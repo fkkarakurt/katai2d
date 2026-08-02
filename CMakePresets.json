@@ -48,6 +48,18 @@
         "KATAI_WITH_MKL": "OFF",
         "KATAI_WITH_PYTHON": "OFF"
       }
+    },
+    {
+      "name": "wheel",
+      "displayName": "Wheel -- the pip package build (Release, Eigen solver, stable ABI)",
+      "description": "What `pip install katai2d` ships: the _core extension built optimized, without any proprietary component, against the CPython stable ABI (3.12+) so one wheel serves every current Python. scripts/build_wheel.ps1 builds, packs and verifies it.",
+      "inherits": "msvc-rwdi",
+      "binaryDir": "${sourceDir}/build/wheel",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "KATAI_WITH_MKL": "OFF",
+        "KATAI_PYTHON_STABLE_ABI": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -55,6 +67,7 @@
     { "name": "msvc-debug", "configurePreset": "msvc-debug" },
     { "name": "portable",   "configurePreset": "portable" },
     { "name": "engine",     "configurePreset": "engine" },
-    { "name": "release",    "configurePreset": "release" }
+    { "name": "release",    "configurePreset": "release" },
+    { "name": "wheel",      "configurePreset": "wheel" }
   ]
 }

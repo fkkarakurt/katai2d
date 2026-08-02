@@ -33,7 +33,7 @@ from ._core import (  # noqa: F401 -- the sanctioned vocabulary, re-exported by 
     LoadKind, Material, MeshSettings, Phase, PhaseType, PlateMaterial, PrescribedDisp,
     SeismicWave, Severity, SoilModel, SoilPolygon, StructElement, StructKind,
     ValidationReport, backend_name, fnv1a64, load_project, project_from_json,
-    project_to_json, save_project, validate_project,
+    project_to_json, save_project, save_results, validate_project,
     PROJECT_FILE_VERSION, RESULTS_FILE_VERSION,
 )
 

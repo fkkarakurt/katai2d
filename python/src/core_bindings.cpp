@@ -396,6 +396,15 @@ NB_MODULE(_core, m) {
             throw nb::value_error(("cannot write " + path + ": " + err).c_str());
     }, "project"_a, "path"_a);
     m.def("project_to_json", &api::project_to_json, "project"_a);
+    m.def("save_results", [](const std::string& path, std::uint64_t model_hash,
+                             const std::vector<api::SolveResult>& results) {
+        std::string err;
+        if (!api::save_results(path, model_hash, results, &err))
+            throw nb::value_error(("cannot write " + path + ": " + err).c_str());
+    }, "path"_a, "model_hash"_a, "results"_a,
+          "Write a .res results file -- the same writer `katai solve --out` uses. "
+          "model_hash = fnv1a64(project_to_json(project)), the staleness stamp every "
+          "front end checks before trusting a .res against a project.");
     m.def("fnv1a64", &api::fnv1a64, "text"_a,
           "The canonical model hash: fnv1a64(project_to_json(project)) is what every "
           "front end stamps into a .res for staleness detection.");
@@ -481,6 +490,7 @@ NB_MODULE(_core, m) {
     m.def("backend_name", &api::backend_name,
           "the linear-solver backend actually linked into this module");
     m.attr("__version__") = api::kVersion;   // the ONE identity (<katai/api/version.hpp>)
+    m.attr("__version_date__") = api::kVersionDate;
     m.attr("PROJECT_FILE_VERSION") = api::kProjectFileVersion;
     m.attr("RESULTS_FILE_VERSION") = (unsigned)api::kResultsFileVersion;
 }

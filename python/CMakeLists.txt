@@ -14,8 +14,21 @@
 
 # The tree uses ONE FindPython module everywhere (the NEW one, which nanobind
 # requires); tests/ already found the Interpreter component, this call adds the
-# Development.Module artifacts to the same cached interpreter.
-find_package(Python 3.10 COMPONENTS Interpreter Development.Module QUIET)
+# Development.Module artifacts to the same cached interpreter. A stable-ABI
+# build additionally needs the SABIModule artifacts -- without that component
+# nanobind silently falls back to a version-specific build (measured: the
+# first wheel came out cp314-tagged with STABLE_ABI=ON).
+# The wheel preset builds against the CPython stable ABI (3.12+): one wheel
+# serves every current Python instead of one per minor version. The dev builds
+# keep the full (faster, version-specific) ABI.
+option(KATAI_PYTHON_STABLE_ABI
+       "Build _core against the CPython stable ABI (one abi3 wheel, Python >= 3.12)" OFF)
+
+if(KATAI_PYTHON_STABLE_ABI)
+  find_package(Python 3.12 COMPONENTS Interpreter Development.Module Development.SABIModule QUIET)
+else()
+  find_package(Python 3.10 COMPONENTS Interpreter Development.Module QUIET)
+endif()
 if(NOT Python_FOUND)
   message(STATUS "katai python: no Python development environment; skipping the bindings")
   return()
@@ -32,7 +45,11 @@ if(NOT KATAI_NANOBIND_DIR)
 endif()
 find_package(nanobind CONFIG REQUIRED PATHS ${KATAI_NANOBIND_DIR} NO_DEFAULT_PATH)
 
-nanobind_add_module(katai_python_core NB_STATIC src/core_bindings.cpp)
+if(KATAI_PYTHON_STABLE_ABI)
+  nanobind_add_module(katai_python_core NB_STATIC STABLE_ABI src/core_bindings.cpp)
+else()
+  nanobind_add_module(katai_python_core NB_STATIC src/core_bindings.cpp)
+endif()
 set_target_properties(katai_python_core PROPERTIES
   OUTPUT_NAME "_core"
   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/python/katai
