@@ -3,6 +3,19 @@
 /out/
 /dist/
 
+# Working notes (formulation and validation prose, environment and decision
+# journals) stay out of the tracked tree; they feed the project website
+# instead. What stays tracked is what the tests pin to the code: the .k2d
+# format spec, the machine schema, and the generated verification matrix.
+/docs/ARCHITECTURE.md
+/docs/DECISIONS.md
+/docs/ENVIRONMENT.md
+/docs/how-to-design-codes.md
+/docs/references/
+/docs/validation/*
+!/docs/validation/verification-matrix.md
+!/docs/validation/references.bib
+
 # Python bytecode cache (a test importing a script must not pollute the source tree;
 # the tests also set PYTHONDONTWRITEBYTECODE, this is the belt for manual runs)
 __pycache__/

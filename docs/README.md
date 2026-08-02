@@ -11,19 +11,22 @@ in one staged-construction workflow, driven from the command line or from Python
 
 | Document | Contents |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | the layer contract, module tree, include and namespace conventions, and an explicit list of the places where the tree does not yet match the design |
-| [DECISIONS.md](DECISIONS.md) | locked technical decisions and open questions |
-| [ENVIRONMENT.md](ENVIRONMENT.md) | toolchain, build script, dependency handling |
-| [how-to-design-codes.md](how-to-design-codes.md) | how a design-code catalogue is added |
-| [references/](references/) | formulation notes: one document per model or analysis type, each tied to its primary source |
-| [validation/](validation/) | the verification and validation record, including the cross-code comparison table and the performance baseline |
+| [k2d-format.md](k2d-format.md) | the `.k2d` input format: field inventory, units, versioning — the one contract the file, the script and the solver share |
+| [k2d.schema.json](k2d.schema.json) | the same contract, machine-readable (JSON Schema) |
+| [validation/verification-matrix.md](validation/verification-matrix.md) | the verification matrix, generated from the reference declarations inside the tests |
+| [validation/references.bib](validation/references.bib) | every primary source the matrix cites, generated alongside it |
+
+The spec, the schema and the matrix are pinned to the code by the test suite (`check_k2d_spec`,
+`test_reference_registry`): they cannot drift from what the program actually reads, writes and
+verifies. The longer-form formulation notes and validation records are working documents and live
+outside the repository; they are being prepared for the project website.
 
 ## Verification
 
-The suite is the specification. Every claim in `validation/` is backed by a test that runs in CTest,
-and every test is checked against a closed-form solution, an independent path that shares no code
-with the solver, or an external code or publication. Self-consistency does not count as
-verification.
+The suite is the specification. Every claim in the verification matrix is backed by a test that
+runs in CTest, and every test is checked against a closed-form solution, an independent path that
+shares no code with the solver, or an external code or publication. Self-consistency does not
+count as verification.
 
 ```
 python scripts/check_language.py --report      # non-English prose census
