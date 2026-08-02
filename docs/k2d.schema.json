@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://katai2d.dev/k2d.schema.json",
+  "title": "KATAI 2D project file (.k2d), format version 1",
+  "description": "Structural schema for the .k2d project file. This schema validates SHAPE (types, array forms, file-stable enum ranges). Parameter bounds and cross-references are deliberately NOT duplicated here: they are the job of katai::io::validate_project(), the single source of those rules. See docs/k2d-format.md.",
+  "type": "object",
+  "required": ["katai2d"],
+  "properties": {
+    "katai2d": { "type": "integer", "minimum": 1, "maximum": 2 },
+    "name": { "type": "string" },
+    "axisymmetric": { "type": "boolean" },
+    "initial_procedure": { "type": "integer", "minimum": 0, "maximum": 2 },
+    "x_min": { "type": "number" },
+    "x_max": { "type": "number" },
+    "y_min": { "type": "number" },
+    "y_max": { "type": "number" },
+    "has_water": { "type": "boolean" },
+    "wx": { "$ref": "#/$defs/numbers" },
+    "wy": { "$ref": "#/$defs/numbers" },
+    "mesh": { "$ref": "#/$defs/mesh" },
+    "materials": { "type": "array", "items": { "$ref": "#/$defs/material" } },
+    "plates": { "type": "array", "items": { "$ref": "#/$defs/plateMaterial" } },
+    "anchors": { "type": "array", "items": { "$ref": "#/$defs/anchorMaterial" } },
+    "geogrids": { "type": "array", "items": { "$ref": "#/$defs/geogridMaterial" } },
+    "embedded": { "type": "array", "items": { "$ref": "#/$defs/embeddedBeamMaterial" } },
+    "polygons": { "type": "array", "items": { "$ref": "#/$defs/soilPolygon" } },
+    "structs": { "type": "array", "items": { "$ref": "#/$defs/structElement" } },
+    "loads": { "type": "array", "items": { "$ref": "#/$defs/load" } },
+    "disps": { "type": "array", "items": { "$ref": "#/$defs/prescribedDisp" } },
+    "initial": { "$ref": "#/$defs/phase" },
+    "phases": { "type": "array", "items": { "$ref": "#/$defs/phase" } }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "numbers": { "type": "array", "items": { "type": "number" } },
+    "flags01": { "type": "array", "items": { "type": "number", "enum": [0, 1] } },
+    "color": {
+      "type": "array",
+      "items": { "type": "number", "minimum": 0, "maximum": 1 },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "mesh": {
+      "type": "object",
+      "properties": {
+        "elem_size": { "type": "number" },
+        "order": { "type": "integer", "enum": [6, 15] },
+        "auto_refine": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "material": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "model": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "drainage": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "color": { "$ref": "#/$defs/color" },
+        "gamma_unsat": { "type": "number" },
+        "gamma_sat": { "type": "number" },
+        "e_init": { "type": "number" },
+        "E": { "type": "number" },
+        "nu": { "type": "number" },
+        "c": { "type": "number" },
+        "phi": { "type": "number" },
+        "psi": { "type": "number" },
+        "E_inc": { "type": "number" },
+        "c_inc": { "type": "number" },
+        "y_ref": { "type": "number" },
+        "tension_cutoff": { "type": "boolean" },
+        "tensile_strength": { "type": "number" },
+        "E50ref": { "type": "number" },
+        "Eoedref": { "type": "number" },
+        "Eurref": { "type": "number" },
+        "m": { "type": "number" },
+        "nu_ur": { "type": "number" },
+        "p_ref": { "type": "number" },
+        "Rf": { "type": "number" },
+        "k0nc_auto": { "type": "boolean" },
+        "k0nc": { "type": "number" },
+        "G0ref": { "type": "number" },
+        "gamma07": { "type": "number" },
+        "lamstar": { "type": "number" },
+        "kapstar": { "type": "number" },
+        "mustar": { "type": "number" },
+        "kx": { "type": "number" },
+        "ky": { "type": "number" },
+        "gw_ga": { "type": "number" },
+        "gw_gn": { "type": "number" },
+        "gw_gl": { "type": "number" },
+        "gw_Sres": { "type": "number" },
+        "rinter_rigid": { "type": "boolean" },
+        "Rinter": { "type": "number" },
+        "k0_auto": { "type": "boolean" },
+        "k0": { "type": "number" },
+        "oc_mode": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "OCR": { "type": "number" },
+        "POP": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "plateMaterial": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "color": { "$ref": "#/$defs/color" },
+        "elastoplastic": { "type": "boolean" },
+        "EA": { "type": "number" },
+        "EI": { "type": "number" },
+        "w": { "type": "number" },
+        "nu": { "type": "number" },
+        "Mp": { "type": "number" },
+        "Np": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "anchorMaterial": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "color": { "$ref": "#/$defs/color" },
+        "elastoplastic": { "type": "boolean" },
+        "EA": { "type": "number" },
+        "Fmax_tens": { "type": "number" },
+        "Fmax_comp": { "type": "number" },
+        "Lspacing": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "geogridMaterial": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "color": { "$ref": "#/$defs/color" },
+        "elastoplastic": { "type": "boolean" },
+        "EA": { "type": "number" },
+        "Np": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "embeddedBeamMaterial": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "color": { "$ref": "#/$defs/color" },
+        "E": { "type": "number" },
+        "gamma": { "type": "number" },
+        "diameter": { "type": "number" },
+        "Lspacing": { "type": "number" },
+        "Tskin_max": { "type": "number" },
+        "Fmax_base": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "soilPolygon": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "material": { "type": "integer" },
+        "coarseness": { "type": "number" },
+        "x": { "$ref": "#/$defs/numbers" },
+        "y": { "$ref": "#/$defs/numbers" },
+        "edge_bc": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 4 } },
+        "edge_flow": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 2 } },
+        "edge_head": { "$ref": "#/$defs/numbers" }
+      },
+      "additionalProperties": true
+    },
+    "structElement": {
+      "type": "object",
+      "properties": {
+        "kind": { "type": "integer", "minimum": 0, "maximum": 4 },
+        "name": { "type": "string" },
+        "x1": { "type": "number" },
+        "y1": { "type": "number" },
+        "x2": { "type": "number" },
+        "y2": { "type": "number" },
+        "material": { "type": "integer" },
+        "iface_pos": { "type": "boolean" },
+        "iface_neg": { "type": "boolean" },
+        "iface_material": { "type": "integer" },
+        "coarseness": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "load": {
+      "type": "object",
+      "properties": {
+        "kind": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "name": { "type": "string" },
+        "x1": { "type": "number" },
+        "y1": { "type": "number" },
+        "x2": { "type": "number" },
+        "y2": { "type": "number" },
+        "qx1": { "type": "number" },
+        "qy1": { "type": "number" },
+        "qx2": { "type": "number" },
+        "qy2": { "type": "number" },
+        "coarseness": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "prescribedDisp": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "x1": { "type": "number" },
+        "y1": { "type": "number" },
+        "x2": { "type": "number" },
+        "y2": { "type": "number" },
+        "set_ux": { "type": "boolean" },
+        "ux": { "type": "number" },
+        "set_uy": { "type": "boolean" },
+        "uy": { "type": "number" },
+        "coarseness": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "phase": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "duration": { "type": "number" },
+        "steps": { "type": "integer" },
+        "design": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "seiswave": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "seisamp": { "type": "number" },
+        "seisfreq": { "type": "number" },
+        "damp": { "type": "number" },
+        "rayf1": { "type": "number" },
+        "rayf2": { "type": "number" },
+        "seisff": { "type": "number", "enum": [0, 1] },
+        "dynnl": { "type": "number", "enum": [0, 1] },
+        "seiscb": { "type": "number", "enum": [0, 1] },
+        "ec8on": { "type": "number", "enum": [0, 1] },
+        "ec8agr": { "type": "number" },
+        "ec8gi": { "type": "number" },
+        "ec8gnd": { "type": "integer", "minimum": 0, "maximum": 4 },
+        "ec8typ": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "rec": { "$ref": "#/$defs/numbers" },
+        "recdt": { "type": "number" },
+        "tbdyss": { "type": "number" },
+        "tbdys1": { "type": "number" },
+        "siteclass": { "type": "integer", "minimum": 0, "maximum": 4 },
+        "poly": { "$ref": "#/$defs/flags01" },
+        "struct": { "$ref": "#/$defs/flags01" },
+        "load": { "$ref": "#/$defs/flags01" },
+        "disp": { "$ref": "#/$defs/flags01" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

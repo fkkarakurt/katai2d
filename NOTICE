@@ -1,0 +1,15 @@
+KATAI 2D
+Copyright 2026 Fatih Kucukkarakurt
+
+Licensed under the Apache License, Version 2.0; see the LICENSE file.
+
+This product includes third-party software:
+
+* Eigen (https://eigen.tuxfamily.org), vendored under third_party/eigen/,
+  licensed primarily under the Mozilla Public License 2.0 (MPL-2.0). The
+  MPL-2.0 text is preserved at third_party/eigen/COPYING.MPL2, and the
+  upstream license inventory (individual files under Apache-2.0, BSD or
+  MINPACK terms) at third_party/eigen/COPYING.README and
+  third_party/eigen/LICENSES/. The complete, unmodified source of the
+  vendored Eigen headers is included in this repository, which satisfies
+  the MPL-2.0 source-availability requirement.

@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite it as below."
+title: "KATAI 2D"
+type: software
+authors:
+  - family-names: "Kucukkarakurt"
+    given-names: "Fatih"
+version: "0.6.0"
+date-released: "2026-08-02"
+license: Apache-2.0
+repository-code: "https://github.com/fkkarakurt/katai2d"
+abstract: >-
+  KATAI 2D is a verification-first two-dimensional finite element engine for
+  geotechnical engineering: staged construction, groundwater flow,
+  consolidation, coupled flow-deformation, seismic dynamics and safety
+  analysis over elastoplastic and creep constitutive models, driven from the
+  command line or from Python. Every capability is validated against
+  closed-form solutions, published benchmarks or independent computation
+  paths, and the validation record ships with the source.
+keywords:
+  - geotechnical engineering
+  - finite element method
+  - soil mechanics
+  - staged construction
+  - consolidation
+  - seepage
+  - soil dynamics
+  - slope stability

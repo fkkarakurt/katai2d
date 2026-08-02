@@ -1,0 +1,46 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "msvc-rwdi",
+      "displayName": "MSVC RelWithDebInfo (Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/msvc-rwdi",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "msvc-debug",
+      "displayName": "MSVC Debug (Ninja)",
+      "inherits": "msvc-rwdi",
+      "binaryDir": "${sourceDir}/build/msvc-debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "portable",
+      "displayName": "Portable -- no proprietary component (Eigen solver backend)",
+      "description": "Builds and runs the whole suite without Intel oneMKL, so every published number can be reproduced by a reviewer who has none. The results must match the msvc-rwdi build; that they do is what the claim 'a result does not depend on the configuration' means here.",
+      "inherits": "msvc-rwdi",
+      "binaryDir": "${sourceDir}/build/portable",
+      "cacheVariables": { "KATAI_WITH_MKL": "OFF" }
+    },
+    {
+      "name": "engine",
+      "displayName": "Engine only -- physics without schema or IO",
+      "description": "Builds math, linsolve, geometry, mesh, materials, fem and analysis, plus exactly the tests confined to those modules. That this configures, builds and passes is the build-level proof that the physics needs no file format and no scripting.",
+      "inherits": "msvc-rwdi",
+      "binaryDir": "${sourceDir}/build/engine",
+      "cacheVariables": { "KATAI_WITH_MODEL": "OFF" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "msvc-rwdi",  "configurePreset": "msvc-rwdi" },
+    { "name": "msvc-debug", "configurePreset": "msvc-debug" },
+    { "name": "portable",   "configurePreset": "portable" },
+    { "name": "engine",     "configurePreset": "engine" }
+  ]
+}

@@ -1,0 +1,20 @@
+# Build output
+/build/
+/out/
+
+# Python bytecode cache (a test importing a script must not pollute the source tree;
+# the tests also set PYTHONDONTWRITEBYTECODE, this is the belt for manual runs)
+__pycache__/
+*.pyc
+
+# IDE / editor
+/.vs/
+/.vscode/
+*.user
+
+# Local ccache directory (if present)
+/.cache/
+
+# OS
+Thumbs.db
+.DS_Store

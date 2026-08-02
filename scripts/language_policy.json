@@ -1,0 +1,18 @@
+{
+  "_comment": "Exemptions for scripts/check_language.py. Only localized user-facing text may be exempted here; comments and identifiers never qualify.",
+
+  "exempt_paths": [
+    "^third_party/",
+    "^build",
+    "^web/",
+    "^docs/internal/",
+    "^studio/app/IconsFontAwesome6\\.h$"
+  ],
+
+  "exempt_line_patterns": [
+    "\\bT\\(\\s*\"",
+    "_tr\\s*\\[\\s*\\]\\s*=",
+    "kFieldNamesTr",
+    "//\\s*tr-l10n\\s*$"
+  ]
+}
