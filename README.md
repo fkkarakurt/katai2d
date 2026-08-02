@@ -32,10 +32,11 @@ catching up.
 The suite is the specification. Every capability is checked in CTest against
 a closed-form solution, an independent computation path that shares no code
 with the solver, or a published benchmark; self-consistency alone does not
-count as verification. The record lives in [docs/validation/](docs/validation/),
-the formulation notes with their primary sources in
-[docs/references/](docs/references/), and the benchmark inputs are plain
-`.k2d` files checked in with the tests.
+count as verification. The record is the generated
+[verification matrix](docs/validation/verification-matrix.md) with its
+[bibliography](docs/validation/references.bib) — both produced from the
+reference declarations inside the tests themselves — and the benchmark
+inputs are plain `.k2d` files checked in under [tests/corpus/](tests/corpus/).
 
 The `portable` preset builds and runs the whole suite without any
 proprietary component, so every published number can be reproduced with the
@@ -61,25 +62,100 @@ all), zipped under `dist/` with its SHA-256. Unzip anywhere and run.
 
 ## Using it
 
+### The command line
+
 ```
-katai validate model.k2d      # schema + physics validation, no solve
-katai solve model.k2d         # run the staged analysis, write results
-katai info                    # version and build information
+katai solve <file.k2d> [--out <file.res>]   # run the staged analysis, write results
+katai validate <file.k2d>                   # schema + physics validation, no solve
+katai info                                  # version and file-format information
 ```
+
+A real session on a corpus case — the Griffiths & Lane (1999) slope, whose
+published factor of safety the suite pins:
+
+```text
+> katai validate kv-slp-001-griffiths-lane-slope.k2d
+warning: materials[0].gamma_sat: "Griffiths-Lane soil": the saturated unit weight
+(20 kN/m3) is below the unsaturated one (20.2 kN/m3), which is physically unusual
+OK: kv-slp-001-griffiths-lane-slope.k2d satisfies the input contract (1 warning(s))
+
+> katai solve kv-slp-001-griffiths-lane-slope.k2d
+phase 1/1: Initial phase
+phase 1/1: ok  max|u| = 2.999373e-01 m  FoS = 1.010
+solved 1 phase(s) in 8.16 s
+```
+
+Validation never solves, and a solve never proceeds past a refused input: a
+readable file with a broken physics contract is an error, not a warning. The
+exit codes are part of the contract, pinned by `test_cli`:
+
+| code | meaning |
+|---|---|
+| 0 | success — `validate`: no errors; `solve`: every phase converged |
+| 2 | usage error |
+| 3 | a file could not be read, parsed or written |
+| 4 | the input contract refused the project — a solve must not proceed |
+| 5 | the solve failed: a phase did not converge, or the engine refused it |
 
 > **Note for MKL builds:** MKL is linked dynamically by default, so `katai.exe`
 > needs the MKL runtime directory on `PATH` (`<oneAPI>\mkl\latest\bin`). A
 > console without it kills the process in the loader — it exits silently,
 > printing nothing at all. `scripts/build.ps1` arranges `PATH` for its own
 > session and CTest does so for the suite; for your own shell, prepend the
-> MKL `bin` directory once. A `portable` build has no such dependency.
+> MKL `bin` directory once. A `portable` or `release` build has no such
+> dependency.
 
 The verification corpus under `tests/corpus/` is a good first thing to run:
 every `.k2d` there is a published benchmark the suite pins.
 
-The Python package exposes the same facade — build a project in a script,
-solve it, and read results as arrays — and writes the same `.k2d` files the
-CLI consumes. The input format is documented in
+### Python
+
+The `katai` package writes and runs the same contract the CLI reads: one
+project description, and the suite pins the script-built project against the
+checked-in `.k2d` byte for byte. Slope stability end to end:
+
+```python
+import katai
+
+# Units everywhere: kN, m, day.
+prj = katai.Project("Griffiths & Lane slope", mesh_size=3.0, auto_refine=False)
+
+soil = prj.materials.mohr_coulomb("Clayey sand", E=1.0e5, nu=0.3,
+                                  c=3.0, phi=19.6, gamma=20.2)
+
+# Geometry drawn counter-clockwise, one fixity name per edge.
+prj.geometry.polygon(
+    [(20, 20), (70, 20), (70, 35), (50, 35), (30, 25), (20, 25)],
+    material=soil,
+    fix=["full", "horizontal", "free", "free", "free", "horizontal"])
+
+prj.initial(procedure="safety")     # phi-c reduction of the gravity state
+
+job = prj.run()
+res = job.results()[-1]
+print(f"FoS = {res.fos:.3f}")       # published ~0.99; 1.010 on this mesh
+
+prj.save("slope.k2d")               # the same case, ready for `katai solve`
+```
+
+Staged construction deactivates regions phase by phase, by handle; a phase
+lists only what changes and inherits the rest (excerpt from the
+staged-excavation example):
+
+```python
+upper = prj.geometry.rectangle(0.0, 6.0, 20.0, 10.0, material=upper_m,
+                               name="Upper", bottom="free")
+prj.phases.plastic("Excavate", deactivate=[upper])
+```
+
+Complete, commented versions of these ship under
+[python/examples/](python/examples/): slope stability, Terzaghi
+consolidation (the settlement time series against U(Tv)) and staged
+excavation (rebound against the closed-form solution). Each one runs in
+CTest against its verification-corpus band, so an example that stops telling
+the truth fails the build.
+
+The input format is documented in
 [docs/k2d-format.md](docs/k2d-format.md) with a machine-readable schema in
 [docs/k2d.schema.json](docs/k2d.schema.json).
 
