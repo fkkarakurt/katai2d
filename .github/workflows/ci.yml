@@ -1,0 +1,44 @@
+# KATAI 2D continuous integration: configure, build and run the FULL suite on
+# the portable preset -- no proprietary component, so the runner needs nothing
+# but the toolchain, and every published number is reproduced from the tree
+# alone. The suite is the specification; a subset would not be a gate.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  portable:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Ninja
+        run: choco install ninja --no-progress -y
+
+      - name: Python for the gates and the bindings
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: nanobind + numpy
+        run: python -m pip install --disable-pip-version-check nanobind numpy
+
+      - name: Configure (portable -- Eigen solver, no MKL)
+        run: cmake --preset portable -D "Python_EXECUTABLE=$((Get-Command python).Source)"
+
+      - name: Build
+        run: cmake --build --preset portable
+
+      - name: Test (the full suite)
+        run: ctest --test-dir build/portable --output-on-failure -j 4

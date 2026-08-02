@@ -1,5 +1,9 @@
 # KATAI 2D
 
+[![CI](https://github.com/fkkarakurt/katai2d/actions/workflows/ci.yml/badge.svg)](https://github.com/fkkarakurt/katai2d/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Cite](https://img.shields.io/badge/Cite-CITATION.cff-green.svg)](CITATION.cff)
+
 A verification-first 2D finite element engine for geotechnical engineering:
 soil, structural elements and groundwater in one staged-construction
 workflow, driven from the command line or from Python.
@@ -9,6 +13,36 @@ active development; interfaces and the file format may still change. Parts
 of `docs/references/` and `docs/validation/` are in the process of being
 translated to English — the numbers in them are current, the prose is
 catching up.
+
+## Install
+
+**Command line** — one PowerShell line: downloads the latest release,
+verifies its SHA-256 and puts `katai` on your PATH (no admin rights, no
+dependencies — `katai.exe` is a single self-contained file):
+
+```powershell
+irm https://raw.githubusercontent.com/fkkarakurt/katai2d/main/install.ps1 | iex
+```
+
+or download `katai2d-<version>-win64.zip` from
+[Releases](https://github.com/fkkarakurt/katai2d/releases) and unzip it
+anywhere.
+
+**Python** — one wheel serves every CPython ≥ 3.12 (Windows x64); download
+it from [Releases](https://github.com/fkkarakurt/katai2d/releases):
+
+```powershell
+pip install katai2d-0.6.0-cp312-abi3-win_amd64.whl
+```
+
+The wheel ships the `katai` package *and* the same `katai` command line —
+one `pip install` gives you both front ends, with the same commands and the
+same exit codes as the native executable. Plain `pip install katai2d` from
+PyPI is planned for the announcement.
+
+Both artifacts are verified the way the source tree is: before they leave
+the build they must reproduce the corpus numbers in a clean environment
+(`scripts/package_cli.ps1`, `scripts/build_wheel.ps1`).
 
 ## Capabilities
 
@@ -65,7 +99,7 @@ all), zipped under `dist/` with its SHA-256. Unzip anywhere and run.
 ### The command line
 
 ```
-katai solve <file.k2d> [--out <file.res>]   # run the staged analysis, write results
+katai solve <file.k2d> [--out <file.res>]   # run the staged analysis (--out writes a .res)
 katai validate <file.k2d>                   # schema + physics validation, no solve
 katai info                                  # version and file-format information
 ```

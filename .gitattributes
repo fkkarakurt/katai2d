@@ -1,0 +1,24 @@
+# Normalize line endings: LF in the repository, native in the working copy.
+* text=auto
+
+# Definitely text
+*.cpp text
+*.hpp text
+*.h   text
+*.c   text
+*.py  text
+*.ps1 text
+*.md  text
+*.json text
+*.txt text
+*.cff text
+*.yml text
+*.k2d text
+*.bib text
+
+# Definitely binary
+*.pyd binary
+*.dll binary
+*.exe binary
+*.zip binary
+*.whl binary
