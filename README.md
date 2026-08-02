@@ -53,7 +53,11 @@ Python ≥ 3.10 with `nanobind` for the bindings.
 
 `scripts/build.ps1` loads the MSVC environment, discovers oneMKL and a real
 Python, and drives the CMake presets (`msvc-rwdi`, `msvc-debug`, `portable`,
-`engine`). `scripts/check_composition.ps1` walks all of them.
+`engine`, `release`). `scripts/check_composition.ps1` walks the first four.
+
+`scripts/package_cli.ps1` builds the end-user distribution: a self-contained
+`katai.exe` (optimized, static CRT, Eigen backend — no runtime dependency at
+all), zipped under `dist/` with its SHA-256. Unzip anywhere and run.
 
 ## Using it
 

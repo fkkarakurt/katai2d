@@ -1,12 +1,13 @@
 # KATAI 2D — dev build script (T-ENV-2).
 # Loads the MSVC environment (vcvars64.bat), then configure + build via a CMake preset.
-# Usage:  .\scripts\build.ps1 [-Preset msvc-rwdi] [-Configure] [-Test]
+# Usage:  .\scripts\build.ps1 [-Preset msvc-rwdi] [-Configure] [-Test] [-Target <name>]
 [CmdletBinding()]
 param(
     [string]$Preset = "msvc-rwdi",
-    [switch]$Configure,   # configure adimini zorla (ilk kurulum/CMake degisikligi)
-    [switch]$Test,        # build sonrasi ctest
-    [int]$Jobs = 6        # ctest paralelligi
+    [switch]$Configure,   # force the configure step (first setup / CMake change)
+    [switch]$Test,        # run ctest after the build
+    [int]$Jobs = 6,       # ctest parallelism
+    [string]$Target = ""  # optional single build target (default: everything)
 )
 
 $ErrorActionPreference = "Stop"
@@ -81,8 +82,10 @@ try {
         cmake @cfgArgs
         if ($LASTEXITCODE -ne 0) { throw "configure basarisiz" }
     }
-    cmake --build --preset $Preset
-    if ($LASTEXITCODE -ne 0) { throw "build basarisiz" }
+    $buildArgs = @("--build", "--preset", $Preset)
+    if ($Target) { $buildArgs += @("--target", $Target) }
+    cmake @buildArgs
+    if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
     if ($Test) {
         # Parallel, matching how the suite is normally run. Serially the same 119
