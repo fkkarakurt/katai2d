@@ -63,6 +63,16 @@ katai solve model.k2d         # run the staged analysis, write results
 katai info                    # version and build information
 ```
 
+> **Note for MKL builds:** MKL is linked dynamically by default, so `katai.exe`
+> needs the MKL runtime directory on `PATH` (`<oneAPI>\mkl\latest\bin`). A
+> console without it kills the process in the loader — it exits silently,
+> printing nothing at all. `scripts/build.ps1` arranges `PATH` for its own
+> session and CTest does so for the suite; for your own shell, prepend the
+> MKL `bin` directory once. A `portable` build has no such dependency.
+
+The verification corpus under `tests/corpus/` is a good first thing to run:
+every `.k2d` there is a published benchmark the suite pins.
+
 The Python package exposes the same facade — build a project in a script,
 solve it, and read results as arrays — and writes the same `.k2d` files the
 CLI consumes. The input format is documented in
