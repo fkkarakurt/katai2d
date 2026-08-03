@@ -1,0 +1,47 @@
+name: Numerical result question
+description: A computed number differs from a published solution, another program, or your expectation.
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Numbers someone may build on must be right, so a report in this
+        category is resolved against primary sources, not by opinion. The more
+        precisely you can point at the reference, the faster that goes. The
+        cases the suite already pins are listed in the
+        [verification matrix](https://github.com/fkkarakurt/katai2d/blob/main/docs/validation/verification-matrix.md).
+  - type: textarea
+    id: case
+    attributes:
+      label: The case
+      description: >
+        Geometry, materials, phases — best of all, attach the `.k2d` file or
+        the script that builds it.
+    validations:
+      required: true
+  - type: textarea
+    id: computed
+    attributes:
+      label: The computed number
+      description: The value, and where it appears (CLI output, `.res` field, Python result).
+    validations:
+      required: true
+  - type: textarea
+    id: reference
+    attributes:
+      label: The reference value and its source
+      description: >
+        The value you believe is right and where it comes from — a closed-form
+        solution (state it), a publication (full citation, page or figure), or
+        another verified program (name, version, settings). "Another run of
+        the same model" is self-consistency and does not settle anything.
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: Version
+      description: Paste the full output of `katai info`.
+      render: text
+    validations:
+      required: true

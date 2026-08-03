@@ -1,0 +1,62 @@
+name: Bug report
+description: A crash, a wrong refusal or acceptance, or misbehavior of the CLI or the Python surface.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: "it refused my input" may be working as intended — the
+        engine refuses inputs it cannot handle correctly rather than
+        approximating silently. But the refusal message must make that
+        judgeable; a message that does not is itself a bug worth reporting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you run, and what did it do?
+    validations:
+      required: true
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Smallest input that reproduces it
+      description: >
+        A minimal `.k2d` file or a short Python script is ideal — paste it here
+        or attach it. The smaller the input, the faster the fix.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead, and why
+      description: >
+        If a number looks wrong, say what you expected and where that
+        expectation comes from — a published source is gold.
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: Version
+      description: Paste the full output of `katai info`.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Install channel
+      options:
+        - Release zip (katai.exe)
+        - Release wheel (pip install)
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: e.g. Windows 11 24H2
+    validations:
+      required: true

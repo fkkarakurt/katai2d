@@ -1,0 +1,31 @@
+name: Capability proposal
+description: A new analysis type, constitutive model, element or workflow.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The project rule is that a capability that is not verified is not in
+        the product. A proposal that already names its oracle — a closed-form
+        solution, an independent computation path, or a published benchmark —
+        is halfway in.
+  - type: textarea
+    id: capability
+    attributes:
+      label: The capability, and the engineering problem it serves
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: How it would be verified
+      description: >
+        Closed-form solution, independent computation path, or published
+        benchmark — with a citation if you have one.
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Papers, book chapters or standards that define the capability.

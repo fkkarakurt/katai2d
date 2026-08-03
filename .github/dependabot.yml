@@ -1,0 +1,8 @@
+# Keep the GitHub Actions pins current. The CI workflow is the only external
+# dependency surface this repository has besides the vendored Eigen.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
