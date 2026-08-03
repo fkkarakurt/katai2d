@@ -9,10 +9,10 @@ soil, structural elements and groundwater in one staged-construction
 workflow, driven from the command line or from Python.
 
 **Status: pre-release.** The engine and its validation record are under
-active development; interfaces and the file format may still change. Parts
-of `docs/references/` and `docs/validation/` are in the process of being
-translated to English — the numbers in them are current, the prose is
-catching up.
+active development; interfaces and the file format may still change. The
+longer-form formulation and validation notes are being prepared for the
+project website; what ships in `docs/` — the format spec, the schema and
+the verification matrix — is pinned to the code by the test suite.
 
 ## Install
 
