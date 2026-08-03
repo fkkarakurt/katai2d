@@ -23,19 +23,35 @@ if ($ZipPath) {
     $zip = $ZipPath
     if (-not (Test-Path $zip)) { throw "zip not found: $zip" }
 } else {
-    $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
+    # /releases/latest ignores pre-releases; while every published version is
+    # a pre-release, fall back to the newest release in the full list.
+    $release = $null
+    try { $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" } catch {}
+    if (-not $release) {
+        $release = @(Invoke-RestMethod "https://api.github.com/repos/$repo/releases") | Select-Object -First 1
+    }
+    if (-not $release) { throw "no published release in $repo" }
     $asset = $release.assets | Where-Object { $_.name -like "katai2d-*-win64.zip" } | Select-Object -First 1
     if (-not $asset) { throw "no katai2d-*-win64.zip asset in the latest release" }
     $zip = Join-Path $env:TEMP $asset.name
     Invoke-WebRequest $asset.browser_download_url -OutFile $zip
 
-    # Verify against the published .sha256 when the release carries one.
+    # Verify against the published .sha256 when the release carries one;
+    # otherwise against the SHA-256 digest the release API reports for the
+    # asset. Either way the download is checked before it is unpacked.
     $shaAsset = $release.assets | Where-Object { $_.name -eq "$($asset.name).sha256" } | Select-Object -First 1
+    $expected = $null
     if ($shaAsset) {
         $expected = ((Invoke-WebRequest $shaAsset.browser_download_url).Content -split '\s+')[0].Trim().ToLower()
+    } elseif ("$($asset.digest)" -match '^sha256:([0-9a-fA-F]{64})$') {
+        $expected = $Matches[1].ToLower()
+    }
+    if ($expected) {
         $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
         if ($actual -ne $expected) { throw "SHA-256 mismatch: expected $expected, got $actual" }
         Write-Host "sha256 verified: $actual"
+    } else {
+        Write-Warning "no published SHA-256 for $($asset.name); installing unverified"
     }
 }
 
