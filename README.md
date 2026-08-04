@@ -72,6 +72,12 @@ count as verification. The record is the generated
 reference declarations inside the tests themselves — and the benchmark
 inputs are plain `.k2d` files checked in under [tests/corpus/](tests/corpus/).
 
+For a guided tour, [Three published benchmarks, end to
+end](docs/validation/three-published-benchmarks.md) reproduces Cox (1962),
+Davis & Booker (1973) and Griffiths & Lane (1999) letter-for-letter from the
+sources and solves each one with the `katai` command line, published value
+beside computed value.
+
 The `portable` preset builds and runs the whole suite without any
 proprietary component, so every published number can be reproduced with the
 vendored Eigen solver alone.

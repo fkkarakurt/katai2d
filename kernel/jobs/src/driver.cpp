@@ -888,8 +888,26 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                                        "(soil-only). Use plane strain for walls/anchors/plates."; return R; }
     }
 
-    // Staged-phase scope guards (v1): keep the unsupported combinations honest.
-    if (io.config && axi) { R.message = "Staged phases are not available in axisymmetric mode yet."; return R; }
+    // Staged-phase scope guards: the static path below is axisymmetric-aware end to end
+    // (r-weighted gravity and internal-force baseline, axisym Newton kinematics, axisym
+    // reactions), so a PLASTIC phase that keeps every element active -- load / prescribed-
+    // displacement staging, the bearing-capacity workflow -- runs the same verified machinery
+    // as the initial phase. What is NOT plumbed for axisymmetry is refused honestly rather
+    // than silently integrated as plane strain: the time-dependent phase inputs carry no
+    // kinematics flag, and the axisym gravity / internal-force assemblies take no
+    // element-activity mask.
+    if (io.config && axi) {
+        if (io.config->type != model::PhaseType::Plastic) {
+            R.message = "Only Plastic phases are available in axisymmetric mode yet "
+                        "(consolidation, flow, dynamic and safety phases are plane-strain only).";
+            return R;
+        }
+        if (!act.empty()) {
+            R.message = "Excavation / fill (activation changes) is not available in "
+                        "axisymmetric mode yet -- keep every soil polygon active.";
+            return R;
+        }
+    }
 
     // Groundwater-flow coupling validity: the head field must match the solved mesh (embedded
     // walls SPLIT the mesh -- the flow result was computed on the unsplit one, so reject honestly).

@@ -15,6 +15,7 @@ in one staged-construction workflow, driven from the command line or from Python
 | [k2d.schema.json](k2d.schema.json) | the same contract, machine-readable (JSON Schema) |
 | [validation/verification-matrix.md](validation/verification-matrix.md) | the verification matrix, generated from the reference declarations inside the tests |
 | [validation/references.bib](validation/references.bib) | every primary source the matrix cites, generated alongside it |
+| [validation/three-published-benchmarks.md](validation/three-published-benchmarks.md) | three published benchmarks reproduced letter-for-letter and solved with the `katai` CLI, published value beside computed value |
 
 The spec, the schema and the matrix are pinned to the code by the test suite (`check_k2d_spec`,
 `test_reference_registry`): they cannot drift from what the program actually reads, writes and

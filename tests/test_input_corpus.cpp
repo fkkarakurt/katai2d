@@ -120,6 +120,30 @@
 //   quantity: footing force at a prescribed settlement of 10 mm, via the schema's line prescribed displacement (v2) and the reaction output, run from the checked-in tests/corpus/kv-fnd-012-giroud-rigid-footing.k2d [kN/m]
 //   expected: 15.15 (analytic); PLAXIS publishes 15.24; the weightless gravity initial does not displace; a footing node carries exactly the imposed u_y
 //   band:     2% vs analytic and 3% vs PLAXIS, as asserted below -- measured +1.1% / +0.5% (15.32) on the file's own 0.5 m tri15 mesh (the direct structured benchmark KV-FND-001 measures +1.4% / +0.8%)
+//
+// verify: KV-FND-013
+//   oracle:   published_benchmark
+//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); slip-line solution Cox (1962)
+//   locator:  Section 3.1, bearing capacity of a smooth rigid circular footing (axisymmetric Mohr-Coulomb), run from the checked-in tests/corpus/kv-fnd-013-cox-circular-footing.k2d
+//   quantity: limit pressure p_max from the axisymmetric reaction output at a prescribed settlement of 0.35 m, associated flow (psi = phi -- the slip-line solution is the associated limit load) [kPa]
+//   expected: 225.6 (analytic, 141 c); PLAXIS publishes 220.0; the K0 initial phase does not displace; a footing node carries exactly the imposed u_y
+//   band:     5% vs analytic, as asserted below -- measured +3.7% (233.9) on the file's own 0.25 m tri15 mesh (the direct structured benchmark KV-FND-003 measures +3.9%; a 0.5 m mesh over-predicts by ~9%, the coarse-mesh bearing bias)
+//
+// verify: KV-FND-014
+//   oracle:   published_benchmark
+//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); analytic solution Davis & Booker (1973)
+//   locator:  Section 3.2, smooth strip footing on clay with strength increasing with depth, run from the checked-in tests/corpus/kv-fnd-014-davis-booker-strip-footing.k2d
+//   quantity: limit pressure p_max [kPa] with c(z) = c0 + c_inc z and E(z) = E0 + E_inc z via the schema's c_inc / E_inc / y_ref profile, from the reaction output at a prescribed settlement of 30 mm
+//   expected: 7.80 (analytic, rho [(2 + pi) c0 + B c_inc / 4]); PLAXIS publishes 7.86; the weightless gravity initial does not displace; a footing node carries exactly the imposed u_y
+//   band:     5% vs analytic and 3% vs PLAXIS, as asserted below -- measured +1.4% / +0.6% (7.91) on the file's own 0.5 m tri15 mesh (the direct structured benchmark KV-FND-004 measures +2.8%)
+//
+// verify: KV-SLP-002
+//   oracle:   published_benchmark
+//   source:   Griffiths and Lane (1999), "Slope stability analysis by finite elements", Geotechnique 49(3), Example 1
+//   locator:  homogeneous 2:1 slope with no foundation layer (D = 1): phi' = 20 deg, c'/gamma H = 0.05, psi = 0, nominal E' = 1e5 kPa and nu' = 0.3 (their stated values); published FoS: 1.4 by FE (non-convergence at the 1000-iteration ceiling), 1.380 by the Bishop and Morgenstern (1960) charts
+//   quantity: slope factor of safety by phi-c reduction, run as the file's INITIAL procedure (initial_procedure = Safety) from the checked-in tests/corpus/kv-slp-002-griffiths-lane-example1.k2d, dimensionalised as H = 10 m, gamma = 20 kN/m3, c' = 10 kPa [-]
+//   expected: FoS between the published pair 1.380 (Bishop-Morgenstern) and 1.4 (Griffiths-Lane FE)
+//   band:     4% vs Bishop-Morgenstern 1.380, as asserted below -- measured FoS 1.384 (+0.3%) on the file's own 1.0 m tri6 mesh; the mechanism must also displace
 #include <katai/analysis/response_spectrum.hpp>
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/jobs/driver.hpp>
@@ -1219,6 +1243,233 @@ void oracle_giroud(const m::Project& pr) {
           "a footing node carries exactly the imposed u_y = -10 mm");
 }
 
+// ------------------------------ KV-FND-013: Cox circular footing, PLAXIS Validation 3.1 --
+// The first AXISYMMETRIC corpus case: the same displacement-controlled machine as
+// KV-FND-012 (line prescribed displacement + reaction output) in r-z kinematics. The
+// left edge is the symmetry axis (r = 0). ASSOCIATED flow (psi = phi): Cox (1962) is a
+// slip-line solution, i.e. the associated limit load -- comparing it against a
+// non-associated run would mix a modelling difference into a verification number. The
+// K0 initial (gamma = 16, K0 = 1 - sin phi = 0.5) seeds the geostatic state; the Indent
+// phase pushes the smooth rigid footing to 0.35 m -- the soft soil (E = 2400) needs a
+// large indentation to reach the collapse plateau.
+constexpr double kCoxC = 1.6, kCoxR = 1.0, kCoxSettle = 0.35;
+
+m::Project build_cox() {
+    m::Project pr;
+    pr.name = "KV-FND-013 Cox circular footing";
+    pr.axisymmetric = true;
+    pr.x_min = 0.0; pr.x_max = 5.0;
+    pr.y_min = 0.0; pr.y_max = 4.0;
+    pr.has_water = false;
+    pr.initial_procedure = m::InitialProcedure::K0Procedure;
+    pr.mesh.elem_size = 0.25;   // 0.5 m puts two elements across the radius: +9% (recorded in KV-FND-003)
+    pr.mesh.order = 15;
+    pr.mesh.auto_refine = false;
+
+    m::Material s;
+    s.name = "Cox soil";
+    s.model = m::SoilModel::MohrCoulomb;
+    s.E = 2400.0; s.nu = 0.20;
+    s.c = kCoxC; s.phi = 30.0; s.psi = 30.0;   // associated (the slip-line assumption)
+    s.gamma_unsat = 16.0; s.gamma_sat = 16.0;
+    s.tension_cutoff = false;                  // plain Mohr-Coulomb, as in the slip-line solution
+    pr.materials.push_back(s);
+
+    m::SoilPolygon P;
+    P.name = "Soil cylinder";
+    P.material = 0;
+    P.x = {0, 5, 5, 0};
+    P.y = {0, 0, 4, 4};
+    P.edge_bc = {(int)m::BCType::FullyFixed, (int)m::BCType::HorizontallyFixed,
+                 (int)m::BCType::Free, (int)m::BCType::HorizontallyFixed};
+    pr.polygons.push_back(P);
+
+    m::PrescribedDisp D;
+    D.name = "Footing";
+    D.x1 = 0.0; D.y1 = 4.0; D.x2 = kCoxR; D.y2 = 4.0;
+    D.set_ux = false; D.ux = 0.0;      // smooth: u_x stays free under the footing
+    D.set_uy = true;  D.uy = -kCoxSettle;
+    pr.disps.push_back(D);
+
+    pr.initial.disp_active = {0};      // footing not yet pushed in the K0 phase
+    m::Phase indent;
+    indent.name = "Indent";
+    indent.disp_active = {1};
+    pr.phases.push_back(indent);
+    return pr;
+}
+
+void oracle_cox(const m::Project& pr) {
+    const auto M = katai::app::mesh_from_project(pr);
+    check(M.ok, "axisymmetric soil cylinder meshed from the file's own settings");
+    if (!M.ok) { std::printf("      (%s)\n", M.message.c_str()); return; }
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    check(res.size() == 2 && res[0].ok && res[1].ok, "K0 initial + indentation phases converged");
+    if (res.size() != 2 || !res[1].ok) return;
+    check(res[0].max_disp < 1e-9, "K0 geostatic initial does not displace");
+
+    // The limit pressure from the REACTION output. Axisymmetric nodal forces are
+    // per radian (the r-weighted assembly), so the footing force is 2 pi |Ry| and
+    // p = 2 pi |Ry| / (pi R^2) = 2 |Ry| / R^2 -- the same conversion as the direct
+    // benchmark KV-FND-003.
+    const auto& R = res[1];
+    check(R.reaction.size() == 2 * R.mesh.node_count, "the static phase reports reactions");
+    if (R.reaction.size() != 2 * R.mesh.node_count) return;
+    double ry = 0.0;
+    for (int n = 0; n < R.mesh.node_count; ++n)
+        if (R.mesh.y[n] > 4.0 - 1e-6 && R.mesh.x[n] <= kCoxR + 1e-6) ry += R.reaction[2 * n + 1];
+    const double p_katai = 2.0 * std::fabs(ry) / (kCoxR * kCoxR);
+    const double p_exact = 225.6, p_plaxis = 220.0;
+    std::printf("      p_max: Cox %.1f | PLAXIS %.1f | file run %.1f (%+.1f%% vs Cox, "
+                "%+.1f%% vs PLAXIS)\n", p_exact, p_plaxis, p_katai,
+                100.0 * (p_katai - p_exact) / p_exact, 100.0 * (p_katai - p_plaxis) / p_plaxis);
+    check(std::fabs(p_katai - p_exact) < 0.05 * p_exact,
+          "limit pressure within 5% of the Cox exact collapse pressure");
+    int on_line = -1;
+    for (int n = 0; n < R.mesh.node_count && on_line < 0; ++n)
+        if (R.mesh.y[n] > 4.0 - 1e-9 && std::fabs(R.mesh.x[n] - 0.5) < 0.13) on_line = n;
+    check(on_line >= 0 && std::fabs(R.disp[2 * on_line + 1] + kCoxSettle) < 1e-12,
+          "a footing node carries exactly the imposed u_y = -0.35 m");
+}
+
+// ------------------ KV-FND-014: Davis & Booker c(z) strip footing, PLAXIS Validation 3.2 --
+// Tresca (phi = 0) with c = 1 + 2z and E = 299 + 498z through the schema's
+// c_inc / E_inc / y_ref profile -- the corpus twin of the direct benchmark KV-FND-004,
+// driven by the same displacement-controlled machine as KV-FND-012. Weightless soil:
+// the gravity initial is an exact nil.
+constexpr double kDbBhalf = 1.0, kDbSettle = 0.03;
+
+m::Project build_davis_booker() {
+    m::Project pr;
+    pr.name = "KV-FND-014 Davis-Booker strip footing";
+    pr.x_min = 0.0; pr.x_max = 5.0;
+    pr.y_min = 0.0; pr.y_max = 4.0;
+    pr.has_water = false;
+    pr.initial_procedure = m::InitialProcedure::GravityLoading;   // weightless -> nil
+    pr.mesh.elem_size = 0.5;
+    pr.mesh.order = 15;
+    pr.mesh.auto_refine = false;
+
+    m::Material s;
+    s.name = "Davis-Booker clay";
+    s.model = m::SoilModel::MohrCoulomb;
+    s.E = 299.0; s.nu = 0.3;
+    s.c = 1.0; s.phi = 0.0; s.psi = 0.0;       // Tresca
+    s.E_inc = 498.0; s.c_inc = 2.0; s.y_ref = 4.0;   // + per metre BELOW y_ref (the surface)
+    s.gamma_unsat = 0.0; s.gamma_sat = 0.0;
+    s.tension_cutoff = false;                  // plain Tresca, as in the analytic solution
+    pr.materials.push_back(s);
+
+    m::SoilPolygon P;
+    P.name = "Clay layer";
+    P.material = 0;
+    P.x = {0, 5, 5, 0};
+    P.y = {0, 0, 4, 4};
+    P.edge_bc = {(int)m::BCType::FullyFixed, (int)m::BCType::HorizontallyFixed,
+                 (int)m::BCType::Free, (int)m::BCType::HorizontallyFixed};
+    pr.polygons.push_back(P);
+
+    m::PrescribedDisp D;
+    D.name = "Footing";
+    D.x1 = 0.0; D.y1 = 4.0; D.x2 = kDbBhalf; D.y2 = 4.0;
+    D.set_ux = false; D.ux = 0.0;      // smooth: u_x stays free under the footing
+    D.set_uy = true;  D.uy = -kDbSettle;
+    pr.disps.push_back(D);
+
+    pr.initial.disp_active = {0};      // footing not yet pushed in the initial phase
+    m::Phase indent;
+    indent.name = "Indent";
+    indent.disp_active = {1};
+    pr.phases.push_back(indent);
+    return pr;
+}
+
+void oracle_davis_booker(const m::Project& pr) {
+    const auto M = katai::app::mesh_from_project(pr);
+    check(M.ok, "clay layer meshed from the file's own settings");
+    if (!M.ok) { std::printf("      (%s)\n", M.message.c_str()); return; }
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    check(res.size() == 2 && res[0].ok && res[1].ok, "initial + indentation phases converged");
+    if (res.size() != 2 || !res[1].ok) return;
+    check(res[0].max_disp < 1e-9, "weightless gravity initial does not displace");
+
+    // Average pressure under the footing from the REACTION output: p = |sum Ry| / (B/2).
+    const auto& R = res[1];
+    check(R.reaction.size() == 2 * R.mesh.node_count, "the static phase reports reactions");
+    if (R.reaction.size() != 2 * R.mesh.node_count) return;
+    double ry = 0.0;
+    for (int n = 0; n < R.mesh.node_count; ++n)
+        if (R.mesh.y[n] > 4.0 - 1e-6 && R.mesh.x[n] <= kDbBhalf + 1e-6) ry += R.reaction[2 * n + 1];
+    const double p_katai = std::fabs(ry) / kDbBhalf;
+    const double p_exact = 7.80, p_plaxis = 7.86;
+    std::printf("      p_max: Davis-Booker %.2f | PLAXIS %.2f | file run %.2f (%+.1f%% vs "
+                "analytic, %+.1f%% vs PLAXIS)\n", p_exact, p_plaxis, p_katai,
+                100.0 * (p_katai - p_exact) / p_exact, 100.0 * (p_katai - p_plaxis) / p_plaxis);
+    check(std::fabs(p_katai - p_exact) < 0.05 * p_exact,
+          "limit pressure within 5% of the Davis-Booker exact collapse pressure");
+    check(std::fabs(p_katai - p_plaxis) < 0.03 * p_plaxis,
+          "limit pressure within 3% of the published PLAXIS number");
+    int on_line = -1;
+    for (int n = 0; n < R.mesh.node_count && on_line < 0; ++n)
+        if (R.mesh.y[n] > 4.0 - 1e-9 && std::fabs(R.mesh.x[n] - 0.5) < 0.26) on_line = n;
+    check(on_line >= 0 && std::fabs(R.disp[2 * on_line + 1] + kDbSettle) < 1e-12,
+          "a footing node carries exactly the imposed u_y = -30 mm");
+}
+
+// ------------------------------ KV-SLP-002: Griffiths and Lane (1999) Example 1 --
+// The paper's own first example (D = 1, no foundation layer), dimensionalised as
+// H = 10 m, gamma = 20 kN/m3, c' = 10 kPa so that c'/gamma H = 0.05 exactly. Geometry
+// from their Fig. 1: a 1.2H crest plateau, a 2H slope run, vertical rollers on the
+// left boundary, full fixity at the base. psi = 0 and the nominal E' = 1e5 / nu' = 0.3
+// are the paper's stated values; no tension crack modelling (plain Mohr-Coulomb), as
+// in the paper.
+m::Project build_gl_example1() {
+    m::Project pr;
+    pr.name = "KV-SLP-002 Griffiths-Lane Example 1";
+    pr.x_min = 0.0; pr.x_max = 32.0;
+    pr.y_min = 0.0; pr.y_max = 10.0;
+    pr.has_water = false;
+    pr.initial_procedure = m::InitialProcedure::Safety;
+    pr.mesh.elem_size = 1.0;
+    pr.mesh.auto_refine = false;
+
+    m::Material s;
+    s.name = "Example 1 soil";
+    s.model = m::SoilModel::MohrCoulomb;
+    s.E = 1.0e5; s.nu = 0.3;
+    s.gamma_unsat = 20.0; s.gamma_sat = 20.0;
+    s.c = 10.0; s.phi = 20.0; s.psi = 0.0;
+    s.tension_cutoff = false;
+    pr.materials.push_back(s);
+
+    m::SoilPolygon P;
+    P.name = "Slope";
+    P.material = 0;
+    // CCW: base, slope face (toe at x = 3.2H), crest plateau, left boundary.
+    P.x = {0, 32, 12, 0};
+    P.y = {0, 0, 10, 10};
+    P.edge_bc = {(int)m::BCType::FullyFixed, (int)m::BCType::Free,
+                 (int)m::BCType::Free,       (int)m::BCType::HorizontallyFixed};
+    pr.polygons.push_back(P);
+    return pr;
+}
+
+void oracle_gl_example1(const m::Project& pr) {
+    katai::mesh::Mesh mesh;
+    const auto R = solve_single_phase(pr, mesh);
+    check(R.ok, "Safety (phi-c reduction) ran from the file");
+    if (!R.ok) { std::printf("      (%s)\n", R.message.c_str()); return; }
+    const double ref = 1.380;   // Bishop & Morgenstern (1960), the chart value the paper cites
+    std::printf("      FoS = %.3f  (published: Bishop-Morgenstern 1.380, Griffiths-Lane FE 1.4)  "
+                "err vs 1.380 = %+.1f%%   mechanism max|u| = %.3e\n",
+                R.fos, 100.0 * (R.fos - ref) / ref, R.max_disp);
+    check(std::fabs(R.fos - ref) < 0.04 * ref,
+          "factor of safety within 4% of the Bishop-Morgenstern chart value");
+    check(R.max_disp > 1e-6, "the failure mechanism displaces (a genuine slip surface)");
+}
+
 }  // namespace
 
 int main() {
@@ -1237,6 +1488,9 @@ int main() {
         {"kv-fnd-010-prandtl-strip-footing.k2d", build_prandtl_footing, oracle_prandtl_footing},
         {"kv-fnd-011-gibson-strip-load.k2d", build_gibson, oracle_gibson},
         {"kv-fnd-012-giroud-rigid-footing.k2d", build_giroud, oracle_giroud},
+        {"kv-fnd-013-cox-circular-footing.k2d", build_cox, oracle_cox},
+        {"kv-fnd-014-davis-booker-strip-footing.k2d", build_davis_booker, oracle_davis_booker},
+        {"kv-slp-002-griffiths-lane-example1.k2d", build_gl_example1, oracle_gl_example1},
     };
     for (const CorpusCase& c : cases) run_case(c);
 

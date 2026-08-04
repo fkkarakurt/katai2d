@@ -4,6 +4,34 @@ All notable changes to KATAI 2D. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 MAJOR.MINOR.PATCH.
 
+## [Unreleased]
+
+### Engine
+- Axisymmetric staged (Plastic) phases: load and prescribed-displacement
+  staging now runs in r–z kinematics from every front end — the
+  displacement-controlled bearing-capacity workflow works axisymmetrically.
+  Previously any axisymmetric project was refused by the phase driver, so
+  the capability was unreachable from the CLI and Python. What is still not
+  plumbed for axisymmetry is refused honestly, never integrated as plane
+  strain: activation changes (excavation / fill) and consolidation, flow,
+  dynamic and safety phases.
+
+### Verification
+- Three new published benchmarks in the corpus, each a checked-in `.k2d`
+  solved from the file by the suite:
+  - `KV-FND-013` — bearing capacity of a smooth rigid circular footing,
+    axisymmetric Mohr–Coulomb (Cox 1962 slip-line solution; PLAXIS 2D
+    Validation Manual section 3.1).
+  - `KV-FND-014` — smooth strip footing on clay with strength increasing
+    with depth (Davis & Booker 1973; PLAXIS 2D Validation Manual
+    section 3.2).
+  - `KV-SLP-002` — Griffiths & Lane (1999) Example 1, the homogeneous 2:1
+    slope, factor of safety by phi–c reduction against the published pair
+    (their FE 1.4, Bishop & Morgenstern charts 1.380).
+- A benchmark walkthrough document: the three cases end to end from the
+  command line, with the published values beside the computed ones
+  (`docs/validation/three-published-benchmarks.md`).
+
 ## [0.6.0] — 2026-07-20
 
 The first published version: the engine, the command line, the Python

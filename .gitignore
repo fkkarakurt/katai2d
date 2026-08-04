@@ -15,6 +15,7 @@
 /docs/validation/*
 !/docs/validation/verification-matrix.md
 !/docs/validation/references.bib
+!/docs/validation/three-published-benchmarks.md
 
 # Python bytecode cache (a test importing a script must not pollute the source tree;
 # the tests also set PYTHONDONTWRITEBYTECODE, this is the belt for manual runs)
