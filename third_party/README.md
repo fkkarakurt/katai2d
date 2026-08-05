@@ -1,21 +1,20 @@
-# third_party — vendored bağımlılıklar
+# third_party — vendored dependencies
 
-Hepsi **permissive** lisanslı (ticari-güvenli, bkz `docs/DECISIONS.md` D7).
-Drop-in: kaynaklar repoya kopyalandı, iç `.git` dizinleri silindi (T-ENV-4).
-Ağsız, tekrarlanabilir build; tek build sistemi (kök CMake) hepsini derler.
+Everything vendored here is permissively licensed and commercial-safe.
+Vendoring is drop-in: the sources are copied into the repository and their
+inner `.git` directories removed, so the build needs no network access and no
+submodule step — the root CMake build compiles everything.
 
-| Klasör | Kütüphane | Sürüm (vendor tarihi 2026-06-02) | Lisans | Kullanım |
-|--------|-----------|----------------------------------|--------|----------|
-| `eigen/` | Eigen | dev/master (≈3.4.90, WORLD=3) | MPL-2 | yoğun/küçük matris cebir (header-only) |
-| `glfw/`  | GLFW | 3.5.0 (dev) | zlib | pencere + GL context |
-| `glad/`  | glad2 üretimi | GL **4.1 core** (D17) | MIT / public-domain | GL fonksiyon loader |
-| `imgui/` | Dear ImGui | 1.92.9 WIP (**docking** dalı) | MIT | GUI chrome (D16) |
+| Directory | Library | Version (vendored 2026-06-02) | License | Used for |
+|-----------|---------|-------------------------------|---------|----------|
+| `eigen/`  | Eigen | dev/master (≈3.4.90, WORLD=3) | MPL-2.0 | dense/small matrix algebra (header-only) |
 
-## Güncelleme / yeniden üretme
-- **glad** (üretilmiş, ağ gerektirir):
-  `python -m glad --api "gl:core=4.1" --out-path third_party/glad c`
-- **eigen / glfw / imgui**: ilgili upstream'den shallow clone → `.git` sil.
-  GLFW örnek/test/docs CMake'te kapalı; ImGui yalnızca core + glfw/opengl3 backend.
+## Updating
 
-> Not: oneMKL **vendored değil** — sistemde kurulu (T-ENV-1) ve `LinearSolver`
-> soyutlaması arkasından link'lenecek (Faz 0'da Eigen ile başlanıyor).
+Shallow-clone the upstream, delete its `.git`, replace the directory. The
+licenses ship with the sources; NOTICE at the repository root records the
+attribution.
+
+> Note: Intel oneMKL is **not** vendored — when present on the system it is
+> linked behind the `LinearSolver` abstraction (`KATAI_WITH_MKL`); without it
+> every build and the whole test suite run on the vendored Eigen backend.
