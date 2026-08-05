@@ -5,7 +5,7 @@
 // scripting -- runs a project through this seam, so a .k2d means the same run
 // everywhere (Stage D; the physics itself left this file for the engine in Stage B).
 //
-// Historical name build_problem.hpp (studio/app); relocated with its schema-resolution
+// Historical name build_problem.hpp; relocated with its schema-resolution
 // content intact once phase solving lived engine-side. Public spellings remain
 // katai::app pending the deferred namespace decision (see ARCHITECTURE.md).
 

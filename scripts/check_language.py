@@ -3,9 +3,9 @@
 
 KATAI 2D is written by a Turkish-speaking author but is intended to be read,
 audited and cited internationally. Every comment, identifier and diagnostic
-message in the source tree must therefore be English. User-facing UI strings
-are exempt: those are localized on purpose and live behind the studio layer's
-``T("english", "turkce")`` helper.
+message in the source tree must therefore be English. Localized user-facing
+text is the one legitimate exemption, and it must be declared (see the escapes
+at the end of this docstring), never silent.
 
 Detection is deliberately two-tier so that the gate never cries wolf:
 
@@ -281,7 +281,6 @@ def main() -> int:
 
     roots = [Path(p).resolve() for p in args.paths] if args.paths else [
         REPO_ROOT / "kernel",
-        REPO_ROOT / "studio",
         REPO_ROOT / "tests",
         REPO_ROOT / "scripts",
         REPO_ROOT / "docs",

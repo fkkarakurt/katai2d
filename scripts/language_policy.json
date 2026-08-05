@@ -3,16 +3,8 @@
 
   "exempt_paths": [
     "^third_party/",
-    "^build",
-    "^web/",
-    "^docs/internal/",
-    "^studio/app/IconsFontAwesome6\\.h$"
+    "^build"
   ],
 
-  "exempt_line_patterns": [
-    "\\bT\\(\\s*\"",
-    "_tr\\s*\\[\\s*\\]\\s*=",
-    "kFieldNamesTr",
-    "//\\s*tr-l10n\\s*$"
-  ]
+  "exempt_line_patterns": []
 }

@@ -19,7 +19,7 @@
 //
 // The materials module depends on nothing else in the tree, so the input here
 // is a neutral parameter block, not the project schema: the caller that owns
-// the schema (today the studio driver, later katai/jobs) copies its fields in.
+// the schema (the katai/jobs driver) copies its fields in.
 
 #include <string>
 #include <string_view>

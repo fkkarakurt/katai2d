@@ -1,6 +1,6 @@
 #pragma once
 // Build an FE mesh from a project's soil polygons (layer 2, katai/jobs; historical
-// name build_mesh.hpp in studio/app). The model-to-mesh half of the driver seam.
+// name build_mesh.hpp). The model-to-mesh half of the driver seam.
 //
 // Pipeline: the polygon edges form a planar straight-line graph (PSLG, shared
 // vertices deduplicated so adjacent regions stay conforming) -> Ruppert quality

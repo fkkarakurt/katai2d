@@ -70,8 +70,6 @@ LAYERS: dict[str, int] = {
     "io": 1,
     "jobs": 2,
     "api": 3,
-    "render": 4,
-    "app": 4,
     "cli": 4,
     "python": 4,
 }
@@ -89,8 +87,6 @@ MODULE_ROOTS: dict[str, str] = {
     "io": "kernel/io",
     "jobs": "kernel/jobs",
     "api": "kernel/api",
-    "render": "studio/render",
-    "app": "studio/app",
     "cli": "cli",
     "python": "python",
 }
@@ -118,7 +114,6 @@ TRAILING_SPECIFIERS = re.compile(r"\s*(?:const|noexcept|override|final|&|&&)\s*"
 # A composition root selects what the program is made of, so it is the one place
 # a build-configuration macro belongs.
 COMPOSITION_ROOTS = (
-    "studio/app/main.cpp",
     "cli/main.cpp",
 )
 
@@ -325,17 +320,16 @@ def check_config(sources: dict[str, list[Path]]) -> list[str]:
     return problems
 
 
-# Front ends program against the published facade: layer 3 (api), layer 2 for runs
-# and progress (jobs), and their own presentation module (render). A front end that
-# includes an engine header directly has stepped around the section 7.3 boundary,
-# even though the layer DAG alone would allow the downward edge (Stage D gate:
-# "no front end includes an engine internal").
-FRONTEND_MODULES = ("app", "cli", "python")
-FRONTEND_ALLOWED = {"api", "jobs", "render"}
+# Front ends program against the published facade: layer 3 (api) plus layer 2 for
+# runs and progress (jobs). A front end that includes an engine header directly has
+# stepped around the section 7.3 boundary, even though the layer DAG alone would
+# allow the downward edge (Stage D gate: "no front end includes an engine internal").
+FRONTEND_MODULES = ("cli", "python")
+FRONTEND_ALLOWED = {"api", "jobs"}
 
 
 def check_frontend(sources: dict[str, list[Path]]) -> list[str]:
-    """Front ends include only the facade, the jobs layer and render."""
+    """Front ends include only the facade and the jobs layer."""
     problems: list[str] = []
     for module in FRONTEND_MODULES:
         for path in sources.get(module, ()):
@@ -347,7 +341,7 @@ def check_frontend(sources: dict[str, list[Path]]) -> list[str]:
                     continue
                 problems.append(
                     f"{rel(path)}: front end includes engine header 'katai/{dep}/{header}' - "
-                    f"front ends program against <katai/api/katai.hpp> (plus jobs and render)"
+                    f"front ends program against <katai/api/katai.hpp> (plus jobs)"
                 )
     return problems
 

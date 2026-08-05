@@ -1,6 +1,6 @@
 #pragma once
-// The groundwater-flow driver (layer 2, katai/jobs; historical name build_flow.hpp in
-// studio/app). Turn a project's groundwater-flow boundary conditions into a steady-state seepage solve
+// The groundwater-flow driver (layer 2, katai/jobs; historical name build_flow.hpp).
+// Turn a project's groundwater-flow boundary conditions into a steady-state seepage solve
 // on the FE mesh (PLAXIS "Groundwater flow" calculation). Confined and unconfined regimes are
 // both handled by the variable-k_rel free-surface solver with seepage-face active sets (a fully
 // saturated domain simply keeps k_rel = 1 everywhere). Returns the nodal head / pore fields for
