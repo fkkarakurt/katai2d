@@ -84,7 +84,7 @@ add_custom_command(TARGET katai_python_core POST_BUILD
 # honestly. Needs the staged package on PYTHONPATH and the MKL runtime on PATH.
 add_test(NAME test_python_smoke
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.py
-                 ${CMAKE_SOURCE_DIR}/tests/corpus)
+                 ${PROJECT_SOURCE_DIR}/tests/corpus)
 set_tests_properties(test_python_smoke PROPERTIES
   LABELS "python;api"
   ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
@@ -94,7 +94,7 @@ set_tests_properties(test_python_smoke PROPERTIES
 # end to end with the same FoS as the file-loaded run.
 add_test(NAME test_python_dsl
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/dsl_corpus.py
-                 ${CMAKE_SOURCE_DIR}/tests/corpus)
+                 ${PROJECT_SOURCE_DIR}/tests/corpus)
 set_tests_properties(test_python_dsl PROPERTIES
   LABELS "python;api"
   ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
@@ -105,7 +105,7 @@ set_tests_properties(test_python_dsl PROPERTIES
 # disagree about what the format contains.
 add_test(NAME test_python_schema_coverage
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/schema_coverage.py
-                 ${CMAKE_SOURCE_DIR})
+                 ${PROJECT_SOURCE_DIR})
 # PYTHONDONTWRITEBYTECODE: this test imports check_k2d_spec.py from scripts/;
 # without it, Python drops a __pycache__ into the SOURCE tree.
 set_tests_properties(test_python_schema_coverage PROPERTIES

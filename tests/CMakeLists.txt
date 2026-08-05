@@ -245,10 +245,10 @@ endif()
 find_package(Python COMPONENTS Interpreter QUIET)
 if(Python_Interpreter_FOUND)
   add_test(NAME check_language
-           COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/check_language.py --ratchet)
+           COMMAND ${Python_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_language.py --ratchet)
   set_tests_properties(check_language PROPERTIES LABELS "hygiene")
   add_test(NAME check_architecture
-           COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/check_architecture.py)
+           COMMAND ${Python_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_architecture.py)
   set_tests_properties(check_architecture PROPERTIES LABELS "architecture")
   # test_reference_registry (roadmap section 6.2): every verification test declares
   # its oracle -- source, locator, expected value and band -- or is in the frozen
@@ -256,7 +256,7 @@ if(Python_Interpreter_FOUND)
   # regeneration from those declarations. Named per the roadmap; implemented as a
   # source gate because it reads comments, not binaries.
   add_test(NAME test_reference_registry
-           COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/check_references.py)
+           COMMAND ${Python_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_references.py)
   set_tests_properties(test_reference_registry PROPERTIES LABELS "references")
   # check_k2d_spec (Stage C): the .k2d format's four descriptions -- writer,
   # reader, docs/k2d-format.md field inventory, docs/k2d.schema.json -- must
@@ -264,7 +264,7 @@ if(Python_Interpreter_FOUND)
   # A field added to the code without its documentation fails here, not in a
   # user's hands.
   add_test(NAME check_k2d_spec
-           COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/check_k2d_spec.py)
+           COMMAND ${Python_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_k2d_spec.py)
   set_tests_properties(check_k2d_spec PROPERTIES LABELS "io")
 else()
   message(STATUS "Python interpreter not found - source-tree gates (language, architecture) disabled")
