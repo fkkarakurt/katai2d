@@ -158,8 +158,16 @@ if(KATAI_WITH_CLI AND KATAI_WITH_MODEL)
   add_subdirectory(cli)
 endif()
 
+# Tests are part of every development build. The option exists for consumers:
+# a tree that pulls this project in via add_subdirectory or FetchContent wants
+# the libraries and front ends, not a hundred test targets -- and in a static-MKL
+# composition every test executable links the whole solver (~130 MB each), so
+# building them is far from free.
+option(KATAI_WITH_TESTS "Build the test suite" ON)
 enable_testing()
-add_subdirectory(tests)
+if(KATAI_WITH_TESTS)
+  add_subdirectory(tests)
+endif()
 
 # python/ -- the scripting front end (needs the schema + facade). Skips itself,
 # with a message, when the Python development environment or nanobind is absent:
