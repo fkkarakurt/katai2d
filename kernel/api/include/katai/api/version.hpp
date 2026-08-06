@@ -12,8 +12,8 @@
 
 namespace katai::api {
 
-inline constexpr const char* kVersion = "0.6.0";
-inline constexpr const char* kVersionDate = "2026-07-20";
+inline constexpr const char* kVersion = "0.6.1";
+inline constexpr const char* kVersionDate = "2026-08-07";
 
 // "KATAI 2D 0.6.0-dev" -- the canonical short identity for titles and report headers.
 inline constexpr const char* kAppName = "KATAI 2D";
