@@ -55,6 +55,7 @@ Codes in the `K2D-M…` family are about a **material parameter** the selected m
 | `K2D-A002` | warning | A **linear Dynamic** phase carries structural elements: geogrids stay elastic, anchors do not yield, interfaces do not slip. Their capacity is not checked during the shaking. |
 | `K2D-A003` | warning | A **prescribed displacement drives a node a structure stands on**. Structural elements do not receive the imposed motion in this build, so that element's M, Q and N understate the action. |
 | `K2D-A004` | note | A **structural element ends on a supported node**. The reported reactions are the soil's contribution only; the element's own end force at that support is not included. |
+| `K2D-A005` | warning | A **Safety (strength reduction) phase** runs with a non-associated flow rule (ψ < φ). The factor of safety then depends on the mesh and **falls as the mesh is refined**, because failure localises into a shear band whose width is set by the elements. Measured on the Griffiths & Lane benchmark: −7.9% across a fourfold refinement. Quote the factor with the mesh it was computed on, and confirm it with a refinement study (`docs/validation/numerical-uncertainty.md` §5). |
 
 ## Where they appear
 
