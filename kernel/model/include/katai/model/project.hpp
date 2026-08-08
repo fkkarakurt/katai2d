@@ -282,6 +282,18 @@ inline const char* const* design_approach_names() {
 struct Phase {
     std::string name = "Phase";
     PhaseType type = PhaseType::Plastic;
+    // Groundwater conditions for THIS phase (PLAXIS "water conditions per phase"). When
+    // water_override is set, the phreatic surface is this polyline instead of the project's,
+    // and the change from the previous phase is carried by the staged-construction imbalance
+    // like any other change: the pore pressure and the effective weight both follow it.
+    //
+    // Staged dewatering is not a refinement. Lowering the water inside an excavation before
+    // digging is a step in nearly every real excavation, and it is what loads the wall first:
+    // the benchmark this was written for (the DGGT / Schweiger triple-anchored wall in Berlin
+    // sand) lowers the level from -3 m to -17.9 m inside the pit before a single cubic metre
+    // is dug. Without it that problem cannot be built at all.
+    bool water_override = false;
+    std::vector<double> wx, wy;   // the phase's own phreatic polyline (used when overriding)
     // Consolidation (PhaseType::Consolidation) time control: total time interval [day] and the
     // number of equal time steps used to integrate the dissipation. Ignored by other phase types.
     // Dynamic (PhaseType::Dynamic) reuses these: duration = total shaking time [s], time_steps = the

@@ -33,7 +33,12 @@ namespace katai::model {
 // more than the one described -- an unsafe-sided silent difference, so the version refuses
 // instead. Until this field existed no anchored excavation could be modelled as it is built,
 // which is why the case that exposed it was an industry benchmark rather than a unit test.
-inline constexpr int kProjectFileVersion = 3;
+//
+// v4 (2026-08): PER-PHASE water conditions (`phases[].water_override` + `wx`/`wy`). The same
+// benchmark needed it one line further down its specification: the pit is dewatered from -3 m
+// to -17.9 m BEFORE the first excavation step, and an older build would run every phase at the
+// project's level and report an excavation that was never dewatered.
+inline constexpr int kProjectFileVersion = 4;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -276,6 +281,8 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     warr(o, "struct", ph.struct_active);
     warr(o, "load", ph.load_active);
     warr(o, "disp", ph.disp_active);
+    wfield(o, "water_override", ph.water_override);
+    warr(o, "wx", ph.wx); warr(o, "wy", ph.wy);
     closeobj(o); o += ',';
 }
 inline Phase rphase(const Json& j) {
@@ -308,6 +315,8 @@ inline Phase rphase(const Json& j) {
     ph.struct_active = j.chars("struct");
     ph.load_active = j.chars("load");
     ph.disp_active = j.chars("disp");
+    ph.water_override = j.flag("water_override", ph.water_override);
+    ph.wx = j.nums("wx"); ph.wy = j.nums("wy");
     return ph;
 }
 

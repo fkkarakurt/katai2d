@@ -332,7 +332,13 @@ NB_MODULE(_core, m) {
             },
             [](api::Phase& p, const std::vector<int>& v) {
                 p.disp_active.assign(v.begin(), v.end());
-            });
+            })
+        // Water conditions for this phase (staged dewatering): the phreatic polyline that
+        // replaces the project's while this phase runs.
+        .def_rw("water_override", &api::Phase::water_override,
+                "use this phase's own phreatic line instead of the project's")
+        .def_rw("wx", &api::Phase::wx, "phase phreatic polyline, x [m]")
+        .def_rw("wy", &api::Phase::wy, "phase phreatic polyline, y [m]");
 
     nb::class_<api::MeshSettings>(m, "MeshSettings")
         .def(nb::init<>())

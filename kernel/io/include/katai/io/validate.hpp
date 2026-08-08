@@ -58,6 +58,25 @@ inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::
     using model::SeismicWave;
     const auto path = [&base](const char* f) { return base + "." + f; };
 
+    // Per-phase water conditions (staged dewatering): the polyline must be usable, or the
+    // phase would silently fall back to the project's level and run an excavation that was
+    // never dewatered -- the exact failure the version bump exists to prevent.
+    if (ph.water_override) {
+        if (ph.wx.size() != ph.wy.size())
+            r.add(Severity::Error, path("wy"),
+                  "the phase water line has " + std::to_string(ph.wx.size()) +
+                      " x-value(s) but " + std::to_string(ph.wy.size()) + " y-value(s)");
+        else if (ph.wx.size() < 2)
+            r.add(Severity::Error, path("wx"),
+                  "water_override is set but the phase water line has " +
+                      std::to_string(ph.wx.size()) +
+                      " point(s); at least two are needed to define a phreatic surface");
+    } else if (!ph.wx.empty() || !ph.wy.empty()) {
+        r.add(Severity::Warning, path("water_override"),
+              "the phase carries a water line but water_override is false, so the project's "
+              "water level is used and these points are ignored");
+    }
+
     const int type = (int)ph.type;
     if (type < 0 || type >= 6) {
         // The driver treats an unknown type as Plastic, so an unchecked value

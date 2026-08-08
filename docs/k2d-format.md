@@ -8,11 +8,12 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **3** · Current `.res` version: **5**
+Current `.k2d` version: **4** · Current `.res` version: **5**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
-activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`). Both bumps
-are deliberate and for the same reason: an older build reading the newer file would silently
+activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`) and **v4** the
+per-phase water conditions (`phases[i].water_override`, `wx`, `wy`). Every bump
+is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
 than one that was tensioned against it -- so it must refuse the file instead.
 
@@ -76,7 +77,7 @@ flagged places differs from the in-memory default of a freshly created object.
 
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
-| `katai2d` | int | — | *required* | Format version; this build writes 3 |
+| `katai2d` | int | — | *required* | Format version; this build writes 4 |
 | `name` | str | — | `"Untitled project"` | Project display name |
 | `axisymmetric` | bool | — | `false` | `false` = plane strain; `true` = axisymmetric (x is the radius, x = 0 the symmetry axis) |
 | `initial_procedure` | int | — | `0` | How the initial phase establishes the in-situ state: 0 K0 procedure, 1 Gravity loading, 2 Safety (φ-c reduction of the gravity state; intended for single-phase runs) |
@@ -294,6 +295,9 @@ with `name` (default `"Displacement"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as 
 | `struct` | 01[] | — | `[]` | Structural-element activity flags |
 | `load` | 01[] | — | `[]` | Load activity flags |
 | `disp` | 01[] | — | `[]` | Prescribed-displacement activity flags |
+| `water_override` | bool | — | `false` | Use this phase's own phreatic line instead of the project's |
+| `wx` | num[] | m | `[]` | Phase phreatic polyline, x (used when `water_override`) |
+| `wy` | num[] | m | `[]` | Phase phreatic polyline, y (used when `water_override`) |
 
 with `name` (default `"Phase"`) as above.
 

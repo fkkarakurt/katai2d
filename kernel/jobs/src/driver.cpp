@@ -164,8 +164,13 @@ static void set_plate_mass(katai::core::plate::PlateProps& pp, double w) {
 }
 
 // Phreatic-surface elevation at horizontal position x (engine service since Stage B4).
-static double water_table_at(const model::Project& pr, double x) {
+// `config` is the phase being solved: a phase may carry its own phreatic polyline (PLAXIS
+// "water conditions per phase"), which is how staged dewatering is expressed. Null config or
+// no override falls back to the project's own line, so every existing run is unchanged.
+static double water_table_at(const model::Project& pr, double x, const model::Phase* config) {
     if (!pr.has_water) return -1e30;
+    if (config && config->water_override && !config->wx.empty())
+        return katai::core::phreatic_surface_at(config->wx, config->wy, x);
     return katai::core::phreatic_surface_at(pr.wx, pr.wy, x);
 }
 
@@ -441,7 +446,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             if (poly_on(i) && point_in_polygon(x, y, pr.polygons[i])) mat = pr.polygons[i].material;
         return mat;   // last wins
     };
-    const auto eff_unit_weight = [&pr, water, &material_at](double x, double y) {
+    const auto eff_unit_weight = [&pr, &io, water, &material_at](double x, double y) {
         const int mat = material_at(x, y);
         if (mat < 0 || mat >= (int)pr.materials.size()) return 0.0;
         const auto& m = pr.materials[mat];
@@ -452,9 +457,9 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // itself corrected to TOTAL stress by the pore re-add in the K0 seeding
         // (K0LayeredOptions::nonporous/pore).
         const bool np = m.drainage == model::Drainage::NonPorous;
-        const double g_total = (!np && water && y < water_table_at(pr, x)) ? m.gamma_sat
+        const double g_total = (!np && water && y < water_table_at(pr, x, io.config)) ? m.gamma_sat
                                                                           : m.gamma_unsat;
-        return (water && y < water_table_at(pr, x)) ? (g_total - kGammaWater) : g_total;
+        return (water && y < water_table_at(pr, x, io.config)) ? (g_total - kGammaWater) : g_total;
     };
     const auto ground_surface = [&pr, &poly_on](double x) {
         double top = -1e30;
@@ -1298,12 +1303,12 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         katai::core::assemble_pore_load_from_head(mesh, dofs, *flow_head, kGammaWater, f, pore_mask);
     } else if (water) {
         // Total-stress equilibrium: saturated weight below the phreatic surface, moist above.
-        const auto wt = [&pr](double x) { return water_table_at(pr, x); };
+        const auto wt = [&pr, &io](double x) { return water_table_at(pr, x, io.config); };
         katai::core::assemble_gravity_phreatic(mesh, dofs, gamma, gamma_sat, wt, f, act);
         // Hydrostatic pore-pressure load -> recovered stress is EFFECTIVE (Terzaghi; buoyancy
         // gamma' = gamma_sat - gamma_w emerges naturally). docs/references/effective-stress-formulation.md.
-        const auto pore = [&pr](double x, double y) {
-            return kGammaWater * std::fmax(0.0, water_table_at(pr, x) - y);
+        const auto pore = [&pr, &io](double x, double y) {
+            return kGammaWater * std::fmax(0.0, water_table_at(pr, x, io.config) - y);
         };
         katai::core::assemble_pore_pressure_load(mesh, dofs, pore, f, pore_mask);
     } else if (axi) {
@@ -1445,8 +1450,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // NonPorous targets are seeded in total stress (header note): u(x,y) hydrostatic.
     if (any_nonporous && water) {
         k0opt.nonporous = mat_nonporous;
-        k0opt.pore = [&pr](double x, double y) {
-            return kGammaWater * std::fmax(0.0, water_table_at(pr, x) - y);
+        k0opt.pore = [&pr, &io](double x, double y) {
+            return kGammaWater * std::fmax(0.0, water_table_at(pr, x, io.config) - y);
         };
     }
     double ymin = 1e30, ymax = -1e30;
@@ -1508,9 +1513,9 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 }
             }
     }
-    k0opt.strata_breaks = [&pr, water](double x) {
+    k0opt.strata_breaks = [&pr, &io, water](double x) {
         std::vector<double> br;
-        if (water) br.push_back(water_table_at(pr, x));
+        if (water) br.push_back(water_table_at(pr, x, io.config));
         for (const auto& P : pr.polygons) {
             const int n = (int)P.x.size();
             for (int i = 0; i < n; ++i) {
@@ -1789,7 +1794,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             tin.active = act;
             tin.fallback_head.resize(mesh.node_count);
             for (int n = 0; n < mesh.node_count; ++n)
-                tin.fallback_head[n] = pr.has_water ? water_table_at(pr, mesh.x[n]) : mesh.y[n];
+                tin.fallback_head[n] = pr.has_water ? water_table_at(pr, mesh.x[n], io.config) : mesh.y[n];
             if (io.config) { tin.duration_day = io.config->duration; tin.time_steps = io.config->time_steps; }
             if (!katai::core::solve_transient_flow_phase(mesh, tin, R)) return R;
             R.mesh = std::move(mesh);   // flow-only: skip the deformation post-processing tail
@@ -1811,7 +1816,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             din.compliant_base = compliant_base;
             din.has_water = pr.has_water;
             din.phreatic_mass = water;
-            din.water_table_y = [&pr](double x) { return water_table_at(pr, x); };
+            din.water_table_y = [&pr, &io](double x) { return water_table_at(pr, x, io.config); };
             din.gamma = gamma;          // gamma_sat is drainage-resolved by the common setup
             din.gamma_sat = gamma_sat;  // (NonPorous holds no water: its saturated weight IS gamma_unsat)
             if (io.config) {
@@ -1896,7 +1901,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             R.pore[n] = kGammaWater * std::fmax(0.0, (*flow_head)[n] - mesh.y[n]);
     else if (water)
         for (int n = 0; n < mesh.node_count; ++n)
-            R.pore[n] = kGammaWater * std::fmax(0.0, water_table_at(pr, mesh.x[n]) - mesh.y[n]);
+            R.pore[n] = kGammaWater * std::fmax(0.0, water_table_at(pr, mesh.x[n], io.config) - mesh.y[n]);
     R.active = act;             // phase element activity (empty = all active)
     R.mesh = std::move(mesh);   // the (possibly split) mesh the GUI must render
     R.ok = true;
