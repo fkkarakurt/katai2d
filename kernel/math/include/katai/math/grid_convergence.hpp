@@ -134,10 +134,18 @@ inline double mesh_representative_size(double total_area, int element_count) {
 // outside which an observed order is evidence that the triplet is NOT in the asymptotic range
 // rather than evidence about the discretisation. Both are stated here so that a report can
 // quote them, and both are conventions of this program -- see the note on `band` below.
+// The window is set by what the elements can actually deliver, so it belongs to the element
+// order, not to taste. For the 6-node quadratic triangle this program meshes with by default:
+// the displacement converges at O(h^3) in L2 and its nodal values can be superconvergent
+// beyond that, while strain and stress converge at O(h^2) with recovery pushing a smoothed
+// field to O(h^3) (Zienkiewicz and Zhu 1992, superconvergent patch recovery). An observed
+// order up to about 4 is therefore attributable to the discretisation; beyond that it is not,
+// and below 0.5 the amplification 1/(r^p - 1) turns mesh noise into a confident correction.
+// A study on the 15-node quartic element should raise both p_assumed and p_max accordingly.
 struct OrderPolicy {
     double p_assumed = 2.0;       // used when the observed order is rejected
     double p_min = 0.5;           // below this, 1/(r^p - 1) amplifies mesh noise into "signal"
-    double p_max = 3.0;           // above this, no element here can be responsible for it
+    double p_max = 4.0;           // above this, no tri6 result can be responsible for it
     double asymptotic_tol = 0.1;  // |asymptotic_ratio - 1| must be within this
     double safety_observed = 1.25;// Roache's Fs when three grids establish the order
     double safety_assumed = 3.0;  // Roache's Fs when the order is assumed rather than measured

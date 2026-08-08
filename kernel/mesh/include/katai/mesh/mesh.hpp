@@ -71,4 +71,43 @@ Mesh tri6_from_triangulation(const Triangulation& triangulation,
 Mesh tri15_from_triangulation(const Triangulation& triangulation,
                               int material_id = 0);
 
+// Uniform ("red", or regular) refinement: every triangle is split into four by the
+// midpoints of its edges (Bank, Sherman and Weiser 1983). Works on tri6 and tri15,
+// and returns a mesh of the same element order, with each child inheriting its
+// parent's material.
+//
+// The three properties that make this the right instrument for a convergence study,
+// and that a fresh mesh at half the element size does NOT have:
+//
+//   NESTED   -- every CORNER and EDGE node of the coarse mesh is a node of the refined
+//               mesh, at the same coordinates. Successive solutions are then comparable
+//               point by point, and their differences are discretisation rather than a
+//               different mesh's idea of where to put nodes. (The exception, measured
+//               and stated rather than discovered later: a tri15 element's three
+//               INTERIOR nodes sit at barycentric (2,1,1)/4 and its permutations, which
+//               are not lattice points of any child, so they do not survive. They are
+//               private to their element and shared with nothing, so no continuity or
+//               comparability is lost -- but "every node survives" would be false, and
+//               tests/test_mesh_refine_uniform.cpp asserts the true statement.)
+//   SIMILAR  -- the four children are similar to the parent (midpoint triangle), so
+//               every angle is preserved EXACTLY. The refined family is shape-regular
+//               by construction, which is the hypothesis the O(h^p) convergence
+//               theory is proved under (Ciarlet 1978), and it removes mesh quality
+//               as a variable between the runs.
+//   EXACT r  -- h halves exactly, so the refinement factor is 2, comfortably above
+//               the 1.3 that Celik et al. (2008) require of a grid-refinement study.
+//
+// Rebuilding a mesh from scratch at a smaller target size gives none of the three:
+// the meshes are not nested, the angles differ, and the achieved ratio is whatever
+// the mesher happened to produce. Measured on this tree, that difference is what put
+// KV-NUM-005's first triplets outside the asymptotic range (docs/validation/
+// numerical-uncertainty.md).
+//
+// Geometry is preserved exactly: the boundary of the refined mesh is the boundary of
+// the coarse one, because a midpoint of a straight edge lies on that edge. A CURVED
+// domain would be a different matter -- refinement here does not know the true
+// geometry and cannot pull new boundary nodes onto it -- and this program's domains
+// are straight-sided polygons, so the question does not arise.
+Mesh refine_uniform(const Mesh& coarse);
+
 } // namespace katai::mesh

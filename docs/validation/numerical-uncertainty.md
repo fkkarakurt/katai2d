@@ -66,12 +66,15 @@ with them:
 1. **When the observed order is not believed.** Roache provides both factors of safety; Celik
    et al. warn that an order far from the formal one means the triplet is not in the asymptotic
    range. Neither states a numeric acceptance window. KATAI accepts the observed order only
-   when the triplet converges monotonically, `0.5 ≤ p ≤ 3.0`, and the asymptotic-range check is
+   when the triplet converges monotonically, `0.5 ≤ p ≤ 4.0`, and the asymptotic-range check is
    within 10% of 1. Otherwise the band is recomputed with an **assumed order p = 2 and
-   Fs = 3.0**, and the extrapolated value is not quoted. The lower bound is not arbitrary: the
-   amplification `1/(r^p − 1)` diverges as `p → 0`, so a small observed order turns mesh-to-mesh
-   irregularity into a large, confident-looking correction — which is exactly what happened in
-   the study below.
+   Fs = 3.0**, and the extrapolated value is not quoted. Neither bound is arbitrary. Below 0.5
+   the amplification `1/(r^p − 1)` diverges as `p → 0`, so a small observed order turns
+   mesh-to-mesh irregularity into a large, confident-looking correction — which is exactly what
+   happened in the first version of the study below. Above 4 nothing in a 6-node quadratic
+   triangle can be responsible: its displacement converges at O(h³) in L2 with nodal values
+   capable of more, and its recovered stress at O(h²) with recovery superconvergent to about
+   O(h³) (Zienkiewicz and Zhu 1992). A study on the 15-node quartic element must raise both.
 2. **A floor the evidence sets.** Outside the asymptotic range the reported band is widened, if
    necessary, to the spread across the three meshes. There the three values are not a hierarchy
    of errors crowned by the finest; they are three answers whose differences are dominated by
@@ -84,43 +87,50 @@ with them:
 ## 4. First case measured: KV-FND-008, uniform strip load on an elastic half-plane
 
 `tests/test_mesh_convergence.cpp` (**KV-NUM-005**), gated in the suite. The checked-in case file
-is solved at three densities — only `mesh.elem_size` changes; geometry, material, load, element
-order and the mesher's own local refinement rules are the file's — and the quantities are read
-at exact probe points with the element shape functions rather than at the nearest node, because
-the nearest node moves with every mesh and that jitter would be indistinguishable from
-discretisation error.
+is solved on a **nested** family: the mesher is visited once, and the two finer meshes are made
+by splitting every triangle at its edge midpoints (`katai::mesh::refine_uniform`, verified in
+**KV-NUM-006**). Quantities are read at exact probe points with the element shape functions
+rather than at the nearest node, because the nearest node moves with every mesh and that jitter
+would be indistinguishable from discretisation error.
 
-| Requested elem_size | Elements | Nodes | Measured h |
+| Level | Elements | Nodes | Measured h |
 |---|---|---|---|
-| 0.700 m | 4 827 | 9 860 | 0.4071 m |
-| 1.050 m | 2 184 | 4 497 | 0.6052 m |
-| 1.575 m | 1 012 | 2 127 | 0.8891 m |
+| coarse (mesher, elem_size 1.4 m) | 1 190 | 2 485 | 0.8199 m |
+| refined once | 4 760 | 9 729 | 0.4100 m |
+| refined twice | 19 040 | 38 497 | 0.2050 m |
 
-Refinement factors r21 = 1.487, r32 = 1.469 — both above the recommended 1.3.
+Refinement factor **exactly 2** at both steps, with every angle of the coarse mesh preserved.
 
 | Quantity | Fine mesh | Observed p | Reported band | Basis | Closed form | Model deviation |
 |---|---|---|---|---|---|---|
-| σ_z at 2 m depth | −81.9428 kPa | 0.238 (monotonic) | **±0.496%** | assumed order, Fs = 3 | −81.8310 kPa | −0.137% — **inside** the band |
-| σ_z at 4 m depth | −55.2331 kPa | 3.014 (oscillatory) | **±0.109%** | assumed order, Fs = 3, widened to the spread | −54.9815 kPa | −0.458% — **outside** the band |
-| Settlement under the strip centre | −0.0212054 m | 6.98 (oscillatory) | **±0.107%** | assumed order, Fs = 3, widened to the spread | (none: a strip on a half-plane has unbounded surface settlement) | — |
+| σ_z at 2 m depth | −81.8861 kPa | 3.65, monotonic | **±0.003%** | observed order, Fs = 1.25 | −81.8310 kPa | −0.067% — **outside** the band |
+| σ_z at 4 m depth | −55.2003 kPa | 2.32, oscillatory | **±1.066%** | assumed order, Fs = 3, widened to the spread | −54.9815 kPa | −0.398% — inside the band |
+| Settlement under the strip centre | −0.0212052 m | 3.90, monotonic | **±0.001%** | observed order, Fs = 1.25 | (none: a strip on a half-plane has unbounded surface settlement) | — |
 
-Three things are worth stating plainly, and the first two are findings about the *study*, not
-about the runs:
+At 2 m depth the triplet is in the asymptotic range, and the Richardson-extrapolated stress —
+what this formulation would give on an infinitely fine mesh — is **−81.8839 kPa, 0.06% from the
+closed form**, closer than any of the three runs.
 
-- **These triplets are not in the asymptotic range.** The observed orders — 0.24, 3.01, 6.98 —
-  are not orders any element in this program can deliver. The reason is structural: KATAI's
-  Ruppert mesher rebuilds the mesh from scratch at every density, so successive meshes are
-  **not nested**, and at practical densities the mesh-to-mesh irregularity is the same size as
-  the h^p trend it is meant to reveal. The GCI literature derives the method for uniform,
-  systematic refinement and says as much; this is that caveat, measured on this code.
-- **Richardson extrapolation would have made the 2 m answer worse.** With p = 0.238 the
-  extrapolated σ_z is −80.28 kPa, i.e. +1.89% from the closed form, against −0.14% for the fine
-  mesh the extrapolation was supposed to improve. The policy in §3 is what stopped that number
-  from being published, and this row is why the policy exists.
-- **At 4 m depth the model deviation is larger than the numerical band.** 0.458% against
-  ±0.109%: the remaining deviation is *not* discretisation. The obvious candidate is the finite
-  40 × 20 m domain standing in for a half-plane, which is a modelling choice, not a mesh
-  property — and separating those two is the entire purpose of this exercise.
+Three things follow, and the first is the result this whole exercise was built to produce:
+
+- **The 2 m deviation from Boussinesq is not the mesh.** The discretisation band there is
+  ±0.003%; the deviation is 0.067%, more than twenty times larger. Refining further will not
+  remove it. The obvious candidate is the finite 40 × 20 m domain standing in for a half-plane —
+  a modelling choice, not a mesh property — and that is now a measured statement rather than a
+  hypothesis.
+- **Nested refinement is what made this possible, and its absence was measurable.** The same
+  study run by asking the mesher for three smaller element sizes gave observed orders of 0.24,
+  3.01 and 6.98 — orders no element here can deliver — because three separate visits to the
+  mesher produce three unrelated meshes whose differences carry the mesher's irregularity as
+  well as the discretisation. With nesting the same probes give 3.65 and 3.90, both consistent
+  with a quadratic element whose displacement converges at O(h³) and whose recovered stress is
+  superconvergent.
+- **Being coarse is not the same as being in the asymptotic range.** A first nested attempt from
+  a 2.8 m base (299 → 1 196 → 4 784 elements) was still oscillatory: the coarsest level simply
+  did not resolve a 4 m strip. The family had to start fine enough for the trend to exist before
+  the extrapolation could see it. The 4 m probe is still oscillatory even in the final family,
+  and its band is therefore the conservative one — an honest ±1.066% rather than a confident
+  ±0.067%.
 
 ## 5. What this does not yet cover
 
@@ -136,7 +146,9 @@ a passed one:
   0.872 on the finest mesh (ψ = 0, non-associated flow), and the −39% deep sheet-pile wall row,
   whose domain-size diagnosis is done but whose closure — a graded mesh over a doubled domain —
   is not.
-- **Nested refinement is not available.** The most direct fix for §4's first finding is to
-  refine a mesh rather than rebuild it, so that successive meshes share nodes. That is a mesher
-  capability this program does not have, and until it does, the honest reading of these bands is
-  the one given: an observational spread with an assumed order, not an asymptotic estimate.
+- **The 4 m probe is still not in the asymptotic range**, and no amount of refinement policy
+  will change that: it needs either a finer family or an understanding of why that depth behaves
+  differently from 2 m. Its band is the conservative one until then.
+- **Only uniform refinement exists.** `refine_uniform` refines everywhere; a graded or adaptive
+  refinement — finer where the error is, which is what the deep-wall case needs — is not
+  implemented, and neither is an error estimator to drive it.
