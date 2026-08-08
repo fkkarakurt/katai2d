@@ -137,6 +137,14 @@
 //   expected: 7.80 (analytic, rho [(2 + pi) c0 + B c_inc / 4]); PLAXIS publishes 7.86; the weightless gravity initial does not displace; a footing node carries exactly the imposed u_y
 //   band:     5% vs analytic and 3% vs PLAXIS, as asserted below -- measured +1.4% / +0.6% (7.91) on the file's own 0.5 m tri15 mesh (the direct structured benchmark KV-FND-004 measures +2.8%)
 //
+// verify: KV-CST-002
+//   oracle:   closed_form
+//   source:   the Hardening Soil oedometric stiffness law as published in the PLAXIS Material Models Manual: E_oed = E_oed^ref ((c cos(phi) + sigma_1 sin(phi))/(c cos(phi) + p_ref sin(phi)))^m, integrated over one-dimensional primary loading; the same law is verified at the material point against the manual's own figures in test_hardening_soil and test_hs_berlin
+//   locator:  with c = 0 the stiffness factor reduces to (sigma_1/p_ref)^m and d eps_1 = d sigma_1 / E_oed gives -eps_1 = (p_ref^m / E_oed^ref) [sigma_1^(1-m)]/(1-m) between the two stress levels (stated in full and evaluated in the test, not called from the material header)
+//   quantity: settlement increment of a laterally confined weightless Hardening Soil column when the vertical stress steps from 50 to 200 kPa, run from the checked-in tests/corpus/kv-cst-002-hs-oedometer.k2d [m]
+//   expected: the closed form above with E_oed^ref = 30 MPa, p_ref = 100 kPa, m = 0.5, H = 4 m
+//   band:     3%, as asserted below -- measured +0.41% on the file's own 0.5 m tri6 mesh with the driver's 40 load steps. The first HS boundary-value case in the corpus: the model was already verified at the material point, this verifies the path from the file through the mesher, the cap return mapping and the load stepping. It also pins a phase convention: a phase reports displacement relative to its own start, so the loading phase's field IS the increment (the seating phase's 0 -> 50 kPa settlement of 0.0164 m is reported separately and is not comparable to the same integral, because the law's stiffness vanishes as sigma -> 0)
+
 // verify: KV-SLP-002
 //   oracle:   published_benchmark
 //   source:   Griffiths and Lane (1999), "Slope stability analysis by finite elements", Geotechnique 49(3), Example 1
@@ -1470,6 +1478,123 @@ void oracle_gl_example1(const m::Project& pr) {
     check(R.max_disp > 1e-6, "the failure mechanism displaces (a genuine slip surface)");
 }
 
+
+// ------------------------------------------- KV-CST-002: Hardening Soil oedometer (1D) --
+// The first HARDENING SOIL boundary-value problem in the corpus. Until now the HS family was
+// verified only at the material point (test_hardening_soil, test_hs_cap, test_hs_berlin against
+// the Material Models Manual figures) -- the model was proven, the PATH from a .k2d file through
+// the mesher, the assembler, the cap return mapping and the load stepping was not.
+//
+// A one-dimensional compression test is the right first case because it is the experiment that
+// DEFINES the parameter under test: E_oed^ref is read off an oedometer, and the closed-form
+// integral of the HS stiffness law is what a practitioner assumes when they type that number in.
+// The column is weightless, so the vertical stress is the surcharge itself and uniform -- there
+// is no depth integral to argue about, and what is compared is the model's own law against the
+// finite element solution of it: an independent path through the whole machinery.
+constexpr double kOedW = 1.0, kOedH = 4.0;        // column [m]
+constexpr double kOedQ0 = 50.0, kOedQ1 = 200.0;   // vertical stress before / after [kPa]
+constexpr double kOedEoedRef = 30000.0, kOedPref = 100.0, kOedM = 0.5;
+
+m::Project build_hs_oedometer() {
+    m::Project pr;
+    pr.name = "KV-CST-002 HS oedometer";
+    pr.x_min = 0.0; pr.x_max = kOedW;
+    pr.y_min = 0.0; pr.y_max = kOedH;
+    pr.has_water = false;
+    pr.initial_procedure = m::InitialProcedure::GravityLoading;
+    pr.mesh.elem_size = 0.5;
+    pr.mesh.auto_refine = false;
+
+    m::Material s;
+    s.name = "Hardening Soil sand";
+    s.model = m::SoilModel::HardeningSoil;
+    s.drainage = m::Drainage::Drained;
+    s.gamma_unsat = 0.0; s.gamma_sat = 0.0;   // weightless: sigma_1 IS the surcharge
+    s.E = 30000.0; s.nu = 0.2;                // fallback only; HS uses the reference moduli
+    s.c = 0.0; s.phi = 35.0; s.psi = 5.0;
+    s.E50ref = 30000.0; s.Eoedref = kOedEoedRef; s.Eurref = 90000.0;
+    s.m = kOedM; s.p_ref = kOedPref; s.nu_ur = 0.2; s.Rf = 0.9;
+    s.k0nc_auto = true;
+    s.tension_cutoff = false;   // 1D compression never reaches it; keeps the run's report clean
+    pr.materials.push_back(s);
+
+    m::SoilPolygon P;
+    P.name = "Column";
+    P.material = 0;
+    P.x = {0, kOedW, kOedW, 0};
+    P.y = {0, 0, kOedH, kOedH};
+    P.edge_bc = {(int)m::BCType::FullyFixed, (int)m::BCType::HorizontallyFixed,
+                 (int)m::BCType::Free, (int)m::BCType::HorizontallyFixed};
+    pr.polygons.push_back(P);
+
+    // Two surcharges on the same line: the seating stress, active from the start, and the
+    // increment the second phase switches on. The schema activates loads per phase, it does not
+    // rescale them, so a stress step is two loads rather than one changed number.
+    m::Load L0;
+    L0.kind = m::LoadKind::Distributed;
+    L0.name = "Seating stress";
+    L0.x1 = 0; L0.y1 = kOedH; L0.x2 = kOedW; L0.y2 = kOedH;
+    L0.qx1 = L0.qx2 = 0; L0.qy1 = L0.qy2 = -kOedQ0;
+    pr.loads.push_back(L0);
+    m::Load L1 = L0;
+    L1.name = "Load increment";
+    L1.qy1 = L1.qy2 = -(kOedQ1 - kOedQ0);
+    pr.loads.push_back(L1);
+
+    pr.initial.load_active = {1, 0};   // seating only
+    m::Phase step;
+    step.name = "Load to 200 kPa";
+    step.load_active = {1, 1};
+    pr.phases.push_back(step);
+    return pr;
+}
+
+void oracle_hs_oedometer(const m::Project& pr) {
+    const auto M = katai::app::mesh_from_project(pr);
+    check(M.ok, "oedometer column meshed from the file's own settings");
+    if (!M.ok) { std::printf("      (%s)\n", M.message.c_str()); return; }
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    check(res.size() == 2 && res[0].ok && res[1].ok, "seating + loading phases converged");
+    if (res.size() != 2 || !res[1].ok) {
+        if (!res.empty()) std::printf("      (%s)\n", res.back().message.c_str());
+        return;
+    }
+
+    // The closed form, written out here rather than called from the material header: with c = 0
+    // the stiffness factor is (sigma/p_ref)^m (sin(phi) cancels), so
+    //   -eps_1 = (p_ref^m / Eoed_ref) * [sigma^(1-m)]/(1-m), evaluated from sigma_0 to sigma_1.
+    const double coef = std::pow(kOedPref, kOedM) / kOedEoedRef;
+    const double eps = coef * (std::pow(kOedQ1, 1.0 - kOedM) - std::pow(kOedQ0, 1.0 - kOedM)) /
+                       (1.0 - kOedM);
+    const double want = eps * kOedH;   // settlement increment of the top [m]
+
+    // A phase reports displacement relative to ITS OWN start, so the loading phase's field is
+    // already the increment the closed form describes. Measured rather than assumed: the seating
+    // phase settles 0.0164 m under 0 -> 50 kPa, and an accumulating phase would then report
+    // about 0.038 m (the 0 -> 200 kPa integral) instead of the 0.019 m it does.
+    const int top = nearest_node(res[1].mesh, 0.5 * kOedW, kOedH);
+    const double got = -res[1].disp[top * 2 + 1];
+    std::printf("      seating phase (0 -> 50 kPa) settles %.6f m; the loading phase reports its "
+                "own increment\n", -res[0].disp[top * 2 + 1]);
+    std::printf("      settlement increment %.6f m vs closed form %.6f m (%+.2f%%)\n", got, want,
+                100.0 * (got - want) / want);
+    check(std::fabs(got - want) / want < 0.03,
+          "1D compression settlement matches the HS oedometric law within 3%");
+
+    // The stress state has to be the one the law was integrated over, or the agreement above is
+    // a coincidence: uniform vertical stress equal to the surcharge, top to bottom.
+    double sv_min = 0.0, sv_max = -1e300;
+    for (int n = 0; n < res[1].mesh.node_count; ++n) {
+        sv_min = std::fmin(sv_min, res[1].stress.stress[n](1));
+        sv_max = std::fmax(sv_max, res[1].stress.stress[n](1));
+    }
+    std::printf("      vertical stress range %.3f .. %.3f kPa (surcharge %.1f)\n", sv_min, sv_max,
+                -kOedQ1);
+    check(std::fabs(sv_min + kOedQ1) / kOedQ1 < 0.02 && std::fabs(sv_max + kOedQ1) / kOedQ1 < 0.02,
+          "the column carries the surcharge as a uniform vertical stress");
+}
+
 }  // namespace
 
 int main() {
@@ -1491,6 +1616,7 @@ int main() {
         {"kv-fnd-013-cox-circular-footing.k2d", build_cox, oracle_cox},
         {"kv-fnd-014-davis-booker-strip-footing.k2d", build_davis_booker, oracle_davis_booker},
         {"kv-slp-002-griffiths-lane-example1.k2d", build_gl_example1, oracle_gl_example1},
+        {"kv-cst-002-hs-oedometer.k2d", build_hs_oedometer, oracle_hs_oedometer},
     };
     for (const CorpusCase& c : cases) run_case(c);
 

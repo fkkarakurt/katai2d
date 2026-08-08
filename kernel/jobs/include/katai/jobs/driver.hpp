@@ -221,10 +221,15 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
 // the COMPLETED prefix is returned -- cooperative cancellation: a running phase is never
 // interrupted. The Job object (katai/jobs/job.hpp) is the intended consumer.
 using PhaseProgress = std::function<void(int, int, const std::string&)>;
+// `numeric` overrides the numerical controls of EVERY phase in the run (zero fields keep the
+// driver's material-class defaults, so an omitted argument reproduces previous runs exactly). It
+// exists so that a study can ask whether a published number depends on its stopping rule --
+// tests/test_tolerance_independence.cpp -- not so that a front end can quietly loosen one.
 std::vector<SolveResult> solve_phases(const model::Project& pr,
                                       const katai::mesh::Mesh& mesh_in,
                                       InitialPhase init_phase = InitialPhase::K0Procedure,
                                       const PhaseProgress& on_phase = {},
-                                      const std::function<bool()>& cancelled = {});
+                                      const std::function<bool()>& cancelled = {},
+                                      const NumericalControls& numeric = {});
 
 } // namespace katai::app

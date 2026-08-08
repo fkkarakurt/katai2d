@@ -20,9 +20,9 @@
 //   oracle:   independent_path
 //   source:   the same problem solved with a different stopping rule is an independent path to the same answer; the criterion under study is the tolerated force residual of the driver's nonlinear solver (kernel/jobs/src/driver.cpp), whose default is 1e-6 for the Mohr-Coulomb family; the practice of demonstrating iterative-convergence independence before quoting a discretisation error is I. B. Celik et al. (2008), ASME J. Fluids Eng. 130(7):078001, which requires iterative convergence to be established first, and ASME V&V 20-2009
 //   locator:  factor of safety by phi-c reduction on the checked-in tests/corpus/kv-slp-002-griffiths-lane-example1.k2d, one fixed mesh, solved at tolerated residuals 1e-4, 1e-6 (the driver's default for this material) and 1e-8; and the elastic strip-load benchmark, whose linear system is solved directly and therefore carries no iterative tolerance at all
-//   quantity: factor of safety [-] as a function of the tolerated force residual, and the spread across the three tolerances relative to the default run
-//   expected: a spread far below the mesh dependence of the same quantity (measured at 4-8% in KV-SLP-003), so that the published comparison against Griffiths and Lane and Bishop and Morgenstern is a statement about the model and the mesh rather than about the stopping rule
-//   band:     as asserted below and MEASURED on this tree, not inherited -- see the printed table; the assertion is that the three tolerances agree within 1%, i.e. at least four times tighter than the mesh dependence they must not be confused with
+//   quantity: factor of safety [-] and, for the Hardening Soil oedometer KV-CST-002, the settlement of the loading step [m], each as a function of the tolerated force residual, with the spread across the three tolerances relative to the default run
+//   expected: for the factor of safety, a spread far below the mesh dependence of the same quantity (4-8% in KV-SLP-003), so that the published comparison is a statement about the model and the mesh rather than about the stopping rule; for the Hardening Soil family, whose default residual is a hundred times looser, a bounded and stated cost rather than an unknown one
+//   band:     as asserted below and MEASURED on this tree, not inherited. Slope factor of safety: 1.421021 at 1e-4, 1e-6 and 1e-8 -- BIT-IDENTICAL, spread 0.0000%, inside the reduction search's own resolution of 6.3e-4. Hardening Soil oedometer: 0.018934 m at the default 1e-2 (+0.413% vs the closed form), 0.019045 m at 1e-4 (+1.002%), 0.019044 m at 1e-6 -- so the default costs 0.59% on this quantity and 1e-4 is already converged. Note the default's smaller deviation is cancellation, not accuracy. Asserted: both spreads below 1%, the FoS spread inside the search resolution, 1e-4 and 1e-6 agreeing to 0.05%, and the default HS run within 3% of the closed form
 
 #include <katai/io/project_io.hpp>
 #include <katai/jobs/driver.hpp>
@@ -123,6 +123,68 @@ int main() {
     // three identical numbers as evidence.
     std::printf("\n  note: the elastic strip-load benchmark (KV-NUM-005) is a LINEAR system --\n"
                 "        solved directly, no iteration, so no stopping rule enters its answer.\n");
+
+    // ---------------------------------------------------------------------------------------
+    // The case this study was really needed for. The driver gives the hardening and soft-soil
+    // families a tolerated residual of 1e-2 -- a hundred times looser than Mohr-Coulomb -- on
+    // the grounds that their tangent is continuum rather than consistent. That is a defensible
+    // engineering choice, and it was an undeclared one: nothing measured whether an HS answer
+    // depends on it. KV-CST-002, the oedometer, is the first HS boundary-value problem in the
+    // corpus, and its settlement has a closed form to be judged against.
+    std::printf("\n== Hardening Soil at its default 1%% residual, and tighter (KV-CST-002) ==\n");
+    m::Project hs;
+    const std::string hs_path = std::string(KATAI_CORPUS_DIR) + "/kv-cst-002-hs-oedometer.k2d";
+    if (!m::load_project(hs_path, hs, &err, nullptr)) {
+        std::printf("FAIL: cannot load %s: %s\n", hs_path.c_str(), err.c_str());
+        return 1;
+    }
+    const auto HM = katai::app::mesh_from_project(hs);
+    check(HM.ok, "oedometer mesh built from the case file");
+    if (!HM.ok) return 1;
+
+    // The closed form of the loading step, as in the corpus oracle: with c = 0 the HS stiffness
+    // factor is (sigma/p_ref)^m, so -eps_1 = (p_ref^m/Eoed_ref)[sigma^(1-m)]/(1-m) over 50..200.
+    const double coef = std::pow(100.0, 0.5) / 30000.0;
+    const double want = coef * (std::pow(200.0, 0.5) - std::pow(50.0, 0.5)) / 0.5 * 4.0;
+    const double hs_tol[3] = {1e-2, 1e-4, 1e-6};
+    double u[3] = {0.0, 0.0, 0.0};
+    for (int i = 0; i < 3; ++i) {
+        katai::app::NumericalControls nc;
+        nc.tolerance = hs_tol[i];
+        const auto res = katai::app::solve_phases(
+            hs, HM.mesh, katai::app::initial_phase_from(hs.initial_procedure), nullptr, nullptr,
+            nc);
+        check(res.size() == 2 && res[1].ok,
+              "the oedometer converges at tolerance " + std::to_string(hs_tol[i]));
+        if (res.size() != 2 || !res[1].ok) return 1;
+        int top = 0;
+        double bd = 1e300;
+        for (int n = 0; n < res[1].mesh.node_count; ++n) {
+            const double d = std::hypot(res[1].mesh.x[n] - 0.5, res[1].mesh.y[n] - 4.0);
+            if (d < bd) { bd = d; top = n; }
+        }
+        u[i] = -res[1].disp[top * 2 + 1];
+        std::printf("  tolerated residual %.0e -> settlement %.6f m  (%+.3f%% vs closed form)\n",
+                    hs_tol[i], u[i], 100.0 * (u[i] - want) / want);
+    }
+    const double hs_lo = std::fmin(u[0], std::fmin(u[1], u[2]));
+    const double hs_hi = std::fmax(u[0], std::fmax(u[1], u[2]));
+    const double hs_spread = (hs_hi - hs_lo) / u[0];
+    std::printf("  spread from 1e-2 (the default) to 1e-6 = %.4f%% of the default run\n",
+                100.0 * hs_spread);
+    check(hs_spread < 0.01,
+          "the Hardening Soil answer is independent of its stopping rule to within 1%");
+    check(std::fabs(u[0] - want) / want < 0.03,
+          "and the default 1% residual still lands within 3% of the closed form");
+    // 1e-4 is already converged: tightening another two orders changes nothing. So the cost of
+    // the default is the 1e-2 -> 1e-4 step and no more, which is a bounded, quotable number.
+    check(std::fabs(u[1] - u[2]) / u[1] < 5e-4,
+          "1e-4 and 1e-6 agree to 0.05%: the residual is converged by 1e-4");
+    std::printf("  the DEFAULT costs %.3f%% on this quantity, and it is not accuracy: the\n"
+                "  converged run sits at %+.3f%% from the closed form while the looser default\n"
+                "  sits at %+.3f%% -- closer by cancellation, not by being better.\n",
+                100.0 * std::fabs(u[0] - u[2]) / u[2], 100.0 * (u[2] - want) / want,
+                100.0 * (u[0] - want) / want);
 
     std::printf(g_failures ? "\n%d CHECK(S) FAILED\n" : "\nall checks passed\n", g_failures);
     return g_failures ? 1 : 0;

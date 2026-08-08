@@ -206,6 +206,36 @@ an adaptive refinement driven by an error estimator, and a comparison against fi
 limit analysis — which brackets the collapse load from above and below and does not localise —
 are the routes the literature takes, and none of them is implemented here.
 
+## 6. The hardening family's 1% residual, measured
+
+The driver gives the Hardening Soil and Soft Soil families a tolerated force residual of **1e-2**
+— a hundred times looser than the 1e-6 it gives Mohr-Coulomb — because their tangent is a
+continuum rather than a consistent one, so the Newton iteration converges linearly instead of
+quadratically. That is a defensible engineering choice, and it was an undeclared one: nothing
+measured what it costs.
+
+`tests/test_input_corpus.cpp` gained the first HS **boundary-value** case for exactly this
+purpose (**KV-CST-002**): a laterally confined, weightless HS column whose vertical stress steps
+from 50 to 200 kPa. The vertical stress is then the surcharge itself, uniform top to bottom, and
+the settlement has a closed form — the integral of the HS oedometric stiffness law,
+`E_oed = E_oed^ref ((c cos φ + σ₁ sin φ)/(c cos φ + p_ref sin φ))^m`, which with c = 0 reduces to
+`−ε₁ = (p_ref^m/E_oed^ref)·[σ₁^(1−m)]/(1−m)`. Until now the HS family was verified only at the
+material point; this verifies the path from the file through the mesher, the cap return mapping
+and the load stepping.
+
+| Tolerated residual | Settlement of the loading step | vs the closed form |
+|---|---|---|
+| **1e-2** (the driver's default) | 0.018934 m | **+0.413%** |
+| 1e-4 | 0.019045 m | +1.002% |
+| 1e-6 | 0.019044 m | +0.998% |
+
+Three things to read off it. The default costs **0.59%** on this quantity — bounded, and no
+longer unknown. **1e-4 is already converged**: two more orders change the answer by 0.005%, so
+the cost is the first step and nothing beyond it. And the default's *smaller* deviation from the
+closed form is **cancellation, not accuracy**: the converged finite element answer is +1.0%, and
+the looser run happens to sit nearer the analytic value on the way there. Reporting it as "more
+accurate" would be exactly the kind of luck this document exists to strip out.
+
 ## 6. What this does not yet cover
 
 The register is deliberately explicit about its own gaps, since an absent row must never read as
@@ -213,13 +243,11 @@ a passed one:
 
 - **Fourteen of the sixteen corpus cases have no sweep yet.** KV-FND-008 and KV-SLP-002 are the
   first two.
-- **Tolerance independence is measured for one case only.** KV-NUM-007 covers the slope factor
-  of safety (Mohr-Coulomb, default residual 1e-6). The **hardening and soft-soil families still
-  run at a 1% residual** and no boundary-value problem in the corpus exercises them, so the
-  question "does an HS number depend on its stopping rule?" is open — and it is the one where a
-  loose tolerance is most likely to matter. The controls are now overridable through the driver
-  seam (`PhaseIO::numeric`), so the study needs a case, not machinery. Exposing them per phase
-  in `.k2d` remains WP-3.
+- **Tolerance independence is measured for two families, not all.** KV-NUM-007 covers the slope
+  factor of safety (Mohr-Coulomb, default residual 1e-6, spread 0.0000%) and the Hardening Soil
+  oedometer KV-CST-002 at its default 1e-2. The soft-soil family, the consolidation and the
+  dynamic paths have not been swept. Exposing the controls per phase in `.k2d` remains WP-3;
+  they are overridable today through the driver seam (`PhaseIO::numeric`, `solve_phases`).
 - **One open question in the record is now measured, one is still open.** The slope factor of
   safety falling on fine meshes is §5 above: characterised, cited and declared to the user. The
   −39% deep sheet-pile wall row still has only its domain-size diagnosis, not its closure.

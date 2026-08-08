@@ -1923,7 +1923,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
 std::vector<SolveResult> solve_phases(const model::Project& pr,
                                       const katai::mesh::Mesh& mesh_in, InitialPhase init_phase,
                                       const PhaseProgress& on_phase,
-                                      const std::function<bool()>& cancelled) {
+                                      const std::function<bool()>& cancelled,
+                                      const NumericalControls& numeric) {
     std::vector<SolveResult> out;
     std::vector<katai::core::GaussState> committed;
     const int total = 1 + (int)pr.phases.size();
@@ -1931,6 +1932,7 @@ std::vector<SolveResult> solve_phases(const model::Project& pr,
 
     PhaseIO io0;
     io0.config = &pr.initial;
+    io0.numeric = numeric;
     io0.out_states = &committed;
     if (stop()) return out;
     if (on_phase) on_phase(0, total, "Initial phase");
@@ -1945,6 +1947,7 @@ std::vector<SolveResult> solve_phases(const model::Project& pr,
         if (stop()) return out;
         PhaseIO io;
         io.config = &ph;
+        io.numeric = numeric;
         io.chained = true;
         io.init_states = &committed;
         // The parent phase's result: a Dynamic phase superposes its increment onto this static state
