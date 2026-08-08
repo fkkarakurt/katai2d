@@ -77,6 +77,36 @@ inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::
               "water level is used and these points are ignored");
     }
 
+    // Numerical controls (0 = let the program choose). A value that is set must be usable,
+    // because the alternative is a run that quietly ignores the numerics the file was written
+    // to carry -- which is the whole reason they are in the file.
+    if (ph.tolerance < 0.0)
+        r.add(Severity::Error, path("tol"),
+              "a tolerated error cannot be negative (got " + num(ph.tolerance) + ")");
+    else if (ph.tolerance >= 1.0)
+        r.add(Severity::Error, path("tol"),
+              "a tolerated error of " + num(ph.tolerance) +
+                  " accepts a residual as large as the load itself; it is a relative error, so "
+                  "it must be below 1 (PLAXIS's default is 0.01)");
+    else if (ph.tolerance > 0.05)
+        r.add(Severity::Warning, path("tol"),
+              "a tolerated error of " + num(ph.tolerance) + " (" + num(100.0 * ph.tolerance) +
+                  "%) is far looser than any published default (PLAXIS: 1%); the equilibrium "
+                  "this phase reports may be a long way from equilibrium");
+    if (ph.load_steps < 0)
+        r.add(Severity::Error, path("loadsteps"),
+              "the number of load increments cannot be negative (got " +
+                  std::to_string(ph.load_steps) + "; 0 means the program chooses)");
+    if (ph.max_iterations < 0)
+        r.add(Severity::Error, path("maxiter"),
+              "the iteration limit cannot be negative (got " +
+                  std::to_string(ph.max_iterations) + "; 0 means the program chooses)");
+    else if (ph.max_iterations > 0 && ph.max_iterations < 4)
+        r.add(Severity::Warning, path("maxiter"),
+              "an iteration limit of " + std::to_string(ph.max_iterations) +
+                  " will make the solver cut the load step back almost every time; the run will "
+                  "be slow rather than wrong");
+
     const int type = (int)ph.type;
     if (type < 0 || type >= 6) {
         // The driver treats an unknown type as Plastic, so an unchecked value

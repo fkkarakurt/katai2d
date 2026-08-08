@@ -333,12 +333,18 @@ class _Phases:
         self._prj = prj
 
     def _add(self, name, ptype, *, activate=(), deactivate=(), duration=None,
-             steps=None):
+             steps=None, tolerance=None, load_steps=None, max_iterations=None):
         ph = _core.Phase()
         ph.name = name
         ph.type = ptype
         if duration is not None: ph.duration = duration
         if steps is not None: ph.time_steps = steps
+        # Numerical controls; unset = the program chooses by material class. They are
+        # written into the .k2d, so a script that pins them publishes a run someone
+        # else can reproduce exactly.
+        if tolerance is not None: ph.tolerance = tolerance
+        if load_steps is not None: ph.load_steps = load_steps
+        if max_iterations is not None: ph.max_iterations = max_iterations
         self._prj._phase_toggles.append((ph, list(activate), list(deactivate)))
         return _PhaseBuilder(self._prj, ph)
 
@@ -426,6 +432,7 @@ class Project:
         self._water = None
         self._procedure = "k0"
         self._initial_exclude = []
+        self._initial_numerics = {}
         self._phase_toggles = []
         self.materials = _Materials(self)
         self.geometry = _Geometry(self)
@@ -434,12 +441,18 @@ class Project:
         self.displacements = _Displacements(self)
         self.phases = _Phases(self)
 
-    def initial(self, *, procedure="k0", exclude=()):
+    def initial(self, *, procedure="k0", exclude=(), tolerance=None,
+                load_steps=None, max_iterations=None):
         """How the in-situ state is established: "k0" (geostatic, default),
         "gravity" (switch-on self-weight) or "safety" (single-phase slope FoS).
-        ``exclude``: loads or regions NOT present in the initial phase."""
+        ``exclude``: loads or regions NOT present in the initial phase.
+
+        ``tolerance`` / ``load_steps`` / ``max_iterations``: numerical controls
+        for this phase; unset = chosen by material class."""
         self._procedure = procedure
         self._initial_exclude = list(exclude)
+        self._initial_numerics = {"tolerance": tolerance, "load_steps": load_steps,
+                                  "max_iterations": max_iterations}
         return self
 
     # ------------------------------------------------------------------ build --
@@ -501,6 +514,9 @@ class Project:
             for i in excl_disps:
                 disp_state[i] = 0
             initial.disp_active = disp_state
+        for field, value in self._initial_numerics.items():
+            if value is not None:
+                setattr(initial, field, value)
         pr.initial = initial
 
         # Staged phases: inherit the previous phase's effective state; write only

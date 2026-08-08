@@ -174,9 +174,14 @@ if(TARGET test_input_corpus)
 endif()
 katai_add_test(test_phase_water katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-003: staged dewatering (.k2d v4 per-phase water) against the effective-stress closed form -- the second capability the anchored-excavation benchmark needed
 katai_add_test(test_anchor_prestress katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-001: the anchor lock-off force (.k2d v3) against an equivalent external-force model -- the first structural case in the matrix, and the input every anchored excavation needs
-katai_add_test(test_tolerance_independence katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-NUM-007: the same benchmark at three tolerated residuals -- is the published number a physics result or an artefact of the stopping rule?
+katai_add_test(test_tolerance_independence katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-NUM-007: the same benchmark at six tolerated residuals -- is the published number a physics result or an artefact of the stopping rule? (and, above the default, an unsafe-sided one)
 if(TARGET test_tolerance_independence)
   target_compile_definitions(test_tolerance_independence PRIVATE
+    KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
+katai_add_test(test_phase_numerics katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-NUM-008: the per-phase numerical controls (.k2d v7) must REACH the solver -- file == seam, and both != default, so a reviewer receives the numerics a published run was computed with
+if(TARGET test_phase_numerics)
+  target_compile_definitions(test_phase_numerics PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
 katai_add_test(test_slope_fos_convergence katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-SLP-003: the strength-reduction factor of safety of the Griffiths-Lane benchmark under systematic nested refinement -- does it converge, or does it follow the shear band down the mesh?

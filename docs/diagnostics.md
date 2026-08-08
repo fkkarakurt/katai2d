@@ -56,6 +56,7 @@ Codes in the `K2D-M…` family are about a **material parameter** the selected m
 | `K2D-A003` | warning | A **prescribed displacement drives a node a structure stands on**. Structural elements do not receive the imposed motion in this build, so that element's M, Q and N understate the action. |
 | `K2D-A004` | note | A **structural element ends on a supported node**. The reported reactions are the soil's contribution only; the element's own end force at that support is not included. |
 | `K2D-A005` | warning | A **Safety (strength reduction) phase** runs with a non-associated flow rule (ψ < φ). The factor of safety then depends on the mesh and **falls as the mesh is refined**, because failure localises into a shear band whose width is set by the elements. Measured on the Griffiths & Lane benchmark: −7.9% across a fourfold refinement. Quote the factor with the mesh it was computed on, and confirm it with a refinement study (`docs/validation/numerical-uncertainty.md` §5). |
+| `K2D-A006` | warning | A **Safety phase is asked for a tolerated error looser than the search's own 1e-3**. The strength-reduction search reads "this trial converged" as "the slope stands", so a loose stopping rule makes it stand at strengths it cannot carry — and the error is one-sided: the factor comes out **too high**. Measured on the Griffiths & Lane benchmark: +2.0% at 1e-2, +45.6% at 1e-1 (KV-NUM-007). |
 
 ## Where they appear
 

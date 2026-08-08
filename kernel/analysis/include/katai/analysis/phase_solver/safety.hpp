@@ -35,6 +35,16 @@ struct SafetyPhase {
     bool has_softsoil = false;      // soft-soil family present
     bool axisymmetric = false;      // r-z mode; refused (not available yet)
     std::vector<char> active;       // element activity; empty = everything active
+    // Numerical controls for the TRIAL solves inside the strength-reduction search; 0 = this
+    // strategy's own defaults below. Each trial is a means to an end (does this reduced-strength
+    // slope still stand?), so its stopping rule is deliberately looser than a static phase's --
+    // but it is still a stopping rule, and a study asking whether the factor of safety depends
+    // on it must be able to CHANGE it. Until 2026-08-09 these were hard-coded here, and the
+    // caller's override was silently ignored: a sweep over the tolerance then returned three
+    // identical numbers because nothing had changed, which reads exactly like independence.
+    double tolerance = 0.0;
+    int load_steps = 0;
+    int max_iterations = 0;
 };
 
 // Solve the phase. Fills the factor of safety, the honest lower-bound flag,
@@ -71,7 +81,9 @@ inline bool solve_safety_phase(
     }
     StrengthReductionOptions sopt;
     sopt.srf_min = 0.4; sopt.srf_max = 3.0; sopt.bisection_iterations = 12;
-    sopt.newton = NewtonOptions{8, 120, 1e-3};
+    sopt.newton = NewtonOptions{in.load_steps > 0 ? in.load_steps : 8,
+                                in.max_iterations > 0 ? in.max_iterations : 120,
+                                in.tolerance > 0.0 ? in.tolerance : 1e-3};
     const auto sr = safety_analysis(mesh, dofs, f, models, solver, sopt, {}, in.active, profiles);
     R.fos = sr.fos;
     if (!sr.ok) {

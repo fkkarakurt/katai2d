@@ -16,13 +16,27 @@
 // So it is measured rather than assumed, on the same benchmark and the same mesh, changing only
 // the tolerated residual.
 //
+// 2026-08-09: THIS CASE ONCE PROVED NOTHING, AND THE RECORD SAYS SO. The strength-reduction
+// strategy hard-coded its trial tolerance (phase_solver/safety.hpp: NewtonOptions{8, 120, 1e-3}),
+// so the sweep below set a number the search never read. Three identical factors of safety came
+// back and were reported as independence -- when what they showed was that nothing had changed.
+// A sweep over an input that is silently dropped is indistinguishable, in its output, from a
+// genuine insensitivity; that is what makes this failure worth recording rather than quietly
+// fixing. The controls are now threaded into the search (and, since .k2d v7, into the file), and
+// the re-measured answer is BETTER than the claim it replaces AND has a hard edge the original
+// could never have found: below the search's own 1e-3 the factor is bit-identical over five
+// orders of magnitude, while ABOVE it the factor climbs, monotonically and always UNSAFE-SIDED
+// (+2.0% at 1e-2, +45.6% at 1e-1, and at 3e-1 the search returns its own cap because no trial
+// ever fails to "converge"). A slope that is reported 45% safer than it is would be a fine
+// example of the kind of number this project exists to refuse.
+//
 // verify: KV-NUM-007
 //   oracle:   independent_path
 //   source:   the same problem solved with a different stopping rule is an independent path to the same answer; the criterion under study is the tolerated force residual of the driver's nonlinear solver (kernel/jobs/src/driver.cpp), whose default is 1e-6 for the Mohr-Coulomb family; the practice of demonstrating iterative-convergence independence before quoting a discretisation error is I. B. Celik et al. (2008), ASME J. Fluids Eng. 130(7):078001, which requires iterative convergence to be established first, and ASME V&V 20-2009
-//   locator:  factor of safety by phi-c reduction on the checked-in tests/corpus/kv-slp-002-griffiths-lane-example1.k2d, one fixed mesh, solved at tolerated residuals 1e-4, 1e-6 (the driver's default for this material) and 1e-8; and the elastic strip-load benchmark, whose linear system is solved directly and therefore carries no iterative tolerance at all
-//   quantity: factor of safety [-] and, for the Hardening Soil oedometer KV-CST-002, the settlement of the loading step [m], each as a function of the tolerated force residual, with the spread across the three tolerances relative to the default run
-//   expected: for the factor of safety, a spread far below the mesh dependence of the same quantity (4-8% in KV-SLP-003), so that the published comparison is a statement about the model and the mesh rather than about the stopping rule; for the Hardening Soil family, whose default residual is a hundred times looser, a bounded and stated cost rather than an unknown one
-//   band:     as asserted below and MEASURED on this tree, not inherited. Slope factor of safety: 1.421021 at 1e-4, 1e-6 and 1e-8 -- BIT-IDENTICAL, spread 0.0000%, inside the reduction search's own resolution of 6.3e-4. Hardening Soil oedometer: 0.018934 m at the default 1e-2 (+0.413% vs the closed form), 0.019045 m at 1e-4 (+1.002%), 0.019044 m at 1e-6 -- so the default costs 0.59% on this quantity and 1e-4 is already converged. Note the default's smaller deviation is cancellation, not accuracy. Asserted: both spreads below 1%, the FoS spread inside the search resolution, 1e-4 and 1e-6 agreeing to 0.05%, and the default HS run within 3% of the closed form
+//   locator:  factor of safety by phi-c reduction on the checked-in tests/corpus/kv-slp-002-griffiths-lane-example1.k2d, one fixed mesh, solved at tolerated residuals 1e-1, 1e-2, 1e-3 (what the strength-reduction search uses when nothing is asked for), 1e-4, 1e-6 and 1e-8; and the elastic strip-load benchmark, whose linear system is solved directly and therefore carries no iterative tolerance at all
+//   quantity: factor of safety [-] and, for the Hardening Soil oedometer KV-CST-002, the settlement of the loading step [m], each as a function of the tolerated force residual, with the spread relative to the default run and the SIGN of the deviation on the loose side
+//   expected: below the search's own stopping rule, a spread far under the mesh dependence of the same quantity (4-8% in KV-SLP-003), so that the published comparison is a statement about the model and the mesh rather than about the stopping rule; above it, a monotone one-sided error -- a looser rule must report a HIGHER factor of safety, since a trial that stops early counts as equilibrium; for the Hardening Soil family, whose default residual is a hundred times looser, a bounded and stated cost rather than an unknown one
+//   band:     as asserted below and MEASURED on this tree, not inherited. Slope factor of safety on this mesh: 1.421021 at 1e-3, 1e-4, 1e-6 and 1e-8 -- BIT-IDENTICAL, spread 0.0000%, inside the reduction search's own resolution of 6.3e-4; 1.449585 at 1e-2 (+2.0%) and 2.069116 at 1e-1 (+45.6%), monotone and always high. Hardening Soil oedometer: 0.018934 m at the default 1e-2 (+0.413% vs the closed form), 0.019045 m at 1e-4 (+1.002%), 0.019044 m at 1e-6 -- so the default costs 0.59% on this quantity and 1e-4 is already converged. Note the default's smaller deviation is cancellation, not accuracy. Asserted: the tight-side spread below 1% and inside the search resolution, monotone unsafe-sided inflation on the loose side with 1e-1 above +30%, 1e-4 and 1e-6 agreeing to 0.05%, and the default HS run within 3% of the closed form
 
 #include <katai/io/project_io.hpp>
 #include <katai/jobs/driver.hpp>
@@ -63,11 +77,15 @@ int main() {
     if (!M.ok) { std::printf("      (%s)\n", M.message.c_str()); return 1; }
     std::printf("  mesh: %d elements, %d nodes\n", M.mesh.element_count, M.mesh.node_count);
 
-    // 1e-6 is what the driver picks for this material family; the neighbours bracket it by two
-    // orders of magnitude each way.
-    const double tolerances[3] = {1e-4, 1e-6, 1e-8};
-    double fos[3] = {0.0, 0.0, 0.0};
-    for (int i = 0; i < 3; ++i) {
+    // The strength-reduction search runs its trial solves at 1e-3; the sweep brackets it two
+    // orders looser and five orders tighter. Both directions are needed, and the loose side is
+    // the one nobody measures: a trial that stops early looks converged, so the slope appears to
+    // survive a strength reduction it cannot actually sustain.
+    constexpr int kN = 6;
+    const double tolerances[kN] = {1e-1, 1e-2, 1e-3, 1e-4, 1e-6, 1e-8};
+    constexpr int kDefault = 2;   // 1e-3: what the search uses when nothing is asked for
+    double fos[kN] = {};
+    for (int i = 0; i < kN; ++i) {
         katai::app::PhaseIO io;
         io.config = &pr.initial;
         io.numeric.tolerance = tolerances[i];
@@ -76,8 +94,9 @@ int main() {
         check(R.ok, "the run converges at tolerance " + std::to_string(tolerances[i]));
         if (!R.ok) { std::printf("      (%s)\n", R.message.c_str()); return 1; }
         fos[i] = R.fos;
-        std::printf("  tolerated residual %.0e -> FoS %s %.6f\n", tolerances[i],
-                    R.fos_lower_bound ? ">" : "=", R.fos);
+        std::printf("  tolerated residual %.0e -> FoS %s %.6f   (%+.2f%% vs the default rule)\n",
+                    tolerances[i], R.fos_lower_bound ? ">" : "=", R.fos,
+                    100.0 * (R.fos - 1.421020508) / 1.421020508);
     }
 
     // The default run must be reproduced exactly by an untouched PhaseIO: the override is a
@@ -86,36 +105,52 @@ int main() {
     io_default.config = &pr.initial;
     const auto R_default = katai::app::solve_gravity_le(
         pr, M.mesh, katai::app::initial_phase_from(pr.initial_procedure), nullptr, io_default);
-    check(R_default.ok && R_default.fos == fos[1],
-          "the driver's own default IS 1e-6 here, bit-for-bit (the override changes nothing "
-          "when it is not set)");
+    check(R_default.ok && R_default.fos == fos[kDefault],
+          "an untouched PhaseIO reproduces the 1e-3 run bit-for-bit (the override changes "
+          "nothing when it is not set)");
 
-    const double lo = std::fmin(fos[0], std::fmin(fos[1], fos[2]));
-    const double hi = std::fmax(fos[0], std::fmax(fos[1], fos[2]));
-    const double spread = (hi - lo) / fos[1];
-    std::printf("\n  spread across four orders of magnitude of tolerance = %.4f%% of the "
-                "default run\n", 100.0 * spread);
+    // THE LOOSE SIDE, and it is one-sided. Every relaxation of the stopping rule RAISES the
+    // reported factor of safety, because the question the search asks -- did this reduced
+    // strength still reach equilibrium? -- is answered "yes" by a solver that was allowed to
+    // stop before it got there. The error therefore always points the unsafe way, and it is
+    // large long before the tolerance looks absurd.
+    check(fos[0] > fos[1] && fos[1] > fos[2],
+          "a looser stopping rule reports a HIGHER factor of safety, monotonically");
+    std::printf("\n  1e-1 inflates the factor of safety by %+.1f%%, 1e-2 by %+.1f%% -- always "
+                "unsafe-sided\n",
+                100.0 * (fos[0] - fos[kDefault]) / fos[kDefault],
+                100.0 * (fos[1] - fos[kDefault]) / fos[kDefault]);
+    check((fos[0] - fos[kDefault]) / fos[kDefault] > 0.30,
+          "and at 1e-1 it is not a rounding matter: over 30% too high");
+
+    // THE TIGHT SIDE, which is what the published comparison rests on: below the search's own
+    // rule the answer stops moving entirely.
+    const double lo = std::fmin(fos[kDefault], std::fmin(fos[3], std::fmin(fos[4], fos[5])));
+    const double hi = std::fmax(fos[kDefault], std::fmax(fos[3], std::fmax(fos[4], fos[5])));
+    const double spread = (hi - lo) / fos[kDefault];
+    std::printf("\n  spread from the default rule down through five orders of magnitude = "
+                "%.4f%% of the default run\n", 100.0 * spread);
     std::printf("  mesh dependence of the same quantity (KV-SLP-003) = 4.0%% over a fourfold "
                 "refinement, 7.9%% on a finer family\n");
 
     check(spread < 0.01,
-          "the factor of safety is independent of the stopping rule to within 1%");
+          "at and below the default rule the factor of safety is independent of it to within 1%");
     check(spread < 0.04 / 4.0,
           "and at least four times tighter than the mesh dependence it must not be confused "
           "with");
 
-    // The three runs agreeing bit-for-bit says something further, and it should be said rather
+    // The four runs agreeing bit-for-bit says something further, and it should be said rather
     // than admired: what quantises this factor of safety is not the residual tolerance but the
     // strength-reduction SEARCH. The safety strategy bisects the reduction factor between 0.4
     // and 3.0 for 12 iterations (phase_solver/safety.hpp), so the reported factor carries a
-    // resolution of 2.6/2^12 = 6.3e-4, about 0.05% at a factor of 1.38. That is finer than the
+    // resolution of 2.6/2^12 = 6.3e-4, about 0.05% at a factor of 1.42. That is finer than the
     // mesh dependence by two orders of magnitude -- and, worth noting beside the reference,
     // finer than the 0.05 trial increments Griffiths and Lane stepped through.
     std::printf("  resolution of the reported factor: 2.6/2^12 = %.1e (the bisection's own "
                 "granularity)\n", 2.6 / 4096.0);
-    check(spread * fos[1] < 2.6 / 4096.0 * 2.0,
-          "the tolerance spread is inside the search's own resolution, so the stopping rule is "
-          "not what sets this number");
+    check(spread * fos[kDefault] < 2.6 / 4096.0 * 2.0,
+          "the remaining spread is inside the search's own resolution, so below the default the "
+          "stopping rule is not what sets this number");
 
     // The elastic benchmark needs no sweep, and saying why is part of the record: its system is
     // linear, so it is factorised and solved once. There is no iteration to stop, and therefore

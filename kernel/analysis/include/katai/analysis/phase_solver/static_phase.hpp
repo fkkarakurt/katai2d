@@ -57,6 +57,10 @@ struct StaticPhase {
     bool axisymmetric = false;    // r-z kinematics
     int load_steps = 1;           // Newton load stepping (grows with nonlinearity)
     double tolerance = 1e-10;     // Newton tolerated error
+    // Maximum Newton iterations per load increment; 0 = this strategy's own 80. A step that
+    // needs more than this is not solved: the solver cuts the increment back and tries again,
+    // so the number is a patience setting, not an accuracy one (PLAXIS "Max iterations", 60).
+    int max_iterations = 0;
     double time_interval_day = 0.0;  // SSC creep time of a chained Plastic phase [days]
     std::vector<char> active;     // element activity; empty = everything active
     // Prescribed displacements (nonzero Dirichlet): full-DOF vector, ramped 0 -> value
@@ -85,7 +89,8 @@ inline bool solve_static_phase(
     const bool static_carry = carry_full != nullptr;
     Eigen::VectorXd ramp = in.baseline ? f_loads : f;
     if (in.nil_step) ramp += f - f_loads - B;   // ramp the configuration imbalance
-    NewtonOptions nopt{in.load_steps, 80, in.tolerance};
+    NewtonOptions nopt{in.load_steps, in.max_iterations > 0 ? in.max_iterations : 80,
+                       in.tolerance};
     nopt.kinematics = in.axisymmetric ? Kinematics::Axisymmetric
                                       : Kinematics::PlaneStrain;
     // SSC TIME (Stage 3): a staged Plastic phase's Time interval [days] enters the constitutive

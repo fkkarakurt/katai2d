@@ -8,13 +8,15 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **6** · Current `.res` version: **5**
+Current `.k2d` version: **7** · Current `.res` version: **5**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
 per-phase water conditions (`phases[i].water_override`, `wx`, `wy`), **v5**
-the dilatancy cut-off (`materials[i].dilatancy_cutoff`, `e_max`) and **v6** the prescribed
-boundary flux (`polygons[i].edge_flux`, and `3` in `edge_flow`). Every bump
+the dilatancy cut-off (`materials[i].dilatancy_cutoff`, `e_max`), **v6** the prescribed
+boundary flux (`polygons[i].edge_flux`, and `3` in `edge_flow`) and **v7** the per-phase
+numerical controls (`tol`, `loadsteps`, `maxiter`), so that a published run carries the
+numerics it was computed with. Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
 than one that was tensioned against it -- so it must refuse the file instead.
@@ -303,6 +305,9 @@ with `name` (default `"Displacement"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as 
 | `water_override` | bool | — | `false` | Use this phase's own phreatic line instead of the project's |
 | `wx` | num[] | m | `[]` | Phase phreatic polyline, x (used when `water_override`) |
 | `wy` | num[] | m | `[]` | Phase phreatic polyline, y (used when `water_override`) |
+| `tol` | num | — | *by material class* | Tolerated relative force residual (PLAXIS "Tolerated error"). Written only when set |
+| `loadsteps` | int | — | *by material class* | Load increments for this phase. Not PLAXIS's "Max steps": KATAI splits the load into a fixed number of increments (with adaptive cut-back), it does not step automatically to a cap. Written only when set |
+| `maxiter` | int | — | *by phase strategy* | Newton iterations per increment (PLAXIS "Max iterations"). Written only when set |
 
 with `name` (default `"Phase"`) as above.
 

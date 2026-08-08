@@ -368,6 +368,26 @@ struct Phase {
     // EC7 / TBDY 2018 design approach for this phase (None = characteristic values). The material-
     // factored approaches (DA1-C2, DA3) reduce c'/tan(phi') and scale variable loads before the solve.
     DesignApproach design_approach = DesignApproach::None;
+    // NUMERICAL CONTROLS for this phase (PLAXIS "Numerical control parameters"). Zero means
+    // "let the program choose", which is what every project that never touches them says, so
+    // the defaults stay exactly where they are: derived from the material class (Hardening Soil
+    // at a PLAXIS-realistic 1%, Mohr-Coulomb at 1e-6, a linear problem at 1e-10) or, in a
+    // Safety phase, from the strength-reduction search's own trial settings.
+    //
+    // They belong in the FILE and not only in the program because a published number has to be
+    // reproducible by someone else: "the settlement is 42 mm" is a claim about a model AND about
+    // the numerics it was solved with, and if the second half cannot be written down, nobody can
+    // re-run it. Reviewers may also legitimately ask whether an answer moved because the physics
+    // moved or because the stopping rule did -- a question only a file that carries the stopping
+    // rule can answer.
+    //
+    // `load_steps` is the number of increments the load is split into. This is NOT PLAXIS's "Max
+    // steps": PLAXIS steps automatically and caps the count, KATAI splits the load into a fixed
+    // number of increments (the solver still cuts back adaptively when one will not converge).
+    // The field is named for what it does rather than for the box it resembles.
+    double tolerance = 0.0;     // tolerated relative force residual (PLAXIS "Tolerated error")
+    int load_steps = 0;         // load increments for this phase
+    int max_iterations = 0;     // Newton iterations per increment (PLAXIS "Max iterations")
     // Active flags per project object, by index (kept in sync by the GUI; an entry missing
     // because the vector is short counts as ACTIVE -- new objects default to active).
     std::vector<char> poly_active, struct_active, load_active, disp_active;

@@ -186,14 +186,42 @@ computed on, with a recommendation to confirm it by refinement. A number that mo
 mesh must never be handed over as if it did not — that is the same rule as WP-1's, applied to a
 result instead of an input.
 
-**And it is not the solver.** The same case at the same mesh, solved at tolerated force
-residuals of 1e-4, 1e-6 (the driver's default for this material family) and 1e-8, returns
-**1.421021 every time — bit for bit** (`tests/test_tolerance_independence.cpp`, **KV-NUM-007**).
-Four orders of magnitude of stopping rule move the factor of safety by 0.0000%, while a fourfold
-mesh refinement moves it by 4–8%. The comparison against Griffiths & Lane and against the charts
-is therefore a statement about the model and the mesh, not about when a Newton loop was allowed
-to stop — which is exactly the confusion a reader is entitled to suspect, given that the
-reference's own factor of safety *is* defined by a convergence criterion.
+**And below the default stopping rule it is not the solver.** The same case at the same mesh,
+solved at tolerated force residuals of 1e-3 (what the strength-reduction search uses when nothing
+is asked for), 1e-4, 1e-6 and 1e-8, returns **1.421021 every time — bit for bit**
+(`tests/test_tolerance_independence.cpp`, **KV-NUM-007**). Five orders of magnitude of stopping
+rule move the factor of safety by 0.0000%, while a fourfold mesh refinement moves it by 4–8%. The
+comparison against Griffiths & Lane and against the charts is therefore a statement about the
+model and the mesh, not about when a Newton loop was allowed to stop — which is exactly the
+confusion a reader is entitled to suspect, given that the reference's own factor of safety *is*
+defined by a convergence criterion.
+
+**Above it, the solver is exactly the answer, and it lies the unsafe way.** The strength-reduction
+search asks one question of each trial — did this reduced strength reach equilibrium? — and reads
+"the solver stopped" as "yes". A loose stopping rule therefore does not add scatter, it adds
+**bias**, always upward:
+
+| Tolerated residual | Factor of safety | vs the default rule |
+|---|---|---|
+| 3e-1 | 2.999683 | +111% — the search's own cap: *nothing ever failed* |
+| 1e-1 | 2.069116 | **+45.6%** |
+| 1e-2 | 1.449585 | +2.0% |
+| **1e-3** (the search's own) | **1.421021** | — |
+| 1e-4 / 1e-6 / 1e-8 | 1.421021 | 0.0000%, bit-identical |
+
+A slope reported 45% safer than it is would be precisely the number this project exists to
+refuse, so since 2026-08-09 a Safety phase asked for anything looser than 1e-3 raises
+**`K2D-A006`** with these figures in the message, and the validator refuses a tolerated error
+of 1 or more outright.
+
+**How this was found is part of the record.** Until the same day, the strength-reduction search
+hard-coded its trial tolerance, so the sweep above set a number nothing read. It returned three
+identical factors of safety, and those were reported here as independence. A sweep over a
+silently ignored input is indistinguishable, in its output, from a genuine insensitivity — which
+is why "the numbers did not move" is evidence only once the input is known to arrive. The
+controls were threaded into the search (and, in `.k2d` v7, into the file) and the study re-run;
+the conclusion above is the re-measured one, and it carries the loose-side edge the original
+could never have found.
 
 What quantises our factor instead is the strength-reduction **search**: the safety strategy
 bisects the reduction factor between 0.4 and 3.0 for 12 iterations, so the reported number
@@ -244,10 +272,12 @@ a passed one:
 - **Fourteen of the sixteen corpus cases have no sweep yet.** KV-FND-008 and KV-SLP-002 are the
   first two.
 - **Tolerance independence is measured for two families, not all.** KV-NUM-007 covers the slope
-  factor of safety (Mohr-Coulomb, default residual 1e-6, spread 0.0000%) and the Hardening Soil
-  oedometer KV-CST-002 at its default 1e-2. The soft-soil family, the consolidation and the
-  dynamic paths have not been swept. Exposing the controls per phase in `.k2d` remains WP-3;
-  they are overridable today through the driver seam (`PhaseIO::numeric`, `solve_phases`).
+  factor of safety (strength-reduction trials at 1e-3, spread 0.0000% below it and unsafe-sided
+  above) and the Hardening Soil oedometer KV-CST-002 at its default 1e-2. The soft-soil family,
+  the consolidation and the dynamic paths have not been swept. The controls are now per phase in
+  the `.k2d` (v7: `tol`, `loadsteps`, `maxiter`) and reach the solver by the same route as the
+  driver seam, which **KV-NUM-008** pins as an identity — a control that is read, validated and
+  echoed but not applied would leave a sweep proving nothing, which is not a hypothetical.
 - **One open question in the record is now measured, one is still open.** The slope factor of
   safety falling on fine meshes is §5 above: characterised, cited and declared to the user. The
   −39% deep sheet-pile wall row still has only its domain-size diagnosis, not its closure.

@@ -47,7 +47,14 @@ namespace katai::model {
 // through to "closed" -- rainfall infiltration or a recharge boundary silently removed from
 // the problem, and a phreatic surface reported lower than the one described. The bump makes
 // that an honest refusal.
-inline constexpr int kProjectFileVersion = 6;
+//
+// v7 (2026-08): the per-phase NUMERICAL CONTROLS (`phases[].tol`, `loadsteps`, `maxiter`).
+// These exist so that a published run can be reproduced by someone else, which makes dropping
+// them the exact failure they were added to prevent: an older build would read the file, solve
+// it at its own tolerance, and report a number that cannot be compared with the one the file
+// was written to carry. The keys are written only when set, so a project that never touches
+// numerics is byte-identical apart from this version digit.
+inline constexpr int kProjectFileVersion = 7;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -292,6 +299,12 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     warr(o, "disp", ph.disp_active);
     wfield(o, "water_override", ph.water_override);
     warr(o, "wx", ph.wx); warr(o, "wy", ph.wy);
+    // Numerical controls, written only when SET (like the accelerogram above). Zero is "let the
+    // program choose", and a file full of zeros would say that in more bytes while making every
+    // project that never touches numerics differ from the one it was yesterday.
+    if (ph.tolerance > 0.0) wfield(o, "tol", ph.tolerance);
+    if (ph.load_steps > 0) wfield(o, "loadsteps", (double)ph.load_steps);
+    if (ph.max_iterations > 0) wfield(o, "maxiter", (double)ph.max_iterations);
     closeobj(o); o += ',';
 }
 inline Phase rphase(const Json& j) {
@@ -326,6 +339,9 @@ inline Phase rphase(const Json& j) {
     ph.disp_active = j.chars("disp");
     ph.water_override = j.flag("water_override", ph.water_override);
     ph.wx = j.nums("wx"); ph.wy = j.nums("wy");
+    ph.tolerance = j.num("tol", ph.tolerance);
+    ph.load_steps = (int)j.num("loadsteps", ph.load_steps);
+    ph.max_iterations = (int)j.num("maxiter", ph.max_iterations);
     return ph;
 }
 

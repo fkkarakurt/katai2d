@@ -1634,6 +1634,25 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             sfin.has_softsoil = has_softsoil;
             sfin.axisymmetric = axi;
             sfin.active = act;
+            // The trial solves inside the strength-reduction search read the SAME controls as any
+            // other phase. Only an explicit request reaches them (0 = the search's own defaults),
+            // so every factor of safety this program has ever reported is unchanged -- but a
+            // tolerance study can now actually change the tolerance it claims to be studying.
+            sfin.tolerance = io.numeric.tolerance;
+            sfin.load_steps = io.numeric.steps;
+            sfin.max_iterations = io.numeric.max_iterations;
+            // A loose stopping rule does not add scatter to a factor of safety, it adds BIAS,
+            // and always the unsafe way: the search reads "this trial converged" as "the slope
+            // stands", so a solver allowed to stop early makes it stand at strengths it cannot
+            // carry. Measured on the Griffiths and Lane benchmark (KV-NUM-007): +2.0% at 1e-2,
+            // +45.6% at 1e-1. Nobody should have to discover that from a manual.
+            if (io.numeric.tolerance > 1e-3)
+                warn(R, "K2D-A006", "Safety",
+                     "This Safety phase is asked for a tolerated error of " +
+                         dnum(io.numeric.tolerance) +
+                         ", looser than the strength-reduction search's own 1e-3. The factor of "
+                         "safety it reports will be too HIGH, not merely less precise: measured "
+                         "on the Griffiths and Lane benchmark, +2.0% at 1e-2 and +45.6% at 1e-1.");
             if (!katai::core::solve_safety_phase(mesh, dofs, models, profiles, f, solver, sfin, R))
                 return R;
         } else {
@@ -1871,6 +1890,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         stin.axisymmetric = axi;
         stin.load_steps = steps;
         stin.tolerance = tol;
+        stin.max_iterations = io.numeric.max_iterations;
         // Only a CHAINED (staged) phase carries time: in PLAXIS the initial phase is TIMELESS --
         // an unconditional duration here once leaked 1 day of creep into the K0 phase and broke
         // the geostatic identity (measured: K0 max |u| = 26 mm = exactly mu* ln2 H on an SSC
@@ -1941,9 +1961,21 @@ std::vector<SolveResult> solve_phases(const model::Project& pr,
     const int total = 1 + (int)pr.phases.size();
     const auto stop = [&cancelled] { return cancelled && cancelled(); };
 
+    // The caller's controls win where they are set, then the phase's own from the file, then
+    // (still zero) the material-class default inside the phase solve. The order is not arbitrary:
+    // the argument exists so that a FILE can be re-run at other numerics, which it could not do
+    // if the file always won.
+    const auto controls_for = [&numeric](const model::Phase& ph) {
+        NumericalControls n = numeric;
+        if (!(n.tolerance > 0.0)) n.tolerance = ph.tolerance;
+        if (n.steps <= 0) n.steps = ph.load_steps;
+        if (n.max_iterations <= 0) n.max_iterations = ph.max_iterations;
+        return n;
+    };
+
     PhaseIO io0;
     io0.config = &pr.initial;
-    io0.numeric = numeric;
+    io0.numeric = controls_for(pr.initial);
     io0.out_states = &committed;
     if (stop()) return out;
     if (on_phase) on_phase(0, total, "Initial phase");
@@ -1958,7 +1990,7 @@ std::vector<SolveResult> solve_phases(const model::Project& pr,
         if (stop()) return out;
         PhaseIO io;
         io.config = &ph;
-        io.numeric = numeric;
+        io.numeric = controls_for(ph);
         io.chained = true;
         io.init_states = &committed;
         // The parent phase's result: a Dynamic phase superposes its increment onto this static state

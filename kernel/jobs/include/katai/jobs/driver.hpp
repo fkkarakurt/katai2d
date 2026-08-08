@@ -140,11 +140,15 @@ inline InitialPhase initial_phase_from(model::InitialProcedure p) {
 // which is what this override is for (tests/test_tolerance_independence.cpp).
 //
 // Zero means "keep the derived default", so an untouched PhaseIO reproduces today's runs
-// bit-for-bit. Exposing these per phase in the .k2d contract is a separate step (the hardening
-// plan's WP-3); until then they are a jobs-layer seam, not a file-format promise.
+// bit-for-bit. Since .k2d v7 the same three controls also live in the FILE, per phase
+// (`Phase::tolerance`, `load_steps`, `max_iterations`), so a published run carries the numerics
+// it was computed with. Precedence, resolved in solve_phases: an explicit control passed HERE
+// wins (it exists so that a given file can be re-run at other numerics -- KV-NUM-007), then the
+// phase's own value from the file, then the material-class default.
 struct NumericalControls {
     double tolerance = 0.0;   // tolerated relative force residual; 0 = by material class
     int steps = 0;            // load increments; 0 = by material class
+    int max_iterations = 0;   // Newton iterations per increment; 0 = the phase strategy's own
 };
 
 struct PhaseIO {

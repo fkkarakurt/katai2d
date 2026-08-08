@@ -65,6 +65,9 @@ KEY_TO_ATTR = {
     "tbdyss": "tbdy_ss",
     "tbdys1": "tbdy_s1",
     "siteclass": "site_class",
+    "tol": "tolerance",
+    "loadsteps": "load_steps",
+    "maxiter": "max_iterations",
     "lamstar": "lam_star",
     "kapstar": "kap_star",
     "mustar": "mu_star",
@@ -138,6 +141,11 @@ def coverage_project():
     ph.name = "Shake"
     ph.accel_record = [0.0, 0.5, -0.5]
     ph.record_dt = 0.02
+    # Same rule for the numerical controls: written only when set, so the coverage
+    # phase sets them.
+    ph.tolerance = 1e-5
+    ph.load_steps = 12
+    ph.max_iterations = 40
     ph.poly_active = [1]
     ph.struct_active = [1]
     ph.load_active = [1]

@@ -344,7 +344,14 @@ NB_MODULE(_core, m) {
         .def_rw("water_override", &api::Phase::water_override,
                 "use this phase's own phreatic line instead of the project's")
         .def_rw("wx", &api::Phase::wx, "phase phreatic polyline, x [m]")
-        .def_rw("wy", &api::Phase::wy, "phase phreatic polyline, y [m]");
+        .def_rw("wy", &api::Phase::wy, "phase phreatic polyline, y [m]")
+        // Numerical controls; 0 = let the program choose (the material-class default).
+        .def_rw("tolerance", &api::Phase::tolerance,
+                "tolerated relative force residual; 0 = chosen by material class")
+        .def_rw("load_steps", &api::Phase::load_steps,
+                "load increments for this phase; 0 = chosen by material class")
+        .def_rw("max_iterations", &api::Phase::max_iterations,
+                "Newton iterations per increment; 0 = the phase strategy's own limit");
 
     nb::class_<api::MeshSettings>(m, "MeshSettings")
         .def(nb::init<>())
