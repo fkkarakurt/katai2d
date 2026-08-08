@@ -48,6 +48,21 @@ void print_issues(const std::vector<api::Issue>& issues) {
                     i.path.c_str(), i.message.c_str());
 }
 
+// What the run did that the file does not literally say: a line clipped to the soil, a
+// fallback taken, an object refused. The input contract is checked before a mesh exists,
+// so these are the only report a user gets on everything that is decided against the mesh
+// -- printing them is what keeps a discarded load from passing as a clean run.
+void print_diagnostics(const api::SolveResult& R) {
+    for (const api::Diagnostic& d : R.diagnostics) {
+        const char* sev = d.severity == api::DiagnosticSeverity::Refusal  ? "refusal"
+                        : d.severity == api::DiagnosticSeverity::Warning  ? "warning"
+                                                                          : "note   ";
+        std::printf("  %s %s  %s%s%s\n", sev, d.code.c_str(),
+                    d.subject.empty() ? "" : d.subject.c_str(), d.subject.empty() ? "" : ": ",
+                    d.message.c_str());
+    }
+}
+
 bool any_error_note(const std::vector<api::Issue>& notes) {
     for (const api::Issue& i : notes)
         if (i.severity == api::Severity::Error) return true;
@@ -101,6 +116,14 @@ int cmd_solve(const std::string& path, const std::string& out) {
             std::printf("REFUSED: %s\n", job.message().c_str());
             return 4;
         }
+        // Every phase that ran, including the one that stopped the job: its diagnostics name
+        // the object at fault, so they must survive the failure path.
+        const std::vector<api::SolveResult>& partial = job.results();
+        for (size_t i = 0; i < partial.size(); ++i) {
+            if (partial[i].diagnostics.empty()) continue;
+            std::printf("phase %zu:\n", i + 1);
+            print_diagnostics(partial[i]);
+        }
         std::printf("FAILED: %s\n", job.message().c_str());
         return 5;
     }
@@ -114,6 +137,7 @@ int cmd_solve(const std::string& path, const std::string& out) {
         if (R.fos >= 0.0)
             std::printf("  FoS %s %.3f", R.fos_lower_bound ? ">" : "=", R.fos);
         std::printf("\n");
+        print_diagnostics(R);
     }
     std::printf("solved %zu phase(s) in %.2f s\n", res.size(), total_s);
 

@@ -40,11 +40,12 @@
 #include <katai/fem/assembly/dof_map.hpp>
 #include <katai/fem/elements/interface.hpp>           // iface::InterfaceProps, interface_stiffness
 #include <katai/fem/elements/plate.hpp>               // PlateProps + set_plate_mass
+#include <katai/fem/elements/point_location.hpp>      // locate_point (is a point load on the mesh?)
 #include <katai/materials/linear_elastic.hpp>
 #include <katai/mesh/boundary_extraction.hpp>      // collect_chain + boundary edges (Stage B5)
 #include <katai/linsolve/direct_solver.hpp>
 
-#include <katai/jobs/mesh_builder.hpp>   // point_in_polygon (anchor end-in-soil test)
+#include <katai/jobs/mesh_builder.hpp>   // point_in_polygon (material_at region lookup)
 
 namespace katai::app {
 
@@ -55,6 +56,77 @@ using katai::mesh::extract_boundary_edges;
 
 // Consolidation stress recovery lives in the engine (Stage B8).
 using katai::core::recover_consolidation_stress;
+
+// ---- Diagnostics (katai/analysis/results.hpp, Diagnostic). One rule, stated once: an input
+// ---- may be used differently from the way it was written, but never in silence.
+//
+// The distinction the three helpers encode is a judgement about consequence, not about how
+// unusual the input is. `warn` is for a run that still answers the user's question -- a line
+// clipped to the soil it could reach, a load attached one node away. `refuse` is for a drawn
+// object that would contribute NOTHING: a surcharge that lands off the mesh, a wall the mesh
+// never sees. Those cannot be warnings, because the analysis would then succeed, report a
+// plausible field, and answer a model the engineer did not draw. Every code below is stable:
+// tests match on it, users grep logs for it, and it is never reworded or reused.
+static void diag(SolveResult& R, katai::core::DiagnosticSeverity sev, const char* code,
+                 std::string subject, std::string message) {
+    R.diagnostics.push_back(
+        katai::core::Diagnostic{sev, code, std::move(subject), std::move(message)});
+}
+static void warn(SolveResult& R, const char* code, std::string subject, std::string message) {
+    diag(R, katai::core::DiagnosticSeverity::Warning, code, std::move(subject), std::move(message));
+}
+// Sets the refusal AND records it as a tagged diagnostic, so a front end can act on the code
+// instead of matching prose. The caller returns R immediately (R.ok is already false).
+static void refuse(SolveResult& R, const char* code, std::string subject, std::string message) {
+    R.ok = false;
+    R.message = message;
+    diag(R, katai::core::DiagnosticSeverity::Refusal, code, std::move(subject), std::move(message));
+}
+// Number for a message, in the file's own spelling.
+static std::string dnum(double v) {
+    char b[40];
+    std::snprintf(b, sizeof(b), "%g", v);
+    return b;
+}
+// A drawn line names itself by its user-given name when it has one, else by its endpoints --
+// an unnamed object must still be findable in the file.
+static std::string line_subject(const std::string& name, double x1, double y1, double x2, double y2) {
+    if (!name.empty()) return name;
+    return "(" + dnum(x1) + ", " + dnum(y1) + ") -> (" + dnum(x2) + ", " + dnum(y2) + ")";
+}
+// How much of a drawn line the mesh actually handed back, as the parameter span [t0, t1] of the
+// collected chain along that line (0 = first endpoint, 1 = second). A line drawn past the edge
+// of the soil comes back short, and the caller says by how much instead of applying it quietly.
+static void chain_span(const katai::mesh::Mesh& mesh, const std::vector<int>& chain,
+                       double x1, double y1, double x2, double y2, double& t0, double& t1) {
+    t0 = 1.0; t1 = 0.0;
+    const double dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy;
+    if (L2 < 1e-18 || chain.empty()) { t0 = 0.0; t1 = 0.0; return; }
+    for (int n : chain) {
+        const double t = ((mesh.x[n] - x1) * dx + (mesh.y[n] - y1) * dy) / L2;
+        t0 = std::fmin(t0, t);
+        t1 = std::fmax(t1, t);
+    }
+}
+// True when the chain covers materially less of the drawn line than the whole of it. The
+// threshold is one part in a thousand of the line: below that it is mesh round-off, not clipping.
+static bool chain_is_clipped(double t0, double t1) { return t0 > 1e-3 || t1 < 1.0 - 1e-3; }
+
+// The mesh scale where an object sits: the longest corner edge of the element containing (x, y),
+// or 0 when nothing contains it. An object that attaches to "the nearest node" has to be judged
+// against THIS length rather than the project's target element size, which a region coarseness
+// factor may multiply by up to four -- a snap of a fraction of the local element is ordinary
+// discretisation, a snap of several is a different model.
+static double element_size_at(const katai::mesh::Mesh& mesh, double x, double y) {
+    const auto loc = katai::core::ploc::locate_point(mesh, x, y);
+    if (!loc.found) return 0.0;
+    double h = 0.0;
+    for (int k = 0; k < 3; ++k) {
+        const int a = mesh.node_of(loc.element, k), b = mesh.node_of(loc.element, (k + 1) % 3);
+        h = std::fmax(h, std::hypot(mesh.x[a] - mesh.x[b], mesh.y[a] - mesh.y[b]));
+    }
+    return h;
+}
 
 // ---- Body-only seams and schema mappings (moved from the header, section 5.2 batch 2;
 // ---- nothing outside the driver uses them -- measured before the move).
@@ -116,6 +188,10 @@ static katai::core::EdgeFixity to_edge_fixity(model::BCType bc) {
 static std::vector<katai::core::BcEdge> bc_edges_from(const model::Project& pr) {
     std::vector<katai::core::BcEdge> edges;
     for (const auto& P : pr.polygons) {
+        // silent-drop-ok: an EMPTY edge_bc means the region states no boundary conditions, which
+        // is legal input (validate.hpp check_edges returns early on an empty array); any other
+        // mismatch, and a region with fewer than three vertices, is an ERROR at its field path,
+        // so a project that reaches the driver cannot be losing conditions here.
         const int n = (int)P.x.size(); if (n < 3 || (int)P.edge_bc.size() != n) continue;
         double cx = 0, cy = 0; for (int k = 0; k < n; ++k) { cx += P.x[k]; cy += P.y[k]; } cx /= n; cy /= n;
         for (int i = 0; i < n; ++i) {
@@ -148,6 +224,8 @@ static std::vector<katai::core::FlowEdge> flow_edges_from(const model::Project& 
     std::vector<katai::core::FlowEdge> edges;
     for (const auto& P : pr.polygons) {
         const int n = (int)P.x.size();
+        // silent-drop-ok: as in bc_edges_from -- an empty edge_flow is "no flow conditions
+        // stated", and any other mismatch is a validator error at polygons[i].edge_flow.
         if (n < 3 || (int)P.edge_flow.size() != n) continue;
         for (int i = 0; i < n; ++i) {
             const double h = (int)P.edge_head.size() == n ? P.edge_head[i] : 0.0;
@@ -428,6 +506,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             }
             const double dx = s.x2 - s.x1, dy = s.y2 - s.y1;
             const double len = std::hypot(dx, dy);
+            // silent-drop-ok: a zero-length structural line is an ERROR at structs[i].x2 in the
+            // input contract, so it cannot reach a run; the guard is arithmetic self-defence.
             if (len < 1e-9) continue;
             WallSpec w;
             w.name = s.name;
@@ -445,7 +525,40 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 const auto seg = katai::core::split_mesh_at_segment(mesh, tx, ty, ux, uy, 1e-3, len + 1.0);
                 for (const auto& p : seg) w.seam.push_back({p.orig, p.dup, p.s});
             }
-            if ((int)w.seam.size() < (order == 15 ? 4 : 2)) continue;   // line not on mesh edges -> bonded
+            // The line is not on mesh edges, so the mesh cannot be split along it and the wall
+            // falls back to a plain plate bonded to the soil: no interface, no slip, no gap. That
+            // is a stiffer and generally UNCONSERVATIVE model than the one drawn, so it is stated
+            // rather than assumed (the plate itself is still built by the plate loop below).
+            if ((int)w.seam.size() < (order == 15 ? 4 : 2)) {
+                warn(R, "K2D-G009", line_subject(s.name, s.x1, s.y1, s.x2, s.y2),
+                     "Wall \"" + s.name +
+                         "\" could not be split from the soil along its line, so its interfaces "
+                         "were not built: it acts as a plate BONDED to the soil (no slip, no gap). "
+                         "Align the wall with mesh edges or refine around it to get the interface.");
+                continue;
+            }
+            // How much of the drawn wall the mesh actually gave: a wall drawn past the top of the
+            // soil is split only where soil exists, so the run models a SHORTER wall than the one
+            // in the file -- and a retaining wall two metres shorter is a different structure.
+            // The toe node is shared by design (split_mesh_at_wall keeps y > y_toe), so the seam
+            // legitimately starts one node spacing above the toe; the threshold is twice that
+            // spacing, which is the mesh's own scale rather than the project's target size.
+            {
+                double t0 = 1.0, t1 = 0.0;
+                for (const auto& p : w.seam) {
+                    const double t = ((mesh.x[p.right] - tx) * (ux - tx) +
+                                      (mesh.y[p.right] - ty) * (uy - ty)) / (len * len);
+                    t0 = std::fmin(t0, t);
+                    t1 = std::fmax(t1, t);
+                }
+                const double built = (t1 - t0) * len, spacing = len / (double)w.seam.size();
+                if (built < len - 2.0 * spacing)
+                    warn(R, "K2D-G006", line_subject(s.name, s.x1, s.y1, s.x2, s.y2),
+                         "Wall \"" + s.name + "\" is built over " + dnum(built) + " m of the " +
+                             dnum(len) +
+                             " m drawn: the rest of the line falls outside the soil, and both its "
+                             "stiffness and its interfaces are those of the shorter wall.");
+            }
             // Plate stiffness from the plate material.
             if (s.material >= 0 && s.material < (int)pr.plates.size()) {
                 const auto& pm = pr.plates[s.material];
@@ -505,13 +618,38 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             }
             const double dx = s.x2 - s.x1, dy = s.y2 - s.y1;
             const double len = std::hypot(dx, dy);
+            // silent-drop-ok: a zero-length structural line is an ERROR at structs[i].x2 in the
+            // input contract, so it cannot reach a run; the guard is arithmetic self-defence.
             if (len < 1e-9) continue;
             IfaceSpec sp;
             sp.name = s.name.empty() ? "Interface" : s.name;
             sp.nx = dy / len; sp.ny = -dx / len;   // unit normal (matches split_mesh_at_segment frame)
             sp.seam = katai::core::split_mesh_at_segment(mesh, s.x1, s.y1, s.x2, s.y2, -1e-6, len + 1e-6);
             const int per_edge = order == 15 ? 4 : 2;
-            if ((int)sp.seam.size() < per_edge + 1) continue;   // line not on mesh edges -> leave bonded
+            // Same fallback as the wall, and the same reason for saying so: with no split there is
+            // no joint, and the soil across the drawn slip surface stays fully bonded.
+            if ((int)sp.seam.size() < per_edge + 1) {
+                warn(R, "K2D-G009", line_subject(s.name, s.x1, s.y1, s.x2, s.y2),
+                     "Interface \"" + sp.name +
+                         "\" does not lie on mesh edges, so no joint was created: the soil across "
+                         "it stays BONDED (no slip, no gap). Align it with mesh edges or refine "
+                         "around it.");
+                continue;
+            }
+            // A slip surface drawn past the edge of the soil is split only where soil exists, so
+            // the joint is shorter than the drawn line. Here the seam carries arc length directly
+            // and both ends are inside the split window, so one node spacing is threshold enough.
+            {
+                double s0 = len, s1 = 0.0;
+                for (const auto& p : sp.seam) { s0 = std::fmin(s0, p.s); s1 = std::fmax(s1, p.s); }
+                const double spacing = len / (double)sp.seam.size();
+                if (s1 - s0 < len - 2.0 * spacing)
+                    warn(R, "K2D-G006", line_subject(s.name, s.x1, s.y1, s.x2, s.y2),
+                         "Interface \"" + sp.name + "\" is built over " + dnum(s1 - s0) +
+                             " m of the " + dnum(len) +
+                             " m drawn: the rest of the line falls outside the soil, and the soil "
+                             "there stays bonded.");
+            }
             // Propagate boundary fixity to the duplicated boundary nodes (else a side daylighting on a
             // fixed boundary would be left unconstrained -> support hole).
             for (const auto& p : sp.seam) if (is_bnode[p.orig]) mesh.boundary_nodes.push_back(p.dup);
@@ -574,7 +712,30 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         if (s.kind != model::StructKind::Plate || plate_is_wall[si]) continue;   // walls built below
         if (!struct_on(si)) continue;   // not installed in this phase
         const std::vector<int> chain = collect_chain(mesh, s.x1, s.y1, s.x2, s.y2);
-        if (chain.size() < 3 || chain.size() % 2 == 0) continue;
+        const std::string psub = line_subject(s.name, s.x1, s.y1, s.x2, s.y2);
+        // Structural lines are mesh constraints too, so an unusable chain means the plate is not
+        // on the soil. Refused rather than skipped: a retaining wall that silently does not exist
+        // returns the unretained field and calls it a success.
+        if (chain.size() < 3 || chain.size() % 2 == 0) {
+            refuse(R, "K2D-G005", psub,
+                   "Plate \"" + s.name + "\" from (" + dnum(s.x1) + ", " + dnum(s.y1) + ") to (" +
+                       dnum(s.x2) + ", " + dnum(s.y2) +
+                       ") does not lie on the mesh, so it would carry nothing. Draw it inside or "
+                       "along a soil region.");
+            return R;
+        }
+        {
+            double t0 = 0.0, t1 = 1.0;
+            chain_span(mesh, chain, s.x1, s.y1, s.x2, s.y2, t0, t1);
+            if (chain_is_clipped(t0, t1)) {
+                const double drawn = std::hypot(s.x2 - s.x1, s.y2 - s.y1);
+                warn(R, "K2D-G006", psub,
+                     "Plate \"" + s.name + "\" is built over " + dnum((t1 - t0) * drawn) +
+                         " m of the " + dnum(drawn) +
+                         " m drawn: the rest of the line falls outside the soil, and its forces "
+                         "are those of the shorter element.");
+            }
+        }
         katai::core::plate::PlateProps pp;
         if (s.material >= 0 && s.material < (int)pr.plates.size()) {
             const auto& pm = pr.plates[s.material]; pp.EA = pm.EA; pp.EI = pm.EI; pp.nu = pm.nu;
@@ -602,7 +763,26 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         const auto& s = pr.structs[si];
         if (s.kind != model::StructKind::Geogrid || !struct_on(si)) continue;
         const std::vector<int> chain = collect_chain(mesh, s.x1, s.y1, s.x2, s.y2);
-        if (chain.size() < 3 || chain.size() % 2 == 0) continue;
+        const std::string gsub = line_subject(s.name, s.x1, s.y1, s.x2, s.y2);
+        if (chain.size() < 3 || chain.size() % 2 == 0) {
+            refuse(R, "K2D-G007", gsub,
+                   "Geogrid \"" + s.name + "\" from (" + dnum(s.x1) + ", " + dnum(s.y1) +
+                       ") to (" + dnum(s.x2) + ", " + dnum(s.y2) +
+                       ") does not lie on the mesh, so it would carry nothing. Draw it inside a "
+                       "soil region.");
+            return R;
+        }
+        {
+            double t0 = 0.0, t1 = 1.0;
+            chain_span(mesh, chain, s.x1, s.y1, s.x2, s.y2, t0, t1);
+            if (chain_is_clipped(t0, t1)) {
+                const double drawn = std::hypot(s.x2 - s.x1, s.y2 - s.y1);
+                warn(R, "K2D-G006", gsub,
+                     "Geogrid \"" + s.name + "\" is built over " + dnum((t1 - t0) * drawn) +
+                         " m of the " + dnum(drawn) +
+                         " m drawn: the rest of the line falls outside the soil.");
+            }
+        }
         katai::core::geogrid::GeogridProps gp;
         if (s.material >= 0 && s.material < (int)pr.geogrids.size()) {
             const auto& gm = pr.geogrids[s.material];
@@ -628,9 +808,16 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         }
         return best;
     };
+    // Is this anchor end in the soil -- i.e. is there something there to pull on? The question is
+    // answered against the MESH, not against the polygon outline: an even-odd point-in-polygon
+    // test reports a point lying exactly ON an edge as outside, and an anchor head placed exactly
+    // on the ground surface or on a slope face is ordinary input, not an error. Reading it as
+    // "outside" put such an anchor on the both-ends-outside path, where it was dropped without a
+    // word (tests/test_anchor_mesh_repro.cpp had a fixture doing exactly that). Locating the
+    // containing element also removes a discontinuity: a head one millimetre inside the slope and
+    // a head exactly on it now build the same structural model.
     const auto in_soil = [&](double x, double y) {
-        for (const auto& P : pr.polygons) if (point_in_polygon(x, y, P)) return true;
-        return false;
+        return katai::core::ploc::locate_point(mesh, x, y).found;
     };
     for (size_t si = 0; si < pr.structs.size(); ++si) {
         const auto& s = pr.structs[si];
@@ -650,18 +837,68 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         }
         an.L = 0.0;  // EA/L uses the geometric distance
         const bool in1 = in_soil(s.x1, s.y1), in2 = in_soil(s.x2, s.y2);
+        const std::string asub = line_subject(s.name, s.x1, s.y1, s.x2, s.y2);
+        // An anchor needs at least one end in the soil to pull on. Both ends outside is not an
+        // unusual anchor, it is no anchor at all, and a strutted excavation that quietly loses
+        // its strut is exactly the run that must never report success.
+        if (!in1 && !in2) {
+            refuse(R, "K2D-G008", asub,
+                   "Anchor \"" + s.name + "\" has neither end in the soil: (" + dnum(s.x1) + ", " +
+                       dnum(s.y1) + ") and (" + dnum(s.x2) + ", " + dnum(s.y2) +
+                       ") both fall outside every soil region, so it would carry nothing.");
+            return R;
+        }
         if (in1 && in2) {                          // node-to-node (strut / internal support)
             an.node_a = nearest_node(s.x1, s.y1);
             an.node_b = nearest_node(s.x2, s.y2);
-            if (an.node_a < 0 || an.node_b < 0 || an.node_a == an.node_b) continue;
-        } else if (in1 || in2) {                   // fixed-end (one end outside the soil)
+            if (an.node_a < 0 || an.node_b < 0 || an.node_a == an.node_b) {
+                refuse(R, "K2D-G008", asub,
+                       "Anchor \"" + s.name +
+                           "\" collapses onto a single mesh node, so it would carry nothing. Make "
+                           "it longer than one element, or refine the mesh around it.");
+                return R;
+            }
+        } else {                                   // fixed-end (one end outside the soil)
             const double sx = in1 ? s.x1 : s.x2, sy = in1 ? s.y1 : s.y2;
             const double fx = in1 ? s.x2 : s.x1, fy = in1 ? s.y2 : s.y1;
             an.node_a = nearest_node(sx, sy);
-            if (an.node_a < 0) continue;
+            if (an.node_a < 0) {
+                refuse(R, "K2D-G008", asub,
+                       "Anchor \"" + s.name + "\" has no mesh node at its soil end (" + dnum(sx) +
+                           ", " + dnum(sy) + "), so it would carry nothing.");
+                return R;
+            }
             an.node_b = -1; an.fixed_point = {fx, fy};
-        } else {
-            continue;                              // both ends outside the soil — nothing to anchor
+        }
+        // An anchor end attaches to the NEAREST node, exactly like a point load, so the same
+        // discretisation question applies: a strut whose head moved a third of an element is
+        // still the drawn strut, one that moved several elements is not. Both ends are measured
+        // and the larger move is reported.
+        {
+            // Each attached node, beside the endpoint it was attached FOR: node-to-node takes
+            // both endpoints in order, a fixed-end anchor only its soil end (which may be
+            // either endpoint, so it is named rather than assumed).
+            const double sx = in1 ? s.x1 : s.x2, sy = in1 ? s.y1 : s.y2;
+            const bool fixed_end = an.node_b < 0;
+            struct Attached { int node; double x, y; };
+            const Attached att[2] = {{an.node_a, fixed_end ? sx : s.x1, fixed_end ? sy : s.y1},
+                                     {an.node_b, s.x2, s.y2}};
+            double moved = 0.0, at_x = 0.0, at_y = 0.0, h = 0.0;
+            for (const Attached& a : att) {
+                if (a.node < 0) continue;
+                const double d = std::hypot(mesh.x[a.node] - a.x, mesh.y[a.node] - a.y);
+                if (d > moved) {
+                    moved = d;
+                    at_x = mesh.x[a.node]; at_y = mesh.y[a.node];
+                    h = element_size_at(mesh, at_x, at_y);
+                }
+            }
+            if (h > 0.0 && moved > 0.25 * h)
+                warn(R, "K2D-G002", asub,
+                     "Anchor \"" + s.name + "\" attaches at node (" + dnum(at_x) + ", " +
+                         dnum(at_y) + "), " + dnum(moved) +
+                         " m from the end drawn for it -- the element there is " + dnum(h) +
+                         " m. Refine the mesh around the anchor if that matters.");
         }
         structures.anchors.push_back(an);
         diag_specs.push_back({1, s.name, structures.anchors.size() - 1, structures.anchors.size(), Ls});
@@ -673,7 +910,19 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         int toe = -1;
         for (int n = 0; n < mesh.node_count; ++n)
             if (std::fabs(mesh.x[n] - w.toe_x) < 1e-6 && std::fabs(mesh.y[n] - w.toe_y) < 1e-6) { toe = n; break; }
-        if (toe < 0) continue;
+        // The toe is the node the plate hangs from, so without it there is no wall at all --
+        // not a shorter one, none: no plate, no interfaces, and a run that returns the field of
+        // an unsupported excavation. It goes missing when the deeper end is drawn outside the
+        // soil, because the mesher clips a structural line to the soil before it becomes a
+        // constraint, and the endpoint is then never inserted as a vertex.
+        if (toe < 0) {
+            refuse(R, "K2D-G010", w.name.empty() ? "wall" : w.name,
+                   "Wall \"" + w.name + "\" has no mesh node at its toe (" + dnum(w.toe_x) +
+                       ", " + dnum(w.toe_y) +
+                       "): that end is outside the soil, and without the toe neither the plate "
+                       "nor its interfaces can be built. Draw the wall inside a soil region.");
+            return R;
+        }
         const double k0 = (w.soil_mat >= 0 && w.soil_mat < (int)k0_by_mat.size()) ? k0_by_mat[w.soil_mat] : 0.5;
         const double fac = k0 * w.nx * w.nx + w.ny * w.ny;   // sigma_n / sigma'_v (vertical -> k0)
         if (w.order == 15) {
@@ -755,10 +1004,24 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     for (size_t si = 0; si < pr.structs.size(); ++si) {
         const auto& s = pr.structs[si];
         if (s.kind != model::StructKind::EmbeddedBeam || !struct_on(si)) continue;
-        if (s.material < 0 || s.material >= (int)pr.embedded.size()) continue;
+        const std::string esub = line_subject(s.name, s.x1, s.y1, s.x2, s.y2);
+        // A pile without a material or with no section has no stiffness to contribute, so it
+        // would be drawn in the model and absent from the analysis.
+        if (s.material < 0 || s.material >= (int)pr.embedded.size()) {
+            refuse(R, "K2D-G012", esub,
+                   "Embedded beam \"" + s.name +
+                       "\" has no embedded-beam material assigned, so it would carry nothing.");
+            return R;
+        }
         const auto& em = pr.embedded[s.material];
         const double L = std::hypot(s.x2 - s.x1, s.y2 - s.y1);
-        if (L < 1e-9 || em.diameter <= 0.0) continue;
+        if (L < 1e-9 || em.diameter <= 0.0) {
+            refuse(R, "K2D-G012", esub,
+                   "Embedded beam \"" + s.name + "\" has length " + dnum(L) +
+                       " m and diameter " + dnum(em.diameter) +
+                       " m: both must be positive, or it would carry nothing.");
+            return R;
+        }
         const int ne = std::clamp((int)std::lround(L / std::max(1e-6, h_char)), 3, 80);
         const int nbn = 2 * ne + 1;
         std::vector<double> bx(nbn), by(nbn);
@@ -822,7 +1085,10 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             if (!disp_on(di)) continue;
             const auto& D = pr.disps[di];
             const double ex = D.x2 - D.x1, ey = D.y2 - D.y1, l2 = ex * ex + ey * ey;
-            if (l2 < 1e-18) continue;   // degenerate: validator reports it; nothing to fix
+            // silent-drop-ok: a zero-length prescribed-displacement line is an ERROR at
+            // disps[i].x2 in the input contract, so it cannot reach a run.
+            if (l2 < 1e-18) continue;
+            int fixed_nodes = 0;
             for (int n = 0; n < mesh.node_count; ++n) {
                 const double t = std::clamp(
                     ((mesh.x[n] - D.x1) * ex + (mesh.y[n] - D.y1) * ey) / l2, 0.0, 1.0);
@@ -837,6 +1103,19 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                     dofs.fix_node_component(n, 1);
                     presc_entries.push_back({n, 1, D.uy});
                 }
+                ++fixed_nodes;
+            }
+            // A prescribed-displacement line that catches no node imposes nothing. The run then
+            // reports a converged, unsettled model -- and every displacement-controlled benchmark
+            // in the corpus (a rigid footing pushed into the soil, and the reaction read back off
+            // it) depends on this line actually reaching the mesh.
+            if (fixed_nodes == 0) {
+                refuse(R, "K2D-G011", line_subject(D.name, D.x1, D.y1, D.x2, D.y2),
+                       "Prescribed displacement \"" + D.name + "\" from (" + dnum(D.x1) + ", " +
+                           dnum(D.y1) + ") to (" + dnum(D.x2) + ", " + dnum(D.y2) +
+                           ") does not lie on the mesh: no node was constrained, so nothing would "
+                           "be imposed. Draw it along a soil boundary or inside a soil region.");
+                return R;
             }
         }
     }
@@ -973,7 +1252,37 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             const double d = std::hypot(mesh.x[n] - L.x1, mesh.y[n] - L.y1);
             if (d < bestd) { bestd = d; best = n; }
         }
-        if (best < 0) continue;
+        // A point load is carried by the nearest node. Unlike a line load, the mesher does not
+        // insert the point as a vertex -- it only refines around it (mesh_builder.cpp, SizeSrc)
+        // -- so landing between nodes is normal and a snap of a fraction of an element is the
+        // expected discretisation. What is NOT expected is a point off the soil altogether: the
+        // nearest-node search always succeeds, so such a load used to be relocated to whatever
+        // node happened to be closest, however far, and the run reported success for a model the
+        // engineer never drew (docs/internal/HARDENING-PLAN.md, WP-1).
+        //
+        // The two questions are answered by two different instruments, on purpose. "Is the load
+        // on the soil?" is geometry, answered exactly by locating the containing element -- no
+        // length scale, so it holds under any mesh density or coarseness factor. "Is the snap
+        // large?" is discretisation, so it is measured against that element's OWN size rather
+        // than the project's target size, which a region coarseness factor may multiply by up
+        // to four.
+        const std::string lsub = line_subject(L.name, L.x1, L.y1, L.x1, L.y1);
+        const double h_elem = element_size_at(mesh, L.x1, L.y1);
+        if (best < 0 || h_elem <= 0.0) {
+            refuse(R, "K2D-G001", lsub,
+                   "Point load \"" + L.name + "\" at (" + dnum(L.x1) + ", " + dnum(L.y1) +
+                       ") is not on the mesh: no element contains it" +
+                       (best < 0 ? std::string()
+                                 : ", and the nearest node is " + dnum(bestd) + " m away") +
+                       ". Place the load on a soil region, or it carries nothing.");
+            return R;
+        }
+        if (bestd > 0.25 * h_elem)
+            warn(R, "K2D-G002", lsub,
+                 "Point load \"" + L.name + "\" acts at node (" + dnum(mesh.x[best]) + ", " +
+                     dnum(mesh.y[best]) + "), " + dnum(bestd) + " m from where it is drawn (" +
+                     dnum(L.x1) + ", " + dnum(L.y1) + ") -- the element there is " +
+                     dnum(h_elem) + " m. Refine the mesh there if that matters.");
         const int ex = dofs.equation(dofs.global_dof(best, 0));
         const int ey = dofs.equation(dofs.global_dof(best, 1));
         if (ex >= 0) { f[ex] += L.qx1; f_loads[ex] += L.qx1; }
@@ -992,7 +1301,31 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             if (L.kind != model::LoadKind::Distributed || !load_on(li)) continue;
             const std::vector<int> chain = collect_chain(mesh, L.x1, L.y1, L.x2, L.y2);
             const int cs = (int)chain.size();
-            if (cs < npe || (cs - 1) % (npe - 1) != 0) continue;  // needs a conforming edge chain
+            const std::string lsub = line_subject(L.name, L.x1, L.y1, L.x2, L.y2);
+            // The mesher adds every distributed load line as a mesh constraint, so a line that
+            // does not come back as an edge chain is not on the soil -- it was drawn above the
+            // surface, outside the model, or across a hole. Refused: the alternative is a phase
+            // that runs unloaded and reports "ok" (docs/internal/HARDENING-PLAN.md, WP-1).
+            if (cs < npe || (cs - 1) % (npe - 1) != 0) {
+                refuse(R, "K2D-G003", lsub,
+                       "Distributed load \"" + L.name + "\" from (" + dnum(L.x1) + ", " +
+                           dnum(L.y1) + ") to (" + dnum(L.x2) + ", " + dnum(L.y2) +
+                           ") does not lie on the mesh, so it would carry nothing. Draw it along a "
+                           "soil boundary or inside a soil region.");
+                return R;
+            }
+            // It resolved, but possibly only in part: a line drawn past the edge of the soil is
+            // applied over the stretch the mesh could give it. That is a defensible run and a
+            // different load from the one drawn, so it is said out loud.
+            double t0 = 0.0, t1 = 1.0;
+            chain_span(mesh, chain, L.x1, L.y1, L.x2, L.y2, t0, t1);
+            if (chain_is_clipped(t0, t1)) {
+                const double drawn = std::hypot(L.x2 - L.x1, L.y2 - L.y1);
+                warn(R, "K2D-G004", lsub,
+                     "Distributed load \"" + L.name + "\" is applied over " +
+                         dnum((t1 - t0) * drawn) + " m of the " + dnum(drawn) +
+                         " m drawn: the rest of the line falls outside the soil.");
+            }
             const double dx = L.x2 - L.x1, dy = L.y2 - L.y1, L2 = dx * dx + dy * dy;
             std::vector<double> tx(cs), ty(cs);
             for (int i = 0; i < cs; ++i) {
@@ -1070,6 +1403,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 if (std::fabs(pr.wy[i] - pr.wy[0]) > 1e-9) k0_nonlevel = true;        // sloped water table
         // Non-horizontal boundary between regions whose geostatic properties (gamma, K0) differ:
         // sigma'_v / sigma'_h then jump across a non-horizontal plane -> traction discontinuity.
+        // silent-drop-scope: none -- this pair scan DECIDES something (is the geostatic field
+        // level?); it builds nothing from the regions, so skipping a pair discards no input.
         for (size_t a = 0; a < pr.polygons.size() && !k0_nonlevel; ++a)
             for (size_t b = 0; b < pr.polygons.size() && !k0_nonlevel; ++b) {
                 if (a == b) continue;

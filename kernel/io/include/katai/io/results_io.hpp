@@ -35,6 +35,8 @@ namespace katai::app {
 // using-declarations keep this file's and its consumers' katai::app spellings
 // valid without the application driver (they lawfully repeat the driver's own).
 using katai::core::SolveResult;
+using katai::core::Diagnostic;
+using katai::core::DiagnosticSeverity;
 using katai::core::StructForce;
 using katai::core::InterfaceResult;
 using katai::core::ForceStation;

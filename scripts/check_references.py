@@ -63,7 +63,13 @@ MATRIX_PATH = REPO_ROOT / "docs" / "validation" / "verification-matrix.md"
 BIB_PATH = REPO_ROOT / "docs" / "validation" / "references.bib"
 
 ORACLES = ("closed_form", "independent_path", "external_code", "published_benchmark")
-CLASSES = ("NUM", "CST", "FND", "EXC", "SLP", "CON", "FLW", "STR", "DYN", "SSI")
+# The problem classes a case can belong to. DIA is the odd one and deliberately so:
+# it verifies a SAFETY property of the input path -- that no drawn object is ever
+# discarded in silence -- rather than a physical quantity. It carries the same oracle
+# discipline as the rest (its independent path is the model drawn the way the mesh
+# actually took it), and it belongs in the matrix because "what does this code refuse
+# to answer?" is a verification question a reviewer is entitled to ask.
+CLASSES = ("NUM", "CST", "FND", "EXC", "SLP", "CON", "FLW", "STR", "DYN", "SSI", "DIA")
 
 CASE_RE = re.compile(r"^KV-(" + "|".join(CLASSES) + r")-\d{3}$")
 # Only 'KV-...' or 'none ...' payloads open a block: an English sentence that

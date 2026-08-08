@@ -21,6 +21,19 @@ def _any_error_note(notes):
     return any(i.severity == _core.Severity.Error for i in notes)
 
 
+def _print_diagnostics(result):
+    """What the run did that the file does not literally say: a line clipped to
+    the soil, a fallback taken, an object refused. The input contract is checked
+    before a mesh exists, so this is the only report on everything decided
+    against the mesh -- printing it is what keeps a discarded load from passing
+    as a clean run."""
+    for d in result.diagnostics:
+        sev = ("refusal" if d.severity == _core.DiagnosticSeverity.Refusal else
+               "warning" if d.severity == _core.DiagnosticSeverity.Warning else "note   ")
+        subject = f"{d.subject}: " if d.subject else ""
+        print(f"  {sev} {d.code}  {subject}{d.message}")
+
+
 def _usage():
     sys.stderr.write(
         "katai -- KATAI 2D command line\n"
@@ -76,6 +89,12 @@ def _cmd_solve(path, out):
             sys.stdout.write(str(job.report()))
             print(f"REFUSED: {job.message()}")
             return 4
+        # Every phase that ran, including the one that stopped the job: its
+        # diagnostics name the object at fault, so they survive the failure path.
+        for i, r in enumerate(job.results()):
+            if r.diagnostics:
+                print(f"phase {i + 1}:")
+                _print_diagnostics(r)
         print(f"FAILED: {job.message()}")
         return 5
 
@@ -86,6 +105,7 @@ def _cmd_solve(path, out):
         if r.fos >= 0.0:
             line += f"  FoS {'>' if r.fos_is_lower_bound else '='} {r.fos:.3f}"
         print(line)
+        _print_diagnostics(r)
     print(f"solved {len(res)} phase(s) in {total_s:.2f} s")
 
     if out:

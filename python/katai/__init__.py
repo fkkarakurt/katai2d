@@ -28,7 +28,8 @@ if hasattr(_os, "add_dll_directory"):
 
 from . import _core
 from ._core import (  # noqa: F401 -- the sanctioned vocabulary, re-exported by name
-    AnchorMaterial, BCType, DesignApproach, Drainage, EmbeddedBeamMaterial,
+    AnchorMaterial, BCType, DesignApproach, Diagnostic, DiagnosticSeverity, Drainage,
+    EmbeddedBeamMaterial,
     FlowBCType, GeogridMaterial, InitialProcedure, Issue, Job, JobState, Load,
     LoadKind, Material, MeshSettings, Phase, PhaseType, PlateMaterial, PrescribedDisp,
     SeismicWave, Severity, SoilModel, SoilPolygon, StructElement, StructKind,
@@ -49,12 +50,22 @@ class Refusal(RuntimeError):
     """The engine or the input contract refused the run, honestly.
 
     The message carries the refusal text byte-for-byte as the engine states it;
-    ``report`` (when the refusal came from validation) holds the field-path issues.
+    ``report`` (when the refusal came from validation) holds the field-path issues;
+    ``diagnostics`` holds every :class:`Diagnostic` the phases raised, including the
+    refusal itself. Match on ``d.code`` -- the prose may be reworded, the code is
+    stable::
+
+        try:
+            job = prj.run()
+        except katai.Refusal as e:
+            if any(d.code == "K2D-G003" for d in e.diagnostics):
+                ...   # a distributed load was drawn off the soil
     """
 
-    def __init__(self, message, report=None):
+    def __init__(self, message, report=None, diagnostics=()):
         super().__init__(message)
         self.report = report
+        self.diagnostics = list(diagnostics)
 
 
 def run(project, on_phase=None):
@@ -72,5 +83,9 @@ def run(project, on_phase=None):
         job.set_on_phase(on_phase)
     if not job.run():
         rep = job.report()
-        raise Refusal(job.message(), report=None if rep.ok() else rep)
+        # Every diagnostic every phase raised, in phase order: the refusal that stopped
+        # the run is the last of them, and the warnings before it are often what explains
+        # it (a clipped wall, then the anchor that no longer reaches anything).
+        diags = [d for r in job.results() for d in r.diagnostics]
+        raise Refusal(job.message(), report=None if rep.ok() else rep, diagnostics=diags)
     return job

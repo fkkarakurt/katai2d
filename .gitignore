@@ -12,6 +12,7 @@
 /docs/ENVIRONMENT.md
 /docs/how-to-design-codes.md
 /docs/references/
+/docs/internal/
 /docs/validation/*
 !/docs/validation/verification-matrix.md
 !/docs/validation/references.bib

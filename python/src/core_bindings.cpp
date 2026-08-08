@@ -426,6 +426,27 @@ NB_MODULE(_core, m) {
         .def_prop_ro("x", [](const api::MeshResult& r) { return r.mesh.x; })
         .def_prop_ro("y", [](const api::MeshResult& r) { return r.mesh.y; });
 
+    // What a run did that its file does not literally say. The severity is the consequence,
+    // not the rarity: Warning = the answer stands but the model is not literally the drawn
+    // one, Refusal = the run stopped rather than answer a model the engineer did not draw.
+    nb::enum_<api::DiagnosticSeverity>(m, "DiagnosticSeverity", nb::is_arithmetic())
+        .value("Note", api::DiagnosticSeverity::Note)
+        .value("Warning", api::DiagnosticSeverity::Warning)
+        .value("Refusal", api::DiagnosticSeverity::Refusal);
+    nb::class_<api::Diagnostic>(m, "Diagnostic")
+        .def_ro("severity", &api::Diagnostic::severity)
+        .def_ro("code", &api::Diagnostic::code,
+                "stable machine tag, e.g. 'K2D-G003' -- match on this, never on the prose")
+        .def_ro("subject", &api::Diagnostic::subject, "the object as the file names it")
+        .def_ro("message", &api::Diagnostic::message)
+        .def("__repr__", [](const api::Diagnostic& d) {
+            const char* sev = d.severity == api::DiagnosticSeverity::Refusal  ? "refusal"
+                            : d.severity == api::DiagnosticSeverity::Warning  ? "warning"
+                                                                              : "note";
+            return "<Diagnostic " + std::string(sev) + " " + d.code +
+                   (d.subject.empty() ? "" : " " + d.subject) + ": " + d.message + ">";
+        });
+
     nb::class_<api::SolveResult>(m, "SolveResult")
         .def_ro("ok", &api::SolveResult::ok)
         .def_ro("message", &api::SolveResult::message)
@@ -450,6 +471,9 @@ NB_MODULE(_core, m) {
         .def_prop_ro("reaction", [](const api::SolveResult& r) { return r.reaction; },
                      "support reactions at fixed dofs [kN/m], (2*node_count) like displacement; "
                      "soil contribution, static phases only (empty otherwise)")
+        .def_prop_ro("diagnostics", [](const api::SolveResult& r) { return r.diagnostics; },
+                     "everything the run did that the file does not literally say: clipped "
+                     "geometry, a fallback taken, the refusal that stopped it (list[Diagnostic])")
         .def_prop_ro("consol_time", [](const api::SolveResult& r) { return r.consol_time; })
         .def_prop_ro("consol_settlement",
                      [](const api::SolveResult& r) { return r.consol_settlement; })

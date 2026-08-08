@@ -85,6 +85,11 @@ using jobs::PhaseTiming;
 // -- results --------------------------------------------------------------------------
 using app::MeshResult;
 using app::SolveResult;
+// Everything a run did that its file does not literally say -- clipped geometry, a fallback
+// taken, an object refused. A front end that hides this list hides the one report that is
+// made against the MESH, which the input contract (validated before meshing) cannot see.
+using app::Diagnostic;
+using app::DiagnosticSeverity;
 
 // -- provenance -----------------------------------------------------------------------
 // The linear-solver backend actually linked into this program (never what the build

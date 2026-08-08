@@ -21,6 +21,29 @@
 
 namespace katai::core {
 
+// One thing the run did that the file does not literally say: an object clipped to the
+// soil it could attach to, a parameter the selected model does not read, a fallback taken.
+// The rule this vocabulary exists to enforce: an input may be treated differently from the
+// way it was written, but never in silence. An object that would contribute NOTHING is not
+// a diagnostic at all -- it is a refusal (SolveResult::ok = false with the message), because
+// a load or a wall that does nothing is a modelling error, and a plausible answer to the
+// wrong model is worse than no answer.
+//
+// `code` is a stable machine tag: front ends may reword nothing, tests match on it, and a
+// user can grep a log for it. Codes are never reused once retired.
+enum class DiagnosticSeverity {
+    Note,      // worth stating; the run is exactly what the file asks for
+    Warning,   // the run is defensible, but it is not literally what the file asks for
+    Refusal    // the run stopped here; SolveResult::message carries the same sentence
+};
+
+struct Diagnostic {
+    DiagnosticSeverity severity = DiagnosticSeverity::Warning;
+    std::string code;      // e.g. "K2D-W101" -- stable, greppable, never reworded
+    std::string subject;   // the object's name as the user wrote it (may be empty)
+    std::string message;   // engineer-readable: what was found, and what was done instead
+};
+
 // One structural element's internal-force OUTPUT (PLAXIS Output -> Structures -> M/Q/N):
 // force stations along the element + the |max| envelope, computed from the converged solution
 // by the validated post-processors in structural_forces.hpp.
@@ -160,6 +183,11 @@ struct SolveResult {
     // Raw structural state for the phase chain (Track 1a; see StructCarryState). Set by the
     // static-family tail; empty for Dynamic / Safety / consolidation results (no carriable state).
     StructCarryState struct_state;
+    // Everything the run did differently from what the file literally says (see Diagnostic):
+    // clipped geometry, an ignored parameter, a fallback taken. Empty on a clean run. Front
+    // ends print this list; they do not interpret it. NEW FIELDS GO AT THE END (results_io
+    // writes positionally) -- diagnostics belong to the run, so they are not persisted.
+    std::vector<Diagnostic> diagnostics;
 };
 
 } // namespace katai::core

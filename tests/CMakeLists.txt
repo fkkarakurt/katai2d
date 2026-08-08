@@ -169,6 +169,11 @@ if(TARGET test_input_corpus)
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus"
     KATAI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")   # El Centro record (KV-DYN-003)
 endif()
+katai_add_test(test_no_silent_drop katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-DIA-001: no input may be discarded in silence -- one fixture per driver build loop, each perturbing ONE field of a corpus case, asserting the stable diagnostic code and that a clipped object equals the object drawn where the mesh took it
+if(TARGET test_no_silent_drop)
+  target_compile_definitions(test_no_silent_drop PRIVATE
+    KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
 katai_add_test(test_jobs katai::jobs katai::mesh katai::analysis katai::model katai::io)  # The Job object (Stage D): driver-path equivalence bit-identical, progress, cooperative phase-boundary cancel, timings, two concurrent jobs in one process
 if(TARGET test_jobs)
   target_compile_definitions(test_jobs PRIVATE KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
@@ -266,6 +271,14 @@ if(Python_Interpreter_FOUND)
   add_test(NAME check_k2d_spec
            COMMAND ${Python_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_k2d_spec.py)
   set_tests_properties(check_k2d_spec PROPERTIES LABELS "io")
+  # check_silent_drop: the safety property test_no_silent_drop asserts at runtime, held
+  # at the source. In the driver's build loops -- where a drawn object becomes an engine
+  # object -- a `continue` that skips user input must emit a diagnostic, be a selection
+  # (wrong kind, not in this phase), or carry a stated reason. A test can only cover the
+  # cases someone thought of; this covers the ones nobody has written yet.
+  add_test(NAME check_silent_drop
+           COMMAND ${Python_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_silent_drop.py)
+  set_tests_properties(check_silent_drop PROPERTIES LABELS "hygiene")
 else()
   message(STATUS "Python interpreter not found - source-tree gates (language, architecture) disabled")
 endif()
