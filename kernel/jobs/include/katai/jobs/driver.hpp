@@ -131,8 +131,25 @@ inline InitialPhase initial_phase_from(model::InitialProcedure p) {
 // stresses and the solve ramps the configuration imbalance d = f(active) - f_int(committed,
 // active) -- the PLAXIS SumMstage: excavation unloading, fill weight, structure installation
 // all emerge from that single rule. `out_states` returns this phase's committed stresses.
+// The numerical controls the driver normally derives from the material class: the tolerated
+// force residual and the number of load increments (see driver.cpp -- Hardening Soil runs at a
+// PLAXIS-realistic 1%, Mohr-Coulomb at 1e-6, a linear problem at 1e-10). Deriving them is a
+// convenience, not a contract, and it has a cost a reviewer is entitled to ask about: is a
+// published number a physics result, or an artefact of the tolerance it happened to be computed
+// at? That question can only be answered by re-running the same problem at other tolerances,
+// which is what this override is for (tests/test_tolerance_independence.cpp).
+//
+// Zero means "keep the derived default", so an untouched PhaseIO reproduces today's runs
+// bit-for-bit. Exposing these per phase in the .k2d contract is a separate step (the hardening
+// plan's WP-3); until then they are a jobs-layer seam, not a file-format promise.
+struct NumericalControls {
+    double tolerance = 0.0;   // tolerated relative force residual; 0 = by material class
+    int steps = 0;            // load increments; 0 = by material class
+};
+
 struct PhaseIO {
     const model::Phase* config = nullptr;
+    NumericalControls numeric;   // all-zero: the driver chooses, exactly as before
     const std::vector<katai::core::GaussState>* init_states = nullptr;
     std::vector<katai::core::GaussState>* out_states = nullptr;
     bool chained = false;

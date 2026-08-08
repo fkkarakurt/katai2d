@@ -1570,13 +1570,18 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // convergence), so it needs more, smaller load increments and a PLAXIS-realistic
         // tolerated error (~1%); ramping gravity into the K0 seed keeps each increment small.
         // Mohr-Coulomb has a closed-form CONSISTENT tangent (quadratic) -> tighter 1e-6.
-        const int steps = (has_hardening || has_softsoil)
-                              ? 40
-                              : (nonlinear_soil ? 20 : ((has_interfaces || has_embedded) ? 5 : 1));
-        const double tol = (has_hardening || has_softsoil)
-                               ? 1e-2
-                               : (nonlinear_soil ? 1e-6
-                                                 : ((has_interfaces || has_embedded) ? 1e-8 : 1e-10));
+        // io.numeric overrides either of them (0 = keep the derived value), so the same problem
+        // can be re-run at other numerics to show whether its answer depends on them.
+        const int steps_default =
+            (has_hardening || has_softsoil)
+                ? 40
+                : (nonlinear_soil ? 20 : ((has_interfaces || has_embedded) ? 5 : 1));
+        const double tol_default =
+            (has_hardening || has_softsoil)
+                ? 1e-2
+                : (nonlinear_soil ? 1e-6 : ((has_interfaces || has_embedded) ? 1e-8 : 1e-10));
+        const int steps = io.numeric.steps > 0 ? io.numeric.steps : steps_default;
+        const double tol = io.numeric.tolerance > 0.0 ? io.numeric.tolerance : tol_default;
         const katai::core::LinearSolve solver = reusing_linear_solve(
             nonsym ? katai::linsolve::MatrixType::RealNonsymmetric
                    : katai::linsolve::MatrixType::RealSymmetricPositiveDefinite);

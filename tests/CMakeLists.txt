@@ -170,6 +170,11 @@ if(TARGET test_input_corpus)
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus"
     KATAI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")   # El Centro record (KV-DYN-003)
 endif()
+katai_add_test(test_tolerance_independence katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-NUM-007: the same benchmark at three tolerated residuals -- is the published number a physics result or an artefact of the stopping rule?
+if(TARGET test_tolerance_independence)
+  target_compile_definitions(test_tolerance_independence PRIVATE
+    KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
 katai_add_test(test_slope_fos_convergence katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-SLP-003: the strength-reduction factor of safety of the Griffiths-Lane benchmark under systematic nested refinement -- does it converge, or does it follow the shear band down the mesh?
 if(TARGET test_slope_fos_convergence)
   target_compile_definitions(test_slope_fos_convergence PRIVATE

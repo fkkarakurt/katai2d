@@ -186,6 +186,21 @@ computed on, with a recommendation to confirm it by refinement. A number that mo
 mesh must never be handed over as if it did not — that is the same rule as WP-1's, applied to a
 result instead of an input.
 
+**And it is not the solver.** The same case at the same mesh, solved at tolerated force
+residuals of 1e-4, 1e-6 (the driver's default for this material family) and 1e-8, returns
+**1.421021 every time — bit for bit** (`tests/test_tolerance_independence.cpp`, **KV-NUM-007**).
+Four orders of magnitude of stopping rule move the factor of safety by 0.0000%, while a fourfold
+mesh refinement moves it by 4–8%. The comparison against Griffiths & Lane and against the charts
+is therefore a statement about the model and the mesh, not about when a Newton loop was allowed
+to stop — which is exactly the confusion a reader is entitled to suspect, given that the
+reference's own factor of safety *is* defined by a convergence criterion.
+
+What quantises our factor instead is the strength-reduction **search**: the safety strategy
+bisects the reduction factor between 0.4 and 3.0 for 12 iterations, so the reported number
+carries a resolution of 2.6/2¹² = 6.3 × 10⁻⁴ — about 0.05% at 1.38, finer than the mesh
+dependence by two orders of magnitude, and finer than the 0.05 trial increments the reference
+stepped through.
+
 **What remains.** A regularisation (a non-local or gradient formulation, or a fixed band width),
 an adaptive refinement driven by an error estimator, and a comparison against finite element
 limit analysis — which brackets the collapse load from above and below and does not localise —
@@ -198,11 +213,13 @@ a passed one:
 
 - **Fourteen of the sixteen corpus cases have no sweep yet.** KV-FND-008 and KV-SLP-002 are the
   first two.
-- **Tolerance independence is not measured.** Each case should also be re-run at solver
-  tolerances 1e-2 / 1e-4 / 1e-6, the more so because the hardening-soil family currently runs at
-  a 1% force residual — the reported quantity must move by less than the declared band, or the
-  band is not a band. For strength reduction this is not a detail: the reference's own factor of
-  safety is defined by a convergence criterion.
+- **Tolerance independence is measured for one case only.** KV-NUM-007 covers the slope factor
+  of safety (Mohr-Coulomb, default residual 1e-6). The **hardening and soft-soil families still
+  run at a 1% residual** and no boundary-value problem in the corpus exercises them, so the
+  question "does an HS number depend on its stopping rule?" is open — and it is the one where a
+  loose tolerance is most likely to matter. The controls are now overridable through the driver
+  seam (`PhaseIO::numeric`), so the study needs a case, not machinery. Exposing them per phase
+  in `.k2d` remains WP-3.
 - **One open question in the record is now measured, one is still open.** The slope factor of
   safety falling on fine meshes is §5 above: characterised, cited and declared to the user. The
   −39% deep sheet-pile wall row still has only its domain-size diagnosis, not its closure.
