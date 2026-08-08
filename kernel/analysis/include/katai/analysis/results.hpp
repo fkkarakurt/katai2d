@@ -190,4 +190,13 @@ struct SolveResult {
     std::vector<Diagnostic> diagnostics;
 };
 
+// The one spelling of "say this out loud", shared by the driver and the phase strategies so a
+// diagnostic reads the same wherever it was raised. A refusal ALSO sets ok/message, because a
+// front end that only looks at those two must not be able to miss it.
+inline void add_diagnostic(SolveResult& R, DiagnosticSeverity severity, const char* code,
+                           std::string subject, std::string message) {
+    if (severity == DiagnosticSeverity::Refusal) { R.ok = false; R.message = message; }
+    R.diagnostics.push_back(Diagnostic{severity, code, std::move(subject), std::move(message)});
+}
+
 } // namespace katai::core

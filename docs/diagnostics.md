@@ -45,6 +45,17 @@ the code is never reworded, reused or retired into something else.
 | `K2D-G011` | refusal | A **prescribed displacement** line catches no node, so it would impose nothing. |
 | `K2D-G012` | refusal | An **embedded beam** has no material assigned, or a non-positive length or diameter. |
 
+Codes in the `K2D-M…` family are about a **material parameter** the selected model does not read;
+`K2D-A…` about a limit of the **analysis** that shapes how a result may be read.
+
+| Code | Severity | Raised when |
+|---|---|---|
+| `K2D-M001` | warning | A **tension cut-off** is switched on for a Hardening Soil / HS-small / Soft Soil / Soft Soil Creep material. Only the Mohr–Coulomb return reads it in this build, so the run allows tension past σ_t. The schema, like PLAXIS, switches the cut-off on by default, so this is a systematic difference from the reference code in the unsafe direction. |
+| `K2D-A001` | warning | A **linear Dynamic** phase reports the stress field as zero everywhere — the linear path never recovers it. Displacements, accelerations and structural forces are that phase's results; for stresses, run it nonlinear. |
+| `K2D-A002` | warning | A **linear Dynamic** phase carries structural elements: geogrids stay elastic, anchors do not yield, interfaces do not slip. Their capacity is not checked during the shaking. |
+| `K2D-A003` | warning | A **prescribed displacement drives a node a structure stands on**. Structural elements do not receive the imposed motion in this build, so that element's M, Q and N understate the action. |
+| `K2D-A004` | note | A **structural element ends on a supported node**. The reported reactions are the soil's contribution only; the element's own end force at that support is not included. |
+
 ## Where they appear
 
 **Command line.** Under the phase that raised them; on a failed run, under every phase that ran:

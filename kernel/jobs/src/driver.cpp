@@ -67,20 +67,19 @@ using katai::core::recover_consolidation_stress;
 // never sees. Those cannot be warnings, because the analysis would then succeed, report a
 // plausible field, and answer a model the engineer did not draw. Every code below is stable:
 // tests match on it, users grep logs for it, and it is never reworded or reused.
-static void diag(SolveResult& R, katai::core::DiagnosticSeverity sev, const char* code,
-                 std::string subject, std::string message) {
-    R.diagnostics.push_back(
-        katai::core::Diagnostic{sev, code, std::move(subject), std::move(message)});
+static void note(SolveResult& R, const char* code, std::string subject, std::string message) {
+    katai::core::add_diagnostic(R, katai::core::DiagnosticSeverity::Note, code, std::move(subject),
+                                std::move(message));
 }
 static void warn(SolveResult& R, const char* code, std::string subject, std::string message) {
-    diag(R, katai::core::DiagnosticSeverity::Warning, code, std::move(subject), std::move(message));
+    katai::core::add_diagnostic(R, katai::core::DiagnosticSeverity::Warning, code,
+                                std::move(subject), std::move(message));
 }
 // Sets the refusal AND records it as a tagged diagnostic, so a front end can act on the code
 // instead of matching prose. The caller returns R immediately (R.ok is already false).
 static void refuse(SolveResult& R, const char* code, std::string subject, std::string message) {
-    R.ok = false;
-    R.message = message;
-    diag(R, katai::core::DiagnosticSeverity::Refusal, code, std::move(subject), std::move(message));
+    katai::core::add_diagnostic(R, katai::core::DiagnosticSeverity::Refusal, code,
+                                std::move(subject), std::move(message));
 }
 // Number for a message, in the file's own spelling.
 static std::string dnum(double v) {
@@ -349,6 +348,18 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             return R;
         }
         models.push_back(entry->build(to_material_params(m)));
+        // The Rankine tension cut-off is consumed by the Mohr-Coulomb return only: the hardening
+        // and soft-soil integrators do not carry the extra planes (material_model.hpp). PLAXIS
+        // applies a tension cut-off to these models by DEFAULT, and so does this schema, so a
+        // silent omission here is a systematic difference from the reference code in the
+        // unsafe direction -- the soil takes tension it should not.
+        if (m.tension_cutoff && (entry->hardening_family || entry->softsoil_family))
+            warn(R, "K2D-M001", m.name,
+                 "Material \"" + m.name + "\" (" + constitutive_name(m.model) +
+                     ") has the tension cut-off switched on, but only the Mohr-Coulomb return "
+                     "reads it in this build: the run allows tension beyond sigma_t = " +
+                     dnum(m.tensile_strength) +
+                     " kPa. Use Mohr-Coulomb where the cut-off governs the answer.");
         nonlinear_soil |= entry->nonlinear;
         has_hardening |= entry->hardening_family;
         has_softsoil |= entry->softsoil_family;
@@ -1118,11 +1129,67 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 return R;
             }
         }
+        // A structural element standing on a driven node does NOT see that motion: the
+        // prescribed-displacement ramp enters the soil element loop alone, and the structural
+        // elements read fixed DOFs as zero (internal_forces.hpp states the limit at the seam
+        // that has it). Its M / Q / N are then those of an undriven element -- near zero for a
+        // plate whose only load is the imposed settlement. The condition is checked rather than
+        // assumed, so a model whose structures stand clear of the driven line hears nothing.
+        if (!presc_entries.empty()) {
+            std::vector<char> driven(mesh.node_count, 0);
+            for (const auto& e : presc_entries)
+                if (e.node >= 0 && e.node < mesh.node_count) driven[e.node] = 1;
+            std::string hit;
+            const auto touches = [&](int n) { return n >= 0 && n < mesh.node_count && driven[n]; };
+            for (const auto& p : structures.plates)
+                for (int n : p.nodes) if (touches(n) && hit.empty()) hit = "a plate";
+            for (const auto& p : structures.plates5)
+                for (int n : p.nodes) if (touches(n) && hit.empty()) hit = "a plate";
+            for (const auto& g : structures.geogrids)
+                for (int n : g.nodes) if (touches(n) && hit.empty()) hit = "a geogrid";
+            for (const auto& a : structures.anchors)
+                if ((touches(a.node_a) || touches(a.node_b)) && hit.empty()) hit = "an anchor";
+            if (!hit.empty())
+                warn(R, "K2D-A003", "",
+                     "A prescribed displacement drives a node that " + hit +
+                         " stands on. Structural elements do not receive the imposed motion in "
+                         "this build, so that element's internal forces (M, Q, N) understate the "
+                         "action -- read the soil results, not the structural diagram, here.");
+        }
     }
     // Staged construction: nodes touched only by passive (excavated / not-yet-filled) elements
     // would be singular -- fix them (their displacement is meaningless this phase).
     if (!act.empty()) katai::core::fix_inactive_nodes(mesh, act, dofs);
     dofs.finalize();
+    // Reported support reactions are the SOIL's discrete B^T sigma: a structural element that
+    // ends on a support adds its own end force to that support in reality, and this build does
+    // not include it (results.hpp states the same limit at the field). It is asked AFTER finalize(),
+    // because that is when a DOF's fixity becomes readable. It matters exactly when a
+    // structure stands on a fixed node, so that is the condition -- a note rather than a warning,
+    // because the number is right for what it says it is, and only incomplete for what a reader
+    // may take it to mean.
+    {
+        std::vector<int> struct_nodes;
+        for (const auto& p : structures.plates) for (int n : p.nodes) struct_nodes.push_back(n);
+        for (const auto& p : structures.plates5) for (int n : p.nodes) struct_nodes.push_back(n);
+        for (const auto& g : structures.geogrids) for (int n : g.nodes) struct_nodes.push_back(n);
+        for (const auto& a : structures.anchors) {
+            struct_nodes.push_back(a.node_a);
+            if (a.node_b >= 0) struct_nodes.push_back(a.node_b);
+        }
+        bool on_support = false;
+        for (int n : struct_nodes) {
+            if (n < 0 || n >= mesh.node_count) continue;
+            for (int c = 0; c < 2 && !on_support; ++c)
+                if (dofs.is_fixed(dofs.global_dof(n, c))) on_support = true;
+            if (on_support) break;
+        }
+        if (on_support)
+            note(R, "K2D-A004", "",
+                 "A structural element ends on a supported node. The reported reactions are the "
+                 "soil's contribution only; the element's own end force at that support is not "
+                 "included in this build. Read it from the element's own force diagram.");
+    }
     Eigen::VectorXd presc;   // full-DOF prescribed values; empty = none active
     if (!presc_entries.empty()) {
         presc = Eigen::VectorXd::Zero(dofs.total_dofs());

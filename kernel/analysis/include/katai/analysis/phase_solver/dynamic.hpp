@@ -973,10 +973,18 @@ inline bool solve_dynamic_phase(
     // committed effective stress through the shaking (parent stress + plastic evolution), so
     // recover the nodal field from its final committed Gauss state: the post-earthquake stress
     // state, showing where the soil plastified. (Uses the same recovery as the static branches.)
-    if (dyn_nl && !nl_gauss.empty())
+    if (dyn_nl && !nl_gauss.empty()) {
         R.stress = recover_nodal_stresses_from_gauss(mesh, nl_gauss, act);
-    else
+    } else {
         R.stress.stress.assign(nc, Eigen::Vector3d::Zero());   // linear path: stress recovery deferred
+        // Zeros are a legitimate datum here and an illegitimate ANSWER: a reader who plots the
+        // stress field of a linear Dynamic phase sees an unstressed soil, which is not what the
+        // analysis found -- it is what the analysis never computed.
+        add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A001", "",
+                       "Linear dynamic phase: the stress field is NOT recovered and is reported "
+                       "as zero everywhere. Displacements, accelerations and structural forces "
+                       "are the results of this phase; for stresses run it nonlinear.");
+    }
     R.pore.assign(nc, 0.0);
     R.load_factor = 1.0; R.iterations = nst;
     R.active = act;
@@ -1040,7 +1048,15 @@ inline bool solve_dynamic_phase(
         if (!structures.anchors.empty()) add("anchors do not yield");
         if (!structures.interfaces.empty() || !structures.interfaces5.empty())
             add("interfaces do not slip");
-        if (!lin.empty()) R.message += lin + ".";
+        if (!lin.empty()) {
+            R.message += lin + ".";
+            // The same sentence, machine-tagged: a front end or a script must be able to act on
+            // "this run linearised structural behaviour" without parsing the message.
+            add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A002", "",
+                           "Linear dynamic phase, with structural elements present." + lin +
+                               ". Their capacity is not checked during the shaking; run the phase "
+                               "nonlinear where yielding or slip governs.");
+        }
     } else if (!structures.geogrids.empty() || !structures.anchors.empty() ||
                !structures.interfaces.empty() || !structures.interfaces5.empty()) {
         // NONLINEAR path: the very simplifications the linear branch had to disclose are now solved

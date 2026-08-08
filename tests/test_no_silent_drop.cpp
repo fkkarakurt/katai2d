@@ -26,7 +26,7 @@
 //   source:   KATAI 2D input-safety property (no input may be discarded in silence): the independent path is the same problem with the object drawn where the mesh actually takes it, plus global vertical equilibrium of the support reactions
 //   locator:  each fixture changes ONE field of tests/corpus/kv-fnd-008-strip-load.k2d (a weightless elastic half-plane, 40 x 20 m, tri6, 4 m strip at q = 100 kPa) and solves it from that project; sum of the base reactions must equal the load actually applied, and a clipped object must reproduce the explicitly shortened object
 //   quantity: the diagnostic severity and code raised by each perturbation [-]; the summed base reaction of the runs that continue [kN/m]; peak displacement of a clipped plate against the explicitly shortened plate [m]
-//   expected: refusals K2D-G001 (point load off the mesh), K2D-G003 (line load off the mesh), K2D-G005 (plate off the mesh), K2D-G007 (geogrid off the mesh), K2D-G008 (anchor with no end in the soil); warnings K2D-G002 (point load snapped), K2D-G004 (line load clipped), K2D-G006 (structure clipped), K2D-G009 (wall/interface not on mesh edges -> bonded); the unperturbed case raises NOTHING and carries 4 m x 100 kPa = 400 kN/m; the half-outside strip carries 2 m x 100 kPa = 200 kN/m
+//   expected: refusals K2D-G001 (point load off the mesh), K2D-G003 (line load off the mesh), K2D-G005 (plate off the mesh), K2D-G007 (geogrid off the mesh), K2D-G008 (anchor with no end in the soil); warnings K2D-G002 (point load snapped), K2D-G004 (line load clipped), K2D-G006 (structure clipped), K2D-G009 (wall/interface not on mesh edges -> bonded), K2D-M001 (tension cut-off on a model that ignores it), K2D-A001 (linear dynamic reports zero stress), K2D-A003 (a structure does not receive a prescribed displacement); note K2D-A004 (reactions exclude the structural end force); the unperturbed case raises NOTHING and carries 4 m x 100 kPa = 400 kN/m; the half-outside strip carries 2 m x 100 kPa = 200 kN/m
 //   band:     exact on severity and code; 1e-9 relative on the equilibrium sums (the same discrete B^T sigma the supports see, so the residual is round-off, measured ~1e-13); 1e-12 m on the clipped-versus-shortened plate, which is a bit-level identity because the mesher clips structural lines in the arrangement, so both models are the SAME mesh and the same assembly
 
 #include <katai/jobs/driver.hpp>
@@ -341,6 +341,70 @@ void case_wall_above_soil() {
           "wall above the soil: the bonded fallback is stated too (K2D-G009)");
 }
 
+// 11. A parameter the selected model does not read. The Rankine tension cut-off is applied by the
+//     Mohr-Coulomb return only; the hardening and soft-soil integrators ignore it, and the schema
+//     (like PLAXIS) switches it ON by default -- so the soil takes tension it was told not to,
+//     with nothing said. The mesh is coarsened and the load reduced on purpose: this fixture is
+//     about what the run declares, and a full Hardening Soil solve on the benchmark's own mesh
+//     would cost minutes to assert one string.
+void case_tension_cutoff_ignored() {
+    std::printf("\n== tension cut-off set on a model that does not read it ==\n");
+    m::Project pr = reference();
+    pr.materials[0].model = m::SoilModel::HardeningSoil;
+    pr.materials[0].tension_cutoff = true;
+    pr.materials[0].tensile_strength = 0.0;
+    pr.mesh.elem_size = 5.0;
+    pr.mesh.auto_refine = false;
+    pr.loads[0].qy1 = pr.loads[0].qy2 = -10.0;
+    const Run r = solve(pr);
+    print_diags(r);
+    check(raised(r, "K2D-M001", core::DiagnosticSeverity::Warning),
+          "tension cut-off ignored: warns with K2D-M001");
+}
+
+// 12. A plate standing on a line that is pushed down. The prescribed-displacement ramp reaches
+//     the soil elements only, so the plate reports the internal forces of an undriven element
+//     (measured as M ~ 0 when this path was first designed); and the reaction at those now-fixed
+//     nodes is the soil's alone. Both facts are stated where they can be acted on.
+void case_prescribed_disp_on_structure() {
+    std::printf("\n== plate standing on a prescribed-displacement line ==\n");
+    m::Project pr = reference();
+    const int pm = add_plate_material(pr);
+    pr.structs.push_back(plate_line(pm, 18.0, 20.0, 22.0, 20.0));
+    pr.loads.clear();                       // the settlement is the action here
+    m::PrescribedDisp D;
+    D.name = "Footing settlement";
+    D.x1 = 18.0; D.y1 = 20.0; D.x2 = 22.0; D.y2 = 20.0;
+    D.set_uy = true; D.uy = -0.01;
+    pr.disps.push_back(D);
+    const Run r = solve(pr);
+    print_diags(r);
+    check(r.ok, "prescribed displacement on a plate: the run completes");
+    check(raised(r, "K2D-A003", core::DiagnosticSeverity::Warning),
+          "prescribed displacement on a plate: warns that the plate does not see it (K2D-A003)");
+    check(raised(r, "K2D-A004", core::DiagnosticSeverity::Note),
+          "structure on a support: the reaction's missing structural share is noted (K2D-A004)");
+}
+
+// 13. A linear Dynamic phase reports zeros for stress -- not because the soil is unstressed, but
+//     because the linear path never recovers the field. Driven from the corpus resonant column,
+//     shortened to a few steps: this fixture is about what the phase SAYS, not what it computes.
+void case_linear_dynamic_zero_stress() {
+    std::printf("\n== linear dynamic phase: stress never recovered ==\n");
+    m::Project pr;
+    std::string err;
+    const std::string path = std::string(KATAI_CORPUS_DIR) + "/kv-dyn-002-resonant-column.k2d";
+    check(m::load_project(path, pr, &err, nullptr), "resonant column loads");
+    while (pr.phases.size() > 1) pr.phases.pop_back();
+    pr.phases[0].duration = 0.1;
+    pr.phases[0].time_steps = 10;
+    const Run r = solve(pr);
+    print_diags(r);
+    check(r.ok, "linear dynamic: the run completes");
+    check(raised(r, "K2D-A001", core::DiagnosticSeverity::Warning),
+          "linear dynamic: the zero stress field is declared (K2D-A001)");
+}
+
 }  // namespace
 
 int main() {
@@ -356,6 +420,9 @@ int main() {
     case_geogrid_above_soil();
     case_anchor_outside_soil();
     case_wall_above_soil();
+    case_tension_cutoff_ignored();
+    case_prescribed_disp_on_structure();
+    case_linear_dynamic_zero_stress();
     std::printf(g_failures ? "\n%d CHECK(S) FAILED\n" : "\nall checks passed\n", g_failures);
     return g_failures ? 1 : 0;
 }
