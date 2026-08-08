@@ -333,12 +333,17 @@ class _Phases:
         self._prj = prj
 
     def _add(self, name, ptype, *, activate=(), deactivate=(), duration=None,
-             steps=None, tolerance=None, load_steps=None, max_iterations=None):
+             steps=None, tolerance=None, load_steps=None, max_iterations=None,
+             apply_fraction=None, ignore_undrained=None):
         ph = _core.Phase()
         ph.name = name
         ph.type = ptype
         if duration is not None: ph.duration = duration
         if steps is not None: ph.time_steps = steps
+        # apply_fraction is PLAXIS's Sum-Mstage: 0.5 applies half the staged change
+        # and leaves the rest for a later phase.
+        if apply_fraction is not None: ph.sum_mstage = apply_fraction
+        if ignore_undrained is not None: ph.ignore_undrained = ignore_undrained
         # Numerical controls; unset = the program chooses by material class. They are
         # written into the .k2d, so a script that pins them publishes a run someone
         # else can reproduce exactly.
@@ -349,7 +354,11 @@ class _Phases:
         return _PhaseBuilder(self._prj, ph)
 
     def plastic(self, name, **kw):
-        """A plastic (staged construction) phase: fill, excavate, install, load."""
+        """A plastic (staged construction) phase: fill, excavate, install, load.
+
+        ``apply_fraction=0.5`` applies half of the stage (PLAXIS Sum-Mstage) and
+        leaves the rest; ``ignore_undrained=True`` solves undrained materials as
+        drained for this phase."""
         return self._add(name, _core.PhaseType.Plastic, **kw)
 
     def consolidation(self, name, *, duration, steps, **kw):
@@ -442,17 +451,19 @@ class Project:
         self.phases = _Phases(self)
 
     def initial(self, *, procedure="k0", exclude=(), tolerance=None,
-                load_steps=None, max_iterations=None):
+                load_steps=None, max_iterations=None, ignore_undrained=None):
         """How the in-situ state is established: "k0" (geostatic, default),
         "gravity" (switch-on self-weight) or "safety" (single-phase slope FoS).
         ``exclude``: loads or regions NOT present in the initial phase.
 
         ``tolerance`` / ``load_steps`` / ``max_iterations``: numerical controls
-        for this phase; unset = chosen by material class."""
+        for this phase; unset = chosen by material class. ``ignore_undrained``:
+        establish the state with undrained materials solved as drained."""
         self._procedure = procedure
         self._initial_exclude = list(exclude)
         self._initial_numerics = {"tolerance": tolerance, "load_steps": load_steps,
-                                  "max_iterations": max_iterations}
+                                  "max_iterations": max_iterations,
+                                  "ignore_undrained": ignore_undrained}
         return self
 
     # ------------------------------------------------------------------ build --

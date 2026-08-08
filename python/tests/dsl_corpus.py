@@ -257,6 +257,22 @@ try:
 except ValueError as exc:
     check("m/day" in str(exc), f'"flux" without a value is refused: {exc}')
 
+# ------------------------------------ the staged options, from the easy surface --
+# KV-EXC-002 and KV-CST-005 verify what these DO; this is the one line an engineer
+# has to write to ask for them.
+prj = katai.Project("staged options", mesh_size=2.0, auto_refine=False)
+soil = prj.materials.mohr_coulomb("Clay", E=5000.0, nu=0.3, c=20.0, phi=25.0,
+                                  gamma=17.0, gamma_sat=19.0, drainage="undrained_a")
+prj.geometry.rectangle(0.0, 0.0, 10.0, 5.0, material=soil, name="Block")
+prj.initial()
+prj.phases.plastic("Half a lift", apply_fraction=0.5, ignore_undrained=True)
+built = prj.build()
+check(built.phases[0].sum_mstage == 0.5, "the DSL sets the staged-construction fraction")
+check(built.phases[0].ignore_undrained, "and the ignore-undrained switch")
+check('"mstage":0.5' in katai.project_to_json(built)
+      and '"ignoreund":true' in katai.project_to_json(built),
+      "both reach the file, where a reviewer can see them")
+
 # ------------------------------------------------- end to end: the slope RUNS --
 job_dsl = build_slope().run()
 file_prj, _ = katai.load_project(f"{CORPUS}/kv-slp-001-griffiths-lane-slope.k2d")

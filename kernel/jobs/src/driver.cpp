@@ -356,6 +356,20 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             return R;
         }
         models.push_back(entry->build(to_material_params(m)));
+        // "Ignore undrained behaviour" (PLAXIS): this phase treats Undrained (A)/(B) soil as
+        // drained -- no excess pore pressure is generated. Only the volumetric coupling is
+        // switched off; the strength parameters stay exactly as the material declares them, so
+        // an Undrained (B) soil keeps its c_u with phi = 0, which is what the option means in
+        // PLAXIS too. Reported per material, because a phase that quietly stops being undrained
+        // is the difference between a short-term and a long-term answer.
+        if (io.config && io.config->ignore_undrained && models.back().undrained) {
+            models.back().undrained = false;
+            note(R, "K2D-A008", m.name,
+                 "This phase ignores undrained behaviour, so material \"" + m.name +
+                     "\" is solved DRAINED: no excess pore pressure is generated in it. Its "
+                     "strength parameters are unchanged. This is a long-term (or state-setting) "
+                     "answer, not a short-term one.");
+        }
         // The Rankine tension cut-off is consumed by the Mohr-Coulomb return only: the hardening
         // and soft-soil integrators do not carry the extra planes (material_model.hpp). PLAXIS
         // applies a tension cut-off to these models by DEFAULT, and so does this schema, so a
@@ -1891,6 +1905,16 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         stin.load_steps = steps;
         stin.tolerance = tol;
         stin.max_iterations = io.numeric.max_iterations;
+        // SumMstage: a partial stage is a construction step only where there IS a stage, so the
+        // fraction is read on chained phases and left at 1 on the initial one (the validator
+        // refuses it there rather than letting a scaled gravity look like a partial excavation).
+        stin.stage_fraction = (io.chained && io.config) ? io.config->sum_mstage : 1.0;
+        if (stin.stage_fraction != 1.0)
+            note(R, "K2D-A007", io.config->name,
+                 "This phase applies only " + dnum(100.0 * stin.stage_fraction) +
+                     "% of its staged change (SumMstage = " + dnum(stin.stage_fraction) +
+                     "), so the configuration it describes is NOT reached: the remainder is "
+                     "still carried by the soil. Results belong to the partial stage.");
         // Only a CHAINED (staged) phase carries time: in PLAXIS the initial phase is TIMELESS --
         // an unconditional duration here once leaked 1 day of creep into the K0 phase and broke
         // the geostatic identity (measured: K0 max |u| = 26 mm = exactly mu* ln2 H on an SSC

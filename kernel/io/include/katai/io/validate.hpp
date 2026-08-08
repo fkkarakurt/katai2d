@@ -77,6 +77,17 @@ inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::
               "water level is used and these points are ignored");
     }
 
+    // SumMstage: the fraction of the staged change to apply. Out of range is refused rather than
+    // clamped -- 1.4 means the author expected something this program does not do.
+    if (!(ph.sum_mstage > 0.0) || ph.sum_mstage > 1.0)
+        r.add(Severity::Error, path("mstage"),
+              "the staged-construction target must be in (0, 1] (got " + num(ph.sum_mstage) +
+                  "); 1 applies the whole stage, 0.5 applies half of it");
+    else if (is_initial && ph.sum_mstage != 1.0)
+        r.add(Severity::Error, path("mstage"),
+              "the initial phase establishes the in-situ stress state, so there is no staged "
+              "change to apply a fraction of; a partial gravity is not a construction step");
+
     // Numerical controls (0 = let the program choose). A value that is set must be usable,
     // because the alternative is a run that quietly ignores the numerics the file was written
     // to carry -- which is the whole reason they are in the file.
@@ -121,6 +132,11 @@ inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::
         r.add(Severity::Warning, path("type"),
               "the initial phase establishes the initial stress state (K0 procedure / gravity); "
               "its phase type is ignored");
+    if (ph.sum_mstage != 1.0 && ph.sum_mstage > 0.0 && ph.sum_mstage < 1.0 && !is_initial &&
+        ph.type != PhaseType::Plastic)
+        r.add(Severity::Warning, path("mstage"),
+              "a staged-construction target below 1 is applied by the plastic (staged) solve; "
+              "this phase type does not ramp a staged change, so the value is ignored");
 
     const bool timed = ph.type == PhaseType::Consolidation || ph.type == PhaseType::TransientFlow ||
                        ph.type == PhaseType::FullyCoupled || ph.type == PhaseType::Dynamic;

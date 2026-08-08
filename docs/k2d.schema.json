@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["katai2d"],
   "properties": {
-    "katai2d": { "type": "integer", "minimum": 1, "maximum": 7 },
+    "katai2d": { "type": "integer", "minimum": 1, "maximum": 8 },
     "name": { "type": "string" },
     "axisymmetric": { "type": "boolean" },
     "initial_procedure": { "type": "integer", "minimum": 0, "maximum": 2 },
@@ -254,6 +254,8 @@
         "water_override": { "type": "boolean" },
         "wx": { "type": "array", "items": { "type": "number" } },
         "wy": { "type": "array", "items": { "type": "number" } },
+        "mstage": { "type": "number" },
+        "ignoreund": { "type": "boolean" },
         "tol": { "type": "number" },
         "loadsteps": { "type": "integer" },
         "maxiter": { "type": "integer" }

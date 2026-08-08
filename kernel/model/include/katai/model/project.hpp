@@ -368,6 +368,23 @@ struct Phase {
     // EC7 / TBDY 2018 design approach for this phase (None = characteristic values). The material-
     // factored approaches (DA1-C2, DA3) reduce c'/tan(phi') and scale variable loads before the solve.
     DesignApproach design_approach = DesignApproach::None;
+    // SumMstage TARGET (PLAXIS "Σ Mstage"): the fraction of this phase's staged change that is
+    // actually applied. 1 = the whole stage, which is what staged construction normally means
+    // and what every project written before this field said. A smaller value applies part of it
+    // and leaves the rest -- half an excavation lift, a partly built embankment -- and the next
+    // phase continues from that partly-changed state.
+    //
+    // It applies to a STAGED (chained) phase only. The initial phase establishes the in-situ
+    // state; scaling gravity there would not be a partial construction step, it would be a
+    // different planet, so the value is refused rather than quietly obeyed.
+    double sum_mstage = 1.0;
+    // IGNORE UNDRAINED BEHAVIOUR (PLAXIS "Ignore und. behaviour (A,B)"): for this phase, materials
+    // whose drainage is Undrained (A) or (B) are treated as drained -- no excess pore pressure is
+    // generated. Strength parameters are untouched, so an Undrained (B) material still carries its
+    // c_u with phi = 0. The standard use is a phase where the undrained response is not the
+    // question being asked (establishing an initial state, or a long-term stage), which PLAXIS
+    // supports for exactly the same reason.
+    bool ignore_undrained = false;
     // NUMERICAL CONTROLS for this phase (PLAXIS "Numerical control parameters"). Zero means
     // "let the program choose", which is what every project that never touches them says, so
     // the defaults stay exactly where they are: derived from the material class (Hardening Soil

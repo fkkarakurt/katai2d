@@ -54,7 +54,13 @@ namespace katai::model {
 // it at its own tolerance, and report a number that cannot be compared with the one the file
 // was written to carry. The keys are written only when set, so a project that never touches
 // numerics is byte-identical apart from this version digit.
-inline constexpr int kProjectFileVersion = 7;
+//
+// v8 (2026-08): the STAGED-CONSTRUCTION TARGET and the UNDRAINED SWITCH (`phases[].mstage`,
+// `ignoreund`). Both change what the phase IS, and an older build would drop both silently: a
+// half-applied excavation lift would be reported as a completed one (unsafe -- the wall carries
+// the full stage in the file but not in the run), and a phase asked to ignore undrained
+// behaviour would generate excess pore pressures the author excluded on purpose.
+inline constexpr int kProjectFileVersion = 8;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -305,6 +311,10 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     if (ph.tolerance > 0.0) wfield(o, "tol", ph.tolerance);
     if (ph.load_steps > 0) wfield(o, "loadsteps", (double)ph.load_steps);
     if (ph.max_iterations > 0) wfield(o, "maxiter", (double)ph.max_iterations);
+    // Same rule for the staged-construction target and the undrained switch: the default IS the
+    // ordinary case (the whole stage, undrained soil behaving undrained), so it costs no bytes.
+    if (ph.sum_mstage != 1.0) wfield(o, "mstage", ph.sum_mstage);
+    if (ph.ignore_undrained) wfield(o, "ignoreund", true);
     closeobj(o); o += ',';
 }
 inline Phase rphase(const Json& j) {
@@ -342,6 +352,8 @@ inline Phase rphase(const Json& j) {
     ph.tolerance = j.num("tol", ph.tolerance);
     ph.load_steps = (int)j.num("loadsteps", ph.load_steps);
     ph.max_iterations = (int)j.num("maxiter", ph.max_iterations);
+    ph.sum_mstage = j.num("mstage", ph.sum_mstage);
+    ph.ignore_undrained = j.flag("ignoreund", ph.ignore_undrained);
     return ph;
 }
 

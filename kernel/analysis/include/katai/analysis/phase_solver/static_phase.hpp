@@ -62,6 +62,12 @@ struct StaticPhase {
     // so the number is a patience setting, not an accuracy one (PLAXIS "Max iterations", 60).
     int max_iterations = 0;
     double time_interval_day = 0.0;  // SSC creep time of a chained Plastic phase [days]
+    // PLAXIS SumMstage target: the fraction of this phase's staged change to apply (1 = all of
+    // it). The ramp itself is what gets scaled, so half a stage is half of exactly the same
+    // change -- the configuration imbalance, the new loads and the structural weight together --
+    // rather than half of some of them. The caller passes 1.0 for any phase where a partial
+    // application is not a construction step (the initial one).
+    double stage_fraction = 1.0;
     std::vector<char> active;     // element activity; empty = everything active
     // Prescribed displacements (nonzero Dirichlet): full-DOF vector, ramped 0 -> value
     // together with the load (the caller fixed the corresponding dofs). Empty = none.
@@ -89,6 +95,9 @@ inline bool solve_static_phase(
     const bool static_carry = carry_full != nullptr;
     Eigen::VectorXd ramp = in.baseline ? f_loads : f;
     if (in.nil_step) ramp += f - f_loads - B;   // ramp the configuration imbalance
+    // SumMstage: apply only this fraction of the staged change. A fraction of 1 leaves the
+    // vector untouched (bit-identical to every run before the field existed).
+    if (in.stage_fraction != 1.0) ramp *= in.stage_fraction;
     NewtonOptions nopt{in.load_steps, in.max_iterations > 0 ? in.max_iterations : 80,
                        in.tolerance};
     nopt.kinematics = in.axisymmetric ? Kinematics::Axisymmetric
