@@ -170,6 +170,11 @@ if(TARGET test_input_corpus)
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus"
     KATAI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")   # El Centro record (KV-DYN-003)
 endif()
+katai_add_test(test_slope_fos_convergence katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-SLP-003: the strength-reduction factor of safety of the Griffiths-Lane benchmark under systematic nested refinement -- does it converge, or does it follow the shear band down the mesh?
+if(TARGET test_slope_fos_convergence)
+  target_compile_definitions(test_slope_fos_convergence PRIVATE
+    KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
 katai_add_test(test_mesh_refine_uniform katai::jobs katai::mesh katai::model)  # KV-NUM-006: regular ("red") refinement -- four similar children per triangle, nested nodes, angles and area preserved exactly, so a convergence study varies the mesh SIZE and nothing else
 katai_add_test(test_mesh_convergence katai::jobs katai::mesh katai::analysis katai::model katai::io katai::fem)  # KV-NUM-005: the strip-load benchmark at three systematically refined densities -> observed order, Richardson extrapolation and the GCI band that every published number is meant to carry
 if(TARGET test_mesh_convergence)

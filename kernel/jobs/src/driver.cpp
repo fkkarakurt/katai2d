@@ -1589,6 +1589,29 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // structural self-weight below and stays structure-free (safety_analysis takes no
         // structures).
         if (phase == InitialPhase::Safety) {
+            // A factor of safety from strength reduction with a NON-ASSOCIATED flow rule
+            // (psi < phi, and psi = 0 is the usual engineering choice) is mesh-dependent, and
+            // the dependence is one-sided: failure localises into a shear band whose width is
+            // set by the elements, so refining the mesh narrows the band and LOWERS the
+            // computed factor. It is not a defect of this code -- "the result obtained from a
+            // phi/c reduction is influenced by the mesh size, element type and convergence
+            // tolerances" (Tschuchnigg, Schweiger and Sloan 2015, Computers and Geotechnics,
+            // Part I) -- but a number that moves with the mesh must never be handed over as if
+            // it did not. Measured on this program for the Griffiths and Lane benchmark:
+            // -7.9% across a fourfold refinement (KV-SLP-003).
+            // silent-drop-scope: none -- this loop only looks for a material that makes the
+            // factor of safety mesh-dependent, so that the run can say so; it builds nothing.
+            for (const auto& mm : pr.materials) {
+                if (!(mm.phi > 1e-9) || mm.psi >= mm.phi - 1e-9) continue;
+                warn(R, "K2D-A005", mm.name,
+                     "Strength reduction with a non-associated flow rule (material \"" + mm.name +
+                         "\": phi = " + dnum(mm.phi) + " deg, psi = " + dnum(mm.psi) +
+                         " deg): the factor of safety depends on the mesh and falls as the mesh "
+                         "is refined, because the shear band narrows with the elements. Quote it "
+                         "with the mesh it was computed on, and confirm it with a refinement "
+                         "study.");
+                break;   // one statement per run: the property is the method's, not the material's
+            }
             katai::core::SafetyPhase sfin;
             sfin.nonlinear_soil = nonlinear_soil;
             sfin.has_hardening = has_hardening;
