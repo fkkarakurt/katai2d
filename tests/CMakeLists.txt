@@ -43,6 +43,7 @@ endfunction()
 
 katai_add_test(test_math_smoke)                    # Eigen smoke (P0.1)
 katai_add_test(test_sparse_matrix)                 # CSR + builder (P0.2)
+katai_add_test(test_grid_convergence)              # KV-NUM-004: the discretisation-error estimator itself (Roache 1994 / Celik et al. 2008 GCI) against manufactured power-law triplets whose exact answer is known
 # Sparse direct solvers: every backend against a dense reference, and backend
 # against backend. Always built, in every configuration, because it is the test
 # that says a result does not depend on which solver the program contains.
@@ -168,6 +169,11 @@ if(TARGET test_input_corpus)
   target_compile_definitions(test_input_corpus PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus"
     KATAI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")   # El Centro record (KV-DYN-003)
+endif()
+katai_add_test(test_mesh_convergence katai::jobs katai::mesh katai::analysis katai::model katai::io katai::fem)  # KV-NUM-005: the strip-load benchmark at three systematically refined densities -> observed order, Richardson extrapolation and the GCI band that every published number is meant to carry
+if(TARGET test_mesh_convergence)
+  target_compile_definitions(test_mesh_convergence PRIVATE
+    KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
 katai_add_test(test_no_silent_drop katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-DIA-001: no input may be discarded in silence -- one fixture per driver build loop, each perturbing ONE field of a corpus case, asserting the stable diagnostic code and that a clipped object equals the object drawn where the mesh took it
 if(TARGET test_no_silent_drop)

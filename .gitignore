@@ -16,6 +16,7 @@
 /docs/validation/*
 !/docs/validation/verification-matrix.md
 !/docs/validation/references.bib
+!/docs/validation/numerical-uncertainty.md
 !/docs/validation/three-published-benchmarks.md
 !/docs/validation/plaxis-2d-validation-comparison.md
 
