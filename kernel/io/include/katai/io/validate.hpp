@@ -246,6 +246,17 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
         if (m.c == 0.0 && m.phi == 0.0)
             r.add(Severity::Error, path("c"),
                   who + "the material has no shear strength (c = 0 and phi = 0)");
+        // The dilatancy cut-off needs room to act: a critical void ratio at or below the in-situ
+        // one means the soil is already at critical density and the cut-off would fire on the
+        // first increment -- almost always a typo rather than an intention.
+        if (m.dilatancy_cutoff && !(m.e_max > m.e_init))
+            r.add(Severity::Error, path("e_max"),
+                  who + "the dilatancy cut-off needs a critical void ratio above the in-situ one "
+                        "(got e_max = " + num(m.e_max) + ", e_init = " + num(m.e_init) + ")");
+        if (m.dilatancy_cutoff && !(m.psi > 0.0))
+            r.add(Severity::Warning, path("dilatancy_cutoff"),
+                  who + "the dilatancy cut-off is set but the dilatancy angle is " + num(m.psi) +
+                      " deg, so there is no dilation to cut off");
         if (m.tensile_strength < 0.0)
             r.add(Severity::Error, path("tensile_strength"),
                   who + "the tensile strength cannot be negative (got " +

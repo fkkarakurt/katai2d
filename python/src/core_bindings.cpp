@@ -140,6 +140,9 @@ NB_MODULE(_core, m) {
         .def_rw("c_inc", &api::Material::c_inc)
         .def_rw("y_ref", &api::Material::y_ref)
         .def_rw("tension_cutoff", &api::Material::tension_cutoff)
+        .def_rw("dilatancy_cutoff", &api::Material::dilatancy_cutoff,
+                "stop dilatancy at the critical void ratio e_max (PLAXIS MMM Eq. 5.16b)")
+        .def_rw("e_max", &api::Material::e_max, "critical (maximum) void ratio")
         .def_rw("tensile_strength", &api::Material::tensile_strength)
         .def_rw("E50ref", &api::Material::E50ref)
         .def_rw("Eoedref", &api::Material::Eoedref)

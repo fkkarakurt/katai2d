@@ -68,6 +68,14 @@ struct Material {
     double y_ref = 0.0;   // reference level for the increments
     bool tension_cutoff = true;     // tension cut-off (on by default)
     double tensile_strength = 0.0;  // sigma_t
+    // Dilatancy cut-off (PLAXIS MMM Eq. 5.16b / Fig. 5.6, entered on the material's General
+    // tab): a dilating soil arrives at a critical void ratio where dilatancy ends. With it OFF
+    // -- the default, as in PLAXIS -- a dense sand dilates without limit and its bearing
+    // capacity is over-predicted. e_init above is the in-situ void ratio; e_max is the critical
+    // one. PLAXIS also stores e_min, and its own manual says e_min "is not used within the
+    // context of the Hardening-Soil model", so it is not carried here.
+    bool dilatancy_cutoff = false;
+    double e_max = 1.0;
 
     // Mechanical — Hardening Soil (+ HS small) (PLAXIS MMM §6.4 / §7).
     double E50ref = 3.0e4, Eoedref = 3.0e4, Eurref = 9.0e4;

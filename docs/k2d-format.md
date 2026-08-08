@@ -8,11 +8,12 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **4** · Current `.res` version: **5**
+Current `.k2d` version: **5** · Current `.res` version: **5**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
-activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`) and **v4** the
-per-phase water conditions (`phases[i].water_override`, `wx`, `wy`). Every bump
+activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
+per-phase water conditions (`phases[i].water_override`, `wx`, `wy`) and **v5**
+the dilatancy cut-off (`materials[i].dilatancy_cutoff`, `e_max`). Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
 than one that was tensioned against it -- so it must refuse the file instead.
@@ -77,7 +78,7 @@ flagged places differs from the in-memory default of a freshly created object.
 
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
-| `katai2d` | int | — | *required* | Format version; this build writes 4 |
+| `katai2d` | int | — | *required* | Format version; this build writes 5 |
 | `name` | str | — | `"Untitled project"` | Project display name |
 | `axisymmetric` | bool | — | `false` | `false` = plane strain; `true` = axisymmetric (x is the radius, x = 0 the symmetry axis) |
 | `initial_procedure` | int | — | `0` | How the initial phase establishes the in-situ state: 0 K0 procedure, 1 Gravity loading, 2 Safety (φ-c reduction of the gravity state; intended for single-phase runs) |
@@ -129,6 +130,8 @@ flagged places differs from the in-memory default of a freshly created object.
 | `c_inc` | num | kN/m²/m | `0` | Cohesion increase per metre depth below `y_ref` |
 | `y_ref` | num | m | `0` | Reference level for the increments |
 | `tension_cutoff` | bool | — | `true` | Rankine tension cut-off active |
+| `dilatancy_cutoff` | bool | — | `false` | Stop dilatancy at the critical void ratio (PLAXIS MMM Eq. 5.16b) |
+| `e_max` | num | — | `1` | Critical (maximum) void ratio; read when `dilatancy_cutoff` is set |
 | `tensile_strength` | num | kN/m² | `0` | Allowed tensile strength σ_t |
 | `E50ref` | num | kN/m² | `3e4` | HS: secant stiffness at p_ref |
 | `Eoedref` | num | kN/m² | `3e4` | HS: oedometer stiffness at p_ref |

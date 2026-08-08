@@ -45,6 +45,11 @@ struct MaterialParams {
     double psi_rad = 0.0;        // dilatancy angle psi [rad]
     bool tension_cutoff = false; // Rankine tension cut-off (MMM Eq 3-11)
     double tensile_strength = 0.0;  // sigma_t [kN/m2]; negative input clamps to 0
+    // Dilatancy cut-off (MMM Eq 5.16b): a dilating soil arrives at a critical void ratio where
+    // dilatancy ends. e_init is the in-situ void ratio, e_max the critical one; when the volume
+    // change has taken the soil to e_max the mobilised dilatancy angle is set to zero.
+    bool dilatancy_cutoff = false;
+    double e_init = 0.5, e_max = 1.0;
 
     // Hardening Soil (+ HSsmall) stiffness law (MMM sections 6-7).
     double E50_ref = 0.0, Eur_ref = 0.0, Eoed_ref = 0.0;

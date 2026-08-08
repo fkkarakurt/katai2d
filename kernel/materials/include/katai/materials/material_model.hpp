@@ -91,6 +91,19 @@ struct MaterialModel {
     // GUI states this honestly). Default OFF keeps every direct caller bit-identical.
     bool tension_cutoff = false;
     double tensile_strength = 0.0;  // sigma_t [kN/m2], tension-positive
+    // Dilatancy cut-off (Material Models Manual Eq. 5.16b, Fig. 5.6): "After extensive shearing,
+    // dilating materials arrive in a state of critical density where dilatancy has come to an
+    // end... As soon as the volume change results in a state of maximum void, the mobilised
+    // dilatancy angle is automatically set back to zero." Without it a dense sand dilates for
+    // ever and its bearing capacity is over-predicted -- an unsafe number, produced quietly.
+    //
+    // The void ratio follows the volume change: 1 + e = (1 + e_init) exp(eps_v), expansion
+    // positive. The manual writes the same statement through ln((1+e)/(1+e_init)) (Eq. 5.17)
+    // with a sign convention that is ambiguous as printed; the exponential form says it once.
+    // e_min is deliberately NOT here: the manual states it "is not used within the context of
+    // the Hardening-Soil model", so storing it would suggest a rule that does not exist.
+    bool dilatancy_cutoff = false;
+    double e_init = 0.5, e_max = 1.0;
 
     // Undrained (A): effective parameters above (E', nu', c', phi'); the pore fluid's
     // volumetric stiffness Kw/n is added to the GLOBAL tangent (D_u = D' + (Kw/n)mm^T)
@@ -287,11 +300,33 @@ inline HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
 // predictor (deps_zz=0) -> kinematics-agnostic principal return -> analytic 3x3 tangent.
 // nsub_fixed / plastic_out / nsub_out: the numerical consistent-tangent plumbing (see
 // hs_consistent_tangent) — the base run reports its nsub, the perturbed runs pin it.
+// Has the dilatancy cut-off been reached at this stress point? (Material Models Manual
+// Eq. 5.16b.) The state carries the accumulated volumetric strain, and the void ratio follows
+// the volume change: 1 + e = (1 + e_init) exp(eps_v), expansion positive. The question is asked
+// of the COMMITTED state -- the void ratio at the start of the increment -- so the answer is
+// the same for every iteration of that increment and the return mapping stays a pure function
+// of its inputs, which is what makes the tangent consistent and the line search safe.
+inline double void_ratio_of(const MaterialModel& m, const GaussState& s) {
+    return (1.0 + m.e_init) * std::exp(s.eps_vol) - 1.0;
+}
+inline bool dilatancy_cut(const MaterialModel& m, const GaussState& s) {
+    return m.dilatancy_cutoff && void_ratio_of(m, s) >= m.e_max;
+}
+// The dilatancy angle the return mapping must use: zero once the soil has dilated to its
+// critical void ratio, the material's own value before that.
+inline double effective_dilatancy(const MaterialModel& m, const GaussState& s) {
+    return dilatancy_cut(m, s) ? 0.0 : m.dilatancy_angle;
+}
+
 inline void hs_forward(const MaterialModel& m, const GaussState& committed,
                        const Eigen::Vector3d& de, GaussState& trial,
                        Eigen::Matrix3d* tangent_out = nullptr, int nsub_fixed = 0,
                        bool* plastic_out = nullptr, int* nsub_out = nullptr) {
-    const HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
+    HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
+    // Dilatancy cut-off: with psi = 0 the mobilised dilatancy sin(psi_m) is clamped to [0, 0]
+    // inside the return core, which IS Eq. 5.16b -- the rule enters where the manual puts it,
+    // and nothing else in the HS machinery has to know about void ratios.
+    if (dilatancy_cut(m, committed)) pe.dilatancy = 0.0;
     const double Eur = hs_frozen_Eur(pe, committed.stress, committed.stress_zz);
     const LameConstants lame_ur = lame_from(Eur, pe.nu_ur);
     const PlaneStrainStress comm{committed.stress, committed.stress_zz};
@@ -546,7 +581,7 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
         case MaterialType::MohrCoulomb: {
             const MohrCoulombParams params{m.youngs_modulus, m.poisson_ratio,
                                            m.cohesion, m.friction_angle,
-                                           m.dilatancy_angle, m.tension_cutoff,
+                                           effective_dilatancy(m, committed), m.tension_cutoff,
                                            m.tensile_strength};
             const McReturn base = mc_return_mapping(predictor, params);
             trial.stress = base.stress.in_plane;
@@ -664,7 +699,7 @@ inline void integrate_point_axisym(const MaterialModel& m,
             predictor.zz = s_tr(3);
             const MohrCoulombParams params{m.youngs_modulus, m.poisson_ratio,
                                            m.cohesion, m.friction_angle,
-                                           m.dilatancy_angle, m.tension_cutoff,
+                                           effective_dilatancy(m, committed), m.tension_cutoff,
                                            m.tensile_strength};
             const McReturn base = mc_return_mapping(predictor, params);
             trial.stress = base.stress.in_plane;
@@ -680,7 +715,11 @@ inline void integrate_point_axisym(const MaterialModel& m,
             // Eur (NOT m.youngs_modulus; the hoop is a real strain), and the consistent 4x4
             // tangent is D_T = algo_jacobian * D_e_axisym (Psi from the shared principal
             // assembly), exactly mirroring Mohr-Coulomb.
-            const HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
+            HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
+    // Dilatancy cut-off: with psi = 0 the mobilised dilatancy sin(psi_m) is clamped to [0, 0]
+    // inside the return core, which IS Eq. 5.16b -- the rule enters where the manual puts it,
+    // and nothing else in the HS machinery has to know about void ratios.
+    if (dilatancy_cut(m, committed)) pe.dilatancy = 0.0;
             const double Eur = hs_frozen_Eur(pe, committed.stress, committed.stress_zz);
             const double nu = pe.nu_ur;
             const double f = Eur / ((1.0 + nu) * (1.0 - 2.0 * nu));

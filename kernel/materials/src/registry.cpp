@@ -33,6 +33,11 @@ MaterialModel common_fields(const MaterialParams& p) {
     // integrators do not read it yet, and the editor says so honestly.
     mm.tension_cutoff = p.tension_cutoff;
     mm.tensile_strength = std::max(0.0, p.tensile_strength);
+    // Dilatancy cut-off (MMM Eq. 5.16b): read by the Mohr-Coulomb and Hardening Soil return
+    // mappings, which are the models that HAVE a dilatancy angle to switch off.
+    mm.dilatancy_cutoff = p.dilatancy_cutoff;
+    mm.e_init = p.e_init;
+    mm.e_max = p.e_max;
     if (is_undrained(p)) {
         mm.undrained = true;
         mm.undrained_poisson = 0.495;

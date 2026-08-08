@@ -265,10 +265,18 @@ public:
                 // matg, not mat: kw_over_n is derived from E' (K' = E'/(3(1-2nu'))), so under a depth
                 // gradient the pore-fluid stiffness varies with depth too. Using `mat` here would
                 // freeze it at the reference value while the skeleton stiffened -- a silent mismatch.
+                // The accumulated volumetric strain is state every material may need, not only
+                // an undrained one: the dilatancy cut-off reads it to know the void ratio
+                // (material_model.hpp, void_ratio_of). It used to be tracked only where it was
+                // consumed, which is why a drained soil could dilate for ever -- nothing was
+                // counting. Accumulating it always changes no existing result, because nothing
+                // else reads it for a drained material; the suite is what says so.
+                const typename Kin::Strain mvec = Kin::pore_vector();
+                trial[gi].eps_vol = committed[gi].eps_vol + mvec.dot(dstrain);
                 if (matg.undrained) {
+                    // Undrained (A): the constitutive model returned EFFECTIVE stress; add the
+                    // pore fluid's volumetric contribution. u = -(Kw/n) eps_v.
                     const double kwn = matg.kw_over_n(matg.undrained_poisson);
-                    const typename Kin::Strain mvec = Kin::pore_vector();
-                    trial[gi].eps_vol = committed[gi].eps_vol + mvec.dot(dstrain);
                     sigma += kwn * trial[gi].eps_vol * mvec;
                     if (build_tangent) dt += kwn * mvec * mvec.transpose();
                 }

@@ -38,7 +38,10 @@ namespace katai::model {
 // benchmark needed it one line further down its specification: the pit is dewatered from -3 m
 // to -17.9 m BEFORE the first excavation step, and an older build would run every phase at the
 // project's level and report an excavation that was never dewatered.
-inline constexpr int kProjectFileVersion = 4;
+// v5 (2026-08): the DILATANCY CUT-OFF (`materials[].dilatancy_cutoff`, `e_max`). An older
+// build would read the file, ignore the cut-off, and let a dense sand dilate without limit --
+// which over-predicts bearing capacity. Unsafe and silent, so the guard refuses the file.
+inline constexpr int kProjectFileVersion = 5;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -358,6 +361,8 @@ inline std::string project_to_json(const Project& p) {
         wfield(o, "c", m.c); wfield(o, "phi", m.phi); wfield(o, "psi", m.psi);
         wfield(o, "E_inc", m.E_inc); wfield(o, "c_inc", m.c_inc); wfield(o, "y_ref", m.y_ref);
         wfield(o, "tension_cutoff", m.tension_cutoff);
+    wfield(o, "dilatancy_cutoff", m.dilatancy_cutoff);
+    wfield(o, "e_max", m.e_max);
         wfield(o, "tensile_strength", m.tensile_strength);
         wfield(o, "E50ref", m.E50ref); wfield(o, "Eoedref", m.Eoedref); wfield(o, "Eurref", m.Eurref);
         wfield(o, "m", m.m); wfield(o, "nu_ur", m.nu_ur); wfield(o, "p_ref", m.p_ref);
@@ -577,6 +582,8 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             m.E_inc = j.num("E_inc", m.E_inc); m.c_inc = j.num("c_inc", m.c_inc);
             m.y_ref = j.num("y_ref", m.y_ref);
             m.tension_cutoff = j.flag("tension_cutoff", m.tension_cutoff);
+    m.dilatancy_cutoff = j.flag("dilatancy_cutoff", m.dilatancy_cutoff);
+    m.e_max = j.num("e_max", m.e_max);
             m.tensile_strength = j.num("tensile_strength", m.tensile_strength);
             m.E50ref = j.num("E50ref", m.E50ref); m.Eoedref = j.num("Eoedref", m.Eoedref);
             m.Eurref = j.num("Eurref", m.Eurref);

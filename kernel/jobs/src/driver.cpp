@@ -299,6 +299,9 @@ katai::core::MaterialParams to_material_params(const model::Material& m) {
     p.phi_rad = m.phi * kPi / 180.0;
     p.psi_rad = m.psi * kPi / 180.0;
     p.tension_cutoff = m.tension_cutoff;
+    p.dilatancy_cutoff = m.dilatancy_cutoff;
+    p.e_init = m.e_init;
+    p.e_max = m.e_max;
     p.tensile_strength = m.tensile_strength;
     p.E50_ref = m.E50ref;
     p.Eur_ref = m.Eurref;

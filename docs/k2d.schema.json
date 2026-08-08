@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["katai2d"],
   "properties": {
-    "katai2d": { "type": "integer", "minimum": 1, "maximum": 4 },
+    "katai2d": { "type": "integer", "minimum": 1, "maximum": 5 },
     "name": { "type": "string" },
     "axisymmetric": { "type": "boolean" },
     "initial_procedure": { "type": "integer", "minimum": 0, "maximum": 2 },
@@ -68,6 +68,8 @@
         "c_inc": { "type": "number" },
         "y_ref": { "type": "number" },
         "tension_cutoff": { "type": "boolean" },
+        "dilatancy_cutoff": { "type": "boolean" },
+        "e_max": { "type": "number" },
         "tensile_strength": { "type": "number" },
         "E50ref": { "type": "number" },
         "Eoedref": { "type": "number" },
