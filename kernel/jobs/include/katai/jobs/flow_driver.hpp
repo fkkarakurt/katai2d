@@ -25,7 +25,8 @@ namespace katai::app {
 struct FlowResult {
     Eigen::VectorXd head;        // nodal hydraulic head h [m] (size node_count)
     std::vector<double> pore;    // nodal pore pressure u = gamma_w * max(0, h - y) [kPa]
-    double discharge = 0.0;      // inflow through prescribed-head boundaries [m3/day per m]
+    double discharge = 0.0;      // TOTAL inflow into the domain [m3/day per m]: through
+                                 // prescribed-head boundaries and prescribed-flux edges alike
     double balance_err = 0.0;    // |sum of all nodal fluxes| / inflow (mass conservation, ~0)
     int iterations = 0;
     bool ok = false;

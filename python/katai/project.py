@@ -174,7 +174,8 @@ class _Geometry:
         """A soil region from ``points`` [(x, y), ...] in metres, counter-clockwise.
 
         ``fix``: one fixity name per edge (edge i runs from point i to point i+1).
-        ``flow``: optional, one of "closed"/"seepage" or ("head", value_m) per edge.
+        ``flow``: optional, one per edge -- "closed"/"seepage", ("head", value_m),
+        or ("flux", q_m_per_day) with inflow positive.
         """
         poly = _core.SoilPolygon()
         poly.name = name
@@ -190,16 +191,34 @@ class _Geometry:
             if len(flow) != len(points):
                 raise ValueError(
                     f"flow has {len(flow)} entries for {len(points)} edges")
-            kinds, heads = [], []
+            kinds, heads, fluxes = [], [], []
+            any_flux = False
             for f in flow:
+                if f in ("head", "flux"):
+                    raise ValueError(
+                        f'"{f}" needs a value: use ("{f}", '
+                        + ("12.0) for the head in metres" if f == "head"
+                           else "0.02) for the flux in m/day"))
                 if isinstance(f, tuple) and f[0] == "head":
                     kinds.append(int(_core.FlowBCType.Head))
                     heads.append(float(f[1]))
+                    fluxes.append(0.0)
+                elif isinstance(f, tuple) and f[0] == "flux":
+                    kinds.append(int(_core.FlowBCType.Flux))
+                    heads.append(0.0)
+                    fluxes.append(float(f[1]))
+                    any_flux = True
                 else:
                     kinds.append(int(_pick(_FLOW, f, "flow boundary")))
                     heads.append(0.0)
+                    fluxes.append(0.0)
             poly.edge_flow = kinds
             poly.edge_head = heads
+            # Only written when a flux edge is actually used: an all-zero array would
+            # say the same thing in more bytes, and a model with no flux stays exactly
+            # the file it has always been.
+            if any_flux:
+                poly.edge_flux = fluxes
         self._prj._polygons.append(poly)
         return RegionHandle(len(self._prj._polygons) - 1, name)
 
@@ -208,8 +227,8 @@ class _Geometry:
                   flow=None):
         """A rectangular region [m] with per-side fixities (engineering defaults:
         fixed base, roller sides, free surface). ``flow``: optional dict with keys
-        bottom/right/top/left, values "closed"/"seepage"/("head", value_m);
-        unmentioned sides are closed."""
+        bottom/right/top/left, values "closed"/"seepage"/("head", value_m)/
+        ("flux", q_m_per_day); unmentioned sides are closed."""
         points = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
         fix = [bottom, right, top, left]
         flow_list = None

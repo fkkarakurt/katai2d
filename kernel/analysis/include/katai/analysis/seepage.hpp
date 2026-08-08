@@ -84,6 +84,24 @@ void assemble_seepage_flux(const mesh::Mesh& mesh, const DofMap& dofs,
                            const std::vector<int>& ordered_boundary_nodes,
                            double q_n, Eigen::VectorXd& rhs);
 
+// The same edge integral accumulated NODE-indexed instead of equation-indexed. That is what a
+// caller needs when the equation numbering is not its own to keep: the unconfined solvers
+// rebuild their DofMap inside their iterations (the seepage-face active set changes which nodes
+// are fixed), so a prescribed flux has to survive as nodal data and be scattered again on every
+// rebuild. `nodal` is size node_count and is ADDED to, so several flux edges accumulate.
+//
+// PLAXIS 2D 2025.1 Scientific Manual, groundwater flow: the discretised system carries a term
+// "q, the prescribed recharges that are given by the boundary conditions", where the boundary
+// contribution is the surface integral of the prescribed flux (Eqs. 3-31, 3-34). The manual
+// writes its q-bar as the OUTFLOW flux; the sign convention here is the one the wells use in
+// the same chapter -- "the source term is positive for a recharge well" (§3.2.7) -- so q_n > 0
+// means water entering the soil. Note also what the manual rules out elsewhere: in the
+// CONSOLIDATION formulation "it is not possible to have boundaries with non-zero prescribed
+// outflow" (Ch. 4), so this belongs to the flow problem and is not wired into consolidation.
+void accumulate_boundary_flux(const mesh::Mesh& mesh,
+                              const std::vector<int>& ordered_boundary_nodes,
+                              double q_n, std::vector<double>& nodal);
+
 // --- Unconfined (free-surface) seepage ------------------------------------------
 // SPD linear solve callback (PARDISO); keeps the kernel decoupled from the solver (see
 // nonlinear_solver.hpp LinearSolve).
@@ -92,6 +110,10 @@ using SeepageLinearSolve =
 
 // Unsaturated-zone relative permeability + Picard iteration settings.
 struct UnconfinedOptions {
+    // Prescribed boundary flux (Neumann), node-indexed and already integrated over the edges
+    // (accumulate_boundary_flux above); inflow positive. Empty = every boundary that is not a
+    // prescribed head or a seepage face is closed, which is the natural condition.
+    std::vector<double> nodal_flux;
     double k_min = 1e-4;      // relative-permeability floor in the unsaturated zone (k·k_min)
     double transition = 0.1;  // pressure-head ψ transition width (length) — ~1-2× the
                               // near-surface element size; smaller = more accurate discharge.

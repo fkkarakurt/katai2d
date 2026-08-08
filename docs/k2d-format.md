@@ -8,12 +8,13 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **5** · Current `.res` version: **5**
+Current `.k2d` version: **6** · Current `.res` version: **5**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
-per-phase water conditions (`phases[i].water_override`, `wx`, `wy`) and **v5**
-the dilatancy cut-off (`materials[i].dilatancy_cutoff`, `e_max`). Every bump
+per-phase water conditions (`phases[i].water_override`, `wx`, `wy`), **v5**
+the dilatancy cut-off (`materials[i].dilatancy_cutoff`, `e_max`) and **v6** the prescribed
+boundary flux (`polygons[i].edge_flux`, and `3` in `edge_flow`). Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
 than one that was tensioned against it -- so it must refuse the file instead.
@@ -216,8 +217,9 @@ with `name` (default `"Embedded beam"`), `color`, `E` (default `3e7` kN/m²) and
 | `x` | num[] | m | `[]` | Polygon vertex x-coordinates (implicitly closed; ≥ 3) |
 | `y` | num[] | m | `[]` | Polygon vertex y-coordinates |
 | `edge_bc` | int[] | — | `[]` | Per-edge deformation BC (edge j runs vertex j → j+1): 0 Free, 1 Normally fixed, 2 Horizontally fixed, 3 Vertically fixed, 4 Fully fixed. Empty or one per vertex |
-| `edge_flow` | int[] | — | `[]` | Per-edge flow BC: 0 Closed, 1 Prescribed head, 2 Seepage face |
+| `edge_flow` | int[] | — | `[]` | Per-edge flow BC: 0 Closed, 1 Prescribed head, 2 Seepage face, 3 Prescribed flux |
 | `edge_head` | num[] | m | `[]` | Prescribed head per edge (read where `edge_flow` is 1) |
+| `edge_flux` | num[] | m/day | `[]` | Prescribed boundary flux per edge, inflow positive (read where `edge_flow` is 3) |
 
 with `name` (default `"Soil"`) as above.
 

@@ -41,7 +41,13 @@ namespace katai::model {
 // v5 (2026-08): the DILATANCY CUT-OFF (`materials[].dilatancy_cutoff`, `e_max`). An older
 // build would read the file, ignore the cut-off, and let a dense sand dilate without limit --
 // which over-predicts bearing capacity. Unsafe and silent, so the guard refuses the file.
-inline constexpr int kProjectFileVersion = 5;
+//
+// v6 (2026-08): the PRESCRIBED BOUNDARY FLUX (`polygons[].edge_flux`, plus `Flux` in
+// `edge_flow`). An older build reads `edge_flow` as an int it does not know and would fall
+// through to "closed" -- rainfall infiltration or a recharge boundary silently removed from
+// the problem, and a phreatic surface reported lower than the one described. The bump makes
+// that an honest refusal.
+inline constexpr int kProjectFileVersion = 6;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -443,6 +449,7 @@ inline std::string project_to_json(const Project& p) {
         warr(o, "edge_bc", P.edge_bc);
         warr(o, "edge_flow", P.edge_flow);
         warr(o, "edge_head", P.edge_head);
+        warr(o, "edge_flux", P.edge_flux);
         closeobj(o);
     }
     o += "],";
@@ -654,6 +661,7 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             P.edge_bc = j.ints("edge_bc");
             P.edge_flow = j.ints("edge_flow");
             P.edge_head = j.nums("edge_head");
+        P.edge_flux = j.nums("edge_flux");
             p.polygons.push_back(std::move(P));
         }
     if (const Json* arr = root.find("structs"); arr && arr->type == Json::Arr)

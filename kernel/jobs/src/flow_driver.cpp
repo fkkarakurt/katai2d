@@ -6,6 +6,7 @@
 
 #include <katai/analysis/seepage.hpp>
 #include <katai/fem/assembly/dof_map.hpp>
+#include <katai/mesh/boundary_extraction.hpp>   // collect_chain (flux-edge node chains)
 #include <katai/linsolve/direct_solver.hpp>
 
 namespace katai::app {
@@ -84,9 +85,34 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
         if (has_head)      { fixed_nodes.push_back(node); fixed_values.push_back(hval); }
         else if (has_seep) { seepage_nodes.push_back(node); }
     }
+    // Prescribed-flux (Neumann) edges: the manual's boundary term q (Scientific Manual Eqs.
+    // 3-31/3-34). Each edge is integrated ONCE, node-indexed, and the solvers scatter it into
+    // whatever equation numbering they currently have -- they rebuild it as the free surface and
+    // the seepage-face active set move.
+    std::vector<double> nodal_flux(mesh.node_count, 0.0);
+    bool any_flux = false;
+    for (const auto& P : pr.polygons) {
+        const int n = (int)P.x.size();
+        if (n < 3 || (int)P.edge_flow.size() != n) continue;
+        for (int i = 0; i < n; ++i) {
+            if (P.edge_flow[i] != (int)model::FlowBCType::Flux) continue;
+            const double q = (int)P.edge_flux.size() == n ? P.edge_flux[i] : 0.0;
+            if (q == 0.0) continue;   // a zero flux IS the natural (closed) condition
+            const auto chain = katai::mesh::collect_chain(mesh, P.x[i], P.y[i],
+                                                          P.x[(i + 1) % n], P.y[(i + 1) % n]);
+            katai::core::accumulate_boundary_flux(mesh, chain, q, nodal_flux);
+            any_flux = true;
+        }
+    }
+
     if (fixed_nodes.empty()) {
-        R.message = "No flow boundary conditions: right-click a soil edge in Flow conditions and "
-                    "prescribe a head on at least one boundary (everything else is closed by default).";
+        R.message = any_flux
+                        ? "A prescribed flux alone does not fix the head: a flow problem with only "
+                          "Neumann boundaries has no unique solution. Prescribe a head on at least "
+                          "one boundary as well."
+                        : "No flow boundary conditions: right-click a soil edge in Flow conditions "
+                          "and prescribe a head on at least one boundary (everything else is closed "
+                          "by default).";
         return R;
     }
 
@@ -117,6 +143,11 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
             katai::math::SparseMatrixBuilder builder(fdofs.equation_count());
             Eigen::VectorXd rhs = Eigen::VectorXd::Zero(fdofs.equation_count());
             katai::core::assemble_seepage(mesh, fdofs, perm, hp, builder, rhs);
+            for (int n = 0; n < mesh.node_count; ++n) {
+                if (nodal_flux[n] == 0.0) continue;
+                const int eq = fdofs.equation(fdofs.global_dof(n, 0));
+                if (eq >= 0) rhs[eq] += nodal_flux[n];
+            }
             const Eigen::VectorXd hf = lin(builder.build(), rhs);
             head_full.resize(mesh.node_count);
             double hscale = 1.0, psi_min = 1e300;
@@ -146,6 +177,7 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
     opt.relax = seepage_nodes.empty() ? 0.15 : 0.05;   // seepage face needs the stronger damping
     opt.max_iter = 1200;
     opt.tol = 1e-5;
+    if (any_flux) opt.nodal_flux = nodal_flux;   // the manual's boundary term q
 
     if (!have_head) {   // unconfined / seepage-face regime: variable-k_rel Picard + active set
         const auto res = katai::core::solve_unconfined_seepage_face(mesh, fixed_nodes, fixed_values,
@@ -168,7 +200,16 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
     double q_in = 0.0, q_all = 0.0;
     for (int n : fixed_nodes) if (Q[n] > 0.0) q_in += Q[n];
     for (int n = 0; n < mesh.node_count; ++n) q_all += Q[n];
-    R.discharge = q_in;
+    // Total inflow INTO the domain: through prescribed-head boundaries and through prescribed
+    // flux edges alike. Reporting only the head part was complete while a flux boundary could
+    // not be asked for; with one, a model whose water enters through the flux edge and leaves
+    // through a head boundary would report "discharge = 0" and read as if nothing flowed. For a
+    // model without flux edges the second term is exactly zero, so every existing number is
+    // unchanged -- KV-FLW-001 (Charny) is the witness.
+    double flux_in = 0.0;
+    for (int n = 0; n < mesh.node_count; ++n)
+        if (nodal_flux[n] > 0.0) flux_in += nodal_flux[n];
+    R.discharge = q_in + flux_in;
     R.balance_err = q_in > 1e-30 ? std::fabs(q_all) / q_in : 0.0;
 
     R.pore.assign(mesh.node_count, 0.0);

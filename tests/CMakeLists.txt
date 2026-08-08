@@ -56,6 +56,7 @@ katai_add_test(test_mesh katai::mesh katai::fem)  # structured tri6 mesh (P0.4+P
 katai_add_test(test_predicates katai::mesh)        # robust geometric predicates (P1.4a)
 katai_add_test(test_delaunay katai::mesh)          # incremental Delaunay (P1.4b)
 katai_add_test(test_mohr_coulomb katai::materials)      # MC constitutive kernels (P1.2a)
+katai_add_test(test_flux_boundary katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-FLW-002: the prescribed boundary flux (PLAXIS Sci. Man. Eqs. 3-31/3-34) against Darcy's straight head profile, with the discharge closing through the base
 katai_add_test(test_dilatancy_cutoff katai::materials)  # KV-CST-004: the dilatancy cut-off (MMM Eq. 5.16b) -- dilation stops at the critical void ratio, the flow is isochoric afterwards, and the switch is inert until it acts
 katai_add_test(test_hardening_soil katai::materials)    # HS stiffness laws + triaxial hyperbola (P2.3a)
 katai_add_test(test_hs_shear katai::materials)          # HS shear return mapping, triaxial (P2.3d-1)

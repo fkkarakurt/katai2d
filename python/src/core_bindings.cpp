@@ -83,7 +83,8 @@ NB_MODULE(_core, m) {
     nb::enum_<api::FlowBCType>(m, "FlowBCType", nb::is_arithmetic())
         .value("Closed", api::FlowBCType::Closed)
         .value("Head", api::FlowBCType::Head)
-        .value("Seepage", api::FlowBCType::Seepage);
+        .value("Seepage", api::FlowBCType::Seepage)
+        .value("Flux", api::FlowBCType::Flux);
     nb::enum_<api::StructKind>(m, "StructKind", nb::is_arithmetic())
         .value("Plate", api::StructKind::Plate)
         .value("Anchor", api::StructKind::Anchor)
@@ -229,6 +230,8 @@ NB_MODULE(_core, m) {
         .def_rw("edge_bc", &api::SoilPolygon::edge_bc)
         .def_rw("edge_flow", &api::SoilPolygon::edge_flow)
         .def_rw("edge_head", &api::SoilPolygon::edge_head)
+        .def_rw("edge_flux", &api::SoilPolygon::edge_flux,
+                "prescribed boundary flux per edge [m/day], inflow positive (FlowBCType.Flux)")
         .def_rw("coarseness", &api::SoilPolygon::coarseness);
 
     nb::class_<api::StructElement>(m, "StructElement")

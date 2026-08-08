@@ -591,7 +591,19 @@ inline ValidationReport validate_project(const model::Project& p) {
                 }
         };
         check_edges("edge_bc", P.edge_bc, 0, 5, "boundary-condition");
-        check_edges("edge_flow", P.edge_flow, 0, 3, "flow-boundary");
+        check_edges("edge_flow", P.edge_flow, 0, 4, "flow-boundary");
+        // A prescribed-flux edge needs a value to prescribe: without the array the edge would
+        // silently behave as closed, which is a different problem from the one asked for.
+        {
+            bool has_flux_edge = false;
+            for (size_t j = 0; j < P.edge_flow.size(); ++j)
+                if (P.edge_flow[j] == (int)model::FlowBCType::Flux) has_flux_edge = true;
+            if (has_flux_edge && P.edge_flux.size() != nv)
+                r.add(Severity::Error, at("polygons", i, "edge_flux"),
+                      who + "an edge prescribes a flux, so edge_flux must list one value per edge "
+                            "(got " + std::to_string(P.edge_flux.size()) + " of " +
+                            std::to_string(nv) + ")");
+        }
         if (!P.edge_flow.empty() && P.edge_head.size() != nv)
             r.add(Severity::Error, at("polygons", i, "edge_head"),
                   who + "edge_flow is present, so edge_head must list one head per edge (got " +

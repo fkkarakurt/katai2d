@@ -234,6 +234,29 @@ prj.initial(procedure="gravity", exclude=[footing])
 prj.phases.plastic("Indent", activate=[footing])
 expect_bytes(prj, "kv-fnd-012-giroud-rigid-footing.k2d")
 
+# ------------------------------------- the prescribed flux, from the easy surface --
+# KV-FLW-002 verifies the physics in C++; what is checked here is that an engineer
+# can ASK for it in one line, and that a model with no flux edge still writes the
+# empty array the corpus files above are pinned to.
+prj = katai.Project("KV-FLW-002 prescribed flux", mesh_size=1.0, auto_refine=False)
+sand = prj.materials.linear_elastic("Sand", E=2.0e4, nu=0.3, gamma=18.0,
+                                    gamma_sat=20.0, k=2.0)
+prj.geometry.rectangle(0.0, 0.0, 4.0, 10.0, material=sand, name="Column",
+                       flow={"bottom": ("head", 12.0), "top": ("flux", 0.05)})
+built = prj.build()
+text = katai.project_to_json(built)
+check('"edge_flow":[1,0,3,0]' in text, "the DSL writes the flux edge kind (3)")
+check(list(built.polygons[0].edge_flux) == [0.0, 0.0, 0.05, 0.0],
+      "and the rate beside it, on that edge only")
+check(katai.validate_project(built).ok, "the flux model validates")
+check('"edge_flux":[]' in katai.project_to_json(build_slope().build()),
+      "a model with no flux edge still writes the empty array the corpus pins")
+try:
+    prj.geometry.rectangle(0.0, 0.0, 1.0, 1.0, material=sand, flow={"top": "flux"})
+    check(False, '"flux" without a value is refused')
+except ValueError as exc:
+    check("m/day" in str(exc), f'"flux" without a value is refused: {exc}')
+
 # ------------------------------------------------- end to end: the slope RUNS --
 job_dsl = build_slope().run()
 file_prj, _ = katai.load_project(f"{CORPUS}/kv-slp-001-griffiths-lane-slope.k2d")

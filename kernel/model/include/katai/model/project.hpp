@@ -236,9 +236,12 @@ struct BoundaryConditions {   // default: all Free (the user applies BC explicit
 // head h [m elevation] (reservoir / far-field water level); Seepage marks a free-drainage face
 // (downstream dam face, excavation wall) where water may exit at atmospheric pressure -- the exit
 // point is found by the solver's active-set iteration.
-enum class FlowBCType { Closed, Head, Seepage };
+// Appended, file-stable: an older build meets the value 3 outside its range and REFUSES the
+// file, which is what the enum bound is for -- no version bump needed to stay honest.
+enum class FlowBCType { Closed, Head, Seepage, Flux };
 inline const char* const* flow_bc_names() {
-    static const char* n[] = {"Closed (impermeable)", "Prescribed head", "Seepage face"};
+    static const char* n[] = {"Closed (impermeable)", "Prescribed head", "Seepage face",
+                              "Prescribed flux (inflow +)"};
     return n;
 }
 
@@ -385,6 +388,13 @@ struct SoilPolygon {
     // prescribed head [m] for FlowBCType::Head edges (same size; ignored otherwise).
     std::vector<int> edge_flow;
     std::vector<double> edge_head;
+    // Prescribed boundary flux [m/day] for FlowBCType::Flux edges (same size; ignored otherwise),
+    // INFLOW POSITIVE -- the sign the PLAXIS Scientific Manual gives its wells in the same
+    // chapter ("the source term is positive for a recharge well", §3.2.7). It is a specific
+    // discharge normal to the boundary: the flow solve integrates it over the edge as the
+    // manual's boundary term q (Eqs. 3-31, 3-34). Flow calculations only -- the manual states
+    // that a CONSOLIDATION analysis cannot carry a non-zero prescribed outflow (Ch. 4).
+    std::vector<double> edge_flux;
     // Local mesh density of the region (PLAXIS Coarseness factor): the target element size
     // inside this polygon is multiplied by it (1 = global, 0.5 = twice as fine, 2 = coarser).
     double coarseness = 1.0;

@@ -355,6 +355,58 @@ Eigen::VectorXd compute_nodal_flux(const mesh::Mesh& mesh,
     return nodal_flux_impl<Tri6Element>(mesh, permeability, head);
 }
 
+// The edge integral itself, scattered node-indexed. assemble_seepage_flux below is the same
+// integral scattered into an equation-indexed right-hand side; both go through this, so the two
+// can never drift apart.
+void accumulate_boundary_flux(const mesh::Mesh& mesh,
+                              const std::vector<int>& ordered_boundary_nodes,
+                              double q_n, std::vector<double>& nodal) {
+    const int npe = mesh.nodes_per_element == 15 ? 5 : 3;
+    const int chain = static_cast<int>(ordered_boundary_nodes.size());
+    if (chain < npe || (chain - 1) % (npe - 1) != 0) return;  // incompatible chain
+    if ((int)nodal.size() < mesh.node_count) nodal.resize(mesh.node_count, 0.0);
+    const int edge_count = (chain - 1) / (npe - 1);
+
+    constexpr double g1 = 0.3399810435848563, g2 = 0.8611363115940526;
+    constexpr double w1 = 0.6521451548625461, w2 = 0.3478548451374538;
+    const std::array<double, 4> point = {-g2, -g1, g1, g2};
+    const std::array<double, 4> weight = {w2, w1, w1, w2};
+
+    std::array<double, 5> N{}, dN{};
+    for (int edge = 0; edge < edge_count; ++edge) {
+        const int base = edge * (npe - 1);
+        std::array<double, 5> integral_n{};  // ∫ N_i ds
+        for (int q = 0; q < 4; ++q) {
+            edge_shape(npe, point[q], N.data(), dN.data());
+            double dxdt = 0.0, dydt = 0.0;
+            for (int i = 0; i < npe; ++i) {
+                const int ni = ordered_boundary_nodes[base + i];
+                dxdt += dN[i] * mesh.x[ni];
+                dydt += dN[i] * mesh.y[ni];
+            }
+            const double ds = std::sqrt(dxdt * dxdt + dydt * dydt);
+            for (int i = 0; i < npe; ++i) integral_n[i] += weight[q] * ds * N[i];
+        }
+        for (int i = 0; i < npe; ++i)
+            nodal[ordered_boundary_nodes[base + i]] += q_n * integral_n[i];  // inflow positive
+    }
+}
+
+namespace {
+// Scatter a node-indexed prescribed flux into the current equation numbering. Called after every
+// assembly, because the unconfined solvers rebuild their DofMap as the free surface and the
+// seepage-face active set move.
+inline void add_nodal_flux(const mesh::Mesh& mesh, const DofMap& dofs,
+                           const std::vector<double>& nodal, Eigen::VectorXd& rhs) {
+    if ((int)nodal.size() < mesh.node_count) return;
+    for (int n = 0; n < mesh.node_count; ++n) {
+        if (nodal[n] == 0.0) continue;
+        const int eq = dofs.equation(dofs.global_dof(n, 0));
+        if (eq >= 0) rhs[eq] += nodal[n];
+    }
+}
+}  // namespace
+
 void assemble_seepage_flux(const mesh::Mesh& mesh, const DofMap& dofs,
                            const std::vector<int>& ordered_boundary_nodes,
                            double q_n, Eigen::VectorXd& rhs) {
@@ -413,6 +465,7 @@ UnconfinedResult solve_unconfined_seepage(
             assemble_krel_impl<Tri6Element>(mesh, dofs, permeability, current,
                                             head_prescribed, options.k_min,
                                             options.transition, options.retention, builder, rhs);
+        add_nodal_flux(mesh, dofs, options.nodal_flux, rhs);
         return expand_overlay(mesh, dofs, linear_solve(builder.build(), rhs),
                               head_prescribed);
     };
@@ -423,6 +476,7 @@ UnconfinedResult solve_unconfined_seepage(
         math::SparseMatrixBuilder builder(neq);
         Eigen::VectorXd rhs = Eigen::VectorXd::Zero(neq);
         assemble_seepage(mesh, dofs, permeability, head_prescribed, builder, rhs);
+        add_nodal_flux(mesh, dofs, options.nodal_flux, rhs);
         head = expand_overlay(mesh, dofs, linear_solve(builder.build(), rhs),
                               head_prescribed);
     }
@@ -505,6 +559,7 @@ UnconfinedResult solve_unconfined_seepage_face(
             assemble_krel_impl<Tri6Element>(mesh, dofs, permeability, current, hp,
                                             options.k_min, options.transition, options.retention,
                                             builder, rhs);
+        add_nodal_flux(mesh, dofs, options.nodal_flux, rhs);
         return expand_overlay(mesh, dofs, linear_solve(builder.build(), rhs), hp);
     };
 
