@@ -408,10 +408,16 @@ public:
             for (int i = 0; i < 4; ++i)
                 if (idx[i] >= 0) U += g[i] * (u_free(idx[i]) + du_free(idx[i]));
             const double Up_c = (*st.anchor_c)[ai];
-            double N = kk * (U - Up_c), Dt = kk;
+            // The lock-off force rides on the elastic response: N = N0 + k(U - U_p). It is a
+            // constant, so it enters the residual and not the tangent -- a prestressed anchor is
+            // no stiffer than a slack one, it merely starts loaded. The capacity is checked on
+            // the TOTAL force, which is why the plastic elongation below subtracts N0 as well:
+            // yielding must leave N exactly at the cap, not at the cap plus the prestress.
+            const double N0 = an.prestress;
+            double N = N0 + kk * (U - Up_c), Dt = kk;
             const double Ft = an.Fmax_tens, Fc = an.Fmax_comp;
-            if (Ft > 0.0 && N > Ft)        { N = Ft;  (*st.anchor_t)[ai] = U - Ft / kk; Dt = 0.0; }
-            else if (Fc > 0.0 && N < -Fc)  { N = -Fc; (*st.anchor_t)[ai] = U + Fc / kk; Dt = 0.0; }
+            if (Ft > 0.0 && N > Ft)        { N = Ft;  (*st.anchor_t)[ai] = U - (Ft - N0) / kk; Dt = 0.0; }
+            else if (Fc > 0.0 && N < -Fc)  { N = -Fc; (*st.anchor_t)[ai] = U + (Fc + N0) / kk; Dt = 0.0; }
             else                           { (*st.anchor_t)[ai] = Up_c; }
             for (int i = 0; i < 4; ++i) {
                 if (idx[i] < 0) continue;

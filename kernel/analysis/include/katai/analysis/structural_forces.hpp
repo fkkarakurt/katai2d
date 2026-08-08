@@ -200,7 +200,8 @@ inline std::vector<ForceStation> plate_force_diagram(
 }
 
 // Anchor AXIAL force — mirrors the solver (nonlinear_solver.cpp anchor loop) EXACTLY:
-//   U = Σ g_i·u  (g = ±unit direction),  N = kk·(U − U_p),  N ∈ [−Fmax_comp, +Fmax_tens].
+//   U = Σ g_i·u  (g = ±unit direction),  N = N0 + kk·(U − U_p),  N ∈ [−Fmax_comp, +Fmax_tens],
+//   N0 = the lock-off prestress (0 for a slack anchor).
 // kk = EA/L (L≤0 ⇒ geometric distance). U_p = committed plastic elongation
 // (NewtonResult.anchor_plastic[i]; 0 for elastic/purely elastic anchors). Fixed DOFs are
 // excluded from U, as in the solver. yielded: at capacity.
@@ -226,7 +227,7 @@ inline AnchorForce anchor_force(const AnchorElement& an, const mesh::Mesh& mesh,
     double U = 0.0;
     for (int i = 0; i < 4; ++i)
         if (gdof[i] >= 0 && !dofs.is_fixed(gdof[i])) U += g[i] * disp[gdof[i]];
-    double N = kk * (U - Up);
+    double N = an.prestress + kk * (U - Up);
     AnchorForce r;
     if (elastic) { r.N = N; return r; }   // linear dynamic branch: uncapped elastic N (same as solver)
     const double Ft = an.Fmax_tens, Fc = an.Fmax_comp;

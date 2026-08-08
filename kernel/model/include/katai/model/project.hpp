@@ -142,6 +142,13 @@ struct AnchorMaterial {
     double Fmax_tens = 0.0;   // |Fmax,tension|   (0 = unlimited)
     double Fmax_comp = 0.0;   // |Fmax,compression| (0 = unlimited)
     double Lspacing = 1.0;    // out-of-plane spacing [m]
+    // Lock-off force per anchor [kN], tension-positive. An anchor or a strut is tensioned
+    // against the wall when it is installed; that force holds the excavation before any
+    // further movement, and it is what every anchored-excavation benchmark specifies (the
+    // DGGT / Schweiger triple-anchored wall locks off 768 / 945 / 980 kN). The anchor is an
+    // elastic spring from that state afterwards, so the force follows the wall rather than
+    // staying constant. 0 = installed slack.
+    double prestress = 0.0;
 };
 
 // Geogrid (tension-only membrane): axial stiffness + optional tension cap (MMM §18.2).

@@ -839,6 +839,9 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             const auto& am = pr.anchors[s.material];
             Ls = am.Lspacing > 1e-9 ? am.Lspacing : 1.0;
             an.EA = am.EA / Ls;
+            // Per metre of wall, like the stiffness and the capacities: the schema states the
+            // lock-off force of ONE anchor and the spacing it repeats at.
+            an.prestress = am.prestress / Ls;
             if (am.elastoplastic) {
                 an.Fmax_tens = am.Fmax_tens > 0.0 ? am.Fmax_tens / Ls : -1.0;
                 an.Fmax_comp = am.Fmax_comp > 0.0 ? am.Fmax_comp / Ls : -1.0;

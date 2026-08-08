@@ -191,7 +191,9 @@ NB_MODULE(_core, m) {
         .def_rw("Lspacing", &api::AnchorMaterial::Lspacing, "out-of-plane spacing [m]")
         .def_rw("elastoplastic", &api::AnchorMaterial::elastoplastic)
         .def_rw("Fmax_tens", &api::AnchorMaterial::Fmax_tens)
-        .def_rw("Fmax_comp", &api::AnchorMaterial::Fmax_comp);
+        .def_rw("Fmax_comp", &api::AnchorMaterial::Fmax_comp)
+        .def_rw("prestress", &api::AnchorMaterial::prestress,
+                "lock-off force of one anchor [kN], tension-positive; 0 = installed slack");
     bind_color(anchor_cls);
 
     auto geogrid_cls = nb::class_<api::GeogridMaterial>(m, "GeogridMaterial");

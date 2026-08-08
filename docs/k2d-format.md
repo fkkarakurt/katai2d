@@ -8,11 +8,13 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **2** · Current `.res` version: **5**
+Current `.k2d` version: **3** · Current `.res` version: **5**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
-activity flags). The bump is deliberate: an older build reading a v2 file would silently
-drop the constraints and solve a *different* problem, so it must refuse the file instead.
+activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`). Both bumps
+are deliberate and for the same reason: an older build reading the newer file would silently
+drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
+than one that was tensioned against it -- so it must refuse the file instead.
 
 ## 1. The `.k2d` project file
 
@@ -74,7 +76,7 @@ flagged places differs from the in-memory default of a freshly created object.
 
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
-| `katai2d` | int | — | *required* | Format version; this build writes 2 |
+| `katai2d` | int | — | *required* | Format version; this build writes 3 |
 | `name` | str | — | `"Untitled project"` | Project display name |
 | `axisymmetric` | bool | — | `false` | `false` = plane strain; `true` = axisymmetric (x is the radius, x = 0 the symmetry axis) |
 | `initial_procedure` | int | — | `0` | How the initial phase establishes the in-situ state: 0 K0 procedure, 1 Gravity loading, 2 Safety (φ-c reduction of the gravity state; intended for single-phase runs) |
@@ -175,8 +177,14 @@ with `name` (default `"Plate"`), `color` and `nu` (default `0`) as in the soil m
 | `Fmax_tens` | num | kN | `0` | Tension capacity (0 = unlimited) |
 | `Fmax_comp` | num | kN | `0` | Compression capacity (0 = unlimited) |
 | `Lspacing` | num | m | `1` | Out-of-plane spacing |
+| `prestress` | num | kN | `0` | Lock-off force of one anchor, tension-positive (0 = installed slack) |
 
 with `name` (default `"Anchor"`), `color`, `elastoplastic` and `EA` (default `1e5` kN) as above.
+
+`prestress` is applied when the anchor is first active and the anchor is an elastic spring from
+that state afterwards, so its force follows the wall rather than staying at the lock-off value.
+The stated force is per anchor; the analysis divides it by `Lspacing`, exactly as it does `EA`
+and the capacities.
 
 #### Geogrid material object (`geogrids[i]`)
 

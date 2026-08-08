@@ -86,6 +86,14 @@ struct AnchorElement {
     double L = 0.0;                         // equivalent length (stiffness EA/L); ≤0 ⇒ geometric distance
     double Fmax_tens = -1.0;                // max tensile force; ≤0 ⇒ unbounded (elastic)
     double Fmax_comp = -1.0;                // max compressive force (positive); ≤0 ⇒ unbounded
+    // Prestress (lock-off force) per metre of wall, tension-positive. An anchor or strut is
+    // almost never installed slack: it is tensioned against the wall, and that force is what
+    // holds the excavation before any further movement occurs. The anchor then behaves as an
+    // elastic spring FROM that state — N = N0 + (EA/L)·(U − U_p) with U measured from the
+    // installation datum the phase chain carries — which is the PLAXIS reading of a prestressed
+    // anchor: the lock-off force is applied once, and afterwards the force follows the wall.
+    // 0 ⇒ installed slack, i.e. what every KATAI anchor was before this field existed.
+    double prestress = 0.0;
 };
 
 // Geogrid — 3-node axial membrane (tension-only + optional N_p; see elements/geogrid.hpp).

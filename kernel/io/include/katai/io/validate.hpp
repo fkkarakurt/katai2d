@@ -460,6 +460,19 @@ inline ValidationReport validate_project(const model::Project& p) {
             r.add(Severity::Warning, at("anchors", i, "elastoplastic"),
                   who + "elastoplastic is set but both capacities are 0 (unlimited); the anchor "
                         "behaves elastically");
+        // A lock-off force is a TENSION: a negative one would mean the anchor was installed
+        // pushing the wall into the soil, which is not what a prestressed anchor or strut does.
+        if (m.prestress < 0.0)
+            r.add(Severity::Error, at("anchors", i, "prestress"),
+                  who + "the lock-off force is tension-positive and cannot be negative (got " +
+                      num(m.prestress) + " kN)");
+        // Locking off beyond the capacity is not a modelling preference: the anchor would yield
+        // on installation, so the force the file asks for cannot exist.
+        if (m.elastoplastic && m.Fmax_tens > 0.0 && m.prestress > m.Fmax_tens)
+            r.add(Severity::Error, at("anchors", i, "prestress"),
+                  who + "the lock-off force " + num(m.prestress) +
+                      " kN exceeds the tension capacity " + num(m.Fmax_tens) +
+                      " kN; the anchor would yield as it is installed");
     }
     for (size_t i = 0; i < p.geogrids.size(); ++i) {
         const auto& m = p.geogrids[i];

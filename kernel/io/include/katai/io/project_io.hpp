@@ -27,7 +27,13 @@ namespace katai::model {
 // silent wrong number into an honest "newer version" refusal. (The mesh/initial_procedure
 // additions stayed v1 because an old build ignoring them still solves the same problem,
 // just on its own defaults.)
-inline constexpr int kProjectFileVersion = 2;
+//
+// v3 (2026-08): anchor PRESTRESS (`anchors[].prestress`). Same rule, same reason: an older
+// build would read the file, ignore the lock-off force, and report a wall that deflects far
+// more than the one described -- an unsafe-sided silent difference, so the version refuses
+// instead. Until this field existed no anchored excavation could be modelled as it is built,
+// which is why the case that exposed it was an industry benchmark rather than a unit test.
+inline constexpr int kProjectFileVersion = 3;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -382,6 +388,7 @@ inline std::string project_to_json(const Project& p) {
         wfield(o, "elastoplastic", m.elastoplastic);
         wfield(o, "EA", m.EA); wfield(o, "Fmax_tens", m.Fmax_tens);
         wfield(o, "Fmax_comp", m.Fmax_comp); wfield(o, "Lspacing", m.Lspacing);
+        wfield(o, "prestress", m.prestress);
         closeobj(o);
     }
     o += "],";
@@ -599,6 +606,7 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             m.Fmax_tens = j.num("Fmax_tens", m.Fmax_tens);
             m.Fmax_comp = j.num("Fmax_comp", m.Fmax_comp);
             m.Lspacing = j.num("Lspacing", m.Lspacing);
+            m.prestress = j.num("prestress", m.prestress);
             p.anchors.push_back(std::move(m));
         }
     if (const Json* arr = root.find("geogrids"); arr && arr->type == Json::Arr)
