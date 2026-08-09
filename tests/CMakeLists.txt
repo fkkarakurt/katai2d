@@ -234,6 +234,8 @@ endif()
 # CTest. Run one with `cmake --build <dir> --target <name>`. Results are written
 # up under docs/validation/. The ones that drive the GUI compute path need the
 # project schema, so they exist only in compositions that build katai::model.
+add_executable(study_giroud_convergence EXCLUDE_FROM_ALL study_giroud_convergence.cpp)  # solution verification of the Giroud benchmark: nested refinement + GCI band -> the published record
+target_link_libraries(study_giroud_convergence PRIVATE katai::jobs katai::mesh katai::analysis katai::model katai::io katai::linsolve)
 add_executable(study_slope_convergence EXCLUDE_FROM_ALL study_slope_convergence.cpp)  # mesh convergence of the slope SRM -> docs/validation/slope-srm-convergence.md
 target_link_libraries(study_slope_convergence PRIVATE katai::analysis katai::linsolve)
 add_executable(study_design_ec7 EXCLUDE_FROM_ALL study_design_ec7.cpp)  # EC7 DA3 material factoring (ODF=FoS/gamma_M identity + Griffiths & Lane benchmark + PLAXIS algorithm identity)
