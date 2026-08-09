@@ -95,6 +95,10 @@ class DispHandle(_Handle):
     pass
 
 
+class HydroHandle(_Handle):
+    pass
+
+
 class _Materials:
     """``prj.materials`` -- one constructor per constitutive model, named as in the
     registry. Common ground parameters: ``gamma`` [kN/m3] above water (``gamma_sat``
@@ -321,6 +325,47 @@ class _Displacements:
         return DispHandle(len(self._prj._disps) - 1, name)
 
 
+class _Dewatering:
+    """``prj.dewatering`` -- wells and drains drawn inside the model (PLAXIS
+    "hydraulic conditions"). Both are lines, both switch on and off per phase
+    like loads, and they say two different things to the ground: a well
+    prescribes how much water is taken out, a drain prescribes how low the
+    head is held."""
+
+    def __init__(self, prj):
+        self._prj = prj
+
+    def well(self, a, b, *, q, h_min, name="Well", infiltration=False):
+        """Pump ``q`` [m3/day per m out of plane] out along the line ``a``-``b``
+        [m] (``infiltration=True`` puts water in instead). ``h_min`` [m] is the
+        lowest head the well can draw the ground down to: once it is reached the
+        well extracts only what the ground can supply, and the run says so."""
+        H = _core.HydroLine()
+        H.name = name
+        H.kind = _core.HydroKind.Well
+        H.behaviour = 1 if infiltration else 0
+        H.x1, H.y1, H.x2, H.y2 = a[0], a[1], b[0], b[1]
+        H.q = float(q)
+        H.h_min = float(h_min)
+        self._prj._hydros.append(H)
+        return HydroHandle(len(self._prj._hydros) - 1, name)
+
+    def drain(self, a, b, *, head, name="Drain", vacuum=False):
+        """Hold the head at ``head`` [m] along the line ``a``-``b`` [m]. A normal
+        drain only takes water away -- ground already drier than the drain is
+        left alone; ``vacuum=True`` holds the head in both directions (vacuum
+        consolidation). In a consolidation phase a drain sets the excess pore
+        pressure to zero, as in PLAXIS."""
+        H = _core.HydroLine()
+        H.name = name
+        H.kind = _core.HydroKind.Drain
+        H.behaviour = 1 if vacuum else 0
+        H.x1, H.y1, H.x2, H.y2 = a[0], a[1], b[0], b[1]
+        H.head = float(head)
+        self._prj._hydros.append(H)
+        return HydroHandle(len(self._prj._hydros) - 1, name)
+
+
 class _PhaseBuilder:
     """One staged-construction phase; created via ``prj.phases.*``."""
 
@@ -445,6 +490,7 @@ class Project:
         self._polygons = []
         self._loads = []
         self._disps = []
+        self._hydros = []
         self._water = None
         self._procedure = "k0"
         self._initial_exclude = []
@@ -455,6 +501,7 @@ class Project:
         self.water = _Water(self)
         self.loads = _Loads(self)
         self.displacements = _Displacements(self)
+        self.dewatering = _Dewatering(self)
         self.phases = _Phases(self)
 
     def initial(self, *, procedure="k0", exclude=(), tolerance=None,
@@ -507,6 +554,7 @@ class Project:
         pr.polygons = self._polygons
         pr.loads = self._loads
         pr.disps = self._disps
+        pr.hydros = self._hydros
 
         # The initial phase: everything active except the exclusions. Vectors are
         # materialized ONLY for a touched class, exactly like the GUI's files.
@@ -517,9 +565,12 @@ class Project:
                         if isinstance(h, RegionHandle)]
         excl_disps = [h.index for h in self._initial_exclude
                       if isinstance(h, DispHandle)]
+        excl_hydros = [h.index for h in self._initial_exclude
+                       if isinstance(h, HydroHandle)]
         load_state = [1] * len(self._loads)
         poly_state = [1] * len(self._polygons)
         disp_state = [1] * len(self._disps)
+        hydro_state = [1] * len(self._hydros)
         if excl_loads:
             for i in excl_loads:
                 load_state[i] = 0
@@ -532,6 +583,10 @@ class Project:
             for i in excl_disps:
                 disp_state[i] = 0
             initial.disp_active = disp_state
+        if excl_hydros:
+            for i in excl_hydros:
+                hydro_state[i] = 0
+            initial.hydro_active = hydro_state
         for field, value in self._initial_numerics.items():
             if value is not None:
                 setattr(initial, field, value)
@@ -542,6 +597,7 @@ class Project:
         phases = []
         for ph, activate, deactivate in self._phase_toggles:
             touched_loads = touched_polys = touched_disps = False
+            touched_hydros = False
             for h in activate + deactivate:
                 on = 1 if h in activate else 0
                 if isinstance(h, LoadHandle):
@@ -553,6 +609,9 @@ class Project:
                 elif isinstance(h, DispHandle):
                     disp_state[h.index] = on
                     touched_disps = True
+                elif isinstance(h, HydroHandle):
+                    hydro_state[h.index] = on
+                    touched_hydros = True
                 else:
                     raise ValueError(f"cannot toggle {h!r}")
             if touched_loads:
@@ -561,6 +620,8 @@ class Project:
                 ph.poly_active = list(poly_state)
             if touched_disps:
                 ph.disp_active = list(disp_state)
+            if touched_hydros:
+                ph.hydro_active = list(hydro_state)
             phases.append(ph)
         pr.phases = phases
         return pr

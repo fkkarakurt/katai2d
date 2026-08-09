@@ -44,6 +44,10 @@ using model::SoilPolygon;
 using model::StructElement;
 using model::Load;
 using model::PrescribedDisp;
+using model::HydroLine;         // wells and drains (hydraulic conditions)
+using model::HydroKind;
+using model::WellBehaviour;
+using model::DrainBehaviour;
 using model::Phase;
 using model::BoundaryConditions;
 using model::MeshSettings;

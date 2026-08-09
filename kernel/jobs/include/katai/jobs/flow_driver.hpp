@@ -28,6 +28,11 @@ struct FlowResult {
     double discharge = 0.0;      // TOTAL inflow into the domain [m3/day per m]: through
                                  // prescribed-head boundaries and prescribed-flux edges alike
     double balance_err = 0.0;    // |sum of all nodal fluxes| / inflow (mass conservation, ~0)
+    // What the hydraulic conditions took OUT of the ground [m3/day per m], and how many well
+    // nodes are held at h_min. A well limited by h_min extracts what the ground can give at that
+    // head, not what it was asked for -- a difference the run has to be able to state.
+    double hydro_discharge = 0.0;
+    int hydro_limited = 0;
     int iterations = 0;
     bool ok = false;
     std::string message;
@@ -37,7 +42,12 @@ struct FlowResult {
 // can be included in either order / independently).
 inline constexpr double kFlowGammaWater = 9.81;
 
-// Definition in kernel/jobs/src/flow_driver.cpp (section 5.2).
-FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::Mesh& mesh);
+// Definition in kernel/jobs/src/flow_driver.cpp (section 5.2). `phase` selects which wells and
+// drains are switched on (PLAXIS activates hydraulic conditions per calculation phase); nullptr
+// means the project as drawn, with every hydraulic condition active -- which is what the standalone
+// "calculate groundwater flow" action asks for and what every caller written before wells existed
+// gets, unchanged.
+FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::Mesh& mesh,
+                                  const model::Phase* phase = nullptr);
 
 }  // namespace katai::app

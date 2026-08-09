@@ -53,7 +53,7 @@ inline std::string num(double v) {   // echo a value the way the file stores it
 // path prefix and the counts tie the activity vectors to the project's lists.
 inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::string& base,
                         bool is_initial, size_t n_poly, size_t n_struct, size_t n_load,
-                        size_t n_disp) {
+                        size_t n_disp, size_t n_hydro = 0) {
     using model::PhaseType;
     using model::SeismicWave;
     const auto path = [&base](const char* f) { return base + "." + f; };
@@ -226,6 +226,7 @@ inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::
     check_activity("struct", ph.struct_active.size(), n_struct, "structural-element");
     check_activity("load", ph.load_active.size(), n_load, "load");
     check_activity("disp", ph.disp_active.size(), n_disp, "prescribed-displacement");
+    check_activity("hydro", ph.hydro_active.size(), n_hydro, "hydraulic-condition");
 
     // Prescribed displacements are a STATIC (Plastic) capability in this build. A
     // time-dependent or Safety phase with one active would silently need semantics this
@@ -837,12 +838,62 @@ inline ValidationReport validate_project(const model::Project& p) {
                   "(deactivate them initially and activate them in a staged phase)");
     }
 
+    // -- Hydraulic conditions: wells and drains (PLAXIS Reference sec. 5.9) -----
+    for (size_t i = 0; i < p.hydros.size(); ++i) {
+        const auto& H = p.hydros[i];
+        const std::string who = "\"" + H.name + "\": ";
+        const auto path = [i](const char* f) { return at("hydros", i, f); };
+        const int kind = (int)H.kind;
+        if (kind < 0 || kind >= model::kHydroKindCount) {
+            r.add(Severity::Error, path("kind"),
+                  who + "unknown hydraulic condition " + std::to_string(kind) +
+                      "; this build knows 0 (well) and 1 (drain)");
+            continue;
+        }
+        if (H.x1 == H.x2 && H.y1 == H.y2)
+            r.add(Severity::Error, path("x2"),
+                  who + "a " + std::string(model::hydro_kind_name(H.kind)) +
+                      " needs a line of positive length (both endpoints at (" + num(H.x1) + ", " +
+                      num(H.y1) + "))");
+        if (!(H.coarseness > 0.0))
+            r.add(Severity::Error, path("coarseness"),
+                  who + "the mesh coarseness factor must be positive (got " + num(H.coarseness) +
+                      ")");
+        if (H.behaviour != 0 && H.behaviour != 1)
+            r.add(Severity::Error, path("behaviour"),
+                  who + "unknown behaviour " + std::to_string(H.behaviour) +
+                      "; a well is 0 = extraction or 1 = infiltration, a drain 0 = normal or "
+                      "1 = vacuum");
+        if (H.kind == model::HydroKind::Well) {
+            // A well with no discharge is not a well: it would be drawn, meshed, and take
+            // nothing out -- the silent-drop class, refused rather than warned about.
+            if (!(H.q > 0.0))
+                r.add(Severity::Error, path("q"),
+                      who + "a well needs a discharge |Q| > 0 in m3/day per m out of plane (got " +
+                          num(H.q) + "); a well that pumps nothing is not in the model");
+            const double top = std::fmax(H.y1, H.y2);
+            if (H.behaviour == (int)model::WellBehaviour::Extraction && H.h_min > top)
+                r.add(Severity::Warning, path("h_min"),
+                      who + "h_min = " + num(H.h_min) + " m is above the well's own top (" +
+                          num(top) + " m): the well stops extracting as soon as the head reaches "
+                                     "it, so it will do little or nothing. PLAXIS's habit is to "
+                                     "set h_min at the bottom of the well");
+        } else {
+            const double bottom = std::fmin(H.y1, H.y2);
+            if (H.head < bottom - 1e-9 && H.behaviour == (int)model::DrainBehaviour::Normal)
+                r.add(Severity::Warning, path("head"),
+                      who + "the drain holds a head of " + num(H.head) +
+                          " m, below its own lowest point (" + num(bottom) +
+                          " m): a normal drain cannot pull the water below itself, so the level "
+                          "it reaches is set by the geometry rather than by this number");
+        }
+    }
     // -- Phases ----------------------------------------------------------------
     detail::check_phase(r, p.initial, "initial", true, p.polygons.size(), p.structs.size(),
-                        p.loads.size(), p.disps.size());
+                        p.loads.size(), p.disps.size(), p.hydros.size());
     for (size_t i = 0; i < p.phases.size(); ++i)
         detail::check_phase(r, p.phases[i], at("phases", i), false, p.polygons.size(),
-                            p.structs.size(), p.loads.size(), p.disps.size());
+                            p.structs.size(), p.loads.size(), p.disps.size(), p.hydros.size());
 
     return r;
 }

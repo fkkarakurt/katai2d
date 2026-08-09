@@ -51,6 +51,11 @@ struct FullyCoupledPhase {
     std::vector<FlowEdge> flow_edges;                   // B4 vocabulary, Closed edges included
     bool have_flow_bcs = false;                         // unfiltered declaration scan (B4 rule)
     std::vector<char> active;                           // element activity; empty = everything active
+    // Nodes of the DRAINS active in this phase. "In consolidation analysis, drains reduce the
+    // excess pore pressure to zero and the specified head is ignored" (PLAXIS Ref sec. 5.9.2) --
+    // which is exactly what this solver's drained-node mask means, so a drain enters here rather
+    // than as a new kind of boundary condition.
+    std::vector<int> drain_nodes;
     bool has_structural_elements = false;               // plates/anchors/geogrids/walls/embedded present
     double duration_day = 1.0;                          // <= 0 falls back to 1 day
     int time_steps = 25;                                // clamped to [1, 2000]
@@ -145,8 +150,13 @@ inline bool solve_fully_coupled_phase(
 
     // Drainage boundary (engine service, B4): prescribed-head / seepage edges drain; with no
     // declared flow BCs the model top drains; inactive-only nodes carry no pore DOF.
-    const std::vector<char> drained =
+    // (not const: an active drain adds its own nodes to the same mask -- the drain and the
+    // draining boundary say the same thing to this solver, that the excess pore pressure there
+    // is zero.)
+    std::vector<char> drained =
         flow_drained_nodes(in.flow_edges, in.have_flow_bcs, mesh, in.active, in.yscale);
+    for (int n : in.drain_nodes)
+        if (n >= 0 && n < mesh.node_count) drained[n] = 1;
 
     // Time stepping from the phase duration / step count.
     const double duration = in.duration_day > 0.0 ? in.duration_day : 1.0;

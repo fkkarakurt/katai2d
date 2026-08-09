@@ -49,6 +49,11 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
     // when the line coincides with a boundary edge).
     for (const auto& D : pr.disps)
         raw.push_back({D.x1, D.y1, D.x2, D.y2, false, false});
+    // Wells and drains for the same reason: a well prescribes a discharge along its line and a
+    // drain a head at its nodes, so the line has to BE a chain of mesh edges. A hydraulic
+    // condition the mesh does not follow is one whose water is applied somewhere else.
+    for (const auto& H : pr.hydros)
+        raw.push_back({H.x1, H.y1, H.x2, H.y2, false, false});
     if (raw.size() < 3) { R.message = "Degenerate geometry."; return R; }
 
     // Pairwise split parameters (segment p->p2 vs q->q2 proper/touching intersection).
@@ -168,6 +173,10 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
     for (const auto& D : pr.disps) {
         const double f = clampf(D.coarseness * (opt.auto_refine ? opt.auto_factor : 1.0));
         if (f < 1.0 - 1e-12) srcs.push_back({D.x1, D.y1, D.x2, D.y2, h0 * f});
+    }
+    for (const auto& H : pr.hydros) {
+        const double f = clampf(H.coarseness * (opt.auto_refine ? opt.auto_factor : 1.0));
+        if (f < 1.0 - 1e-12) srcs.push_back({H.x1, H.y1, H.x2, H.y2, h0 * f});
     }
     bool region_factors = false;
     for (const auto& P : pr.polygons)

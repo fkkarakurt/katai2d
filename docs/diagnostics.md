@@ -61,6 +61,8 @@ Codes in the `K2D-M…` family are about a **material parameter** the selected m
 | `K2D-A006` | warning | A **Safety phase is asked for a tolerated error looser than the search's own 1e-3**. The strength-reduction search reads "this trial converged" as "the slope stands", so a loose stopping rule makes it stand at strengths it cannot carry — and the error is one-sided: the factor comes out **too high**. Measured on the Griffiths & Lane benchmark: +2.0% at 1e-2, +45.6% at 1e-1 (KV-NUM-007). |
 | `K2D-A007` | note | A phase applies only **part of its staged change** (Σ Mstage < 1). The configuration the phase describes is not reached — the remainder is still carried by the soil, and the results belong to the partial stage. |
 | `K2D-A008` | note | A phase **ignores undrained behaviour** for a material that declares Undrained (A) or (B): it is solved drained, so no excess pore pressure is generated in it. Strength parameters are unchanged. The answer is long-term (or state-setting), not short-term. |
+| `K2D-A009` | warning | A **well is active in a consolidation or fully-coupled phase**. Those solvers take drainage boundaries and drains, not a prescribed discharge, so the well's pumping is not applied in that phase. Drains, which set the excess pore pressure to zero, are. |
+| `K2D-A010` | warning | A **pore-pressure field is computed with walls or interfaces in the model**. Neither blocks flow in this build (PLAXIS Scientific Manual §3.4 gives interfaces their own flow setting), so water crosses them as if the soil were continuous and a cut-off wall holds back less head than it would in the ground. Model an impermeable barrier as a thin Non-porous region. |
 
 ## Where they appear
 

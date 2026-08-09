@@ -270,6 +270,25 @@ NB_MODULE(_core, m) {
         .def_rw("uy", &api::PrescribedDisp::uy, "vertical displacement [m] (when set_uy)")
         .def_rw("coarseness", &api::PrescribedDisp::coarseness);
 
+    nb::enum_<api::HydroKind>(m, "HydroKind", nb::is_arithmetic())
+        .value("Well", api::HydroKind::Well)
+        .value("Drain", api::HydroKind::Drain);
+    nb::class_<api::HydroLine>(m, "HydroLine")
+        .def(nb::init<>())
+        .def_rw("name", &api::HydroLine::name)
+        .def_rw("kind", &api::HydroLine::kind, "0 = well (a discharge), 1 = drain (a head)")
+        .def_rw("behaviour", &api::HydroLine::behaviour,
+                "well: 0 = extraction, 1 = infiltration; drain: 0 = normal, 1 = vacuum")
+        .def_rw("x1", &api::HydroLine::x1)
+        .def_rw("y1", &api::HydroLine::y1)
+        .def_rw("x2", &api::HydroLine::x2)
+        .def_rw("y2", &api::HydroLine::y2)
+        .def_rw("q", &api::HydroLine::q, "well discharge |Q| [m3/day per m out of plane]")
+        .def_rw("h_min", &api::HydroLine::h_min,
+                "well: the lowest head it can draw the ground down to [m]")
+        .def_rw("head", &api::HydroLine::head, "drain: the head it holds [m]")
+        .def_rw("coarseness", &api::HydroLine::coarseness);
+
     nb::class_<api::Load>(m, "Load")
         .def(nb::init<>())
         .def_rw("kind", &api::Load::kind)
@@ -348,6 +367,14 @@ NB_MODULE(_core, m) {
             [](api::Phase& p, const std::vector<int>& v) {
                 p.disp_active.assign(v.begin(), v.end());
             })
+        .def_prop_rw(
+            "hydro_active",
+            [](const api::Phase& p) {
+                return std::vector<int>(p.hydro_active.begin(), p.hydro_active.end());
+            },
+            [](api::Phase& p, const std::vector<int>& v) {
+                p.hydro_active.assign(v.begin(), v.end());
+            })
         // Water conditions for this phase (staged dewatering): the phreatic polyline that
         // replaces the project's while this phase runs.
         .def_rw("water_override", &api::Phase::water_override,
@@ -395,6 +422,7 @@ NB_MODULE(_core, m) {
         .def_rw("structs", &api::Project::structs)
         .def_rw("loads", &api::Project::loads)
         .def_rw("disps", &api::Project::disps)
+        .def_rw("hydros", &api::Project::hydros, "wells and drains (hydraulic conditions)")
         .def_rw("initial", &api::Project::initial)
         .def_rw("phases", &api::Project::phases);
 

@@ -74,7 +74,12 @@ namespace katai::model {
 // parameters are read as effective ones -- a c_u of 60 kPa taken for a c' of 60 kPa, with pore
 // pressures subtracted from stresses that were never meant to have any. The version refuses in
 // the reader instead, which no path can skip.
-inline constexpr int kProjectFileVersion = 10;
+//
+// v11 (2026-08): WELLS AND DRAINS (`hydros`, `phases[].hydro`). An older build ignores the array
+// and solves the same ground with no dewatering in it: the head stays where the boundaries put
+// it, the excavation floor is reported dry when the file says it is being pumped, and every
+// uplift and seepage number that follows belongs to a different problem.
+inline constexpr int kProjectFileVersion = 11;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -317,6 +322,7 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     warr(o, "struct", ph.struct_active);
     warr(o, "load", ph.load_active);
     warr(o, "disp", ph.disp_active);
+    warr(o, "hydro", ph.hydro_active);
     wfield(o, "water_override", ph.water_override);
     warr(o, "wx", ph.wx); warr(o, "wy", ph.wy);
     // Numerical controls, written only when SET (like the accelerogram above). Zero is "let the
@@ -361,6 +367,7 @@ inline Phase rphase(const Json& j) {
     ph.struct_active = j.chars("struct");
     ph.load_active = j.chars("load");
     ph.disp_active = j.chars("disp");
+    ph.hydro_active = j.chars("hydro");
     ph.water_override = j.flag("water_override", ph.water_override);
     ph.wx = j.nums("wx"); ph.wy = j.nums("wy");
     ph.tolerance = j.num("tol", ph.tolerance);
@@ -542,6 +549,22 @@ inline std::string project_to_json(const Project& p) {
         wfield(o, "set_ux", D.set_ux); wfield(o, "ux", D.ux);
         wfield(o, "set_uy", D.set_uy); wfield(o, "uy", D.uy);
         wfield(o, "coarseness", D.coarseness);
+        closeobj(o);
+    }
+    o += "],";
+
+    wkey(o, "hydros"); o += '[';
+    for (size_t i = 0; i < p.hydros.size(); ++i) {
+        const HydroLine& H = p.hydros[i];
+        if (i) o += ',';
+        o += '{';
+        wfield(o, "name", H.name);
+        wfield(o, "kind", (double)(int)H.kind);
+        wfield(o, "behaviour", (double)H.behaviour);
+        wfield(o, "x1", H.x1); wfield(o, "y1", H.y1);
+        wfield(o, "x2", H.x2); wfield(o, "y2", H.y2);
+        wfield(o, "q", H.q); wfield(o, "h_min", H.h_min); wfield(o, "head", H.head);
+        wfield(o, "coarseness", H.coarseness);
         closeobj(o);
     }
     o += "],";
@@ -761,6 +784,30 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             D.set_uy = j.flag("set_uy", true);  D.uy = j.num("uy", 0);
             D.coarseness = j.num("coarseness", 1.0);
             p.disps.push_back(std::move(D));
+        }
+
+    if (const Json* arr = root.find("hydros"); arr && arr->type == Json::Arr)
+        for (const Json& j : arr->a) {
+            HydroLine H;
+            H.name = j.str("name", H.name);
+            // An unknown kind must not land on "Well" in silence: a drain read as a well would
+            // pump a discharge of zero and quietly stop holding the head it was drawn to hold.
+            const int kv = (int)j.num("kind", 0);
+            const bool kind_ok = kv >= 0 && kv < kHydroKindCount;
+            H.kind = kind_ok ? (HydroKind)kv : HydroKind::Well;
+            if (notes && !kind_ok)
+                notes->push_back({katai::io::Severity::Error,
+                                  "hydros[" + std::to_string(p.hydros.size()) + "].kind",
+                                  "\"" + H.name + "\": unknown hydraulic condition " +
+                                      std::to_string(kv) + " (this build knows 0 = well, "
+                                      "1 = drain); loaded for display as a well -- do not solve "
+                                      "with this file"});
+            H.behaviour = (int)j.num("behaviour", 0);
+            H.x1 = j.num("x1", 0); H.y1 = j.num("y1", 0);
+            H.x2 = j.num("x2", 0); H.y2 = j.num("y2", 0);
+            H.q = j.num("q", 0); H.h_min = j.num("h_min", 0); H.head = j.num("head", 0);
+            H.coarseness = j.num("coarseness", 1.0);
+            p.hydros.push_back(std::move(H));
         }
 
     if (const Json* ph = root.find("initial"); ph && ph->type == Json::Obj)

@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **10** · Current `.res` version: **5**
+Current `.k2d` version: **11** · Current `.res` version: **5**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -21,7 +21,9 @@ switch (`mstage`, `ignoreund`) and **v9** the per-material undrained stiffness
 (`materials[i].und_mode`, `nu_u`, `skempton_B`), which an older build would replace with
 PLAXIS's default of 0.495 for every undrained material in the file, and **v10** the
 Undrained (C) drainage type (`materials[i].drainage` = 4), which an older build would load
-"for display as Drained" and solve with undrained parameters read as effective ones. Every bump
+"for display as Drained" and solve with undrained parameters read as effective ones, and **v11**
+wells and drains (`hydros`, `phases[i].hydro`), which an older build would ignore and solve the
+same ground with no dewatering in it. Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
 than one that was tensioned against it -- so it must refuse the file instead.
@@ -86,7 +88,7 @@ flagged places differs from the in-memory default of a freshly created object.
 
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
-| `katai2d` | int | — | *required* | Format version; this build writes 10 |
+| `katai2d` | int | — | *required* | Format version; this build writes 11 |
 | `name` | str | — | `"Untitled project"` | Project display name |
 | `axisymmetric` | bool | — | `false` | `false` = plane strain; `true` = axisymmetric (x is the radius, x = 0 the symmetry axis) |
 | `initial_procedure` | int | — | `0` | How the initial phase establishes the in-situ state: 0 K0 procedure, 1 Gravity loading, 2 Safety (φ-c reduction of the gravity state; intended for single-phase runs) |
@@ -107,6 +109,7 @@ flagged places differs from the in-memory default of a freshly created object.
 | `structs` | array | — | `[]` | Structural elements (lines) |
 | `loads` | array | — | `[]` | External loads |
 | `disps` | array | — | `[]` | Line prescribed displacements (objects below) |
+| `hydros` | array | — | `[]` | Wells and drains — hydraulic conditions inside the model (objects below) |
 | `initial` | object | — | defaults | The initial phase (activation flags; its `type` is ignored — `initial_procedure` selects how the initial state is established) |
 | `phases` | array | — | `[]` | Staged-construction phases after the initial phase, in run order |
 
@@ -279,6 +282,25 @@ rigid footing whose force is read from the reactions.
 
 with `name` (default `"Displacement"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
 
+#### Hydraulic-condition object (`hydros[i]`)
+
+A well or a drain drawn *inside* the model (PLAXIS Reference §5.9). Its line is embedded in the
+mesh like a load line. A **well** prescribes a discharge spread along it and stops extracting once
+the head reaches `h_min`; a **drain** holds the head at `head` — a *normal* drain only takes water
+away, a *vacuum* drain holds its head in both directions. Activated per phase through the phase
+`hydro` flags. Read by the groundwater-flow calculation; in consolidation and fully-coupled phases
+a drain sets the excess pore pressure to zero and a well is reported as not applied (`K2D-A009`).
+
+| Key | Type | Unit | Default | Meaning |
+|---|---|---|---|---|
+| `kind` | int | — | `0` | 0 Well (a discharge), 1 Drain (a head) |
+| `behaviour` | int | — | `0` | Well: 0 Extraction, 1 Infiltration. Drain: 0 Normal, 1 Vacuum |
+| `q` | num | m³/day/m | `0` | Well discharge \|Q\| per metre out of plane (> 0) |
+| `h_min` | num | m | `0` | Well: the lowest head it can draw the ground down to |
+| `head` | num | m | `0` | Drain: the head it holds |
+
+with `name` (default `"Well"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
+
 #### Phase object (`initial` and `phases[i]`)
 
 | Key | Type | Unit | Default | Meaning |
@@ -310,6 +332,7 @@ with `name` (default `"Displacement"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as 
 | `struct` | 01[] | — | `[]` | Structural-element activity flags |
 | `load` | 01[] | — | `[]` | Load activity flags |
 | `disp` | 01[] | — | `[]` | Prescribed-displacement activity flags |
+| `hydro` | 01[] | — | `[]` | Well / drain activity flags |
 | `water_override` | bool | — | `false` | Use this phase's own phreatic line instead of the project's |
 | `wx` | num[] | m | `[]` | Phase phreatic polyline, x (used when `water_override`) |
 | `wy` | num[] | m | `[]` | Phase phreatic polyline, y (used when `water_override`) |

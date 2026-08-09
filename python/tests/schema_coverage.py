@@ -77,6 +77,7 @@ KEY_TO_ATTR = {
     "struct": "struct_active",
     "load": "load_active",
     "disp": "disp_active",
+    "hydro": "hydro_active",
 }
 
 # ---------------------------------------------------------- the coverage model --
@@ -136,6 +137,22 @@ def coverage_project():
     footing.set_uy = True
     footing.uy = -0.01
     pr.disps = [footing]
+
+    # A well and a drain, so the writer emits every hydraulic-condition key (`behaviour`,
+    # `q`, `h_min` come from the well, `head` from the drain).
+    well = core.HydroLine()
+    well.name = "Well"
+    well.kind = core.HydroKind.Well
+    well.x1, well.y1, well.x2, well.y2 = 5.0, 0.0, 5.0, 4.0
+    well.q = 10.0
+    well.h_min = 0.0
+    drain = core.HydroLine()
+    drain.name = "Drain"
+    drain.kind = core.HydroKind.Drain
+    drain.behaviour = 1
+    drain.x1, drain.y1, drain.x2, drain.y2 = 8.0, 2.0, 12.0, 2.0
+    drain.head = 2.0
+    pr.hydros = [well, drain]
 
     # The writer emits "rec"/"recdt" only when a record exists -- give the
     # staged phase one, so the coverage universe includes them.

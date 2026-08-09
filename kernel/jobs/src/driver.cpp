@@ -252,6 +252,40 @@ static bool any_flow_bc_declared(const model::Project& pr) {
 }
 
 // Drainage-boundary mask / prescribed-head boundary for time-dependent flow phases.
+// The mesh nodes of the DRAINS active in this phase, and whether any WELL is active. A drain is
+// read by the time-dependent flow solvers (its nodes drain: excess pore pressure zero, PLAXIS Ref
+// sec. 5.9.2); a well prescribes a discharge, which those solvers do not take, so an active well
+// in such a phase is reported rather than silently ignored.
+// Said wherever a pore-pressure field is COMPUTED with walls in the model: an impermeable screen
+// is not something this build can express (PLAXIS Sci. Man. sec. 3.4 gives interfaces their own
+// flow setting), so the water crosses the wall. It is a warning and not a refusal because the
+// deformation answer is still the model's; it is the flow half that is more permeable than drawn.
+static void warn_no_flow_barrier(const model::Project& pr, SolveResult& R) {
+    for (const auto& st : pr.structs)
+        if (st.kind == model::StructKind::Plate || st.kind == model::StructKind::Interface) {
+            warn(R, "K2D-A010", st.name,
+                 "This phase computes a pore-pressure field with walls or interfaces in the model, "
+                 "and neither blocks flow in this build: water crosses them as if the soil were "
+                 "continuous. A cut-off wall therefore holds back less head here than it would in "
+                 "the ground. Model an impermeable barrier as a thin Non-porous region.");
+            return;
+        }
+}
+
+static std::vector<int> phase_drain_nodes(const model::Project& pr, const katai::mesh::Mesh& mesh,
+                                          const PhaseIO& io, bool& any_well_active) {
+    std::vector<int> nodes;
+    any_well_active = false;
+    for (std::size_t hi = 0; hi < pr.hydros.size(); ++hi) {
+        if (io.config && !io.config->active_hydro(hi)) continue;
+        const model::HydroLine& H = pr.hydros[hi];
+        if (H.kind == model::HydroKind::Well) { any_well_active = true; continue; }
+        const auto chain = katai::mesh::collect_chain(mesh, H.x1, H.y1, H.x2, H.y2);
+        nodes.insert(nodes.end(), chain.begin(), chain.end());
+    }
+    return nodes;
+}
+
 static std::vector<char> flow_drained_nodes(const model::Project& pr, const katai::mesh::Mesh& mesh,
                                             const std::vector<char>& act, double yscale) {
     return katai::core::flow_drained_nodes(flow_edges_from(pr), any_flow_bc_declared(pr),
@@ -1788,6 +1822,16 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             }
             cin.flow_edges = flow_edges_from(pr);
             cin.have_flow_bcs = any_flow_bc_declared(pr);
+            bool well_in_phase = false;
+            cin.drain_nodes = phase_drain_nodes(pr, mesh, io, well_in_phase);
+            warn_no_flow_barrier(pr, R);
+            if (well_in_phase)
+                warn(R, "K2D-A009", "wells",
+                     "A well is active in this consolidation phase, but a consolidation analysis "
+                     "solves the EXCESS pore pressure and takes no prescribed discharge: the "
+                     "well's pumping is not applied here. PLAXIS offers wells for groundwater "
+                     "flow and fully coupled analyses. Drains, which set the excess pore pressure "
+                     "to zero, ARE applied.");
             cin.active = act;
             cin.has_structural_elements = has_interfaces || has_embedded ||
                 !structures.plates.empty() || !structures.anchors.empty() ||
@@ -1831,6 +1875,15 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             }
             fin.flow_edges = flow_edges_from(pr);
             fin.have_flow_bcs = any_flow_bc_declared(pr);
+            bool well_in_fc = false;
+            fin.drain_nodes = phase_drain_nodes(pr, mesh, io, well_in_fc);
+            warn_no_flow_barrier(pr, R);
+            if (well_in_fc)
+                warn(R, "K2D-A009", "wells",
+                     "A well is active in this fully-coupled phase. This build's coupled solver "
+                     "takes drainage boundaries and drains, but not a prescribed well discharge, "
+                     "so the well's pumping is not applied here. Run the dewatering as a "
+                     "groundwater-flow calculation, or model it with a drain at the target head.");
             fin.active = act;
             fin.has_structural_elements = has_interfaces || has_embedded ||
                 !structures.plates.empty() || !structures.anchors.empty() ||

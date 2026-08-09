@@ -310,6 +310,31 @@ check(built.materials[0].drainage == katai._core.Drainage.UndrainedC,
 check('"drainage":4' in katai.project_to_json(built), "and it reaches the file as drainage 4")
 check(katai.validate_project(built).ok, "an undrained total-stress clay validates")
 
+# --------------------------------- wells and drains, from the easy surface --
+# KV-FLW-003 verifies what they DO; this is the sentence an engineer writes to dewater
+# a pit: pump this much out of that line, and hold the head down along this one.
+prj = katai.Project("dewatering", mesh_size=2.0, auto_refine=False)
+sand = prj.materials.mohr_coulomb("Sand", E=3.0e4, nu=0.3, c=1.0, phi=32.0,
+                                  gamma=18.0, k=2.0)
+prj.geometry.rectangle(0.0, 0.0, 40.0, 8.0, material=sand, name="Aquifer",
+                       flow={"left": ("head", 10.0), "right": ("head", 10.0)})
+pump = prj.dewatering.well((20.0, 0.0), (20.0, 8.0), q=1.6, h_min=2.0, name="Pump")
+trench = prj.dewatering.drain((5.0, 6.0), (10.0, 6.0), head=6.0, name="Trench")
+prj.water.table(10.0)
+prj.initial(exclude=[pump])
+prj.phases.plastic("Dewater", activate=[pump])
+built = prj.build()
+check(len(built.hydros) == 2, "the DSL adds a well and a drain")
+check(built.hydros[0].q == 1.6 and built.hydros[0].h_min == 2.0,
+      "with the well's discharge and its floor")
+check(built.hydros[1].head == 6.0, "and the drain's head")
+check(list(built.initial.hydro_active) == [0, 1] and
+      list(built.phases[0].hydro_active) == [1, 1],
+      "and switches the well on in the phase that pumps, like any other object")
+check('"hydros":[' in katai.project_to_json(built) and '"hydro":[0,1]' in katai.project_to_json(built),
+      "both reach the file, with their per-phase activity")
+check(katai.validate_project(built).ok, "the dewatered model validates")
+
 # ------------------------------------------------- end to end: the slope RUNS --
 job_dsl = build_slope().run()
 file_prj, _ = katai.load_project(f"{CORPUS}/kv-slp-001-griffiths-lane-slope.k2d")

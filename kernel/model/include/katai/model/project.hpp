@@ -432,11 +432,12 @@ struct Phase {
     int max_iterations = 0;     // Newton iterations per increment (PLAXIS "Max iterations")
     // Active flags per project object, by index (kept in sync by the GUI; an entry missing
     // because the vector is short counts as ACTIVE -- new objects default to active).
-    std::vector<char> poly_active, struct_active, load_active, disp_active;
+    std::vector<char> poly_active, struct_active, load_active, disp_active, hydro_active;
     bool active_poly(size_t i) const { return i >= poly_active.size() || poly_active[i]; }
     bool active_struct(size_t i) const { return i >= struct_active.size() || struct_active[i]; }
     bool active_load(size_t i) const { return i >= load_active.size() || load_active[i]; }
     bool active_disp(size_t i) const { return i >= disp_active.size() || disp_active[i]; }
+    bool active_hydro(size_t i) const { return i >= hydro_active.size() || hydro_active[i]; }
 };
 
 // A soil region: an explicit polygon (drawn by the user) with a material. Classic, rock-solid:
@@ -475,6 +476,49 @@ struct PrescribedDisp {
     double coarseness = 1.0;                          // local mesh density factor (like loads)
 };
 
+// A hydraulic condition drawn INSIDE the model (PLAXIS Reference sec. 5.9 "Hydraulic
+// conditions"): a line along which water is taken out of or put into the ground. Two kinds,
+// because the ground is told two different things:
+//
+//   Well  — a DISCHARGE is prescribed: |Q| per unit time per unit width out of plane. The head
+//           is whatever that extraction produces, down to h_min, "the minimum possible head in
+//           the well. When the groundwater head reduces below the h_min level no further
+//           extraction will occur."
+//   Drain — a HEAD is prescribed: "the pore pressure in all nodes of the drain is reduced such
+//           that it is equivalent to the given head". A Normal drain only takes water away
+//           (pore pressures already below the drain's head are untouched); a Vacuum drain holds
+//           the head at its value in both directions, which is what vacuum consolidation does.
+//
+// Both are activated per phase (Phase::hydro_active), exactly like loads: dewatering is a
+// construction step, and a well that cannot be switched off after the pit is built is not one.
+// Enum values are file-stable.
+enum class HydroKind { Well = 0, Drain = 1 };
+enum class WellBehaviour { Extraction = 0, Infiltration = 1 };
+enum class DrainBehaviour { Normal = 0, Vacuum = 1 };
+
+inline const char* const* hydro_kind_names() {
+    static const char* n[] = {"Well", "Drain"};
+    return n;
+}
+inline constexpr int kHydroKindCount = 2;
+inline const char* hydro_kind_name(HydroKind k) {
+    const int i = (int)k;
+    return (i >= 0 && i < kHydroKindCount) ? hydro_kind_names()[i] : "Unknown hydraulic condition";
+}
+
+struct HydroLine {
+    std::string name = "Well";
+    HydroKind kind = HydroKind::Well;
+    int behaviour = 0;                                // WellBehaviour or DrainBehaviour by kind
+    double x1 = 0.0, y1 = 0.0, x2 = 0.0, y2 = 0.0;    // the line [m]
+    // Well: the magnitude of the discharge [m3/day per m out of plane] and the lowest head the
+    // well can draw the ground down to [m]. Drain: the head it holds [m].
+    double q = 0.0;
+    double h_min = 0.0;
+    double head = 0.0;
+    double coarseness = 1.0;   // local mesh density factor (like loads and displacements)
+};
+
 // How the initial phase establishes the in-situ stress state (the "Initial stress"
 // selector): the K0 procedure (geostatic equilibrium, the default), gravity loading
 // (switch-on self-weight, for ground where the K0 field does not equilibrate), or an
@@ -502,6 +546,7 @@ struct Project {
     std::vector<StructElement> structs;         // structural elements (Structures mode)
     std::vector<Load> loads;                    // external loads
     std::vector<PrescribedDisp> disps;          // line prescribed displacements
+    std::vector<HydroLine> hydros;              // wells and drains (hydraulic conditions)
     // Staged construction phases AFTER the initial phase (empty = classic single-phase solve).
     // phases[0] runs from the initial state, phases[k] from phases[k-1]'s committed stresses.
     std::vector<Phase> phases;

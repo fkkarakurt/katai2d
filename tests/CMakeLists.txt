@@ -179,6 +179,7 @@ if(TARGET test_tolerance_independence)
   target_compile_definitions(test_tolerance_independence PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
+katai_add_test(test_wells_drains katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-FLW-003: wells and drains (PLAXIS Ref sec. 5.9) against the Dupuit 1D closed forms -- the drawdown of a full-depth well, the discharge a drain removes, and a well limited by h_min becoming a drain at that level
 katai_add_test(test_undrained_c katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-007: Undrained (C), the total-stress analysis (MMM sec. 2.7) -- the same soil described two ways must agree, and the difference is the compressibility nu_u < 0.5 leaves behind
 katai_add_test(test_undrained_stiffness katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-006: the pore fluid's stiffness per material (MMM Eqs. 2-50/2-54/2-55/2-57) -- two undrained layers with different Kw/n, and the Hardening Soil family sized by its own unload/reload pair
 katai_add_test(test_staged_options katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-EXC-002 + KV-CST-005: the staged-construction target (Sum-Mstage) as an exact linear identity, and "ignore undrained behaviour" as the drained calculation it claims to be
