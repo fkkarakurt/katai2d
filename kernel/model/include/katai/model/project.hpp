@@ -77,6 +77,24 @@ struct Material {
     bool dilatancy_cutoff = false;
     double e_max = 1.0;
 
+    // Groundwater — stiffness of the pore fluid for Undrained (A)/(B) (PLAXIS Reference §6.1.2.17
+    // "Parameters for excess pore pressure calculation"; MMM §2.4). The bulk modulus of water is
+    // not a property of the water in PLAXIS: it is a numerical value tied to the soil stiffness,
+    // K_w/n = 3(ν_u − ν')/((1 − 2ν_u)(1 + ν')) K' (Eq. 2-50), and what the user chooses is how ν_u
+    // is arrived at. Two ways, PLAXIS's two suboptions of the ν-undrained definition:
+    //   und_mode = 0  Direct        — ν_u is entered (PLAXIS default 0.495; exactly 0.5 is singular)
+    //   und_mode = 1  Skempton-B    — B is entered and ν_u follows from Eq. 2-55 with α_Biot = 1
+    // ν_u is NOT ν_ur (the unloading/reloading ratio above) — the manual flags that confusion too.
+    // These are per material because the pore fluid's stiffness is: two clays with different ν'
+    // and different B do not share a K_w/n, and until now every undrained material in a model was
+    // given ν_u = 0.495 whatever its data said.
+    // PLAXIS's third option (the Biot effective stress concept, α_Biot < 1 with K_w entered
+    // directly) is deliberately absent: α_Biot enters the effective-stress split itself
+    // (Eq. 2-60), so honouring it in the undrained corner alone would be a half-truth.
+    int und_mode = 0;
+    double nu_u = 0.495;       // equivalent undrained Poisson ratio (und_mode = 0)
+    double skempton_B = 0.0;   // Skempton's B (und_mode = 1); 0 is refused there, never assumed
+
     // Mechanical — Hardening Soil (+ HS small) (PLAXIS MMM §6.4 / §7).
     double E50ref = 3.0e4, Eoedref = 3.0e4, Eurref = 9.0e4;
     double m = 0.5, nu_ur = 0.2, p_ref = 100.0;

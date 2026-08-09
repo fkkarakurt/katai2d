@@ -51,6 +51,7 @@ Codes in the `K2D-M…` family are about a **material parameter** the selected m
 | Code | Severity | Raised when |
 |---|---|---|
 | `K2D-M001` | warning | A **tension cut-off** is switched on for a Hardening Soil / HS-small / Soft Soil / Soft Soil Creep material. Only the Mohr–Coulomb return reads it in this build, so the run allows tension past σ_t. The schema, like PLAXIS, switches the cut-off on by default, so this is a systematic difference from the reference code in the unsafe direction. |
+| `K2D-M002` | note | An **undrained Hardening Soil / HS-small material** takes its pore-fluid stiffness from the unload/reload pair (`Eurref`, `nu_ur`) at the reference pressure. That is the model's own elasticity — the `E`/`nu` boxes it never reads no longer size the water — but it does not follow the stress-dependent E_ur(σ₃) during the run. |
 | `K2D-A001` | warning | A **linear Dynamic** phase reports the stress field as zero everywhere — the linear path never recovers it. Displacements, accelerations and structural forces are that phase's results; for stresses, run it nonlinear. |
 | `K2D-A002` | warning | A **linear Dynamic** phase carries structural elements: geogrids stay elastic, anchors do not yield, interfaces do not slip. Their capacity is not checked during the shaking. |
 | `K2D-A003` | warning | A **prescribed displacement drives a node a structure stands on**. Structural elements do not receive the imposed motion in this build, so that element's M, Q and N understate the action. |

@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["katai2d"],
   "properties": {
-    "katai2d": { "type": "integer", "minimum": 1, "maximum": 8 },
+    "katai2d": { "type": "integer", "minimum": 1, "maximum": 9 },
     "name": { "type": "string" },
     "axisymmetric": { "type": "boolean" },
     "initial_procedure": { "type": "integer", "minimum": 0, "maximum": 2 },
@@ -87,6 +87,9 @@
         "mustar": { "type": "number" },
         "kx": { "type": "number" },
         "ky": { "type": "number" },
+        "und_mode": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "nu_u": { "type": "number" },
+        "skempton_B": { "type": "number" },
         "gw_ga": { "type": "number" },
         "gw_gn": { "type": "number" },
         "gw_gl": { "type": "number" },

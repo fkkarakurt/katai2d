@@ -60,7 +60,14 @@ namespace katai::model {
 // half-applied excavation lift would be reported as a completed one (unsafe -- the wall carries
 // the full stage in the file but not in the run), and a phase asked to ignore undrained
 // behaviour would generate excess pore pressures the author excluded on purpose.
-inline constexpr int kProjectFileVersion = 8;
+//
+// v9 (2026-08): the PER-MATERIAL UNDRAINED STIFFNESS (`materials[].und_mode`, `nu_u`,
+// `skempton_B`). An older build reads none of them and solves every undrained material at
+// nu_u = 0.495 -- the value PLAXIS uses when the user says nothing, applied to a user who said
+// something. A clay entered with a measured Skempton B of 0.90 would be run at 0.978, generating
+// more excess pore pressure and less effective stress than the file describes, silently and in
+// whichever direction the case happens to be sensitive to.
+inline constexpr int kProjectFileVersion = 9;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -406,6 +413,8 @@ inline std::string project_to_json(const Project& p) {
         wfield(o, "lamstar", m.lam_star); wfield(o, "kapstar", m.kap_star);
         wfield(o, "mustar", m.mu_star);
         wfield(o, "kx", m.kx); wfield(o, "ky", m.ky);
+        wfield(o, "und_mode", (double)m.und_mode);
+        wfield(o, "nu_u", m.nu_u); wfield(o, "skempton_B", m.skempton_B);
         wfield(o, "gw_ga", m.gw_ga); wfield(o, "gw_gn", m.gw_gn);
         wfield(o, "gw_gl", m.gw_gl); wfield(o, "gw_Sres", m.gw_Sres);
         wfield(o, "rinter_rigid", m.rinter_rigid); wfield(o, "Rinter", m.Rinter);
@@ -629,6 +638,21 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             m.lam_star = j.num("lamstar", m.lam_star); m.kap_star = j.num("kapstar", m.kap_star);
             m.mu_star = j.num("mustar", m.mu_star);
             m.kx = j.num("kx", m.kx); m.ky = j.num("ky", m.ky);
+            // Undrained stiffness definition: 0 = nu_u direct, 1 = Skempton-B based. An
+            // unrecognised value must not land on 0 in silence -- that is the reading that
+            // solves at 0.495 whatever the file says, which is what the v9 bump exists to stop.
+            const int undv = (int)j.num("und_mode", m.und_mode);
+            m.und_mode = (undv == 0 || undv == 1) ? undv : 0;
+            if (notes && !(undv == 0 || undv == 1))
+                notes->push_back({katai::io::Severity::Error,
+                                  "materials[" + std::to_string(p.materials.size()) + "].und_mode",
+                                  "\"" + m.name + "\": unknown undrained stiffness definition " +
+                                      std::to_string(undv) +
+                                      " (this build knows 0 = nu_u direct, 1 = Skempton B); "
+                                      "loaded for display as nu_u direct -- do not solve with "
+                                      "this file"});
+            m.nu_u = j.num("nu_u", m.nu_u);
+            m.skempton_B = j.num("skempton_B", m.skempton_B);
             m.gw_ga = j.num("gw_ga", m.gw_ga); m.gw_gn = j.num("gw_gn", m.gw_gn);
             m.gw_gl = j.num("gw_gl", m.gw_gl); m.gw_Sres = j.num("gw_Sres", m.gw_Sres);
             m.rinter_rigid = j.flag("rinter_rigid", m.rinter_rigid);

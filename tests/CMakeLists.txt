@@ -179,6 +179,7 @@ if(TARGET test_tolerance_independence)
   target_compile_definitions(test_tolerance_independence PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
+katai_add_test(test_undrained_stiffness katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-006: the pore fluid's stiffness per material (MMM Eqs. 2-50/2-54/2-55/2-57) -- two undrained layers with different Kw/n, and the Hardening Soil family sized by its own unload/reload pair
 katai_add_test(test_staged_options katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-EXC-002 + KV-CST-005: the staged-construction target (Sum-Mstage) as an exact linear identity, and "ignore undrained behaviour" as the drained calculation it claims to be
 katai_add_test(test_phase_numerics katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-NUM-008: the per-phase numerical controls (.k2d v7) must REACH the solver -- file == seam, and both != default, so a reviewer receives the numerics a published run was computed with
 if(TARGET test_phase_numerics)

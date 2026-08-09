@@ -113,6 +113,16 @@ struct MaterialModel {
     // 0.495; exactly 0.5 is singular).
     bool undrained = false;
     double undrained_poisson = 0.495;  // nu_u
+    // The EFFECTIVE elastic pair the pore-fluid derivation uses, when it is not (E, nu).
+    // Zero = derive from youngs_modulus / poisson_ratio, which is what Linear Elastic and
+    // Mohr-Coulomb want -- and it keeps a depth gradient E'_inc flowing into Kw/n, since the
+    // caller hands this struct a per-Gauss copy with the profiled modulus already in place.
+    // The Hardening Soil family sets it: that model's elasticity is the unload/reload pair
+    // (Eur_ref, nu_ur), while E and nu are boxes it never reads. Deriving the pore fluid's
+    // stiffness from those boxes gave an undrained HS soil a water stiffness sized by a
+    // default the user never entered -- typically a factor of several, in whichever direction
+    // the untouched field happened to sit.
+    double undrained_E_ref = 0.0, undrained_nu_ref = 0.0;
 
     // Hardening Soil parameters (used when type == HardeningSoil). Compression-positive
     // internally; the FE wrapper converts (sigma_HS = -sigma_solver). See
@@ -149,12 +159,23 @@ struct MaterialModel {
 
     // Undrained (A) pore-fluid bulk stiffness Kw/n from the EFFECTIVE parameters and
     // an assumed undrained Poisson ratio (PLAXIS default nu_u = 0.495; exactly 0.5
-    // makes the stiffness singular). Derived so that K' + Kw/n = the correct
-    // undrained bulk modulus Ku (see effective-stress-formulation.md).
+    // makes the stiffness singular). MMM Eq. 2-50. Derived so that K' + Kw/n = the
+    // correct undrained bulk modulus Ku (see effective-stress-formulation.md).
     double kw_over_n(double nu_u) const {
-        const double v = poisson_ratio;
-        const double k_eff = youngs_modulus / (3.0 * (1.0 - 2.0 * v));  // K'
+        const bool own = undrained_E_ref > 0.0;   // the model carries its own elastic pair
+        const double e = own ? undrained_E_ref : youngs_modulus;
+        const double v = own ? undrained_nu_ref : poisson_ratio;
+        const double k_eff = e / (3.0 * (1.0 - 2.0 * v));  // K'
         return 3.0 * (nu_u - v) / ((1.0 - 2.0 * nu_u) * (1.0 + v)) * k_eff;
+    }
+
+    // K' as the pore-fluid derivation sees it -- the denominator of Skempton's B and the
+    // number a GUI or a report needs to show Kw/n as a multiple of the skeleton stiffness.
+    double undrained_k_eff() const {
+        const bool own = undrained_E_ref > 0.0;
+        const double e = own ? undrained_E_ref : youngs_modulus;
+        const double v = own ? undrained_nu_ref : poisson_ratio;
+        return e / (3.0 * (1.0 - 2.0 * v));
     }
 
     // Undrained (A) plane-strain stiffness D_u = D' + (Kw/n) m m^T, m = [1,1,0]:
@@ -179,6 +200,31 @@ struct MaterialModel {
         return d;
     }
 };
+
+// --- The undrained stiffness trio (PLAXIS MMM section 2.4, alpha_Biot = 1) -------------------
+// Three quantities describe the same pore fluid and the manual gives one equation for each:
+//   Kw/n  from nu_u        Eq. 2-50, MaterialModel::kw_over_n above
+//   nu_u  from Skempton B  Eq. 2-55, undrained_poisson_from_skempton
+//   B     from Kw/n        Eq. 2-57, skempton_from_kw_over_n
+// They are mutually consistent -- going round the ring returns the number it started from, which
+// is what test_undrained_stiffness measures rather than assumes. Which one the USER supplies is
+// the choice PLAXIS offers (nu-undrained definition: Direct or Skempton-B based); the other two
+// are then derived and are worth showing, because a B of 0.98 and a Kw/n of 45 K' are the same
+// statement and an engineer recognises one of them.
+
+// Eq. 2-55 with alpha_Biot = 1: nu_u = (3 nu' + B (1 - 2 nu')) / (3 - B (1 - 2 nu')).
+// B -> 1 gives exactly 0.5 (incompressible, singular), so the caller must keep B < 1.
+inline double undrained_poisson_from_skempton(double B, double nu_eff) {
+    const double t = B * (1.0 - 2.0 * nu_eff);
+    return (3.0 * nu_eff + t) / (3.0 - t);
+}
+
+// Eq. 2-57 with alpha_Biot = 1: B = 1 / (1 + n K'/Kw), written on the quantity the engine
+// actually carries -- B = (Kw/n) / (K' + Kw/n) = (Kw/n) / Ku. The porosity cancels because
+// Kw and n only ever enter as the ratio; PLAXIS's own input box is Kw,ref / n for that reason.
+inline double skempton_from_kw_over_n(double kw_over_n, double k_eff) {
+    return kw_over_n / (k_eff + kw_over_n);
+}
 
 // Frozen unload/reload modulus Eur for the HS forward update: stress-dependent Eur(sigma3)
 // evaluated at the committed minor principal (compression-positive), clamped at hs_integrate's

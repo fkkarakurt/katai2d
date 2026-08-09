@@ -27,6 +27,7 @@
 #include <katai/io/project_io.hpp>
 #include <katai/io/results_io.hpp>
 #include <katai/io/validate.hpp>
+#include <katai/materials/material_model.hpp>   // the undrained-stiffness conversions (MMM 2.4)
 #include <katai/jobs/job.hpp>
 #include <katai/linsolve/direct_solver.hpp>   // backend_name(): result provenance
 
@@ -90,6 +91,34 @@ using app::SolveResult;
 // made against the MESH, which the input contract (validated before meshing) cannot see.
 using app::Diagnostic;
 using app::DiagnosticSeverity;
+
+// -- derived input ---------------------------------------------------------------------
+// What a material's undrained stiffness inputs MEAN, computed the way the solve computes
+// them (PLAXIS MMM section 2.4). This is not solver state: it is the reading of an input,
+// and a front end that lets an engineer type nu_u or Skempton's B has to be able to show
+// the other two numbers, because they are the same statement in the units the engineer
+// happens to think in. Whichever of the two was entered, all four fields come back filled.
+struct UndrainedStiffness {
+    double k_eff = 0.0;    // K' of the effective elastic pair the material's model reads
+    double nu_u = 0.0;     // equivalent undrained Poisson ratio (Eq. 2-55 when B was entered)
+    double kw_over_n = 0.0;  // pore-fluid bulk stiffness (Eq. 2-50) [kN/m2]
+    double skempton_B = 0.0; // Skempton's B (Eq. 2-57)
+};
+inline UndrainedStiffness undrained_stiffness(const Material& m) {
+    // The Hardening Soil family's elasticity is the unload/reload pair; E and nu are boxes
+    // it never reads. The same choice the constitutive catalogue makes when it builds Kw/n.
+    const bool hs = m.model == SoilModel::HardeningSoil || m.model == SoilModel::HSsmall;
+    const double E = hs ? m.Eurref : m.E;
+    const double nu = hs ? m.nu_ur : m.nu;
+    UndrainedStiffness r;
+    if (!(E > 0.0) || !(nu > -1.0 && nu < 0.5)) return r;
+    r.k_eff = E / (3.0 * (1.0 - 2.0 * nu));
+    r.nu_u = m.und_mode == 1 ? core::undrained_poisson_from_skempton(m.skempton_B, nu) : m.nu_u;
+    if (!(r.nu_u < 0.5)) return r;
+    r.kw_over_n = 3.0 * (r.nu_u - nu) / ((1.0 - 2.0 * r.nu_u) * (1.0 + nu)) * r.k_eff;
+    r.skempton_B = core::skempton_from_kw_over_n(r.kw_over_n, r.k_eff);
+    return r;
+}
 
 // -- provenance -----------------------------------------------------------------------
 // The linear-solver backend actually linked into this program (never what the build

@@ -40,7 +40,14 @@ MaterialModel common_fields(const MaterialParams& p) {
     mm.e_max = p.e_max;
     if (is_undrained(p)) {
         mm.undrained = true;
-        mm.undrained_poisson = 0.495;
+        // The equivalent undrained Poisson ratio: entered directly, or derived from Skempton's
+        // B (MMM Eq. 2-55). It used to be the constant 0.495 for every material in every model,
+        // which is PLAXIS's DEFAULT rather than its rule -- a soil with a measured B of 0.90 was
+        // silently solved at B = 0.978, and the two differ by more than the excess pore pressure
+        // a designer would call negligible.
+        mm.undrained_poisson = p.skempton_mode
+                                   ? undrained_poisson_from_skempton(p.skempton_B, p.nu)
+                                   : p.nu_u;
     }
     return mm;
 }
@@ -101,6 +108,18 @@ MaterialModel build_hs_core(const MaterialParams& p) {
     h.dilatancy = p.psi_rad;
     h.Rf = p.Rf;
     h.nu_ur = p.nu_ur;
+    // The pore fluid follows THIS model's elasticity. Hardening Soil's elastic pair is
+    // (Eur_ref, nu_ur); E and nu belong to the Linear-elastic/Mohr-Coulomb boxes, which an HS
+    // data set never fills and the HS integrator never reads. Until this line existed, an
+    // undrained HS material was given Kw/n = f(E_box, nu_box) -- a pore fluid sized by a
+    // default, on the model most likely to be used for soft clay. nu' also enters Skempton's
+    // conversion, so a B entered by the user has to be re-resolved against nu_ur.
+    if (mm.undrained) {
+        mm.undrained_E_ref = p.Eur_ref;
+        mm.undrained_nu_ref = p.nu_ur;
+        if (p.skempton_mode)
+            mm.undrained_poisson = undrained_poisson_from_skempton(p.skempton_B, p.nu_ur);
+    }
     return mm;
 }
 

@@ -273,6 +273,29 @@ check('"mstage":0.5' in katai.project_to_json(built)
       and '"ignoreund":true' in katai.project_to_json(built),
       "both reach the file, where a reviewer can see them")
 
+# ------------------------------- the pore fluid's stiffness, from the easy surface --
+# KV-CST-006 verifies what these DO; this is how an engineer with a measured Skempton B
+# says so instead of accepting PLAXIS's 0.495 for a soil that was never asked about.
+prj = katai.Project("undrained stiffness", mesh_size=2.0, auto_refine=False)
+soft = prj.materials.mohr_coulomb("Soft clay", E=5000.0, nu=0.3, c=20.0, phi=25.0,
+                                  gamma=17.0, drainage="undrained_a",
+                                  und_mode=1, skempton_B=0.9)
+stiff = prj.materials.mohr_coulomb("Stiff clay", E=5.0e4, nu=0.25, c=60.0, phi=25.0,
+                                   gamma=19.0, drainage="undrained_a", nu_u=0.498)
+prj.geometry.rectangle(0.0, 0.0, 10.0, 3.0, material=soft, name="Soft")
+prj.geometry.rectangle(0.0, 3.0, 10.0, 6.0, material=stiff, name="Stiff")
+prj.initial()
+built = prj.build()
+check(built.materials[0].und_mode == 1 and built.materials[0].skempton_B == 0.9,
+      "the DSL sets Skempton's B on one material")
+check(built.materials[1].nu_u == 0.498,
+      "and the equivalent undrained Poisson ratio on the other")
+check('"und_mode":1' in katai.project_to_json(built)
+      and '"skempton_B":0.9' in katai.project_to_json(built)
+      and '"nu_u":0.498' in katai.project_to_json(built),
+      "all three reach the file, per material")
+check(katai.validate_project(built).ok, "two differently-watered clays validate")
+
 # ------------------------------------------------- end to end: the slope RUNS --
 job_dsl = build_slope().run()
 file_prj, _ = katai.load_project(f"{CORPUS}/kv-slp-001-griffiths-lane-slope.k2d")

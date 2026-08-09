@@ -161,6 +161,14 @@ NB_MODULE(_core, m) {
         .def_rw("mu_star", &api::Material::mu_star)
         .def_rw("kx", &api::Material::kx, "permeability x [m/day]")
         .def_rw("ky", &api::Material::ky, "permeability y [m/day]")
+        .def_rw("und_mode", &api::Material::und_mode,
+                "undrained stiffness definition: 0 = nu_u entered, 1 = Skempton's B "
+                "(PLAXIS MMM section 2.4); read for Undrained (A)/(B) only")
+        .def_rw("nu_u", &api::Material::nu_u,
+                "equivalent undrained Poisson ratio (und_mode = 0; PLAXIS default 0.495)")
+        .def_rw("skempton_B", &api::Material::skempton_B,
+                "Skempton's B (und_mode = 1): the share of a mean stress change carried "
+                "by the pore water")
         .def_rw("gw_ga", &api::Material::gw_ga)
         .def_rw("gw_gn", &api::Material::gw_gn)
         .def_rw("gw_gl", &api::Material::gw_gl)

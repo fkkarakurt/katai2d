@@ -396,7 +396,63 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
                       ")");
     }
 
-    // -- Groundwater -----------------------------------------------------------
+    // -- Groundwater: the pore fluid's stiffness (PLAXIS MMM section 2.4) ------
+    // Kw/n = 3(nu_u - nu')/((1 - 2 nu_u)(1 + nu')) K' is positive only for nu' < nu_u < 0.5.
+    // Outside that window the "water" would either soften the skeleton or make the stiffness
+    // matrix singular, and both are silent in a converged-looking run.
+    {
+        const bool und = m.drainage == Drainage::Undrained || m.drainage == Drainage::UndrainedB;
+        // nu' is the model's own effective ratio: nu_ur for the Hardening Soil family, nu for
+        // the rest -- the same choice the registry makes when it builds Kw/n.
+        const double nu_eff = hs ? m.nu_ur : m.nu;
+        if (m.und_mode != 0 && m.und_mode != 1)
+            r.add(Severity::Error, path("und_mode"),
+                  who + "unknown undrained stiffness definition " + std::to_string(m.und_mode) +
+                      "; this build knows 0 (nu_u entered directly) and 1 (Skempton's B)");
+        else if (und && m.und_mode == 0) {
+            if (!(m.nu_u < 0.5))
+                r.add(Severity::Error, path("nu_u"),
+                      who + "the equivalent undrained Poisson's ratio must be below 0.5; at 0.5 "
+                            "the undrained material is fully incompressible and the stiffness "
+                            "matrix is singular (got " + num(m.nu_u) + ")");
+            else if (!(m.nu_u > nu_eff))
+                r.add(Severity::Error, path("nu_u"),
+                      who + "the equivalent undrained Poisson's ratio must exceed the effective "
+                            "one, otherwise the pore fluid's stiffness Kw/n is zero or negative "
+                            "and the water would soften the soil (got nu_u = " + num(m.nu_u) +
+                          ", nu' = " + num(nu_eff) + ")");
+            else if (m.nu_u > 0.4999)
+                r.add(Severity::Warning, path("nu_u"),
+                      who + "nu_u = " + num(m.nu_u) + " is very close to 0.5: Kw/n exceeds "
+                            "5000 K' and the stiffness matrix becomes ill-conditioned "
+                            "(PLAXIS's default is 0.495)");
+        } else if (und && m.und_mode == 1) {
+            if (!(m.skempton_B > 0.0 && m.skempton_B < 1.0))
+                r.add(Severity::Error, path("skempton_B"),
+                      who + "Skempton's B must lie in (0, 1); B = 1 is the fully incompressible "
+                            "pore fluid, which makes nu_u exactly 0.5 and the stiffness matrix "
+                            "singular (got " + num(m.skempton_B) + ")");
+            else if (m.skempton_B > 0.999)
+                r.add(Severity::Warning, path("skempton_B"),
+                      who + "B = " + num(m.skempton_B) + " puts nu_u within 1e-4 of 0.5; the "
+                            "system becomes ill-conditioned (PLAXIS's default corresponds to "
+                            "B slightly below 0.98)");
+        }
+        // The manual's own condition for the derivation to mean anything: Kw must be large
+        // against n K', "sufficiently ensured by requiring nu' <= 0.35" (MMM section 2.4).
+        if (und && nu_eff > 0.35)
+            r.add(Severity::Warning, path(hs ? "nu_ur" : "nu"),
+                  who + "an undrained analysis wants nu' <= 0.35 so that the pore fluid stays "
+                        "stiff against the skeleton (Kw >> n K'); this material has nu' = " +
+                      num(nu_eff));
+        // Entered but not read: the same rule the tension cut-off follows.
+        if (!und && (m.und_mode != 0 || m.nu_u != 0.495 || m.skempton_B != 0.0))
+            r.add(Severity::Warning, path("und_mode"),
+                  who + "the undrained stiffness parameters (nu_u / Skempton's B) are read only "
+                        "for Undrained (A) and Undrained (B) materials; this one is " +
+                      std::string(model::drainage_name(m.drainage)));
+    }
+
     if (m.kx < 0.0 || m.ky < 0.0)
         r.add(Severity::Error, path(m.kx < 0.0 ? "kx" : "ky"),
               who + "permeability cannot be negative (got kx = " + num(m.kx) + ", ky = " +

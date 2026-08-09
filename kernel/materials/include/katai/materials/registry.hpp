@@ -64,6 +64,13 @@ struct MaterialParams {
     bool k0nc_auto = true;
     double k0nc = 0.0;
 
+    // Pore-fluid stiffness for Undrained (A)/(B) (MMM section 2.4). Either the equivalent
+    // undrained Poisson ratio is given directly (skempton_mode = false, PLAXIS default 0.495)
+    // or Skempton's B is, and nu_u follows from Eq. 2-55. Kw/n comes from Eq. 2-50 either way.
+    bool skempton_mode = false;
+    double nu_u = 0.495;
+    double skempton_B = 0.0;
+
     DrainageClass drainage = DrainageClass::Drained;
 };
 

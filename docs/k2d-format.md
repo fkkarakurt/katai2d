@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **8** · Current `.res` version: **5**
+Current `.k2d` version: **9** · Current `.res` version: **5**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -16,8 +16,10 @@ per-phase water conditions (`phases[i].water_override`, `wx`, `wy`), **v5**
 the dilatancy cut-off (`materials[i].dilatancy_cutoff`, `e_max`), **v6** the prescribed
 boundary flux (`polygons[i].edge_flux`, and `3` in `edge_flow`) and **v7** the per-phase
 numerical controls (`tol`, `loadsteps`, `maxiter`), so that a published run carries the
-numerics it was computed with, and **v8** the staged-construction target and the undrained
-switch (`mstage`, `ignoreund`). Every bump
+numerics it was computed with, **v8** the staged-construction target and the undrained
+switch (`mstage`, `ignoreund`) and **v9** the per-material undrained stiffness
+(`materials[i].und_mode`, `nu_u`, `skempton_B`), which an older build would replace with
+PLAXIS's default of 0.495 for every undrained material in the file. Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
 than one that was tensioned against it -- so it must refuse the file instead.
@@ -82,7 +84,7 @@ flagged places differs from the in-memory default of a freshly created object.
 
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
-| `katai2d` | int | — | *required* | Format version; this build writes 8 |
+| `katai2d` | int | — | *required* | Format version; this build writes 9 |
 | `name` | str | — | `"Untitled project"` | Project display name |
 | `axisymmetric` | bool | — | `false` | `false` = plane strain; `true` = axisymmetric (x is the radius, x = 0 the symmetry axis) |
 | `initial_procedure` | int | — | `0` | How the initial phase establishes the in-situ state: 0 K0 procedure, 1 Gravity loading, 2 Safety (φ-c reduction of the gravity state; intended for single-phase runs) |
@@ -153,6 +155,9 @@ flagged places differs from the in-memory default of a freshly created object.
 | `mustar` | num | — | `0.005` | Soft Soil Creep: modified creep index μ* |
 | `kx` | num | m/day | `1` | Horizontal permeability |
 | `ky` | num | m/day | `1` | Vertical permeability |
+| `und_mode` | int | — | `0` | How the pore fluid's stiffness is defined for Undrained (A)/(B): 0 = `nu_u` entered, 1 = Skempton's `skempton_B` (PLAXIS MMM §2.4) |
+| `nu_u` | num | — | `0.495` | Equivalent undrained Poisson ratio (read when `und_mode` = 0); must satisfy ν' < ν_u < 0.5 |
+| `skempton_B` | num | — | `0` | Skempton's B (read when `und_mode` = 1); must lie in (0, 1) |
 | `gw_ga` | num | 1/m | `14.5` | van Genuchten g_a (inverse air-entry) |
 | `gw_gn` | num | — | `2.68` | van Genuchten g_n (> 1) |
 | `gw_gl` | num | — | `0.5` | Mualem pore-connectivity g_l |

@@ -98,7 +98,11 @@ class _Materials:
     """``prj.materials`` -- one constructor per constitutive model, named as in the
     registry. Common ground parameters: ``gamma`` [kN/m3] above water (``gamma_sat``
     defaults to it), ``k`` [m/day] isotropic permeability (or ``kx``/``ky``),
-    ``drainage`` in {"drained", "undrained_a", "undrained_b", "non_porous"}."""
+    ``drainage`` in {"drained", "undrained_a", "undrained_b", "non_porous"}.
+
+    For an undrained material the pore fluid's stiffness Kw/n follows the equivalent
+    undrained Poisson ratio ``nu_u`` (default 0.495, as in PLAXIS), or Skempton's B if
+    ``und_mode=1, skempton_B=...`` is given instead. Both are per material."""
 
     def __init__(self, prj):
         self._prj = prj

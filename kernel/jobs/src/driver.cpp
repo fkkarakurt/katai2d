@@ -317,6 +317,9 @@ katai::core::MaterialParams to_material_params(const model::Material& m) {
     p.mu_star = m.mu_star;
     p.k0nc_auto = m.k0nc_auto;
     p.k0nc = m.k0nc;
+    p.skempton_mode = (m.und_mode == 1);
+    p.nu_u = m.nu_u;
+    p.skempton_B = m.skempton_B;
     switch (m.drainage) {
         case model::Drainage::Drained:    p.drainage = katai::core::DrainageClass::Drained; break;
         case model::Drainage::Undrained:  p.drainage = katai::core::DrainageClass::UndrainedA; break;
@@ -382,6 +385,20 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                      "reads it in this build: the run allows tension beyond sigma_t = " +
                      dnum(m.tensile_strength) +
                      " kPa. Use Mohr-Coulomb where the cut-off governs the answer.");
+        // The pore fluid of a Hardening Soil material is sized at the REFERENCE unload/reload
+        // stiffness. That is the model's own elastic pair -- not the unread E box it used to be
+        // read from -- but HS stiffness is stress-dependent, so a soil far from p_ref carries a
+        // Kw/n that a stress-dependent derivation would not give it. Said out loud rather than
+        // left to be discovered from the pore pressures.
+        if (models.back().undrained && entry->hardening_family)
+            note(R, "K2D-M002", m.name,
+                 "The pore-fluid stiffness of \"" + m.name +
+                     "\" is derived from the unload/reload pair (Eur_ref = " + dnum(m.Eurref) +
+                     " kPa, nu_ur = " + dnum(m.nu_ur) +
+                     "), the Hardening Soil model's own elastic constants, evaluated at the "
+                     "reference pressure. It does not follow the stress-dependent Eur(sigma3) "
+                     "during the run, so far from p_ref the excess pore pressure is that of a "
+                     "reference-stiffness pore fluid.");
         nonlinear_soil |= entry->nonlinear;
         has_hardening |= entry->hardening_family;
         has_softsoil |= entry->softsoil_family;
