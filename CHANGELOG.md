@@ -4,6 +4,28 @@ All notable changes to KATAI 2D. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 MAJOR.MINOR.PATCH.
 
+## [0.7.1] - 2026-08-09
+
+Packaging release. No engine change: the same solver, the same results, the same
+verification record.
+
+### Fixed
+
+- The Windows executable carries its identity. It shipped with an empty version
+  resource -- no product name, no version, no publisher, no copyright -- which is
+  poor practice on its own and, on an unsigned and newly published binary, is
+  also what a reputation heuristic reads as "anonymous": Microsoft Defender
+  flagged `katai2d-0.7.0-win64.zip` as `Trojan:Win32/Wacatac.B!ml`, a generic
+  machine-learning label, and removed the file. The executable now declares its
+  product name, version, publisher, copyright and origin, generated from
+  `version.hpp` so it cannot drift from what `katai info` prints. The rebuilt
+  binary scans clean.
+
+  This is a mitigation, not a guarantee, and the honest statement of the
+  situation is in the README: an unsigned binary from a young project has no
+  reputation, the published SHA-256 is how you verify what you downloaded, and
+  the Python wheel -- which was never flagged -- is the alternative route.
+
 ## [0.7.0] — 2026-08-09
 
 Capability release. Ten inputs a geotechnical model needs, and could not

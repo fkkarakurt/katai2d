@@ -32,7 +32,7 @@ anywhere.
 it from [Releases](https://github.com/fkkarakurt/katai2d/releases):
 
 ```powershell
-pip install katai2d-0.7.0-cp312-abi3-win_amd64.whl
+pip install katai2d-0.7.1-cp312-abi3-win_amd64.whl
 ```
 
 The wheel ships the `katai` package *and* the same `katai` command line —
@@ -43,6 +43,30 @@ PyPI is planned for the announcement.
 Both artifacts are verified the way the source tree is: before they leave
 the build they must reproduce the corpus numbers in a clean environment
 (`scripts/package_cli.ps1`, `scripts/build_wheel.ps1`).
+
+### If Windows warns about the download
+
+The Windows executable is **not code-signed**, and it is published by a young
+project, so it has no reputation with Microsoft SmartScreen or Defender. That
+combination can produce a generic machine-learning verdict — v0.7.0 was flagged
+as `Trojan:Win32/Wacatac.B!ml`, a label Defender applies to unknown unsigned
+binaries rather than to any identified malware. It is a false positive, and it
+is being addressed rather than argued with: since v0.7.1 the executable carries
+its full version and publisher information, the detection is reported to
+Microsoft, and code signing is on the roadmap.
+
+You do not have to take that on trust. Verify what you downloaded against the
+checksum published with the release:
+
+```powershell
+(Get-FileHash .\katai2d-<version>-win64.zip -Algorithm SHA256).Hash.ToLower()
+# compare with katai2d-<version>-win64.zip.sha256 from the same release
+```
+
+and, if you want an independent opinion, upload the file to VirusTotal — it is
+a public release asset, so nothing private is disclosed by doing so. The Python
+wheel has never been flagged and is the alternative route:
+`pip install katai2d-<version>-cp312-abi3-win_amd64.whl`.
 
 ## Capabilities
 

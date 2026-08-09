@@ -1,0 +1,43 @@
+// Windows VERSIONINFO resource for the command-line executable (configured by CMake from
+// <katai/api/version.hpp>, so the binary and the program agree by construction).
+//
+// Why a binary carries this at all: an executable on a stranger's machine should be able to
+// say what it is, who published it and which version it is, without being run. Explorer's
+// Properties tab, an IT department's inventory and a support ticket all read these fields, and
+// a file that answers none of them is indistinguishable from an anonymous one. Reputation
+// systems weigh that too -- an unsigned, low-prevalence binary with no identity at all is the
+// easiest thing in the world for a generic heuristic to flag.
+//
+// This is NOT a substitute for code signing. It is the part that costs nothing.
+
+#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     @KATAI_VER_MAJOR@,@KATAI_VER_MINOR@,@KATAI_VER_PATCH@,0
+PRODUCTVERSION  @KATAI_VER_MAJOR@,@KATAI_VER_MINOR@,@KATAI_VER_PATCH@,0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0x0L
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"   // U.S. English, Unicode
+        BEGIN
+            VALUE "CompanyName",      "Fatih Kucukkarakurt"
+            VALUE "FileDescription",  "KATAI 2D command line -- geotechnical finite element analysis"
+            VALUE "FileVersion",      "@KATAI_VERSION@"
+            VALUE "InternalName",     "katai"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Fatih Kucukkarakurt. Apache License 2.0."
+            VALUE "OriginalFilename", "katai.exe"
+            VALUE "ProductName",      "KATAI 2D"
+            VALUE "ProductVersion",   "@KATAI_VERSION@"
+            VALUE "Comments",         "Open source: https://github.com/fkkarakurt/katai2d"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
