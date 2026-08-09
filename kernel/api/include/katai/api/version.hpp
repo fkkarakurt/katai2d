@@ -7,7 +7,7 @@
 // record that covers it. The identity lives in the published facade because every front end needs
 // it -- a version only the GUI could read was the bug in the making this move removes.
 //
-// Scheme: MAJOR.MINOR.PATCH per the release gates in docs/internal/ROADMAP.md sec 4 ("-dev" while the
+// Scheme: MAJOR.MINOR.PATCH per the project's release gates ("-dev" while the
 // gate's checklist is open; drop it in the gate-closing commit, which also updates kVersionDate).
 
 namespace katai::api {

@@ -1439,7 +1439,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // expected discretisation. What is NOT expected is a point off the soil altogether: the
         // nearest-node search always succeeds, so such a load used to be relocated to whatever
         // node happened to be closest, however far, and the run reported success for a model the
-        // engineer never drew (docs/internal/HARDENING-PLAN.md, WP-1).
+        // engineer never drew. An input may be used differently from the way it was written, but
+        // never in silence -- see docs/diagnostics.md for the codes that rule.
         //
         // The two questions are answered by two different instruments, on purpose. "Is the load
         // on the soil?" is geometry, answered exactly by locating the containing element -- no
@@ -1486,7 +1487,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // The mesher adds every distributed load line as a mesh constraint, so a line that
             // does not come back as an edge chain is not on the soil -- it was drawn above the
             // surface, outside the model, or across a hole. Refused: the alternative is a phase
-            // that runs unloaded and reports "ok" (docs/internal/HARDENING-PLAN.md, WP-1).
+            // that runs unloaded and reports "ok" (docs/diagnostics.md, the refusal rule).
             if (cs < npe || (cs - 1) % (npe - 1) != 0) {
                 refuse(R, "K2D-G003", lsub,
                        "Distributed load \"" + L.name + "\" from (" + dnum(L.x1) + ", " +
