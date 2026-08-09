@@ -1930,6 +1930,24 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             }
             tin.flow_edges = flow_edges_from(pr);
             tin.active = act;
+            // Wells and drains in a TRANSIENT flow phase: refused by name rather than dropped.
+            // This solver takes a prescribed-head boundary set and no source term, so a well's
+            // discharge has nowhere to enter and a NORMAL drain's one-sided rule ("pore pressures
+            // lower than the equivalent head are not affected") cannot be re-evaluated as the
+            // head moves through the time steps -- applying it as a plain fixed head would let a
+            // drain FEED water into ground that is drier than it, which is the opposite of what
+            // a drain does. PLAXIS applies both here; this build does not yet, and says so.
+            for (std::size_t hi = 0; hi < pr.hydros.size(); ++hi) {
+                if (io.config && !io.config->active_hydro(hi)) continue;
+                const model::HydroLine& H = pr.hydros[hi];
+                R.message = std::string(model::hydro_kind_name(H.kind)) + " \"" + H.name +
+                            "\" is active in a transient flow phase, which this build cannot "
+                            "solve with it: the transient solver takes prescribed heads and no "
+                            "discharge, and a drain's one-sided rule is not re-evaluated as the "
+                            "head moves. Run the dewatering as a steady groundwater-flow "
+                            "calculation (both are exact there), or deactivate it in this phase.";
+                return R;
+            }
             tin.fallback_head.resize(mesh.node_count);
             for (int n = 0; n < mesh.node_count; ++n)
                 tin.fallback_head[n] = pr.has_water ? water_table_at(pr, mesh.x[n], io.config) : mesh.y[n];

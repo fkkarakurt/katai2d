@@ -6,6 +6,7 @@
 
 #include <katai/analysis/seepage.hpp>
 #include <katai/fem/assembly/dof_map.hpp>
+#include <katai/fem/elements/point_location.hpp>  // locate_point (which layer a well edge is in)
 #include <katai/mesh/boundary_extraction.hpp>   // collect_chain (flux-edge node chains)
 #include <katai/linsolve/direct_solver.hpp>
 
@@ -145,30 +146,54 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
                 level.push_back({n, H.head, true, vacuum, hi});
         } else {
             any_well = true;
-            // The discharge is spread along the line. PLAXIS distributes it over the layers a well
-            // crosses "as a function of the saturated permeability and the intersected depth"; this
-            // build spreads it by length alone, which is the same statement for a well inside one
-            // material and is said out loud when it is not.
+            // How the discharge is spread along the line. PLAXIS: "When a well intersects
+            // multiple soil layers the prescribed flux for each soil layer is a function of the
+            // saturated permeability and the intersected depth" -- water comes out of the layers
+            // that can deliver it. Each edge of the chain therefore carries a share proportional
+            // to (k_n x its length), k_n being the permeability of the element it lies in,
+            // resolved NORMAL to the well (which is the direction the water arrives from, and
+            // reduces to k_x for the usual vertical well). Inside one material every share is
+            // equal and the result is the uniform spread, exactly as before.
             const double len = std::hypot(H.x2 - H.x1, H.y2 - H.y1);
             if (len < 1e-12) { R.message = "A well needs a line of non-zero length."; return R; }
             const double sign = H.behaviour == (int)model::WellBehaviour::Infiltration ? 1.0 : -1.0;
-            katai::core::accumulate_boundary_flux(mesh, chain, sign * std::fabs(H.q) / len, well_flux);
+            const int per_edge = mesh.nodes_per_element == 15 ? 5 : 3;   // nodes along one edge
+            const int step = per_edge - 1;
+            const double ux = (H.x2 - H.x1) / len, uy = (H.y2 - H.y1) / len;
+            const double nx = -uy, ny = ux;                              // unit normal of the line
+            struct Sub { std::vector<int> nodes; double length; double k; };
+            std::vector<Sub> subs;
+            double weight_sum = 0.0;
+            for (std::size_t a = 0; a + (std::size_t)step < chain.size(); a += (std::size_t)step) {
+                Sub sub;
+                sub.nodes.assign(chain.begin() + (std::ptrdiff_t)a,
+                                 chain.begin() + (std::ptrdiff_t)(a + step + 1));
+                const int n0 = sub.nodes.front(), n1 = sub.nodes.back();
+                sub.length = std::hypot(mesh.x[n1] - mesh.x[n0], mesh.y[n1] - mesh.y[n0]);
+                const double mx = 0.5 * (mesh.x[n0] + mesh.x[n1]), my = 0.5 * (mesh.y[n0] + mesh.y[n1]);
+                const auto loc = katai::core::ploc::locate_point(mesh, mx, my);
+                const int mat = loc.found ? mesh.element_material[loc.element] : -1;
+                const auto kk = (mat >= 0 && mat < (int)perm.size()) ? perm[mat]
+                                                                     : katai::core::Permeability{1.0, 1.0};
+                sub.k = kk.kx * nx * nx + kk.ky * ny * ny;   // conductivity across the well line
+                weight_sum += std::fmax(0.0, sub.k) * sub.length;
+                subs.push_back(std::move(sub));
+            }
+            if (subs.empty() || !(weight_sum > 0.0)) {
+                R.message = "The well \"" + H.name + "\" could not be resolved to a chain of mesh "
+                            "edges in permeable soil, so its discharge has nowhere to come from.";
+                return R;
+            }
+            for (const Sub& sub : subs) {
+                if (sub.length < 1e-12) continue;
+                // Share of the total discharge for this edge, expressed as the specific
+                // discharge the edge integral expects (per unit length).
+                const double share = std::fmax(0.0, sub.k) * sub.length / weight_sum;
+                katai::core::accumulate_boundary_flux(
+                    mesh, sub.nodes, sign * std::fabs(H.q) * share / sub.length, well_flux);
+            }
             if (sign < 0.0)   // only an extraction well can pull the ground down to h_min
                 for (int n : chain) level.push_back({n, H.h_min, false, false, hi});
-            int first_mat = -1;
-            bool mixed = false;
-            for (int e = 0; e < mesh.element_count && !mixed; ++e) {
-                bool touches = false;
-                for (int k = 0; k < mesh.nodes_per_element && !touches; ++k)
-                    for (int n : chain) if (mesh.node_of(e, k) == n) { touches = true; break; }
-                if (!touches) continue;
-                if (first_mat < 0) first_mat = mesh.element_material[e];
-                else if (mesh.element_material[e] != first_mat) mixed = true;
-            }
-            if (mixed && hydro_note.empty())
-                hydro_note = " Well \"" + H.name + "\" crosses more than one material: its "
-                             "discharge is spread along its length, not weighted by each layer's "
-                             "permeability.";
         }
     }
     for (int n = 0; n < mesh.node_count; ++n)

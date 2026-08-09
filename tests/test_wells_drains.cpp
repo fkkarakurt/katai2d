@@ -259,6 +259,88 @@ int main() {
         }
     }
 
+    // A well through TWO layers: the manual's own rule for where the water comes from.
+    std::printf("\n== a well through two layers draws on each in proportion to k b ==\n");
+    {
+        // TWO aquifers with an almost impermeable band between them, and one well through all
+        // three. The band is what makes this case DISCRIMINATING: with the layers connected, the
+        // head equalises vertically at the well and the answer comes out right whatever rule
+        // spreads the discharge -- the first version of this test measured nothing. Separated,
+        // each aquifer supplies exactly the share the well takes from it, and the two rules give
+        // visibly different answers:
+        //
+        //   manual's rule (share ~ k b)  ->  s_i = Q (L/2) / (2 sum(k b)) -- the SAME in both
+        //   spread by length             ->  s_i ~ 1/(k_i b_i)            -- here 3 : 1 apart
+        //
+        // So "the two drawdowns are equal" IS the manual's rule, stated as a measurement.
+        const double k_lo = 3.0 * kK, k_up = kK, b_half = 3.5, y_band = 3.5, band_top = 4.5;
+        m::Project pr;
+        pr.name = "KV-FLW-003 layered well";
+        pr.x_min = 0; pr.x_max = kL; pr.y_min = 0; pr.y_max = kB;
+        pr.mesh.elem_size = 2.0;
+        pr.mesh.auto_refine = false;
+        pr.has_water = true;
+        pr.wx = {0.0, kL};
+        pr.wy = {kH, kH};
+        m::Material lower;
+        lower.name = "Lower (more permeable)";
+        lower.model = m::SoilModel::LinearElastic;
+        lower.E = 2.0e4; lower.nu = 0.3;
+        lower.gamma_unsat = 18.0; lower.gamma_sat = 20.0;
+        lower.kx = k_lo; lower.ky = k_lo;
+        m::Material band = lower;
+        band.name = "Aquitard";
+        band.kx = 1e-5 * kK; band.ky = 1e-5 * kK;
+        m::Material upper = lower;
+        upper.name = "Upper aquifer";
+        upper.kx = k_up; upper.ky = k_up;
+        pr.materials.push_back(lower);
+        pr.materials.push_back(band);
+        pr.materials.push_back(upper);
+        const double ys[4] = {0.0, y_band, band_top, kB};
+        for (int layer = 0; layer < 3; ++layer) {
+            m::SoilPolygon P;
+            P.name = layer == 0 ? "Lower aquifer" : layer == 1 ? "Aquitard" : "Upper aquifer";
+            P.material = layer;
+            P.x = {0, kL, kL, 0};
+            P.y = {ys[layer], ys[layer], ys[layer + 1], ys[layer + 1]};
+            P.edge_bc = {(int)(layer == 0 ? m::BCType::FullyFixed : m::BCType::Free),
+                         (int)m::BCType::HorizontallyFixed, (int)m::BCType::Free,
+                         (int)m::BCType::HorizontallyFixed};
+            P.edge_flow = {(int)m::FlowBCType::Closed, (int)m::FlowBCType::Head,
+                           (int)m::FlowBCType::Closed, (int)m::FlowBCType::Head};
+            P.edge_head = {0.0, kH, 0.0, kH};
+            pr.polygons.push_back(P);
+        }
+        const double T_sum = k_lo * b_half + k_up * (kB - band_top);
+        const double Qw = 4.0;
+        pr.hydros.push_back(well(Qw, -50.0));
+        const Run r = run(pr);
+        check(r.ok, "the two-aquifer model solves");
+        if (r.ok) {
+            // Drawdown at the well IN each aquifer, away from the band.
+            double h_lo = 0.0, h_up = 0.0;
+            int n_lo = 0, n_up = 0;
+            for (int n = 0; n < r.mesh.node_count; ++n) {
+                if (std::fabs(r.mesh.x[n] - kMid) > 1e-9) continue;
+                if (r.mesh.y[n] < y_band - 1e-9) { h_lo += r.R.head[n]; ++n_lo; }
+                else if (r.mesh.y[n] > band_top + 1e-9) { h_up += r.R.head[n]; ++n_up; }
+            }
+            const double s_lo = kH - h_lo / std::max(1, n_lo), s_up = kH - h_up / std::max(1, n_up);
+            const double s_ex = Qw * (kL / 2.0) / (2.0 * T_sum);
+            std::printf("  drawdown in the lower aquifer %.6f m, in the upper %.6f m "
+                        "(both exact %.6f); ratio %.4f -- a length-based spread would give %.2f\n",
+                        s_lo, s_up, s_ex, s_lo / s_up,
+                        (b_half / (k_lo * b_half)) / ((kB - band_top) / (k_up * (kB - band_top))));
+            check(std::fabs(s_lo - s_ex) < 0.03 * s_ex && std::fabs(s_up - s_ex) < 0.03 * s_ex,
+                  "each aquifer draws down by Q (L/2) / (2 sum(k b)) -- the same amount");
+            check(std::fabs(s_lo / s_up - 1.0) < 0.03,
+                  "so the two drawdowns are EQUAL, which is the manual's k b rule measured");
+            check(std::fabs(r.R.hydro_discharge - Qw) < 0.005 * Qw,
+                  "and the well still removes exactly what it was asked for");
+        }
+    }
+
     // The refusals: a well that pumps nothing, and a line the mesh cannot see.
     std::printf("\n== what is refused ==\n");
     {
