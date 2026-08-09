@@ -32,7 +32,7 @@ anywhere.
 it from [Releases](https://github.com/fkkarakurt/katai2d/releases):
 
 ```powershell
-pip install katai2d-0.6.0-cp312-abi3-win_amd64.whl
+pip install katai2d-0.7.0-cp312-abi3-win_amd64.whl
 ```
 
 The wheel ships the `katai` package *and* the same `katai` command line —
