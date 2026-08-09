@@ -13,9 +13,18 @@
 namespace katai::core {
 namespace {
 
+// The two effective-stress undrained types: the ones that add a pore fluid to the skeleton.
+// Undrained (C) is deliberately NOT one of them -- it has no pore fluid to add.
 bool is_undrained(const MaterialParams& p) {
     return p.drainage == DrainageClass::UndrainedA ||
            p.drainage == DrainageClass::UndrainedB;
+}
+
+// Undrained strength entered directly: a Tresca envelope, phi = psi = 0 with c = su. (B) reaches
+// it through an effective-stress analysis, (C) through a total-stress one; the envelope is the
+// same and so is this substitution.
+bool is_su_entered(const MaterialParams& p) {
+    return p.drainage == DrainageClass::UndrainedB || p.drainage == DrainageClass::UndrainedC;
 }
 
 // Fields every model shares. The undrained flag wires the pore fluid's bulk
@@ -49,6 +58,11 @@ MaterialModel common_fields(const MaterialParams& p) {
                                    ? undrained_poisson_from_skempton(p.skempton_B, p.nu)
                                    : p.nu_u;
     }
+    // Undrained (C): total stress throughout. E and nu are already the undrained pair -- the
+    // user entered them in those boxes, as PLAXIS asks -- so nothing about the elasticity
+    // changes here; what the flag carries is that the result is total stress and there are no
+    // pore pressures to separate out.
+    mm.total_stress = p.drainage == DrainageClass::UndrainedC;
     return mm;
 }
 
@@ -73,10 +87,10 @@ MaterialModel build_le(const MaterialParams& p) {
 MaterialModel build_mc(const MaterialParams& p) {
     MaterialModel mm = common_fields(p);
     mm.type = MaterialType::MohrCoulomb;
-    // Undrained (B): c already holds su; a Tresca envelope is phi = psi = 0.
+    // Undrained (B) and (C): c already holds su; a Tresca envelope is phi = psi = 0.
     // This override exists only for Mohr-Coulomb -- see validate_hs below for
     // why HS refuses the same request.
-    if (p.drainage == DrainageClass::UndrainedB) {
+    if (is_su_entered(p)) {
         mm.friction_angle = 0.0;
         mm.dilatancy_angle = 0.0;
     }
@@ -86,6 +100,16 @@ MaterialModel build_mc(const MaterialParams& p) {
 // --- Hardening Soil (+ HSsmall) ----------------------------------------------
 
 std::string validate_hs(const MaterialParams& p) {
+    // Undrained (C) is offered by PLAXIS for the Linear Elastic and Mohr-Coulomb models (and
+    // for NGI-ADP / UDCAM-S, which this build does not have) -- MMM section 2.7.1. A total
+    // stress analysis with a hardening model would run: the model would happily take undrained
+    // parameters as effective ones and harden along the wrong stress path.
+    if (p.drainage == DrainageClass::UndrainedC)
+        return "Hardening Soil with Undrained (C) is not a supported combination: a total "
+               "stress analysis needs undrained stiffness and strength, and the hardening laws "
+               "are written for effective stress (PLAXIS offers Undrained (C) for the Linear "
+               "Elastic and Mohr-Coulomb models). Use Undrained (A) or (B) with this model, or "
+               "Mohr-Coulomb with Eu, nu_u and su for a total stress analysis.";
     if (p.drainage == DrainageClass::UndrainedB)
         return "Hardening Soil with Undrained (B) is not supported yet (the su/Tresca "
                "override is only implemented for Mohr-Coulomb; HS would silently follow "
@@ -140,6 +164,12 @@ MaterialModel build_hss(const MaterialParams& p) {
 // --- Soft Soil (Creep) --------------------------------------------------------
 
 std::string validate_ss(const MaterialParams& p) {
+    if (p.drainage == DrainageClass::UndrainedC)
+        return "Soft Soil (Creep) with Undrained (C) is not a supported combination: a total "
+               "stress analysis needs an undrained stiffness, and this model's stiffness is the "
+               "stress-dependent ln law (K = p'/kappa*) written for EFFECTIVE stress (PLAXIS "
+               "offers Undrained (C) for the Linear Elastic and Mohr-Coulomb models). Use "
+               "Drained, or Mohr-Coulomb with Eu, nu_u and su.";
     // Honest refusal: the pore-fluid stiffness plumbing derives Kw/n from a
     // constant E, and Soft Soil has no E input (stiffness is the ln law
     // K = p'/kappa*) -- wiring it through would set Kw/n silently to zero and

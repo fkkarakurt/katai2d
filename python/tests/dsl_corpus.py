@@ -296,6 +296,20 @@ check('"und_mode":1' in katai.project_to_json(built)
       "all three reach the file, per material")
 check(katai.validate_project(built).ok, "two differently-watered clays validate")
 
+# ---------------------------------- Undrained (C): the total-stress drainage type --
+# KV-CST-007 verifies what it DOES; this is the one word that asks for it.
+prj = katai.Project("undrained C", mesh_size=2.0, auto_refine=False)
+total = prj.materials.mohr_coulomb("Clay (total stress)", E=1.5e4, nu=0.495, c=60.0,
+                                   phi=0.0, gamma=18.0, gamma_sat=20.0,
+                                   drainage="undrained_c")
+prj.geometry.rectangle(0.0, 0.0, 10.0, 5.0, material=total, name="Clay")
+prj.initial()
+built = prj.build()
+check(built.materials[0].drainage == katai._core.Drainage.UndrainedC,
+      "the DSL asks for a total-stress analysis by name")
+check('"drainage":4' in katai.project_to_json(built), "and it reaches the file as drainage 4")
+check(katai.validate_project(built).ok, "an undrained total-stress clay validates")
+
 # ------------------------------------------------- end to end: the slope RUNS --
 job_dsl = build_slope().run()
 file_prj, _ = katai.load_project(f"{CORPUS}/kv-slp-001-griffiths-lane-slope.k2d")

@@ -92,7 +92,11 @@ inline bool factors_material(DesignApproach da) {
 // Hardening Soil failure-surface sub-struct carries its OWN c/phi, so it is reduced too -- otherwise
 // an HS material keeps full strength. Dilatancy is clamped to the reduced friction (psi <= phi).
 inline void factor_material_strength(MaterialModel& m, const PartialFactors& f) {
-    const bool tresca = m.undrained && m.friction_angle == 0.0;  // Undrained (B): c = c_u, phi = 0
+    // Undrained (B) and (C): c = c_u, phi = 0. (C) reaches the same Tresca envelope through a
+    // total stress analysis, and the strength being factored is still an undrained one, so it
+    // takes gamma_cu. Reading only `undrained` here would have factored a total-stress c_u with
+    // the effective-cohesion partial factor -- a different design value, quietly.
+    const bool tresca = (m.undrained || m.total_stress) && m.friction_angle == 0.0;
     m.cohesion /= (tresca ? f.gamma_cu : f.gamma_c);
     m.friction_angle = std::atan(std::tan(m.friction_angle) / f.gamma_phi);
     if (m.dilatancy_angle > m.friction_angle) m.dilatancy_angle = m.friction_angle;

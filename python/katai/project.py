@@ -39,6 +39,7 @@ _DRAINAGE = {
     "drained": _core.Drainage.Drained,
     "undrained_a": _core.Drainage.Undrained,
     "undrained_b": _core.Drainage.UndrainedB,
+    "undrained_c": _core.Drainage.UndrainedC,
     "non_porous": _core.Drainage.NonPorous,
 }
 _PROCEDURE = {
@@ -98,7 +99,9 @@ class _Materials:
     """``prj.materials`` -- one constructor per constitutive model, named as in the
     registry. Common ground parameters: ``gamma`` [kN/m3] above water (``gamma_sat``
     defaults to it), ``k`` [m/day] isotropic permeability (or ``kx``/``ky``),
-    ``drainage`` in {"drained", "undrained_a", "undrained_b", "non_porous"}.
+    ``drainage`` in {"drained", "undrained_a", "undrained_b", "undrained_c",
+    "non_porous"} -- "undrained_c" is a TOTAL stress analysis: E, nu and c are the
+    undrained values and no pore pressure is generated.
 
     For an undrained material the pore fluid's stiffness Kw/n follows the equivalent
     undrained Poisson ratio ``nu_u`` (default 0.495, as in PLAXIS), or Skempton's B if

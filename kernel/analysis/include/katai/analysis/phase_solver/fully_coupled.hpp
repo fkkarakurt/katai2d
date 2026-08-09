@@ -42,6 +42,7 @@ struct FullyCoupledPhaseMaterial {
     WaterRetention retention;      // van Genuchten/Mualem SWCC parameters
     double porosity = 0.3;         // n = e / (1 + e)
     bool nonporous = false;        // refused: a non-porous region would silently behave water-filled
+    bool total_stress = false;     // Undrained (C): no pore pressure exists to consolidate
 };
 
 // The phase's neutral configuration.
@@ -103,6 +104,16 @@ inline bool solve_fully_coupled_phase(
                         "single fluid stiffness, so a non-porous region would silently behave "
                         "water-filled. Model the concrete with Drained + high stiffness in "
                         "coupled phases, or keep Non-porous to static/dynamic phases.";
+            return false;
+        }
+        if (used_np && in.materials[mi].total_stress) {
+            R.message = "Material '" + in.materials[mi].name + "' is Undrained (C), a total "
+                        "stress analysis: it carries no pore pressure, so there is nothing in it "
+                        "to consolidate (PLAXIS: \"a Consolidation calculation does not affect "
+                        "Undrained (C) materials\"). Solving the phase would put part of the mesh "
+                        "in total stress and the rest in effective stress. Give the material "
+                        "effective parameters with Drained or Undrained (A)/(B) for the "
+                        "consolidating phases.";
             return false;
         }
     }

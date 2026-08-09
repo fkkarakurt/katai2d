@@ -325,6 +325,7 @@ katai::core::MaterialParams to_material_params(const model::Material& m) {
         case model::Drainage::Undrained:  p.drainage = katai::core::DrainageClass::UndrainedA; break;
         case model::Drainage::UndrainedB: p.drainage = katai::core::DrainageClass::UndrainedB; break;
         case model::Drainage::NonPorous:  p.drainage = katai::core::DrainageClass::NonPorous; break;
+        case model::Drainage::UndrainedC: p.drainage = katai::core::DrainageClass::UndrainedC; break;
     }
     return p;
 }
@@ -399,6 +400,18 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                      "reference pressure. It does not follow the stress-dependent Eur(sigma3) "
                      "during the run, so far from p_ref the excess pore pressure is that of a "
                      "reference-stiffness pore fluid.");
+        // Undrained (C): the results of this material are in a different currency from the rest
+        // of the model, and nothing in the output says which is which -- the stress field has one
+        // name. Saying it here is the whole reason the diagnostics list exists.
+        if (m.drainage == model::Drainage::UndrainedC)
+            note(R, "K2D-M003", m.name,
+                 "Material \"" + m.name +
+                     "\" is Undrained (C), a TOTAL stress analysis: E and nu are read as the "
+                     "undrained pair, c as the undrained shear strength with phi = 0, and no pore "
+                     "pressure is generated or carried in it. The stresses reported for this "
+                     "material are TOTAL stresses, and its K0 refers to total stress -- they "
+                     "cannot be compared with the effective stresses of a Drained or Undrained "
+                     "(A)/(B) region in the same model.");
         nonlinear_soil |= entry->nonlinear;
         has_hardening |= entry->hardening_family;
         has_softsoil |= entry->softsoil_family;
@@ -410,12 +423,21 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         gamma_sat.push_back(m.drainage == model::Drainage::NonPorous ? m.gamma_unsat : m.gamma_sat);
     }
     // NonPorous material flags (the shared source for element masks + K0 seeding + flow).
-    std::vector<char> mat_nonporous;
-    bool any_nonporous = false;
+    // `mat_total_stress` is the wider set: materials whose equilibrium is stated in TOTAL
+    // stress and which therefore carry no pore pressure -- Non-porous because it holds no
+    // water, Undrained (C) because it declines to separate the water from the skeleton
+    // (MMM section 2.7: "all pore pressures are equal to zero"). Everything downstream that
+    // asks "does this element get a pore pressure?" asks this mask; the places that ask "does
+    // this material hold water at all?" (its saturated weight) keep asking about Non-porous.
+    std::vector<char> mat_nonporous, mat_total_stress;
+    bool any_nonporous = false, any_total_stress = false;
     for (const auto& m : pr.materials) {
         const char np = m.drainage == model::Drainage::NonPorous ? 1 : 0;
+        const char ts = (np || m.drainage == model::Drainage::UndrainedC) ? 1 : 0;
         mat_nonporous.push_back(np);
+        mat_total_stress.push_back(ts);
         any_nonporous |= (np != 0);
+        any_total_stress |= (ts != 0);
     }
     for (int e = 0; e < mesh.element_count; ++e)
         if (mesh.element_material[e] < 0 || mesh.element_material[e] >= (int)mats.size()) {
@@ -1317,12 +1339,12 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // equilibrium in that region is stated in TOTAL stress). The mask overlays activation;
     // without NonPorous it stays empty (the legacy path).
     std::vector<char> act_pore;
-    if (any_nonporous) {
+    if (any_total_stress) {
         act_pore.assign(mesh.element_count, 1);
         for (int e = 0; e < mesh.element_count; ++e) {
             if (!act.empty() && !act[e]) { act_pore[e] = 0; continue; }
             const int mt = mesh.element_material[e];
-            if (mt >= 0 && mt < (int)mat_nonporous.size() && mat_nonporous[mt]) act_pore[e] = 0;
+            if (mt >= 0 && mt < (int)mat_total_stress.size() && mat_total_stress[mt]) act_pore[e] = 0;
         }
     }
     const std::vector<char>& pore_mask = act_pore.empty() ? act : act_pore;
@@ -1481,9 +1503,12 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     k0opt.k0 = k0_by_mat;
     k0opt.eff_unit_weight = eff_unit_weight;
     k0opt.ground_surface = ground_surface;
-    // NonPorous targets are seeded in total stress (header note): u(x,y) hydrostatic.
-    if (any_nonporous && water) {
-        k0opt.nonporous = mat_nonporous;
+    // Total-stress targets are seeded in total stress (header note): u(x,y) hydrostatic. For
+    // Undrained (C) this is the manual's "the K0-value refers to total stresses rather than
+    // effective stresses in this case" -- the seed has to be the stress the material is
+    // analysed in, or the initial state contradicts the constitutive law from the first step.
+    if (any_total_stress && water) {
+        k0opt.nonporous = mat_total_stress;
         k0opt.pore = [&pr, &io](double x, double y) {
             return kGammaWater * std::fmax(0.0, water_table_at(pr, x, io.config) - y);
         };
@@ -1759,6 +1784,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 cm.kx = Mt.kx; cm.ky = Mt.ky;
                 cm.porosity = Mt.e_init / (1.0 + Mt.e_init);
                 cm.nonporous = mat_nonporous[mi] != 0;
+                cm.total_stress = Mt.drainage == model::Drainage::UndrainedC;
             }
             cin.flow_edges = flow_edges_from(pr);
             cin.have_flow_bcs = any_flow_bc_declared(pr);
@@ -1801,6 +1827,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 fm.retention = {Mt.gw_ga, Mt.gw_gn, Mt.gw_gl, Mt.gw_Sres, 1.0};
                 fm.porosity = Mt.e_init / (1.0 + Mt.e_init);
                 fm.nonporous = mat_nonporous[mi] != 0;
+                fm.total_stress = Mt.drainage == model::Drainage::UndrainedC;
             }
             fin.flow_edges = flow_edges_from(pr);
             fin.have_flow_bcs = any_flow_bc_declared(pr);
@@ -1841,7 +1868,12 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 fm.kx = Mt.kx; fm.ky = Mt.ky;
                 fm.retention = {Mt.gw_ga, Mt.gw_gn, Mt.gw_gl, Mt.gw_Sres, 1.0};
                 fm.porosity = Mt.e_init / (1.0 + Mt.e_init);
-                fm.nonporous = mat_nonporous[mi] != 0;
+                // In flow, "non-porous" means one thing: no water moves through here and none is
+                // stored. An Undrained (C) cluster is in the same position -- PLAXIS does not even
+                // let its permeability be entered ("the input field for permeabilities are greyed
+                // out when the drainage type is either Non-porous or Undrained C") -- so it takes
+                // the same impermeable-barrier treatment rather than a permeability nobody set.
+                fm.nonporous = mat_total_stress[mi] != 0;
             }
             tin.flow_edges = flow_edges_from(pr);
             tin.active = act;

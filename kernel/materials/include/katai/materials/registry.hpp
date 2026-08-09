@@ -32,7 +32,10 @@ namespace katai::core {
 // Drainage condition of the constitutive input, independent of the project
 // schema's enum (the materials module cannot see katai/model). The caller maps
 // its schema value; the mapping is a plain switch at the seam.
-enum class DrainageClass { Drained, UndrainedA, UndrainedB, NonPorous };
+// UndrainedC = a TOTAL stress analysis (MMM section 2.7): undrained stiffness and undrained
+// strength, no pore pressure at all. It shares nothing with (A)/(B) but its name -- there is
+// no Kw/n, because there is no separation of water from skeleton to make one for.
+enum class DrainageClass { Drained, UndrainedA, UndrainedB, NonPorous, UndrainedC };
 
 // Neutral constitutive input. Angles are in radians -- the caller converts
 // once, at the seam, so every entry sees the same convention. Fields a model

@@ -20,7 +20,12 @@ enum class SoilModel { LinearElastic, MohrCoulomb, HardeningSoil, HSsmall, SoftS
 // phi = 0 (a Tresca su envelope), which the solver enforces. Both share the effective-stress + Kw
 // computation. Enum VALUES are kept file-stable (UndrainedB appended as 3); the GUI presents them in
 // PLAXIS order via an explicit index<->enum map (drainage_names is indexed by the enum value).
-enum class Drainage { Drained = 0, Undrained = 1, NonPorous = 2, UndrainedB = 3 };
+// Undrained (C): a TOTAL stress analysis. Stiffness is the undrained pair (E_u, nu_u close to
+// 0.5) and strength the undrained shear strength (c = su, phi = 0), entered in the same boxes;
+// no pore pressure is generated OR carried, so what the output calls effective stress is total
+// stress, and K0 refers to total stress too (MMM section 2.7). It is not a variant of (A)/(B):
+// those separate the water from the skeleton, this one declines to.
+enum class Drainage { Drained = 0, Undrained = 1, NonPorous = 2, UndrainedB = 3, UndrainedC = 4 };
 
 inline const char* const* soil_model_names() {
     static const char* n[] = {"Linear elastic", "Mohr-Coulomb", "Hardening Soil", "HS small",
@@ -37,12 +42,14 @@ inline const char* soil_model_name(SoilModel m) {
     return (i >= 0 && i < kSoilModelCount) ? soil_model_names()[i] : "Unknown model";
 }
 inline const char* const* drainage_names() {   // indexed by the enum VALUE (status text)
-    static const char* n[] = {"Drained", "Undrained (A)", "Non-porous", "Undrained (B)"};
+    static const char* n[] = {"Drained", "Undrained (A)", "Non-porous", "Undrained (B)",
+                              "Undrained (C)"};
     return n;
 }
+inline constexpr int kDrainageCount = 5;
 inline const char* drainage_name(Drainage d) {
     const int i = (int)d;
-    return (i >= 0 && i < 4) ? drainage_names()[i] : "Unknown drainage";
+    return (i >= 0 && i < kDrainageCount) ? drainage_names()[i] : "Unknown drainage";
 }
 
 // One soil material data set (PLAXIS "Soil" material). Parameters cover all supported models; only

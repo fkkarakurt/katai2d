@@ -41,7 +41,12 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
         // 1e-8 m/day, >= 1e6 times below neighbouring soil) -- the flow net routes AROUND
         // the barrier and the system stays well-posed. The user's kx/ky on this material
         // is NOT read in flow (so the k > 0 requirement is lifted too).
-        if (pr.materials[m].drainage == model::Drainage::NonPorous) {
+        // Undrained (C) joins it: a total-stress cluster takes no part in a flow calculation, and
+        // PLAXIS does not offer its permeability for entry at all ("the input field for
+        // permeabilities are greyed out when the drainage type is either Non-porous or
+        // Undrained C"). Reading kx/ky there would be reading a number nobody was asked for.
+        if (pr.materials[m].drainage == model::Drainage::NonPorous ||
+            pr.materials[m].drainage == model::Drainage::UndrainedC) {
             perm[m] = {1e-8, 1e-8};
             continue;
         }

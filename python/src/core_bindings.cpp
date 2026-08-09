@@ -66,7 +66,8 @@ NB_MODULE(_core, m) {
         .value("Drained", api::Drainage::Drained)
         .value("Undrained", api::Drainage::Undrained)
         .value("NonPorous", api::Drainage::NonPorous)
-        .value("UndrainedB", api::Drainage::UndrainedB);
+        .value("UndrainedB", api::Drainage::UndrainedB)
+        .value("UndrainedC", api::Drainage::UndrainedC);
     nb::enum_<api::PhaseType>(m, "PhaseType", nb::is_arithmetic())
         .value("Plastic", api::PhaseType::Plastic)
         .value("Safety", api::PhaseType::Safety)

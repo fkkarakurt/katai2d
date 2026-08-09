@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **9** · Current `.res` version: **5**
+Current `.k2d` version: **10** · Current `.res` version: **5**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -19,7 +19,9 @@ numerical controls (`tol`, `loadsteps`, `maxiter`), so that a published run carr
 numerics it was computed with, **v8** the staged-construction target and the undrained
 switch (`mstage`, `ignoreund`) and **v9** the per-material undrained stiffness
 (`materials[i].und_mode`, `nu_u`, `skempton_B`), which an older build would replace with
-PLAXIS's default of 0.495 for every undrained material in the file. Every bump
+PLAXIS's default of 0.495 for every undrained material in the file, and **v10** the
+Undrained (C) drainage type (`materials[i].drainage` = 4), which an older build would load
+"for display as Drained" and solve with undrained parameters read as effective ones. Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
 than one that was tensioned against it -- so it must refuse the file instead.
@@ -84,7 +86,7 @@ flagged places differs from the in-memory default of a freshly created object.
 
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
-| `katai2d` | int | — | *required* | Format version; this build writes 9 |
+| `katai2d` | int | — | *required* | Format version; this build writes 10 |
 | `name` | str | — | `"Untitled project"` | Project display name |
 | `axisymmetric` | bool | — | `false` | `false` = plane strain; `true` = axisymmetric (x is the radius, x = 0 the symmetry axis) |
 | `initial_procedure` | int | — | `0` | How the initial phase establishes the in-situ state: 0 K0 procedure, 1 Gravity loading, 2 Safety (φ-c reduction of the gravity state; intended for single-phase runs) |
@@ -122,7 +124,7 @@ flagged places differs from the in-memory default of a freshly created object.
 |---|---|---|---|---|
 | `name` | str | — | `"New material"` | Data set name |
 | `model` | int | — | `0` | Soil model: 0 Linear elastic, 1 Mohr-Coulomb, 2 Hardening Soil, 3 HS small, 4 Soft Soil, 5 Soft Soil Creep. NOTE: an absent key loads 0, although a freshly created material defaults to 1 |
-| `drainage` | int | — | `0` | 0 Drained, 1 Undrained (A), 2 Non-porous, 3 Undrained (B) |
+| `drainage` | int | — | `0` | 0 Drained, 1 Undrained (A), 2 Non-porous, 3 Undrained (B), 4 Undrained (C) — the last is a **total stress** analysis: `E`/`nu` are the undrained pair, `c` is s_u with φ = 0, and no pore pressure is generated or carried (PLAXIS MMM §2.7) |
 | `color` | num[] | — | `[0.85,0.78,0.55]` | Display colour, RGB in 0..1 (3 values) |
 | `gamma_unsat` | num | kN/m³ | `17` | Unit weight above the phreatic level |
 | `gamma_sat` | num | kN/m³ | `20` | Unit weight below the phreatic level |

@@ -124,6 +124,14 @@ struct MaterialModel {
     // the untouched field happened to sit.
     double undrained_E_ref = 0.0, undrained_nu_ref = 0.0;
 
+    // Undrained (C): the material is analysed in TOTAL stress (MMM section 2.7). The stiffness
+    // and strength above are the undrained ones, no pore pressure is generated or carried, and
+    // the stress this model returns is total stress wearing the effective stress's name. The
+    // flag exists because the difference is invisible in the parameters: an undrained Tresca
+    // envelope looks exactly like a drained one with phi = 0, and something has to know which
+    // partial factor an EC7 run should apply to that cohesion (gamma_cu, not gamma_c').
+    bool total_stress = false;
+
     // Hardening Soil parameters (used when type == HardeningSoil). Compression-positive
     // internally; the FE wrapper converts (sigma_HS = -sigma_solver). See
     // hardening_soil_plastic.hpp / docs/references/hardening-soil-formulation.md.

@@ -307,16 +307,40 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
             r.add(Severity::Error, path("tensile_strength"),
                   who + "the tensile strength cannot be negative (got " +
                       num(m.tensile_strength) + " kN/m2)");
-        if (m.drainage == Drainage::UndrainedB) {
+        if (m.drainage == Drainage::UndrainedB || m.drainage == Drainage::UndrainedC) {
+            const std::string which =
+                m.drainage == Drainage::UndrainedB ? "Undrained (B)" : "Undrained (C)";
             if (!(m.c > 0.0))
                 r.add(Severity::Error, path("c"),
-                      who + "Undrained (B) reads c as the undrained shear strength su, "
+                      who + which + " reads c as the undrained shear strength su, "
                             "which must be positive (got " + num(m.c) + " kN/m2)");
             if (m.phi != 0.0)
                 r.add(Severity::Warning, path("phi"),
-                      who + "Undrained (B) is a Tresca envelope: phi is forced to 0 and the "
-                            "entered value (" + num(m.phi) + " degrees) is ignored");
+                      who + which + " is a Tresca envelope: phi is forced to 0 and the "
+                            "entered value (" + num(m.phi) + " degrees) is ignored for strength "
+                            "(an automatic K0 still follows it -- enter 0 there too)");
         }
+    }
+
+    // -- Undrained (C): a total stress analysis (MMM section 2.7) --------------
+    if (m.drainage == Drainage::UndrainedC) {
+        // The manual offers it for the Linear Elastic and Mohr-Coulomb models (and for NGI-ADP /
+        // UDCAM-S, which this build does not have). The constitutive catalogue refuses the rest
+        // at solve time; saying it here means the project is refused before a mesh is built.
+        if (!(le || mc))
+            r.add(Severity::Error, path("drainage"),
+                  who + "Undrained (C) is a total stress analysis and is available for the "
+                        "Linear elastic and Mohr-Coulomb models only; this material uses " +
+                      std::string(model::soil_model_name(m.model)) +
+                      ", whose stiffness and hardening are written for effective stress");
+        // "Typically, for the undrained Poisson ratio a value close to 0.5 is selected (between
+        // 0.495 and 0.499)" -- the point of the type is a nearly incompressible total-stress
+        // soil, and a nu of 0.3 quietly gives an undrained analysis that compresses.
+        if (m.nu < 0.4)
+            r.add(Severity::Warning, path("nu"),
+                  who + "Undrained (C) reads nu as the UNDRAINED Poisson's ratio, which the "
+                        "manual puts between 0.495 and 0.499 (undrained soil barely changes "
+                        "volume); the entered " + num(m.nu) + " will let it compress");
     }
 
     if (hs) {

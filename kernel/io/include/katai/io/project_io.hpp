@@ -67,7 +67,14 @@ namespace katai::model {
 // something. A clay entered with a measured Skempton B of 0.90 would be run at 0.978, generating
 // more excess pore pressure and less effective stress than the file describes, silently and in
 // whichever direction the case happens to be sensitive to.
-inline constexpr int kProjectFileVersion = 9;
+//
+// v10 (2026-08): UNDRAINED (C), the total-stress drainage type (`materials[].drainage` = 4).
+// An older build meets a drainage value it does not know, and what the reader does with any
+// unknown enum is load it "for display as Drained". Here that would be a soil whose undrained
+// parameters are read as effective ones -- a c_u of 60 kPa taken for a c' of 60 kPa, with pore
+// pressures subtracted from stresses that were never meant to have any. The version refuses in
+// the reader instead, which no path can skip.
+inline constexpr int kProjectFileVersion = 10;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -609,13 +616,15 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
                                       "); loaded for display as Linear elastic -- do not solve "
                                       "with this file"});
             const int drv = (int)j.num("drainage", 0);
-            m.drainage = (drv >= 0 && drv < 4) ? (Drainage)drv : Drainage::Drained;
-            if (notes && !(drv >= 0 && drv < 4))
+            const bool drv_ok = drv >= 0 && drv < kDrainageCount;
+            m.drainage = drv_ok ? (Drainage)drv : Drainage::Drained;
+            if (notes && !drv_ok)
                 notes->push_back({katai::io::Severity::Error,
                                   "materials[" + std::to_string(p.materials.size()) + "].drainage",
                                   "\"" + m.name + "\": unknown drainage value " +
-                                      std::to_string(drv) +
-                                      " (this build knows 0..3); loaded for display as Drained "
+                                      std::to_string(drv) + " (this build knows 0.." +
+                                      std::to_string(kDrainageCount - 1) +
+                                      "); loaded for display as Drained "
                                       "-- do not solve with this file"});
             rcolor(j, m.color);
             m.gamma_unsat = j.num("gamma_unsat", m.gamma_unsat);

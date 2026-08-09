@@ -41,6 +41,11 @@ struct ConsolidationPhaseMaterial {
     double kx = 1.0, ky = 1.0;     // permeability [m/day]
     double porosity = 0.3;         // n = e / (1 + e)
     bool nonporous = false;        // refused: a non-porous region would silently behave water-filled
+    // Undrained (C) is a TOTAL stress material: it has no pore pressures to consolidate.
+    // PLAXIS states the same fact as "a Consolidation calculation does not affect Undrained (C)
+    // materials"; this build refuses the phase rather than solving part of the mesh in total
+    // stress and the rest in effective stress with one Kw/n between them.
+    bool total_stress = false;
 };
 
 // The phase's neutral configuration.
@@ -109,6 +114,16 @@ inline bool solve_consolidation_phase(
                         "single fluid stiffness, so a non-porous region would silently behave "
                         "water-filled. Model the concrete with Drained + high stiffness in "
                         "consolidation phases, or keep Non-porous to static/dynamic phases.";
+            return false;
+        }
+        if (used_np && in.materials[mi].total_stress) {
+            R.message = "Material '" + in.materials[mi].name + "' is Undrained (C), a total "
+                        "stress analysis: it carries no pore pressure, so there is nothing in it "
+                        "to consolidate (PLAXIS: \"a Consolidation calculation does not affect "
+                        "Undrained (C) materials\"). Solving the phase would put part of the mesh "
+                        "in total stress and the rest in effective stress. Give the material "
+                        "effective parameters with Drained or Undrained (A)/(B) for the "
+                        "consolidating phases.";
             return false;
         }
     }

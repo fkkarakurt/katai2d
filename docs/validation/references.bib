@@ -67,6 +67,11 @@
 }
 
 @misc{plaxis2025b,
+  title = {PLAXIS 2D 2025.1 Material Models Manual section 2.7 (Undrained total stress analysis) and section 2.4: an undrained Young's modulus converts to an effective one by Eq. 2-59, E' = 2(1 + nu')Eu/3, because the shear modulus is the same in both descriptions of the same soil. The two analyses of that soil must therefore agree, and the manual says exactly how far apart they are allowed to be: the total-stress route is exactly incompressible only at nu_u = 0.5, which "is not possible, since this would lead to singularity", so the difference is the compressibility that nu_u < 0.5 leaves behind. Reference Manual section 6.2.3 for the rest of the type's behaviour ("Pore pressures are not generated"; K0 refers to total stress; a consolidation calculation does not affect such a material)},
+  note  = {cited by KV-CST-007},
+}
+
+@misc{plaxis2025c,
   title = {PLAXIS 2D 2025.1 Reference Manual, "Ignore und. behaviour (A,B)": the undrained response of Undrained (A)/(B) clusters is temporarily excluded so that no excess pore pressure is generated, while the strength parameters stay as declared. The independent path is the same model with the material DECLARED drained: if the option means what the manual says, the two must be the same calculation},
   note  = {cited by KV-CST-005},
 }

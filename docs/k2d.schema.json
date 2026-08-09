@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["katai2d"],
   "properties": {
-    "katai2d": { "type": "integer", "minimum": 1, "maximum": 9 },
+    "katai2d": { "type": "integer", "minimum": 1, "maximum": 10 },
     "name": { "type": "string" },
     "axisymmetric": { "type": "boolean" },
     "initial_procedure": { "type": "integer", "minimum": 0, "maximum": 2 },
@@ -54,7 +54,7 @@
       "properties": {
         "name": { "type": "string" },
         "model": { "type": "integer", "minimum": 0, "maximum": 5 },
-        "drainage": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "drainage": { "type": "integer", "minimum": 0, "maximum": 4 },
         "color": { "$ref": "#/$defs/color" },
         "gamma_unsat": { "type": "number" },
         "gamma_sat": { "type": "number" },
