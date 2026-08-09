@@ -264,10 +264,11 @@ static void warn_no_flow_barrier(const model::Project& pr, SolveResult& R) {
     for (const auto& st : pr.structs)
         if (st.kind == model::StructKind::Plate || st.kind == model::StructKind::Interface) {
             warn(R, "K2D-A010", st.name,
-                 "This phase computes a pore-pressure field with walls or interfaces in the model, "
-                 "and neither blocks flow in this build: water crosses them as if the soil were "
-                 "continuous. A cut-off wall therefore holds back less head here than it would in "
-                 "the ground. Model an impermeable barrier as a thin Non-porous region.");
+                 "This phase computes a pore-pressure field with walls or interfaces in the "
+                 "model, and a consolidation / fully-coupled phase does not read their cross "
+                 "permeability in this build: water crosses the line as if the soil were "
+                 "continuous, so a cut-off wall holds back less head here than it would in the "
+                 "ground. The steady groundwater-flow calculation does read it.");
             return;
         }
 }
@@ -1386,6 +1387,21 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // External load vector (free DOFs): gravity body force + point loads (+ pore pressures).
     Eigen::VectorXd f = Eigen::VectorXd::Zero(dofs.equation_count());
     if (flow) {
+        // A barrier makes the head DISCONTINUOUS across its line, and this hand-over carries one
+        // value per node: the pore load is therefore applied from one side of the wall, so the
+        // differential water pressure on it is missing from the structural forces. Said out loud
+        // -- it is the load a cut-off wall is designed for.
+        for (const auto& st : pr.structs)
+            if (st.flow_barrier != 0 && (st.kind == model::StructKind::Plate ||
+                                         st.kind == model::StructKind::Interface)) {
+                warn(R, "K2D-A011", st.name,
+                     "The flow field driving this phase was computed with \"" + st.name +
+                         "\" as a barrier, so the head jumps across it -- but the pore load here "
+                         "is applied from ONE side. The differential water pressure on that wall "
+                         "is not in its structural forces. Read both sides from the flow result "
+                         "(head and head_far) until the deformation mesh is split with it.");
+                break;
+            }
         // Pore pressure + saturation from the steady-state seepage head field (PLAXIS groundwater
         // flow pore generation): total-stress gravity with gamma_sat where psi = h - y >= 0, and
         // the pore load interpolated from the SAME nodal head -> recovered stress is EFFECTIVE.

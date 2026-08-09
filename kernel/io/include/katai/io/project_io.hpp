@@ -79,7 +79,12 @@ namespace katai::model {
 // and solves the same ground with no dewatering in it: the head stays where the boundaries put
 // it, the excavation floor is reported dry when the file says it is being pumped, and every
 // uplift and seepage number that follows belongs to a different problem.
-inline constexpr int kProjectFileVersion = 11;
+//
+// v12 (2026-08): CROSS PERMEABILITY of walls and interfaces (`structs[].flow_barrier`, `hyd_res`).
+// An older build reads neither and computes the flow straight THROUGH a cut-off wall: the head
+// difference the wall was drawn to hold does not appear, the uplift under an excavation comes out
+// too low and the inflow too high. Unsafe in both, and invisible in the result.
+inline constexpr int kProjectFileVersion = 12;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -517,6 +522,8 @@ inline std::string project_to_json(const Project& p) {
         wfield(o, "material", (double)s.material);
         wfield(o, "iface_pos", s.iface_pos); wfield(o, "iface_neg", s.iface_neg);
         wfield(o, "iface_material", (double)s.iface_material);
+        wfield(o, "flow_barrier", (double)s.flow_barrier);
+        wfield(o, "hyd_res", s.hydraulic_resistance);
         wfield(o, "coarseness", s.coarseness);
         closeobj(o);
     }
@@ -759,6 +766,19 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             s.iface_pos = j.flag("iface_pos", false);
             s.iface_neg = j.flag("iface_neg", false);
             s.iface_material = (int)j.num("iface_material", -1);
+            // Cross permeability: an unknown value must not land on "fully permeable" quietly --
+            // that is the reading in which a cut-off wall stops being one.
+            const int fbv = (int)j.num("flow_barrier", 0);
+            s.flow_barrier = (fbv >= 0 && fbv <= 2) ? fbv : 0;
+            if (notes && !(fbv >= 0 && fbv <= 2))
+                notes->push_back({katai::io::Severity::Error,
+                                  "structs[" + std::to_string(p.structs.size()) + "].flow_barrier",
+                                  "\"" + s.name + "\": unknown cross permeability " +
+                                      std::to_string(fbv) +
+                                      " (this build knows 0 = fully permeable, 1 = impermeable, "
+                                      "2 = semi-permeable); loaded for display as fully permeable "
+                                      "-- do not solve with this file"});
+            s.hydraulic_resistance = j.num("hyd_res", 0.0);
             s.coarseness = j.num("coarseness", 1.0);
             p.structs.push_back(std::move(s));
         }

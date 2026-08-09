@@ -838,6 +838,33 @@ inline ValidationReport validate_project(const model::Project& p) {
                   "(deactivate them initially and activate them in a staged phase)");
     }
 
+    // -- Cross permeability of walls and interfaces (PLAXIS Ref Table 5-2) -----
+    for (size_t i = 0; i < p.structs.size(); ++i) {
+        const auto& st = p.structs[i];
+        const std::string who = "\"" + st.name + "\": ";
+        if (st.flow_barrier < 0 || st.flow_barrier > 2)
+            r.add(Severity::Error, at("structs", i, "flow_barrier"),
+                  who + "unknown cross permeability " + std::to_string(st.flow_barrier) +
+                      "; this build knows 0 (fully permeable), 1 (impermeable) and "
+                      "2 (semi-permeable)");
+        else if (st.flow_barrier != 0 && st.kind != StructKind::Plate &&
+                 st.kind != StructKind::Interface)
+            r.add(Severity::Error, at("structs", i, "flow_barrier"),
+                  who + "only a wall (plate) or an interface can be a flow barrier; an anchor, a "
+                        "geogrid or an embedded beam is a line the water does not see");
+        if (st.flow_barrier == 2 && !(st.hydraulic_resistance > 0.0))
+            r.add(Severity::Error, at("structs", i, "hyd_res"),
+                  who + "a semi-permeable barrier needs a hydraulic resistance d/k > 0 in days "
+                        "(got " + num(st.hydraulic_resistance) +
+                      "); it is the head difference divided by the discharge per unit area of "
+                      "wall, so zero would mean a wall that is not there");
+        if (st.flow_barrier != 2 && st.hydraulic_resistance != 0.0)
+            r.add(Severity::Warning, at("structs", i, "hyd_res"),
+                  who + "a hydraulic resistance is read only for a semi-permeable barrier; this "
+                        "one is " +
+                      std::string(st.flow_barrier == 0 ? "fully permeable" : "impermeable"));
+    }
+
     // -- Hydraulic conditions: wells and drains (PLAXIS Reference sec. 5.9) -----
     for (size_t i = 0; i < p.hydros.size(); ++i) {
         const auto& H = p.hydros[i];

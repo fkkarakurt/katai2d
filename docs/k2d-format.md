@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **11** · Current `.res` version: **5**
+Current `.k2d` version: **12** · Current `.res` version: **5**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -23,7 +23,9 @@ PLAXIS's default of 0.495 for every undrained material in the file, and **v10** 
 Undrained (C) drainage type (`materials[i].drainage` = 4), which an older build would load
 "for display as Drained" and solve with undrained parameters read as effective ones, and **v11**
 wells and drains (`hydros`, `phases[i].hydro`), which an older build would ignore and solve the
-same ground with no dewatering in it. Every bump
+same ground with no dewatering in it, and **v12** the cross permeability of walls and interfaces
+(`structs[i].flow_barrier`, `hyd_res`), which an older build would ignore and compute the flow
+straight through a cut-off wall. Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
 than one that was tensioned against it -- so it must refuse the file instead.
@@ -88,7 +90,7 @@ flagged places differs from the in-memory default of a freshly created object.
 
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
-| `katai2d` | int | — | *required* | Format version; this build writes 11 |
+| `katai2d` | int | — | *required* | Format version; this build writes 12 |
 | `name` | str | — | `"Untitled project"` | Project display name |
 | `axisymmetric` | bool | — | `false` | `false` = plane strain; `true` = axisymmetric (x is the radius, x = 0 the symmetry axis) |
 | `initial_procedure` | int | — | `0` | How the initial phase establishes the in-situ state: 0 K0 procedure, 1 Gravity loading, 2 Safety (φ-c reduction of the gravity state; intended for single-phase runs) |
@@ -248,6 +250,8 @@ with `name` (default `"Soil"`) as above.
 | `iface_pos` | bool | — | `false` | Positive-side interface attached |
 | `iface_neg` | bool | — | `false` | Negative-side interface attached |
 | `iface_material` | int | — | `-1` | Soil material override for the interfaces (−1 = adjacent soil) |
+| `flow_barrier` | int | — | `0` | Cross permeability in a groundwater calculation: 0 fully permeable (no effect on flow), 1 impermeable (the two sides get separate pore-pressure DOFs), 2 semi-permeable (PLAXIS Ref Table 5-2). Plates and interfaces only |
+| `hyd_res` | num | day | `0` | Hydraulic resistance d/k of a semi-permeable barrier: the head difference divided by the discharge per unit area of wall |
 
 with `name` (default `"Element"`), `material` (index into the kind's material list, default `-1`)
 and `coarseness` (default `1`) as above. An Interface element takes its strength from the adjacent

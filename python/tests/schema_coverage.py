@@ -78,6 +78,7 @@ KEY_TO_ATTR = {
     "load": "load_active",
     "disp": "disp_active",
     "hydro": "hydro_active",
+    "hyd_res": "hydraulic_resistance",
 }
 
 # ---------------------------------------------------------- the coverage model --
@@ -123,6 +124,8 @@ def coverage_project():
     wall.kind = core.StructKind(0)
     wall.name = "Wall"
     wall.x1, wall.y1, wall.x2, wall.y2 = 5.0, 5.0, 5.0, 1.0
+    wall.flow_barrier = 2            # so the writer emits the cross-permeability pair
+    wall.hydraulic_resistance = 10.0
     pr.structs = [wall]
 
     strip = core.Load()

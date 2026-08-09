@@ -255,6 +255,11 @@ NB_MODULE(_core, m) {
         .def_rw("iface_pos", &api::StructElement::iface_pos)
         .def_rw("iface_neg", &api::StructElement::iface_neg)
         .def_rw("iface_material", &api::StructElement::iface_material)
+        .def_rw("flow_barrier", &api::StructElement::flow_barrier,
+                "cross permeability in flow: 0 fully permeable, 1 impermeable, "
+                "2 semi-permeable (PLAXIS Ref Table 5-2)")
+        .def_rw("hydraulic_resistance", &api::StructElement::hydraulic_resistance,
+                "d/k of a semi-permeable barrier [day]")
         .def_rw("coarseness", &api::StructElement::coarseness);
 
     nb::class_<api::PrescribedDisp>(m, "PrescribedDisp")

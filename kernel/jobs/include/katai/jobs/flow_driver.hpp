@@ -33,6 +33,10 @@ struct FlowResult {
     // head, not what it was asked for -- a difference the run has to be able to state.
     double hydro_discharge = 0.0;
     int hydro_limited = 0;
+    // The head on the FAR side of a flow barrier, at the same caller node (equal to `head` where
+    // there is no barrier). An impermeable screen makes the head discontinuous across its line,
+    // and one number per node cannot say that -- this is the other one.
+    std::vector<double> head_far;
     int iterations = 0;
     bool ok = false;
     std::string message;

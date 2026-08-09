@@ -6,15 +6,20 @@
 
 #include <katai/analysis/seepage.hpp>
 #include <katai/fem/assembly/dof_map.hpp>
+#include <katai/analysis/staged_construction.hpp>  // split_mesh_at_segment (a barrier's seam)
 #include <katai/fem/elements/point_location.hpp>  // locate_point (which layer a well edge is in)
 #include <katai/mesh/boundary_extraction.hpp>   // collect_chain (flux-edge node chains)
 #include <katai/linsolve/direct_solver.hpp>
 
 namespace katai::app {
 
-FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::Mesh& mesh,
+FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::Mesh& mesh_in,
                                   const model::Phase* phase) {
     FlowResult R;
+    // Working copy: a flow barrier SPLITS the mesh along its line (below), and the twins are
+    // appended, so node n of the caller's mesh is still node n here. Without a barrier this is
+    // the caller's mesh, entry for entry.
+    katai::mesh::Mesh mesh = mesh_in;
     if (mesh.element_count == 0) { R.message = "Empty mesh -- generate a mesh first (Mesh tab)."; return R; }
     if (pr.materials.empty())    { R.message = "No materials."; return R; }
 
@@ -56,6 +61,52 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
             R.message = "Material '" + pr.materials[m].name + "' has no permeability -- set kx, ky "
                         "(> 0) on its Groundwater tab before a flow calculation.";
             return R;
+        }
+    }
+
+    // --- Walls and interfaces as flow barriers (PLAXIS Ref Table 5-2, Sci. Man. sec. 3.4) -------
+    // A line the water cannot cross has to be a line the MESH cannot cross: the two sides need
+    // pore-pressure degrees of freedom of their own. PLAXIS words it exactly that way -- an
+    // impermeable interface is "a full separation of the pore pressure degrees-of-freedom of the
+    // interface node pairs" -- and the deformation path already splits a wall this way, so the
+    // same splitter does it here. The manual's "the end points of an interface are always
+    // permeable" comes for free: the splitter keeps the end nodes shared, so water goes around
+    // the ends of a screen exactly as it does in the ground.
+    struct SeamEdge { int r0, r1, l0, l1; double length, resistance; };
+    std::vector<SeamEdge> seam_edges;    // semi-permeable coupling, one per seam segment
+    std::vector<int> twin_of;            // caller-node -> its twin (or -1), for reporting both sides
+    bool any_barrier = false, any_leaky = false;
+    for (const auto& st : pr.structs) {
+        if (st.flow_barrier == 0) continue;
+        if (st.kind != model::StructKind::Plate && st.kind != model::StructKind::Interface) continue;
+        const double len = std::hypot(st.x2 - st.x1, st.y2 - st.y1);
+        if (len < 1e-12) continue;
+        auto seam = katai::core::split_mesh_at_segment(mesh, st.x1, st.y1, st.x2, st.y2,
+                                                       1e-6, len - 1e-6);
+        if (seam.size() < 2) {
+            R.message = "The flow barrier \"" + st.name +
+                        "\" does not lie on mesh edges, so the mesh cannot be split along it and "
+                        "water would cross it as if it were not there. Draw it along a soil-region "
+                        "boundary, or set its cross permeability back to fully permeable.";
+            return R;
+        }
+        any_barrier = true;
+        if (twin_of.empty()) twin_of.assign(mesh_in.node_count, -1);
+        for (const auto& sp : seam)
+            if (sp.orig < (int)twin_of.size()) twin_of[sp.orig] = sp.dup;
+        if (st.flow_barrier != 2) continue;   // impermeable: separated DOFs ARE the whole rule
+        any_leaky = true;
+        // Semi-permeable: the sides are rejoined by a leaky line passing q_n = dh / R per unit
+        // area, R = d/k the hydraulic resistance in units of time (Ref sec. 6.1.7.4). Sorted by
+        // arc length, so consecutive entries are the two ends of one seam segment.
+        std::sort(seam.begin(), seam.end(),
+                  [](const katai::core::SegSeam& a, const katai::core::SegSeam& b) { return a.s < b.s; });
+        for (std::size_t i = 0; i + 1 < seam.size(); ++i) {
+            const double dl = std::hypot(mesh.x[seam[i + 1].orig] - mesh.x[seam[i].orig],
+                                          mesh.y[seam[i + 1].orig] - mesh.y[seam[i].orig]);
+            if (dl < 1e-12) continue;
+            seam_edges.push_back({seam[i].orig, seam[i + 1].orig, seam[i].dup, seam[i + 1].dup,
+                                  dl, std::fmax(1e-12, st.hydraulic_resistance)});
         }
     }
 
@@ -261,6 +312,25 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
                 katai::math::SparseMatrixBuilder builder(fdofs.equation_count());
                 Eigen::VectorXd rhs = Eigen::VectorXd::Zero(fdofs.equation_count());
                 katai::core::assemble_seepage(mesh, fdofs, perm, hp, builder, rhs);
+                // Semi-permeable seams: a conductance 1/R between the two sides, integrated over
+                // each seam segment (the consistent 2-node line matrix). With a uniform head
+                // difference this transmits exactly dh L / R, which is the manual's definition of
+                // the hydraulic resistance read back out.
+                for (const SeamEdge& se : seam_edges) {
+                    const double c = se.length / (6.0 * se.resistance);
+                    const int nd[4] = {se.r0, se.r1, se.l0, se.l1};
+                    const double sgn[4] = {1.0, 1.0, -1.0, -1.0};
+                    const double m2[2][2] = {{2.0, 1.0}, {1.0, 2.0}};
+                    for (int a = 0; a < 4; ++a) {
+                        const int eq_a = fdofs.equation(fdofs.global_dof(nd[a], 0));
+                        for (int b = 0; b < 4; ++b) {
+                            const double v = sgn[a] * sgn[b] * c * m2[a % 2][b % 2];
+                            const int eq_b = fdofs.equation(fdofs.global_dof(nd[b], 0));
+                            if (eq_a >= 0 && eq_b >= 0) builder.add_entry(eq_a, eq_b, v);
+                            else if (eq_a >= 0 && eq_b < 0) rhs[eq_a] -= v * hp[nd[b]];
+                        }
+                    }
+                }
                 for (int n = 0; n < mesh.node_count; ++n) {
                     if (flux[n] == 0.0) continue;
                     const int eq = fdofs.equation(fdofs.global_dof(n, 0));
@@ -281,6 +351,18 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
         }
         opt.nodal_flux.clear();
         if (with_flux) opt.nodal_flux = flux;   // the manual's boundary term q
+        if (!have_head && any_leaky) {
+            // The Picard/active-set solver rebuilds its own system, so the leaky seam would be
+            // dropped from every rebuild -- a semi-permeable wall silently turning into an
+            // impermeable one. Refused by name instead. (An IMPERMEABLE barrier needs no term at
+            // all: it is the split mesh, so it works on this path too.)
+            R.message = "A semi-permeable barrier is only solved in the confined regime in this "
+                        "build: this model has a free surface or a seepage face, where the solver "
+                        "rebuilds its system and the seam's resistance would be dropped. Use an "
+                        "impermeable barrier (which needs no coupling term and works here), or "
+                        "keep the model fully saturated.";
+            return false;
+        }
         if (!have_head) {   // unconfined / seepage-face regime: variable-k_rel Picard + active set
             const auto res = katai::core::solve_unconfined_seepage_face(mesh, fx, fv, seepage_nodes,
                                                                         perm, lin, opt);
@@ -394,9 +476,20 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
     for (std::size_t i = 0; i < level.size(); ++i)
         if (!level[i].from_above && on[i]) ++R.hydro_limited;
 
-    R.pore.assign(mesh.node_count, 0.0);
-    for (int n = 0; n < mesh.node_count; ++n)
-        R.pore[n] = kFlowGammaWater * std::fmax(0.0, R.head[n] - mesh.y[n]);
+    // Back to the CALLER's numbering. The twins are appended, so the first node_count entries are
+    // the caller's nodes -- but at a barrier they are only ONE side of it, and the other side is
+    // a different number. `head_far` carries it, so a reader can see the head difference the
+    // barrier holds instead of having to infer it.
+    R.head_far.assign(mesh_in.node_count, 0.0);
+    for (int n = 0; n < mesh_in.node_count; ++n) {
+        const int tw = (n < (int)twin_of.size()) ? twin_of[n] : -1;
+        R.head_far[n] = (tw >= 0 && tw < (int)R.head.size()) ? R.head[tw] : R.head[n];
+    }
+    if (any_barrier) R.head.conservativeResize(mesh_in.node_count);
+
+    R.pore.assign(mesh_in.node_count, 0.0);
+    for (int n = 0; n < mesh_in.node_count; ++n)
+        R.pore[n] = kFlowGammaWater * std::fmax(0.0, R.head[n] - mesh_in.y[n]);
 
     R.ok = true;
     char buf[256];
@@ -409,14 +502,21 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
     // The flow net here runs straight THROUGH a cut-off wall, which is a real difference between
     // the drawing and the calculation -- so the run says it rather than leaving it to be noticed.
     {
-        bool barrier = false;
+        bool permeable_line = false;
         for (const auto& st : pr.structs)
-            barrier = barrier || st.kind == model::StructKind::Plate ||
-                      st.kind == model::StructKind::Interface;
-        if (barrier)
-            R.message += " Note: walls and interfaces do not block flow in this build -- the "
-                         "flow net is continuous through them. Model an impermeable barrier as a "
-                         "thin Non-porous region.";
+            if ((st.kind == model::StructKind::Plate || st.kind == model::StructKind::Interface) &&
+                st.flow_barrier == 0)
+                permeable_line = true;
+        if (permeable_line)
+            R.message += " Note: a wall or interface with cross permeability \"fully permeable\" "
+                         "does not block flow -- the flow net is continuous through it. Set it to "
+                         "impermeable or semi-permeable if it is a cut-off.";
+        if (any_barrier) {
+            char b2[160];
+            std::snprintf(b2, sizeof(b2), " %d flow barrier(s) split the mesh.",
+                          (int)(mesh.node_count - mesh_in.node_count) > 0 ? 1 : 1);
+            R.message += b2;
+        }
     }
     if (any_well || any_drain) {
         std::snprintf(buf, sizeof(buf), " Wells and drains removed %.4g m3/day/m.",

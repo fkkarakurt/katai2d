@@ -225,6 +225,25 @@ struct StructElement {
     // They use the adjacent soil's Rinter unless iface_material >= 0 (a soil material override).
     bool iface_pos = false, iface_neg = false;
     int iface_material = -1;
+    // CROSS PERMEABILITY in a groundwater calculation (PLAXIS Reference Table 5-2 / sec. 6.1.7.4,
+    // Scientific Manual sec. 3.4). A wall or interface is a line the water either crosses freely,
+    // cannot cross at all, or crosses against a resistance:
+    //   0 fully permeable   — no effect on flow. The DEFAULT, and what every project written
+    //                         before this field said: the flow net runs through the line.
+    //   1 impermeable       — a screen. The pore-pressure degrees of freedom on the two sides are
+    //                         fully separated, which is exactly how PLAXIS words it.
+    //   2 semi-permeable    — the line passes q_n = dh / R per unit area, R = d/k the HYDRAULIC
+    //                         RESISTANCE in units of TIME: "considering a semi-permeable wall with
+    //                         a thickness d and permeability k, the hydraulic resistance is defined
+    //                         by d/k... To determine d/k, one needs to measure the average
+    //                         discharge q through a wall (per unit of area) for a given head
+    //                         difference dh, so d/k = dh/q." Neither d nor k separately matters.
+    // The manual's own note that "the end points of an interface are always permeable" is honoured
+    // for free: the mesh splitter keeps the end nodes shared, so water goes around the ends.
+    // Longitudinal drainage conductivity (dk, the interface acting as a drain along its length) is
+    // NOT carried yet — a declared gap rather than a silent zero.
+    int flow_barrier = 0;
+    double hydraulic_resistance = 0.0;   // d/k [day], read when flow_barrier = 2
 };
 
 enum class LoadKind { Point, Distributed };
