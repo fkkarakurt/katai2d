@@ -19,6 +19,27 @@ $ErrorActionPreference = "Stop"
 $repo = "fkkarakurt/katai2d"
 $dest = Join-Path $env:LOCALAPPDATA "Programs\katai2d"
 
+# Windows PowerShell 5.1 still defaults to TLS 1.0 on some builds; GitHub serves 1.2+ only.
+try { [Net.ServicePointManager]::SecurityProtocol =
+          [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
+
+# Every web call goes through here, for two reasons learned the hard way.
+#
+# -UseBasicParsing: without it, Windows PowerShell 5.1 hands the response to the Internet
+# Explorer engine to build a DOM, which stops with a "Script Execution Risk" prompt and then
+# refuses. An installer that asks a question mid-run is an installer that fails in a script.
+#
+# The response body is decoded EXPLICITLY. For a text/plain asset PowerShell returns a string,
+# but for application/octet-stream -- which is what GitHub serves a .sha256 attachment as -- it
+# returns a BYTE ARRAY, and every string operation then silently works on bytes: splitting it
+# yielded 55, the byte value of the character "7", which was compared against a real hash and
+# reported as "expected 55". Decoding before parsing is the fix.
+function Get-TextFromUrl([string]$url) {
+    $r = Invoke-WebRequest $url -UseBasicParsing
+    if ($r.Content -is [byte[]]) { return [Text.Encoding]::UTF8.GetString($r.Content) }
+    return [string]$r.Content
+}
+
 if ($ZipPath) {
     $zip = $ZipPath
     if (-not (Test-Path $zip)) { throw "zip not found: $zip" }
@@ -34,7 +55,7 @@ if ($ZipPath) {
     $asset = $release.assets | Where-Object { $_.name -like "katai2d-*-win64.zip" } | Select-Object -First 1
     if (-not $asset) { throw "no katai2d-*-win64.zip asset in the latest release" }
     $zip = Join-Path $env:TEMP $asset.name
-    Invoke-WebRequest $asset.browser_download_url -OutFile $zip
+    Invoke-WebRequest $asset.browser_download_url -OutFile $zip -UseBasicParsing
 
     # Verify against the published .sha256 when the release carries one;
     # otherwise against the SHA-256 digest the release API reports for the
@@ -42,7 +63,15 @@ if ($ZipPath) {
     $shaAsset = $release.assets | Where-Object { $_.name -eq "$($asset.name).sha256" } | Select-Object -First 1
     $expected = $null
     if ($shaAsset) {
-        $expected = ((Invoke-WebRequest $shaAsset.browser_download_url).Content -split '\s+')[0].Trim().ToLower()
+        # "<64 hex>  <filename>" -- take the hex word, whatever whitespace or line ending
+        # follows it. Refuse anything that is not 64 hex characters rather than comparing
+        # against a fragment: a checksum that cannot be read is not a checksum that passed.
+        $shaText = Get-TextFromUrl $shaAsset.browser_download_url
+        if ($shaText -match '([0-9a-fA-F]{64})') {
+            $expected = $Matches[1].ToLower()
+        } else {
+            throw "the published checksum file $($shaAsset.name) does not contain a SHA-256: '$shaText'"
+        }
     } elseif ("$($asset.digest)" -match '^sha256:([0-9a-fA-F]{64})$') {
         $expected = $Matches[1].ToLower()
     }
