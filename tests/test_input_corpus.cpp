@@ -145,6 +145,14 @@
 //   expected: the closed form above with E_oed^ref = 30 MPa, p_ref = 100 kPa, m = 0.5, H = 4 m
 //   band:     3%, as asserted below -- measured +0.41% on the file's own 0.5 m tri6 mesh with the driver's 40 load steps. The first HS boundary-value case in the corpus: the model was already verified at the material point, this verifies the path from the file through the mesher, the cap return mapping and the load stepping. It also pins a phase convention: a phase reports displacement relative to its own start, so the loading phase's field IS the increment (the seating phase's 0 -> 50 kPa settlement of 0.0164 m is reported separately and is not comparable to the same integral, because the law's stiffness vanishes as sigma -> 0)
 
+// verify: KV-STR-002
+//   oracle:   published_benchmark
+//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems)
+//   locator:  Section 3.3, sliding block for testing interfaces; the manual states the answer as failure force = width * c_w + weight * tan(phi_w) = 4 * 2.5 + 100 * 0.5 = 60 kN/m, and reports 60.4 kN/m for its own run. Block E = 30 GN/m2, nu = 0, gamma = 25 kN/m3 with K0 = 0; interface in a separate elastoplastic data set, E = 3 GN/m2, nu = 0.45, phi_w = 26.6 deg, c_w = 2.5 kN/m2; bottom fully fixed, u_x = 0.1 m prescribed on the left side with u_y free, everything else free. Width 4 m and a weight of 100 kN/m at gamma = 25 fix the block at 4 m x 1 m -- the manual prints the arithmetic rather than the height
+//   quantity: the horizontal failure force, as the sum of the reactions on the pushed edge, run from the checked-in tests/corpus/kv-str-002-plaxis-sliding-block.k2d [kN/m]
+//   expected: 60.076 -- the manual's own formula evaluated at the phi_w it specifies. Its printed 60 uses tan(phi_w) = 0.5, i.e. 26.565 deg, so the manual is 0.13% self-inconsistent and the closed form is quoted here at the INPUT it publishes; PLAXIS reports 60.4
+//   band:     2% vs the closed form and 2% vs PLAXIS, as asserted below -- measured -0.59% (59.7202) on the file's own 0.25 m tri6 mesh, converging monotonically with refinement (-1.31% / -0.59% / -0.27% at 0.5 / 0.25 / 0.125 m). Four further checks make the number more than a coincidence: the block translates rigidly rather than shearing; the force is bit-identical when the imposed slip is doubled, so it is a plateau and not a stiffness reading; adhesion and friction each move the answer by exactly the closed form's amount, so the two terms are reproduced separately; and deleting the interface changes the answer by five orders of magnitude. That last one is a regression sentry: until 2026-08-10 the interface lay along a fixed boundary whose two split sides share coordinates, the boundary conditions fixed both, and the joint was welded shut in silence
+//
 // verify: KV-SLP-002
 //   oracle:   published_benchmark
 //   source:   Griffiths and Lane (1999), "Slope stability analysis by finite elements", Geotechnique 49(3), Example 1
@@ -1597,6 +1605,185 @@ void oracle_hs_oedometer(const m::Project& pr) {
 
 }  // namespace
 
+// ------------------------------ KV-STR-002: sliding block, PLAXIS Validation 3.3 ---------
+// The first case in which an INTERFACE decides the answer, and it is the manual's own
+// interface verification. A stiff block is pushed sideways until it slides on a Coulomb
+// joint at its base; the failure force is the joint's capacity and nothing else.
+//
+// Width 4 m and "weight 100 kN/m" at gamma = 25 fix the block at 4 m x 1 m -- the manual
+// prints the arithmetic, not the height. The interface lives in a SEPARATE data set, as the
+// manual specifies, reached through the schema's iface_material.
+//
+// Why the case is here at all: it did not run until 2026-08-10. The interface lies ALONG a
+// fixed boundary, whose two split sides sit at identical coordinates, and the boundary
+// conditions -- which match by coordinate -- fixed both of them. The joint was assembled and
+// then welded shut, in silence, and this file read 5.4e6 kN/m instead of 60. The last check
+// below is the sentry for that: with no interface the answer is not slightly different, it
+// is wrong by five orders of magnitude.
+constexpr double kSbW = 4.0, kSbH = 1.0, kSbGamma = 25.0;
+constexpr double kSbCw = 2.5, kSbPhiw = 26.6, kSbPush = 0.1;
+
+// The manual's own formula, evaluated for whatever (c_w, gamma) it is handed.
+double sliding_capacity(double cw, double gamma) {
+    return kSbW * cw + (kSbW * kSbH * gamma) * std::tan(kSbPhiw * kPi / 180.0);
+}
+
+m::Project build_sliding_block_at(double cw, double gamma, double push) {
+    m::Project pr;
+    pr.name = "KV-STR-002 PLAXIS 3.3 sliding block";
+    pr.x_min = 0.0; pr.x_max = kSbW;
+    pr.y_min = 0.0; pr.y_max = kSbH;
+    pr.has_water = false;
+    pr.initial_procedure = m::InitialProcedure::K0Procedure;
+    pr.mesh.elem_size = 0.25;
+    pr.mesh.order = 6;
+    pr.mesh.auto_refine = false;
+
+    m::Material block;                       // "The block is modelled as a stiff linear elastic material"
+    block.name = "Concrete block";
+    block.model = m::SoilModel::LinearElastic;
+    block.E = 3.0e7; block.nu = 0.0;         // 30 GN/m2
+    block.gamma_unsat = gamma; block.gamma_sat = gamma;
+    block.k0_auto = false; block.k0 = 0.0;   // "self weight stresses are switched on using K0 = 0"
+    pr.materials.push_back(block);
+
+    m::Material joint;                       // "stored in a separate elastoplastic data set"
+    joint.name = "Interface";
+    joint.model = m::SoilModel::MohrCoulomb;
+    joint.E = 3.0e6; joint.nu = 0.45;        // 3 GN/m2
+    joint.c = cw; joint.phi = kSbPhiw; joint.psi = 0.0;
+    joint.gamma_unsat = gamma; joint.gamma_sat = gamma;
+    joint.k0_auto = false; joint.k0 = 0.0;
+    joint.rinter_rigid = true;               // R_inter = 1: the data set IS the interface strength
+    pr.materials.push_back(joint);
+
+    m::SoilPolygon P;
+    P.name = "Block";
+    P.material = 0;
+    P.x = {0, kSbW, kSbW, 0};
+    P.y = {0, 0, kSbH, kSbH};
+    // "Bottom nodes are fully fixed. All other nodes are entirely free."
+    P.edge_bc = {(int)m::BCType::FullyFixed, (int)m::BCType::Free,
+                 (int)m::BCType::Free, (int)m::BCType::Free};
+    pr.polygons.push_back(P);
+
+    m::StructElement iface;
+    iface.name = "Base interface";
+    iface.kind = m::StructKind::Interface;
+    iface.x1 = 0.0; iface.y1 = 0.0; iface.x2 = kSbW; iface.y2 = 0.0;
+    iface.iface_material = 1;
+    pr.structs.push_back(iface);
+
+    m::PrescribedDisp D;                     // "a prescribed horizontal displacement of 0.1 m ...
+    D.name = "Push";                         //  but the nodes at this side are free to move vertically"
+    D.x1 = 0.0; D.y1 = 0.0; D.x2 = 0.0; D.y2 = kSbH;
+    D.set_ux = true;  D.ux = push;
+    D.set_uy = false; D.uy = 0.0;
+    pr.disps.push_back(D);
+
+    pr.initial.struct_active = {1};
+    pr.initial.disp_active = {0};
+    m::Phase shove;
+    shove.name = "Push";
+    shove.struct_active = {1};
+    shove.disp_active = {1};
+    pr.phases.push_back(shove);
+    return pr;
+}
+
+m::Project build_sliding_block() { return build_sliding_block_at(kSbCw, kSbGamma, kSbPush); }
+
+// The horizontal force the prescribed displacement applies: sum R_x over the pushed edge.
+// Returns a negative number if the run did not get there, which every caller checks.
+double sliding_force(const m::Project& pr) {
+    const auto M = katai::app::mesh_from_project(pr);
+    if (!M.ok) return -1.0;
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    if (res.size() != 2 || !res[1].ok) return -1.0;
+    const auto& R = res[1];
+    if (R.reaction.size() != 2u * (size_t)R.mesh.node_count) return -1.0;
+    double rx = 0.0;
+    for (int n = 0; n < R.mesh.node_count; ++n)
+        if (std::fabs(R.mesh.x[n]) < 1e-9) rx += R.reaction[2 * n];
+    return std::fabs(rx);
+}
+
+void oracle_sliding_block(const m::Project& pr) {
+    const auto M = katai::app::mesh_from_project(pr);
+    check(M.ok, "block meshed from the file's own settings");
+    if (!M.ok) { std::printf("      (%s)\n", M.message.c_str()); return; }
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    check(res.size() == 2 && res[0].ok && res[1].ok, "initial + push phases converged");
+    if (res.size() != 2 || !res[1].ok) return;
+    const auto& R = res[1];
+
+    // (a) The block SLIDES: it translates by the imposed amount instead of distorting. Every
+    // node of the block carries the same u_x, which is what "it hardly deforms" means.
+    check(R.reaction.size() == 2u * (size_t)R.mesh.node_count, "the static phase reports reactions");
+    if (R.reaction.size() != 2u * (size_t)R.mesh.node_count) return;
+    double ux_lo = 1e300, ux_hi = -1e300;
+    for (int n = 0; n < R.mesh.node_count; ++n) {
+        if (R.mesh.y[n] < 1e-9) continue;                 // the seam's outer side is the fixed world
+        ux_lo = std::fmin(ux_lo, R.disp[2 * n]);
+        ux_hi = std::fmax(ux_hi, R.disp[2 * n]);
+    }
+    std::printf("      block u_x spans %.9f .. %.9f m (imposed %.3f)\n", ux_lo, ux_hi, kSbPush);
+    check(std::fabs(ux_lo - kSbPush) < 1e-4 && std::fabs(ux_hi - kSbPush) < 1e-4,
+          "the block translates rigidly on the joint rather than shearing against a welded base");
+
+    // (b) The published comparison.
+    double rx = 0.0;
+    for (int n = 0; n < R.mesh.node_count; ++n)
+        if (std::fabs(R.mesh.x[n]) < 1e-9) rx += R.reaction[2 * n];
+    const double F = std::fabs(rx);
+    const double F_exact = sliding_capacity(kSbCw, kSbGamma);   // 60.076 at phi_w = 26.6 deg
+    const double F_manual = 60.0, F_plaxis = 60.4;
+    std::printf("      F: manual's arithmetic %.1f | exact for phi_w = %.1f deg %.4f | PLAXIS %.1f"
+                " | file run %.4f (%+.2f%% vs exact, %+.2f%% vs PLAXIS)\n",
+                F_manual, kSbPhiw, F_exact, F_plaxis, F,
+                100.0 * (F - F_exact) / F_exact, 100.0 * (F - F_plaxis) / F_plaxis);
+    check(std::fabs(F - F_exact) < 0.02 * F_exact, "failure force within 2% of the closed form");
+    check(std::fabs(F - F_plaxis) < 0.02 * F_plaxis,
+          "failure force within 2% of the published PLAXIS number");
+
+    // (c) It is a LIMIT load, not a stiffness reading: pushing twice as far must not push
+    // twice as hard. On a plateau the two runs agree to the last bit.
+    const double F_far = sliding_force(build_sliding_block_at(kSbCw, kSbGamma, 2.0 * kSbPush));
+    std::printf("      pushed 2x as far: %.9f vs %.9f kN/m\n", F_far, F);
+    check(F_far > 0.0 && std::fabs(F_far - F) <= 1e-9 * F,
+          "the force is a plateau: twice the imposed slip gives the same failure force");
+
+    // (d) The two TERMS of the manual's formula, moved one at a time. Matching one number can
+    // be a coincidence of two compensating errors; reproducing adhesion and friction
+    // separately cannot. Doubling gamma leaves c_w alone and vice versa, and the relative
+    // deviation must not move -- the discretisation bias is structural, not per-case.
+    const double bias = (F - F_exact) / F_exact;
+    struct Term { const char* what; double cw, gamma; };
+    for (const Term& t : {Term{"gamma doubled ", kSbCw, 2.0 * kSbGamma},
+                          Term{"adhesion off  ", 0.0, kSbGamma},
+                          Term{"friction alone", 0.0, 2.0 * kSbGamma}}) {
+        const double f = sliding_force(build_sliding_block_at(t.cw, t.gamma, kSbPush));
+        const double e = sliding_capacity(t.cw, t.gamma);
+        std::printf("      %s: %10.6f vs closed form %10.6f (%+.3f%%)\n", t.what, f, e,
+                    100.0 * (f - e) / e);
+        check(f > 0.0 && std::fabs((f - e) / e - bias) < 1e-6,
+              "the term moves by exactly the closed form's amount (same relative bias)");
+    }
+
+    // (e) The sentry for the fault this case was built to catch. Delete the interface and the
+    // block is welded to its base: the answer is not slightly stiffer, it is off the scale.
+    m::Project welded = build_sliding_block();
+    welded.structs.clear();
+    welded.initial.struct_active.clear();
+    welded.phases[0].struct_active.clear();
+    const double F_welded = sliding_force(welded);
+    std::printf("      with the interface removed: %.6g kN/m\n", F_welded);
+    check(F_welded > 100.0 * F,
+          "removing the interface changes the answer by orders of magnitude (it is not inert)");
+}
+
 int main() {
     std::printf("Input corpus: checked-in .k2d == programmatic build, validated, solved from the file\n");
     const CorpusCase cases[] = {
@@ -1617,6 +1804,7 @@ int main() {
         {"kv-fnd-014-davis-booker-strip-footing.k2d", build_davis_booker, oracle_davis_booker},
         {"kv-slp-002-griffiths-lane-example1.k2d", build_gl_example1, oracle_gl_example1},
         {"kv-cst-002-hs-oedometer.k2d", build_hs_oedometer, oracle_hs_oedometer},
+        {"kv-str-002-plaxis-sliding-block.k2d", build_sliding_block, oracle_sliding_block},
     };
     for (const CorpusCase& c : cases) run_case(c);
 

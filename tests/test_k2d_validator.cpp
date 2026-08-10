@@ -135,6 +135,21 @@ void probe(const m::Project& base, Mut mutate, const char* path, io::Severity se
     if (hit && sev == io::Severity::Error)
         check(!r.ok(), (std::string(what) + " (report not ok)").c_str());
 }
+
+// The mirror of `probe`: mutate one field and assert the contract stays SILENT at that
+// path. A bound that was loosened on purpose needs pinning as deliberately as one that
+// fires, or the next tightening puts it back without anybody noticing.
+template <class Mut>
+void probe_accepts(const m::Project& base, Mut mutate, const char* path, const char* what) {
+    m::Project p = base;
+    mutate(p);
+    const io::ValidationReport r = io::validate_project(p);
+    const io::Issue* hit = nullptr;
+    for (const io::Issue& i : r.issues)
+        if (i.path == path) { hit = &i; break; }
+    check(hit == nullptr, what);
+    if (hit) std::printf("      unexpected %s: %s\n", hit->path.c_str(), hit->message.c_str());
+}
 }  // namespace
 
 int main() {
@@ -227,12 +242,20 @@ int main() {
               p.materials[0].Rinter = 1.2;
           },
           "materials[0].Rinter", E, "interface factor above 1");
+    // K0 = 0 is legal: with free vertical sides it is the only initial state in equilibrium
+    // with them, and the PLAXIS Validation Manual's own sliding-block case (3.3) asks for it.
+    probe_accepts(base,
+                  [](m::Project& p) {
+                      p.materials[0].k0_auto = false;
+                      p.materials[0].k0 = 0.0;
+                  },
+                  "materials[0].k0", "manual K0 = 0 is accepted (zero horizontal stress)");
     probe(base,
           [](m::Project& p) {
               p.materials[0].k0_auto = false;
-              p.materials[0].k0 = 0.0;
+              p.materials[0].k0 = -0.1;
           },
-          "materials[0].k0", E, "manual K0 not positive");
+          "materials[0].k0", E, "manual K0 negative");
     probe(base, [](m::Project& p) { p.materials[0].oc_mode = 5; }, "materials[0].oc_mode", E,
           "unknown stress-history mode");
     probe(base,

@@ -499,9 +499,14 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
         r.add(Severity::Error, path("Rinter"),
               who + "the interface strength factor must lie in (0, 1] (got " + num(m.Rinter) +
                   ")");
-    if (!m.k0_auto && !(m.k0 > 0.0))
+    // K0 = 0 is allowed and is not a curiosity: with free vertical sides, sigma_h = 0 is the ONLY
+    // initial state in equilibrium with them, which is why the PLAXIS Validation Manual's own
+    // sliding-block case (section 3.3) specifies it. A NEGATIVE K0 stays refused -- it asks for
+    // horizontal tension under vertical compression, which no initial state has.
+    if (!m.k0_auto && !(m.k0 >= 0.0))
         r.add(Severity::Error, path("k0"),
-              who + "K0 must be positive (got " + num(m.k0) + ")");
+              who + "K0 cannot be negative -- it would put the ground in horizontal tension under "
+                    "its own weight (got " + num(m.k0) + ")");
     if (m.oc_mode < 0 || m.oc_mode > 2)
         r.add(Severity::Error, path("oc_mode"),
               who + "the stress-history mode must be 0 (none), 1 (OCR) or 2 (POP); got " +

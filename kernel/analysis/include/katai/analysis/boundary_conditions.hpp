@@ -56,8 +56,17 @@ inline void fix_node(DofMap& dofs, int node, EdgeFixity bc, double nx, double ny
 // dashpot + upward-wave traction take over the restraint role). Only u_x is released; u_y stays
 // fixed (v1 horizontal-SH scope, disclosed in the phase message). Static phases never pass it, so
 // the static chain (and the rigid-base dynamic default) is bit-for-bit unchanged.
+// `released` (optional, one entry per mesh node): a node marked here takes NO edge fixity at all.
+// It exists for one measured reason. An interface drawn ALONG a fixed boundary splits the mesh into
+// two node sets at the SAME coordinates -- one carrying the soil, one carrying nothing -- and this
+// function matches by coordinate, so it fixed both and welded the joint shut. The support belongs
+// to the empty side, which plays the rigid outside world; the soil side has to be free to slide,
+// and only the caller knows which is which. Nodes are released wholesale rather than per component
+// because the seam's two sides are geometrically indistinguishable here: the caller has already
+// decided that this node is not the one the boundary is talking about.
 inline void apply_boundary_conditions(const std::vector<BcEdge>& edges, const katai::mesh::Mesh& mesh,
-                                      DofMap& dofs, bool free_base_ux = false) {
+                                      DofMap& dofs, bool free_base_ux = false,
+                                      const std::vector<char>* released = nullptr) {
     double ymin = 1e300, yspan_max = -1e300;
     if (free_base_ux) {
         for (int node : mesh.boundary_nodes) {
@@ -67,6 +76,7 @@ inline void apply_boundary_conditions(const std::vector<BcEdge>& edges, const ka
     }
     const double ytol = free_base_ux ? 1e-6 * std::fmax(1.0, yspan_max - ymin) : 0.0;
     for (int node : mesh.boundary_nodes) {
+        if (released && node < static_cast<int>(released->size()) && (*released)[node]) continue;
         const double xn = mesh.x[node], yn = mesh.y[node];
         struct EdgeHit { EdgeFixity bc; double nx, ny; double d; };
         std::vector<EdgeHit> hits;

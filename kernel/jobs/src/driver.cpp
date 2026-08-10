@@ -701,8 +701,9 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // --- Standalone interfaces (StructKind::Interface): a Coulomb slip surface in the soil at ANY
     // orientation, on tri6 OR tri15. Mirror the wall: split the mesh along the line (BEFORE the DofMap)
     // and build a soil-soil joint (build_soil_interface, after the DofMap) connecting the two sides.
-    // Strength/stiffness come from the adjacent soil + Rinter. Boundary nodes that get duplicated have
-    // their fixity propagated (apply_boundary_conditions matches by coordinate). (interface-formulation.md.)
+    // Strength/stiffness come from the adjacent soil + Rinter. Boundary nodes that get duplicated need
+    // their support decided rather than copied -- see the seam pass after the loop.
+    // (interface-formulation.md.)
     struct IfaceSpec {
         std::vector<katai::core::SegSeam> seam;
         katai::core::iface::InterfaceProps ip;
@@ -711,10 +712,12 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         std::string name;
     };
     std::vector<IfaceSpec> soil_ifaces;
+    std::vector<char> bc_released;   // nodes the domain boundary must NOT fix (filled by the seam pass)
     {
         std::vector<char> is_bnode(mesh.node_count, 0);
         for (int n : mesh.boundary_nodes) is_bnode[n] = 1;
         const int order = mesh.nodes_per_element;
+        std::vector<std::pair<int, int>> boundary_seam;   // (orig, dup) pairs sitting ON the boundary
         for (size_t si = 0; si < pr.structs.size(); ++si) {
             const auto& s = pr.structs[si];
             if (s.kind != model::StructKind::Interface) continue;
@@ -757,9 +760,14 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                              " m drawn: the rest of the line falls outside the soil, and the soil "
                              "there stays bonded.");
             }
-            // Propagate boundary fixity to the duplicated boundary nodes (else a side daylighting on a
-            // fixed boundary would be left unconstrained -> support hole).
-            for (const auto& p : sp.seam) if (is_bnode[p.orig]) mesh.boundary_nodes.push_back(p.dup);
+            // A seam node that sits on the domain boundary needs its support DECIDED, not copied;
+            // the decision needs the finished mesh, so collect the pairs and settle them below.
+            // `is_bnode` was sized before the first split, so a seam that catches a node an EARLIER
+            // interface created indexes past it -- guard the read rather than the growth: a twin is
+            // never a domain-boundary node in its own right, so "not in the snapshot" is the answer.
+            for (const auto& p : sp.seam)
+                if (p.orig < (int)is_bnode.size() && is_bnode[p.orig])
+                    boundary_seam.push_back({p.orig, p.dup});
             // Interface strength/stiffness from the adjacent soil + Rinter (PLAXIS strength reduction).
             const double mx = 0.5 * (s.x1 + s.x2), my = 0.5 * (s.y1 + s.y2);
             int smat = s.iface_material >= 0 ? s.iface_material : material_at(mx + 1e-3 * sp.nx, my + 1e-3 * sp.ny);
@@ -774,6 +782,39 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             sp.ip.phi_i = std::atan(Rinter * std::tan(sm.phi * kPi / 180.0));
             sp.ip.sigma_t = sm.tension_cutoff ? Rinter * std::max(0.0, sm.tensile_strength) : 0.0;
             soil_ifaces.push_back(std::move(sp));
+        }
+        // Who holds the support on a seam that touches the domain boundary. The two sides of a seam
+        // sit at the SAME coordinates and apply_boundary_conditions matches by coordinate, so this
+        // cannot be left to it: measured 2026-08-10, an interface drawn ALONG a fixed boundary got
+        // both of its sides fixed and became inert -- the mesh split, the joint assembled, and the
+        // block welded itself to its own base (PLAXIS Validation Manual 3.3 read 5.4e6 kN/m instead
+        // of 60). The discriminator is which side carries soil once the split has re-wired the
+        // elements, which is why this runs after every interface has been built.
+        if (!boundary_seam.empty()) {
+            std::vector<int> refs(mesh.node_count, 0);
+            for (int e = 0; e < mesh.element_count; ++e)
+                for (int k = 0; k < mesh.nodes_per_element; ++k) ++refs[mesh.node_of(e, k)];
+            bc_released.assign(mesh.node_count, 0);
+            for (const auto& [orig, dup] : boundary_seam) {
+                const bool orig_soil = refs[orig] > 0, dup_soil = refs[dup] > 0;
+                if (orig_soil && dup_soil) {
+                    // The seam CROSSES the boundary here (a slip surface reaching the fixed base):
+                    // both sides carry soil, so both keep the support or the split opens a hole.
+                    mesh.boundary_nodes.push_back(dup);
+                } else if (dup_soil) {
+                    // The seam runs ALONG the boundary and the twin took the soil. The original
+                    // carries nothing: it IS the rigid outside world, it is already in the boundary
+                    // list, and the twin must stay free to slide against it. Nothing to do.
+                } else {
+                    // Mirror image -- the drawn line's direction decides which side is duplicated,
+                    // and a user cannot be expected to know that. Hand the support to the empty
+                    // twin and take it away from the soil-carrying original. (`!orig_soil &&
+                    // !dup_soil` lands here too: nothing to hold either way, and the twin taking
+                    // the fixity keeps the node count of fixed DOFs unchanged.)
+                    mesh.boundary_nodes.push_back(dup);
+                    if (orig_soil) bc_released[orig] = 1;
+                }
+            }
         }
     }
 
@@ -1173,7 +1214,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // every static phase and the rigid-base dynamic default keep the user's fixities bit-for-bit.
     const bool compliant_base =
         phase == InitialPhase::Dynamic && io.config && io.config->seismic_compliant_base;
-    katai::core::apply_boundary_conditions(bc_edges_from(pr), mesh, dofs, compliant_base);
+    katai::core::apply_boundary_conditions(bc_edges_from(pr), mesh, dofs, compliant_base,
+                                           bc_released.empty() ? nullptr : &bc_released);
     // Line prescribed displacements (schema v2): every mesh node ON an active line gets the
     // set components FIXED here and their target values ramped 0 -> u by the static solver
     // (nonzero Dirichlet). Static family only: the validator refuses other phase types at
