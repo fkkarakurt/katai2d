@@ -153,6 +153,22 @@
 //   expected: 60.076 -- the manual's own formula evaluated at the phi_w it specifies. Its printed 60 uses tan(phi_w) = 0.5, i.e. 26.565 deg, so the manual is 0.13% self-inconsistent and the closed form is quoted here at the INPUT it publishes; PLAXIS reports 60.4
 //   band:     2% vs the closed form and 2% vs PLAXIS, as asserted below -- measured -0.59% (59.7202) on the file's own 0.25 m tri6 mesh, converging monotonically with refinement (-1.31% / -0.59% / -0.27% at 0.5 / 0.25 / 0.125 m). Four further checks make the number more than a coincidence: the block translates rigidly rather than shearing; the force is bit-identical when the imposed slip is doubled, so it is a plateau and not a stiffness reading; adhesion and friction each move the answer by exactly the closed form's amount, so the two terms are reproduced separately; and deleting the interface changes the answer by five orders of magnitude. That last one is a regression sentry: until 2026-08-10 the interface lay along a fixed boundary whose two split sides share coordinates, the boundary conditions fixed both, and the joint was welded shut in silence
 //
+// verify: KV-CST-009
+//   oracle:   closed_form
+//   source:   the Soft Soil logarithmic compression law as published in the PLAXIS Material Models Manual chapter 10: e_v = lambda* ln(p'/p'_0) in primary loading (Eq 10-5) and e_v^e = kappa* ln(p'/p'_0) in unloading/reloading (Eq 10-6, with the tangent bulk modulus K_ur = p'/kappa* of Eq 10-7); M is not an input but is derived from K0nc (Eq 10-13) so that primary one-dimensional compression reaches that K0nc. The same equations are verified at the material point and through a hand-built BVP in test_soft_soil
+//   locator:  a laterally confined weightless column walks the SAME stress range three times -- 50 -> 200 kPa primary, back to 50, and up to 200 again -- so the two indices and the pre-consolidation memory are each read from one file. Primary loading holds K0 = K0nc, so there the mean stress is proportional to the vertical one and the vertical stress ratio stands in for p'/p'_0. UNLOADING does not: with nu_ur = 0.15 the lateral stress falls far less than the vertical one, the ratio of horizontal to vertical stress RISES (sec. 10.3.5, "a well-known phenomenon in overconsolidated materials"), and sec. 10.3.1 draws the consequence that kappa* has no exact relation to the one-dimensional swelling index. The swelling leg therefore has its own closed form, evaluated on the mean stresses the elastic one-dimensional path d(sigma_h) = nu_ur/(1-nu_ur) d(sigma_v) produces (stated in full and evaluated in the test, not called from the material header)
+//   quantity: settlement of each of the three legs, and the lateral stress ratio reached in primary loading, run from the checked-in tests/corpus/kv-cst-009-soft-soil-oedometer.k2d [m; -]
+//   expected: primary lambda* ln(4) H = 0.110904 m with lambda* = 0.02, H = 4 m; swelling and reloading kappa* ln(p'_0/p'_1) H = 0.010186 m with kappa* = 0.004; K0 -> K0nc = 1 - sin(25 deg) = 0.5774
+//   band:     2% on primary loading, 3% on the two elastic legs and 3% on K0nc, as asserted below -- measured -0.01% / -1.01% / -1.63% and +2.11% on the file's own 0.5 m tri6 mesh. The naive oracle kappa* ln(sigma_v/sigma_v0) reads 0.0222 m against a measured 0.0101, a factor of 2.2: the ORACLE is wrong there, not the run, and the manual says so in two separate places -- writing the closed form for the leg the soil actually walks is part of the verification, not a detail of it. Three further witnesses: the primary/reload ratio (11.07) matches the ratio of the two closed forms (10.89), which is the model's memory for the pre-consolidation stress stated as a number -- same file, same load, same stress range, an order of magnitude less settlement the second time; K0nc is MEASURED rather than the M formula being checked against itself; and the two indices are moved one at a time (lambda* x2, kappa* x2), each moving only its own leg and by exactly the closed form's amount
+//
+// verify: KV-CST-010
+//   oracle:   closed_form
+//   source:   the Soft Soil Creep differential law as published in the PLAXIS Material Models Manual chapter 11 (Buisman 1936, Bjerrum 1967, Garlanger 1972, Vermeer & Neher 1999): the volumetric creep rate is (mu*/tau)(p_eq/p_p^eq)^beta with beta = (lambda*-kappa*)/mu* (Eq 11-23), and tau is ONE DAY because the standard oedometer's 24-hour stage is the definition of the normal-consolidation line (Eq 11-13/14). The same law is verified at the material point in test_soft_soil_creep
+//   locator:  on the normal-consolidation line p_eq = p_p, the rate reduces to mu*/tau independently of the stress level, and the differential law integrates exactly to e_v^c(t) = mu* ln(1 + t/tau) (derivation in docs/references/soft-soil-creep-formulation.md sec. 5.1, stated in full and evaluated in the test). Ground under its own weight, seeded normally consolidated by the K0 procedure, is left to sit for 100 days: NO load changes in the measured phase, only time passes, and the strain is uniform over the column even though the stress is not
+//   quantity: surface settlement after 100 days of creep under self-weight alone, run from the checked-in tests/corpus/kv-cst-010-soft-soil-creep-column.k2d [m]
+//   expected: mu* ln(1 + 100/1) H = 0.018460 m with mu* = 0.001, H = 4 m
+//   band:     3%, as asserted below -- measured +0.74% on the file's own 0.5 m tri6 mesh with 50 time steps. The fixture is what it is because the manual predicted two earlier attempts failing: a weightless column loaded from zero cannot be used, because the initial pre-consolidation stress sits at the model's minimum of one stress unit, the first load puts p_eq far above it, and with beta = 16 the rate (p_eq/p_p)^beta collapses the run -- sec. 11.11's warning about unrealistic initial creep rates at OCR = 1 arriving as an arithmetic fact; and a zero-duration phase is elastic, because this model has no instantaneous plastic component at all (all inelastic strain is time-dependent). Three further witnesses: the law is sampled across three decades of time (1 / 10 / 1000 days, -2.06% / +1.62% / +0.61%), which no linear-in-time creep law could match at once and which locates tau at one day; the settlement is linear in mu*; and the differential witness -- the SAME file with the same ground as plain Soft Soil, which has every feature of this model except the creep, moves EXACTLY 0.000e+00 m over the same hundred days, so what is measured is creep and not a slow numerical drift
+//
 // verify: KV-CST-008
 //   oracle:   closed_form
 //   source:   the Hardening Soil with small-strain stiffness degradation law as published in the PLAXIS Material Models Manual chapter 7 (modified Hardin-Drnevich after Santos & Correia 2001): secant G_s/G0 = 1/(1 + a |gamma|/gamma_ref) with a = 0.385 (Eq 7-3), tangent G_t = G0/(1 + a gamma/gamma_ref)^2 (Eq 7-8) cut off below at G_ur = E_ur/(2(1+nu_ur)) (Eq 7-9), and Masing's rule gamma_0.7,re-loading = 2 gamma_0.7,virgin-loading (Eq 7-11), which the manual applies as a constant factor "throughout loading" rather than at a detected reversal; the same equations are verified at the material point in test_hssmall
@@ -2221,6 +2237,303 @@ void oracle_hss(const m::Project& pr) {
     }
 }
 
+// ------------------------------ KV-CST-009: Soft Soil oedometer, MMM ch. 10 --------------
+// The Soft Soil model's defining behaviour is logarithmic compression with a SEPARATE
+// unloading line and a memory for the pre-consolidation stress, and this case walks the same
+// stress range three times to read all three of those off one file: primary loading at
+// lambda*, unloading at kappa*, and reloading at kappa* again because the cap remembers where
+// it has been. The material point and a hand-built BVP were already verified (test_soft_soil);
+// what was unwitnessed is the path from a .k2d through the mesher, the K0/gravity initial
+// state, the cap seeding and the load stepping.
+constexpr double kSsLam = 0.02;     // lambda*, modified compression index
+constexpr double kSsKap = 0.004;    // kappa*, modified swelling index (lambda*/kappa* = 5)
+constexpr double kSsPhi = 25.0;
+constexpr double kSsH = 4.0;        // column height
+constexpr double kSsSeat = 50.0;    // seating stress
+constexpr double kSsFull = 200.0;   // loaded stress
+
+constexpr double kSsNu = 0.15;      // nu_ur, the manual's default for this model
+
+// The manual's own law (Eq 10-5/10-6), written out here rather than called from the material
+// header: e_v = index * ln(p'/p'_0). In one-dimensional strain the column is laterally
+// confined, so e_v IS the vertical strain, and weightless soil keeps the stress uniform, so
+// the settlement is e_v * H exactly.
+//
+// PRIMARY loading stays on the K0nc line -- the model's M is derived precisely so that
+// one-dimensional compression reaches K0nc and then holds it -- so there the mean stress is
+// proportional to the vertical one and the vertical stress ratio can stand in for p'/p'_0.
+double ss_settlement(double index) { return index * std::log(kSsFull / kSsSeat) * kSsH; }
+
+// UNLOADING is not the mirror of that, and the manual says why twice. Sec. 10.3.5: with a small
+// nu_ur the lateral stress falls far less than the vertical one in one-dimensional unloading,
+// so the ratio of horizontal to vertical stress RISES -- "a well-known phenomenon in
+// overconsolidated materials". Sec. 10.3.1 draws the consequence: there is no exact relation
+// between kappa* and the one-dimensional swelling index Cs, "because the ratio of horizontal
+// and vertical stresses changes during one-dimensional unloading". So the mean stress does NOT
+// follow the vertical stress on this leg, and kappa* ln(sigma_v/sigma_v0) is the wrong closed
+// form -- it over-predicts the swelling by a factor of 2.2 here. The elastic one-dimensional
+// path gives d(sigma_h) = nu_ur/(1 - nu_ur) d(sigma_v), and the law is then evaluated on the
+// mean stresses that path actually produces.
+double ss_swell(double kap) {
+    const double K0nc = 1.0 - std::sin(kSsPhi * kPi / 180.0);
+    const double sh0 = K0nc * kSsFull, p0 = (kSsFull + 2.0 * sh0) / 3.0;
+    const double sh1 = sh0 + (kSsNu / (1.0 - kSsNu)) * (kSsSeat - kSsFull);
+    const double p1 = (kSsSeat + 2.0 * sh1) / 3.0;
+    return kap * std::log(p0 / p1) * kSsH;
+}
+
+m::Project build_ss_at(double lam, double kap) {
+    m::Project pr;
+    pr.name = "KV-CST-009 Soft Soil oedometer";
+    pr.x_min = 0.0; pr.x_max = 1.0; pr.y_min = 0.0; pr.y_max = kSsH;
+    pr.has_water = false;
+    pr.initial_procedure = m::InitialProcedure::GravityLoading;
+    pr.mesh.elem_size = 0.5;
+    pr.mesh.order = 6;
+    pr.mesh.auto_refine = false;
+
+    m::Material s;
+    s.name = "Soft Soil clay";
+    s.model = m::SoilModel::SoftSoil;
+    s.gamma_unsat = s.gamma_sat = 0.0;       // weightless: the applied stress is the whole story
+    s.c = 0.0; s.phi = kSsPhi; s.psi = 0.0;  // the manual's default dilatancy for this model
+    s.tension_cutoff = false;                // K2D-M001: the SS return does not read it
+    s.lam_star = lam; s.kap_star = kap;
+    s.nu_ur = 0.15;                          // the manual's default
+    s.k0nc_auto = true;                      // M is derived from K0nc (Eq 10-13)
+    s.k0_auto = true;                        // start ON the K0nc line, so it stays there
+    pr.materials.push_back(s);
+
+    m::SoilPolygon P;
+    P.name = "Column";
+    P.material = 0;
+    P.x = {0.0, 1.0, 1.0, 0.0};
+    P.y = {0.0, 0.0, kSsH, kSsH};
+    P.edge_bc = {(int)m::BCType::FullyFixed, (int)m::BCType::HorizontallyFixed,
+                 (int)m::BCType::Free, (int)m::BCType::HorizontallyFixed};
+    pr.polygons.push_back(P);
+
+    m::Load seat;
+    seat.kind = m::LoadKind::Distributed;
+    seat.name = "Seating stress";
+    seat.x1 = 0.0; seat.y1 = kSsH; seat.x2 = 1.0; seat.y2 = kSsH;
+    seat.qx1 = seat.qx2 = 0.0; seat.qy1 = seat.qy2 = -kSsSeat;
+    pr.loads.push_back(seat);
+    m::Load inc;
+    inc.kind = m::LoadKind::Distributed;
+    inc.name = "Load increment";
+    inc.x1 = 0.0; inc.y1 = kSsH; inc.x2 = 1.0; inc.y2 = kSsH;
+    inc.qx1 = inc.qx2 = 0.0; inc.qy1 = inc.qy2 = -(kSsFull - kSsSeat);
+    pr.loads.push_back(inc);
+
+    pr.initial.load_active = {1, 0};              // the seating stress establishes the state
+    m::Phase load;  load.name  = "Load to 200 kPa";   load.load_active  = {1, 1};
+    m::Phase unl;   unl.name   = "Unload to 50 kPa";  unl.load_active   = {1, 0};
+    m::Phase rel;   rel.name   = "Reload to 200 kPa"; rel.load_active   = {1, 1};
+    pr.phases.push_back(load);
+    pr.phases.push_back(unl);
+    pr.phases.push_back(rel);
+    return pr;
+}
+
+m::Project build_ss() { return build_ss_at(kSsLam, kSsKap); }
+
+// The three phases' settlements (each reported relative to its own start, so each IS the
+// increment of that leg) plus the lateral stress ratio reached in primary loading.
+struct SsRead { bool ok = false; double load = 0, unload = 0, reload = 0, k0 = 0; };
+SsRead read_ss(const m::Project& pr) {
+    SsRead r;
+    const auto M = katai::app::mesh_from_project(pr);
+    if (!M.ok) return r;
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    if (res.size() != 4) return r;
+    for (const auto& p : res) if (!p.ok) return r;
+    r.load = res[1].max_disp; r.unload = res[2].max_disp; r.reload = res[3].max_disp;
+    // K0 = sigma_h/sigma_v at the end of primary loading, averaged over the column's interior
+    // (the loaded top and the fixed base are boundary-disturbed).
+    double acc = 0.0; int n_acc = 0;
+    for (int n = 0; n < res[1].mesh.node_count; ++n) {
+        const double y = res[1].mesh.y[n];
+        if (y < 0.5 || y > kSsH - 0.5) continue;
+        const double sv = res[1].stress.stress[n](1), sh = res[1].stress.stress[n](0);
+        if (sv < -1.0) { acc += sh / sv; ++n_acc; }
+    }
+    r.k0 = n_acc ? acc / n_acc : 0.0;
+    r.ok = true;
+    return r;
+}
+
+void oracle_ss(const m::Project& pr) {
+    const SsRead R = read_ss(pr);
+    check(R.ok, "the initial, loading, unloading and reloading phases all converged");
+    if (!R.ok) return;
+
+    // (a) Primary loading rides the lambda* line.
+    const double cf_lam = ss_settlement(kSsLam), cf_kap = ss_swell(kSsKap);
+    std::printf("      primary loading: closed form %.6f m | file run %.6f m (%+.2f%%)\n",
+                cf_lam, R.load, 100.0 * (R.load - cf_lam) / cf_lam);
+    check(std::fabs(R.load - cf_lam) < 0.02 * cf_lam, "primary settlement within 2% of lambda* ln(4)");
+
+    // (b) The SAME stress range unloaded rides the kappa* line -- a different index, measured
+    // separately on the same file. This is the model's "distinction between primary loading and
+    // unloading/reloading" and it cannot be faked by a single stiffness. The comparison is
+    // against the closed form of the leg the soil actually walks (see ss_swell): the naive
+    // kappa* ln(sigma_v/sigma_v0) reads 0.0222 m against a measured 0.0101, and it is the
+    // ORACLE that is wrong there, not the run.
+    std::printf("      unloading:       closed form %.6f m | file run %.6f m (%+.2f%%)\n",
+                cf_kap, R.unload, 100.0 * (R.unload - cf_kap) / cf_kap);
+    check(std::fabs(R.unload - cf_kap) < 0.03 * cf_kap, "swelling within 3% of the kappa* leg");
+
+    // (c) Reloading the same range stays on kappa* -- the cap REMEMBERS the pre-consolidation
+    // stress it reached, so the ground does not compress a second time. Same file, same load,
+    // same stress range, an order of magnitude less settlement: that ratio is the sharpest
+    // statement of the model's memory, and both of its legs are pinned to closed forms above.
+    std::printf("      reloading:       closed form %.6f m | file run %.6f m (%+.2f%%); "
+                "primary/reload ratio %.3f (closed forms %.3f)\n",
+                cf_kap, R.reload, 100.0 * (R.reload - cf_kap) / cf_kap,
+                R.load / R.reload, cf_lam / cf_kap);
+    check(std::fabs(R.reload - cf_kap) < 0.03 * cf_kap, "reloading within 3% of the kappa* leg");
+    check(std::fabs(R.load / R.reload - cf_lam / cf_kap) < 0.05 * (cf_lam / cf_kap),
+          "the pre-consolidation memory: primary/reload matches the two closed forms");
+
+    // (d) M is not an input: the file gives K0nc and the manual derives M from it (Eq 10-13) so
+    // that primary one-dimensional compression REACHES that K0nc. Measuring the lateral stress
+    // ratio is what verifies the derivation -- pinning M by its formula would only check the
+    // formula against itself.
+    const double k0nc = 1.0 - std::sin(kSsPhi * kPi / 180.0);
+    std::printf("      K0 in primary loading: %.6f (K0nc = 1 - sin(phi) = %.6f, %+.2f%%)\n",
+                R.k0, k0nc, 100.0 * (R.k0 - k0nc) / k0nc);
+    check(std::fabs(R.k0 - k0nc) < 0.03 * k0nc,
+          "primary one-dimensional compression reaches K0nc (so M was derived correctly)");
+
+    // (e) The law is linear in its index: doubling lambda* doubles the primary settlement and
+    // leaves the unloading leg alone; doubling kappa* does the opposite. Two indices moved one
+    // at a time -- the same separation of terms that KV-STR-002 used on adhesion and friction.
+    const SsRead A = read_ss(build_ss_at(2.0 * kSsLam, kSsKap));
+    const SsRead B = read_ss(build_ss_at(kSsLam, 2.0 * kSsKap));
+    std::printf("      lambda* x2: primary %.6f (cf %.6f) | kappa* x2: unloading %.6f (cf %.6f)\n",
+                A.load, ss_settlement(2.0 * kSsLam), B.unload, ss_swell(2.0 * kSsKap));
+    check(A.ok && std::fabs(A.load - ss_settlement(2.0 * kSsLam)) < 0.02 * ss_settlement(2.0 * kSsLam),
+          "doubling lambda* doubles the primary settlement, as the closed form says");
+    check(B.ok && std::fabs(B.unload - ss_swell(2.0 * kSsKap)) < 0.03 * ss_swell(2.0 * kSsKap),
+          "doubling kappa* doubles the swelling, as the closed form says");
+}
+
+// ------------------------------ KV-CST-010: Soft Soil Creep, MMM ch. 11 ------------------
+// Secondary compression from a .k2d: the ground is not loaded at all in the measured phase,
+// only TIME passes, and the settlement that appears is the whole point of this model.
+//
+// Getting the experiment right took two attempts, and the manual predicted both failures. A
+// weightless column loaded from zero (the KV-CST-009 fixture) cannot be used: the initial
+// pre-consolidation stress sits at the model's minimum of one stress unit, the first load puts
+// p_eq far above it, and the creep rate goes as (p_eq/p_p)^beta with beta = (lambda*-kappa*)/mu*
+// = 16 here -- the run collapses, which is sec. 11.11's warning about unrealistically high
+// initial creep rates at OCR = 1 arriving as an arithmetic fact. A phase of zero duration is no
+// use either: in this model there is no instantaneous plastic component at all (all inelastic
+// strain is time-dependent), so a zero-duration phase is elastic. What works is what the model
+// is FOR: ground under its own weight, seeded normally consolidated by the K0 procedure, left
+// to sit. There p_eq = p_p everywhere, the rate is exactly mu*/tau regardless of depth, and the
+// strain is uniform even though the stress is not.
+constexpr double kScLam = 0.02, kScKap = 0.004, kScMu = 0.001;   // lambda*/mu* = 20 (sec. 11.8.1)
+constexpr double kScH = 4.0, kScGamma = 15.0, kScDays = 100.0;
+
+// Eq 11-13/14 as the manual reads them: tau is ONE DAY, because the standard oedometer's
+// 24-hour stage is the definition of the normal-consolidation line. Under constant effective
+// stress on that line the differential creep law integrates exactly (soft-soil-creep-
+// formulation.md sec. 5.1): e_v^c(t) = mu* ln(1 + t/tau). Written out here, not called from
+// the material header.
+double ssc_creep(double mu, double days) { return mu * std::log(1.0 + days / 1.0) * kScH; }
+
+m::Project build_ssc_at(double mu, double days, bool creep_model) {
+    m::Project pr;
+    pr.name = "KV-CST-010 Soft Soil Creep column";
+    pr.x_min = 0.0; pr.x_max = 1.0; pr.y_min = 0.0; pr.y_max = kScH;
+    pr.has_water = false;
+    pr.initial_procedure = m::InitialProcedure::K0Procedure;
+    pr.mesh.elem_size = 0.5;
+    pr.mesh.order = 6;
+    pr.mesh.auto_refine = false;
+
+    m::Material s;
+    s.name = "Soft Soil Creep clay";
+    s.model = creep_model ? m::SoilModel::SoftSoilCreep : m::SoilModel::SoftSoil;
+    s.gamma_unsat = s.gamma_sat = kScGamma;
+    s.c = 0.0; s.phi = kSsPhi; s.psi = 0.0;
+    s.tension_cutoff = false;
+    s.lam_star = kScLam; s.kap_star = kScKap; s.mu_star = mu;
+    s.nu_ur = kSsNu;
+    s.k0nc_auto = true; s.k0_auto = true;      // seeded ON the K0nc line, normally consolidated
+    pr.materials.push_back(s);
+
+    m::SoilPolygon P;
+    P.name = "Column";
+    P.material = 0;
+    P.x = {0.0, 1.0, 1.0, 0.0};
+    P.y = {0.0, 0.0, kScH, kScH};
+    P.edge_bc = {(int)m::BCType::FullyFixed, (int)m::BCType::HorizontallyFixed,
+                 (int)m::BCType::Free, (int)m::BCType::HorizontallyFixed};
+    pr.polygons.push_back(P);
+
+    pr.initial.name = "K0";
+    pr.initial.duration = 0.0;
+    m::Phase wait;
+    wait.name = "Creep";
+    wait.duration = days;
+    wait.time_steps = 50;
+    pr.phases.push_back(wait);
+    return pr;
+}
+
+m::Project build_ssc() { return build_ssc_at(kScMu, kScDays, true); }
+
+double ssc_run(const m::Project& pr) {
+    const auto M = katai::app::mesh_from_project(pr);
+    if (!M.ok) return -1.0;
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    if (res.size() != 2 || !res[0].ok || !res[1].ok) return -1.0;
+    return res[1].max_disp;
+}
+
+void oracle_ssc(const m::Project& pr) {
+    const double u = ssc_run(pr);
+    check(u > 0.0, "the K0 and creep phases converged");
+    if (u <= 0.0) return;
+
+    // (a) The published law at the file's own duration.
+    const double cf = ssc_creep(kScMu, kScDays);
+    std::printf("      creep at %.0f days: closed form %.6f m | file run %.6f m (%+.2f%%)\n",
+                kScDays, cf, u, 100.0 * (u - cf) / cf);
+    check(std::fabs(u - cf) < 0.03 * cf, "creep settlement within 3% of mu* ln(1 + t/tau)");
+
+    // (b) The law is LOGARITHMIC, and one point cannot show that. Three more durations spanning
+    // three decades do: a linear creep law fitted through any one of them would miss the others
+    // by a factor of ten. The spread also locates tau -- at t = tau the settlement is mu* ln 2,
+    // and it is the 24-hour oedometer stage that fixes tau at one day (Eq 11-13/14).
+    for (double d : {1.0, 10.0, 1000.0}) {
+        const double uu = ssc_run(build_ssc_at(kScMu, d, true));
+        const double c = ssc_creep(kScMu, d);
+        std::printf("      t = %6.0f d: run %.6e | closed form %.6e (%+.2f%%)\n", d, uu, c,
+                    100.0 * (uu - c) / c);
+        check(uu > 0.0 && std::fabs(uu - c) < 0.03 * c, "the creep law holds across three decades of time");
+    }
+
+    // (c) The settlement is linear in mu*, the one parameter this model adds.
+    const double u2 = ssc_run(build_ssc_at(2.0 * kScMu, kScDays, true));
+    std::printf("      mu* x2: %.6f m (closed form %.6f)\n", u2, ssc_creep(2.0 * kScMu, kScDays));
+    check(u2 > 0.0 && std::fabs(u2 - ssc_creep(2.0 * kScMu, kScDays)) < 0.03 * ssc_creep(2.0 * kScMu, kScDays),
+          "doubling mu* doubles the creep, as the closed form says");
+
+    // (d) The differential witness: the same file with the SAME ground as plain Soft Soil --
+    // which has every feature of this model except the creep -- must sit still for the same
+    // hundred days. If it moved, the settlement above would be something other than creep.
+    const double u_ss = ssc_run(build_ssc_at(kScMu, kScDays, false));
+    std::printf("      plain Soft Soil for the same 100 days: %.3e m (creep run %.3e, ratio %.0f)\n",
+                u_ss, u, u / std::fmax(u_ss, 1e-15));
+    check(u_ss >= 0.0 && u_ss < 0.01 * u, "without the creep model, time alone moves nothing");
+}
+
 int main() {
     std::printf("Input corpus: checked-in .k2d == programmatic build, validated, solved from the file\n");
     const CorpusCase cases[] = {
@@ -2244,6 +2557,8 @@ int main() {
         {"kv-str-002-plaxis-sliding-block.k2d", build_sliding_block, oracle_sliding_block},
         {"kv-str-003-plaxis-beam-bending.k2d", build_beams, oracle_beams},
         {"kv-cst-008-hssmall-unloading.k2d", build_hss, oracle_hss},
+        {"kv-cst-009-soft-soil-oedometer.k2d", build_ss, oracle_ss},
+        {"kv-cst-010-soft-soil-creep-column.k2d", build_ssc, oracle_ssc},
     };
     for (const CorpusCase& c : cases) run_case(c);
 

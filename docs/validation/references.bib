@@ -171,7 +171,17 @@
   note  = {cited by KV-CST-008},
 }
 
+@misc{the1936,
+  title = {the Soft Soil Creep differential law as published in the PLAXIS Material Models Manual chapter 11 (Buisman 1936, Bjerrum 1967, Garlanger 1972, Vermeer & Neher 1999): the volumetric creep rate is (mu*/tau)(p_eq/p_p^eq)^beta with beta = (lambda*-kappa*)/mu* (Eq 11-23), and tau is ONE DAY because the standard oedometer's 24-hour stage is the definition of the normal-consolidation line (Eq 11-13/14). The same law is verified at the material point in test_soft_soil_creep},
+  note  = {cited by KV-CST-010},
+}
+
 @misc{theb,
+  title = {the Soft Soil logarithmic compression law as published in the PLAXIS Material Models Manual chapter 10: e_v = lambda* ln(p'/p'_0) in primary loading (Eq 10-5) and e_v^e = kappa* ln(p'/p'_0) in unloading/reloading (Eq 10-6, with the tangent bulk modulus K_ur = p'/kappa* of Eq 10-7); M is not an input but is derived from K0nc (Eq 10-13) so that primary one-dimensional compression reaches that K0nc. The same equations are verified at the material point and through a hand-built BVP in test_soft_soil},
+  note  = {cited by KV-CST-009},
+}
+
+@misc{thec,
   title = {the analysis driver's former inline SoilModel construction (build_problem.hpp before commit b35bb9a), duplicated verbatim in this test as the oracle},
   note  = {cited by KV-NUM-001},
 }
@@ -181,7 +191,7 @@
   note  = {cited by KV-NUM-006},
 }
 
-@misc{thec,
+@misc{thed,
   title = {the prestressed-anchor contract of PLAXIS 2D (Reference Manual, node-to-node and fixed-end anchors: a lock-off force is applied when the anchor is activated, after which the anchor behaves as an elastic spring from that state); the equivalence used as the oracle is the statement that a constant internal force N0 along the anchor axis is, in the residual, an external force of the same magnitude and direction -- so the same problem can be built twice from different primitives},
   note  = {cited by KV-STR-001},
 }
