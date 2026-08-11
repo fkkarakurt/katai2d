@@ -71,6 +71,24 @@ struct HardeningSoilParams {
     double G0_ref = 0.0;     // very-small-strain shear modulus (reference); 0 = no HSsmall
     double gamma07 = 1.0e-4; // threshold shear strain where G_s drops to 0.722·G0 (virgin)
     static constexpr double kHDa = 0.385;  // Hardin-Drnevich (Santos&Correia): G_s=0.722G0 @ γ=γ07
+    // Masing's rule, Eq 7-11: gamma_0.7,re-loading = 2 gamma_0.7,virgin-loading. The INPUT
+    // gamma07 is the virgin-loading threshold (sec. 7.4: "gamma_0.7 is to be supplied for
+    // virgin loading"); the curve the model's QUASI-ELASTIC stiffness rides on is that
+    // backbone scaled by 2. The manual is explicit that this factor is not switched on at a
+    // detected reversal: "the scaling factor for the threshold shear strain is assumed to be
+    // constant and equal to 2 throughout loading", because in HS-small the virgin response is
+    // elasto-plastic from the start of shearing and the hardening plasticity already supplies
+    // the faster virgin decay. The functions below are the BACKBONE (Eq 7-3/7-7/7-8/7-10, at
+    // the input gamma07); the FE overlay in hs_small_strain_params rides the reloading curve.
+    static constexpr double kMasing = 2.0;
+    double gamma07_reload() const { return kMasing * gamma07; }
+    // MMM sec. 7.5: "Although Alpan suggests that the ratio E0/Eur can exceed 10 for very soft
+    // clays, the maximum ratio E0/Eur or G0/Gur permitted in the HSsmall model is limited to
+    // 20." Both moduli follow the same power law, so the ratio is stress-independent and the
+    // cap can be applied once, at the reference values.
+    static constexpr double kMaxG0Ratio = 20.0;
+    double Gur_ref() const { return Eur_ref / (2.0 * (1.0 + nu_ur)); }
+    double G0_ref_cap() const { return kMaxG0Ratio * Gur_ref(); }
 
     double G0(double sigma3) const { return G0_ref * stiffness_factor(sigma3); }     // stress-dependent
     double Gur(double sigma3) const { return Eur(sigma3) / (2.0 * (1.0 + nu_ur)); }  // lower cut-off modulus

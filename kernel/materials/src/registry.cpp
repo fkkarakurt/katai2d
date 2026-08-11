@@ -155,8 +155,11 @@ MaterialModel build_hs(const MaterialParams& p) {
 
 MaterialModel build_hss(const MaterialParams& p) {
     MaterialModel mm = build_hs_core(p);
-    mm.hs.G0_ref = p.G0_ref;               // small-strain overlay (MMM ch. 7)
     mm.hs.gamma07 = p.gamma07;
+    // Small-strain overlay (MMM ch. 7), capped at the ratio the model permits (sec. 7.5:
+    // G0/Gur <= 20). The driver says so when the cap bites (K2D-M004) -- a G0 quietly reduced
+    // is a different soil from the one the file asked for.
+    mm.hs.G0_ref = std::min(p.G0_ref, mm.hs.G0_ref_cap());
     hs_calibrate_cap(mm.hs, k0nc_of(p));
     return mm;
 }

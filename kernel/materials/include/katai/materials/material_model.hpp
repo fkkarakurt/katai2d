@@ -251,11 +251,19 @@ inline double hs_frozen_Eur(const HardeningSoilParams& pe,
 
 // HSsmall (G0_ref>0): scale Eur_ref by the small-strain over-stiffness Et/Eur(gamma_hist).
 // G0_ref=0 -> returns p unchanged (plain HS, byte-identical). (Material Models Manual sec 7.)
+//
+// The threshold is the RELOADING one, 2*gamma07 (Masing, Eq 7-11): what this function sets is
+// the model's quasi-elastic (unload/reload) stiffness, and the manual keeps that factor
+// constant at 2 throughout loading rather than switching it on at a reversal. Riding the
+// virgin backbone here instead would degrade the stiffness twice as fast as the manual's
+// model: measured 12.9% more heave on the unloading case KV-CST-008 (0.7996 mm against the
+// manual's curve, 0.7132 mm) -- and softer is not the safe side when the number being read is
+// a wall deflection or a heave.
 inline HardeningSoilParams hs_small_strain_params(const HardeningSoilParams& p,
                                                   double gamma_hist) {
     HardeningSoilParams pe = p;
     if (p.G0_ref > 0.0) {
-        const double d = 1.0 + HardeningSoilParams::kHDa * gamma_hist / p.gamma07;
+        const double d = 1.0 + HardeningSoilParams::kHDa * gamma_hist / p.gamma07_reload();
         const double E0_ref = 2.0 * (1.0 + p.nu_ur) * p.G0_ref;
         pe.Eur_ref = std::max(E0_ref / (d * d), p.Eur_ref);
     }

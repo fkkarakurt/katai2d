@@ -153,6 +153,14 @@
 //   expected: 60.076 -- the manual's own formula evaluated at the phi_w it specifies. Its printed 60 uses tan(phi_w) = 0.5, i.e. 26.565 deg, so the manual is 0.13% self-inconsistent and the closed form is quoted here at the INPUT it publishes; PLAXIS reports 60.4
 //   band:     2% vs the closed form and 2% vs PLAXIS, as asserted below -- measured -0.59% (59.7202) on the file's own 0.25 m tri6 mesh, converging monotonically with refinement (-1.31% / -0.59% / -0.27% at 0.5 / 0.25 / 0.125 m). Four further checks make the number more than a coincidence: the block translates rigidly rather than shearing; the force is bit-identical when the imposed slip is doubled, so it is a plateau and not a stiffness reading; adhesion and friction each move the answer by exactly the closed form's amount, so the two terms are reproduced separately; and deleting the interface changes the answer by five orders of magnitude. That last one is a regression sentry: until 2026-08-10 the interface lay along a fixed boundary whose two split sides share coordinates, the boundary conditions fixed both, and the joint was welded shut in silence
 //
+// verify: KV-CST-008
+//   oracle:   closed_form
+//   source:   the Hardening Soil with small-strain stiffness degradation law as published in the PLAXIS Material Models Manual chapter 7 (modified Hardin-Drnevich after Santos & Correia 2001): secant G_s/G0 = 1/(1 + a |gamma|/gamma_ref) with a = 0.385 (Eq 7-3), tangent G_t = G0/(1 + a gamma/gamma_ref)^2 (Eq 7-8) cut off below at G_ur = E_ur/(2(1+nu_ur)) (Eq 7-9), and Masing's rule gamma_0.7,re-loading = 2 gamma_0.7,virgin-loading (Eq 7-11), which the manual applies as a constant factor "throughout loading" rather than at a detected reversal; the same equations are verified at the material point in test_hssmall
+//   locator:  one-dimensional UNLOADING of a laterally confined column: excavating h_exc of a gamma = 20 kN/m3 column relieves d(sigma) = gamma h_exc uniformly over the remaining depth. With m = 0 the stiffness is stress-independent, so the strain is uniform and the heave is eps x H_rem; in one-dimensional strain gamma = eps (gamma = sqrt(3/2 e:e) with e_yy = 2eps/3, e_xx = e_zz = -eps/3). Inverting the secant law sigma = E_oed,0 eps/(1 + a eps/gamma_ref) gives eps = d(sigma)/(E_oed,0 - a d(sigma)/gamma_ref), with E_oed,0 from E_0 = 2(1+nu_ur) G_0 (stated in full and evaluated in the test, not called from the material header)
+//   quantity: heave of the excavated floor after deactivating the upper 2 m of a 10 m HSsmall column, run from the checked-in tests/corpus/kv-cst-008-hssmall-unloading.k2d [m]
+//   expected: the closed form above with G0^ref = 187.5 MPa (E_0 = 450 MPa = 5 E_ur), gamma_0.7 = 1.5e-4, E_ur^ref = 90 MPa, nu_ur = 0.2 -> 7.1322e-4 m
+//   band:     2%, as asserted below -- measured -0.30% (7.1108e-4) on the file's own 1.0 m tri6 mesh. UNLOADING is the point: in the HS family a deviatoric LOADING path is plastic from the first increment (the K0 state is seeded onto the shear surface), so there is no elastic window in which to measure a stiffness, whereas excavating moves away from both surfaces and is purely quasi-elastic. That the window really is elastic is not assumed but shown: the plain-HS twin, the same file with the overlay switched off (G0 = 0), reproduces ITS closed form -- elastic unloading at E_ur -- to +0.000%, and it heaves 4.500x as much, so the overlay is not a small correction here. Two further witnesses: setting G0 = G_ur makes the overlay redundant (E_0 = E_ur) and the run falls back onto plain HS BIT-FOR-BIT, which pins the overlay to the elastic branch alone (a version that also touched the plastic moduli or the failure surface could not close that identity); and the law is sampled at three points of the degradation curve, h_exc = 1 / 2 / 4 m, holding to -0.14% / -0.30% / -0.72%. Those three also pin Masing's factor: riding the VIRGIN backbone (gamma_0.7 instead of 2 gamma_0.7) would read +5.7% / +12.9% / +34.8% high, a deviation that grows with strain -- the signature of the wrong threshold, not of discretisation. The build did ride the virgin backbone until 2026-08-11
+//
 // verify: KV-STR-003
 //   oracle:   published_benchmark
 //   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems)
@@ -2061,6 +2069,158 @@ void oracle_beams(const m::Project& pr) {
     check(bare_refused, "without the beams there is nothing left to solve, and the run says so");
 }
 
+// ------------------------------ KV-CST-008: HSsmall unloading, MMM ch. 7 -----------------
+// The first HSsmall boundary-value case: the small-strain stiffness decides the answer, and
+// it is read from the file. The model was already verified at the material point
+// (test_hssmall runs Eq 7-3/7-7/7-8/7-10 against the closed form) -- what was unwitnessed is
+// the path a user walks, and that is where the fault was.
+//
+// Why UNLOADING: in the HS family a deviatoric LOADING path is plastic from the first
+// increment (the K0 state is seeded onto the shear surface, so there is no elastic window to
+// measure a stiffness in). Excavating is the opposite -- it moves away from both surfaces, so
+// the response is purely quasi-elastic and it is exactly the stiffness this overlay sets.
+// The K0 procedure produces no strain, so the phase starts at gamma_hist = 0, which is where
+// E0 lives. The plain-HS twin (checked below) reproduces its own closed form EXACTLY, which
+// is what proves the window is elastic rather than merely assumed to be.
+constexpr double kHsG0 = 187500.0;      // G0^ref: E0 = 2(1+nu_ur) G0 = 450 MPa = 5 x Eur
+constexpr double kHsG07 = 1.5e-4;       // gamma_0.7 (VIRGIN loading, as the manual defines it)
+constexpr double kHsEur = 90000.0;
+constexpr double kHsNu = 0.2;           // nu_ur
+constexpr double kHsGamma = 20.0;       // unit weight -> d(sigma) = gamma h_exc
+constexpr double kHsDepth = 10.0;       // model depth
+
+// Written out here rather than called from the material header, so the comparison is the FE
+// answer against the law and not the law against itself. One-dimensional unloading of a
+// laterally confined column: the stress relief is uniform, m = 0 makes the stiffness
+// stress-independent, so the strain is uniform and the heave is eps x H_rem. The tangent
+// modulus rides the Hardin-Drnevich hyperbola (Eq 7-8) whose integral is the secant law
+// (Eq 7-7), and gamma = eps in one-dimensional strain (gamma = sqrt(3/2 e:e) with
+// e_yy = 2eps/3, e_xx = e_zz = -eps/3). Inverting sigma = E_oed,0 eps / (1 + a eps/gamma_ref)
+// gives the closed form below. gamma_ref is the RELOADING threshold 2 gamma_0.7 (Eq 7-11).
+double hss_oed(double E) { return E * (1.0 - kHsNu) / ((1.0 + kHsNu) * (1.0 - 2.0 * kHsNu)); }
+double hss_heave(double dsigma, double H_rem, double masing) {
+    const double E0 = 2.0 * (1.0 + kHsNu) * kHsG0;
+    const double eps = dsigma / (hss_oed(E0) - 0.385 * dsigma / (masing * kHsG07));
+    return eps * H_rem;
+}
+double hs_heave(double dsigma, double H_rem) { return dsigma * H_rem / hss_oed(kHsEur); }
+
+// h_exc metres of the column are excavated in the staged phase. G0 = 0 builds the plain-HS
+// twin (the schema's own switch: no G0, no small-strain overlay).
+m::Project build_hss_at(double h_exc, double G0) {
+    m::Project pr;
+    pr.name = "KV-CST-008 HSsmall unloading";
+    pr.x_min = 0.0; pr.x_max = 2.0; pr.y_min = 0.0; pr.y_max = kHsDepth;
+    pr.has_water = false;
+    pr.initial_procedure = m::InitialProcedure::K0Procedure;
+    pr.mesh.elem_size = 1.0;
+    pr.mesh.order = 6;
+    pr.mesh.auto_refine = false;
+
+    m::Material s;
+    s.name = "HSsmall";
+    s.model = m::SoilModel::HSsmall;
+    s.gamma_unsat = s.gamma_sat = kHsGamma;
+    s.E = 1.0e4; s.nu = kHsNu;              // not read by this model (HS reads its own pair)
+    s.c = 10.0; s.phi = 35.0; s.psi = 0.0;
+    s.tension_cutoff = false;               // K2D-M001: HS does not read it; say so in the file
+    s.E50ref = 3.0e4; s.Eoedref = 3.0e4; s.Eurref = kHsEur;
+    s.m = 0.0;                              // stress-independent: keeps the closed form exact
+    s.nu_ur = kHsNu; s.p_ref = 100.0; s.Rf = 0.9;
+    s.G0ref = G0; s.gamma07 = kHsG07;
+    pr.materials.push_back(s);
+
+    const double y_cut = kHsDepth - h_exc;
+    m::SoilPolygon keep;
+    keep.name = "Remaining";
+    keep.material = 0;
+    keep.x = {0.0, 2.0, 2.0, 0.0};
+    keep.y = {0.0, 0.0, y_cut, y_cut};
+    keep.edge_bc = {(int)m::BCType::FullyFixed, (int)m::BCType::HorizontallyFixed,
+                    (int)m::BCType::Free, (int)m::BCType::HorizontallyFixed};
+    pr.polygons.push_back(keep);
+    m::SoilPolygon dig;
+    dig.name = "Excavated";
+    dig.material = 0;
+    dig.x = {0.0, 2.0, 2.0, 0.0};
+    dig.y = {y_cut, y_cut, kHsDepth, kHsDepth};
+    dig.edge_bc = {(int)m::BCType::Free, (int)m::BCType::HorizontallyFixed,
+                   (int)m::BCType::Free, (int)m::BCType::HorizontallyFixed};
+    pr.polygons.push_back(dig);
+
+    pr.initial.poly_active = {1, 1};
+    m::Phase cut;
+    cut.name = "Excavate";
+    cut.poly_active = {1, 0};
+    pr.phases.push_back(cut);
+    return pr;
+}
+
+constexpr double kHsExc = 2.0;
+m::Project build_hss() { return build_hss_at(kHsExc, kHsG0); }
+
+// The heave at the excavated floor. Negative = the run did not get there.
+double hss_run(const m::Project& pr) {
+    const auto M = katai::app::mesh_from_project(pr);
+    if (!M.ok) return -1.0;
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    if (res.size() != 2 || !res[0].ok || !res[1].ok) return -1.0;
+    return res[1].max_disp;
+}
+
+void oracle_hss(const m::Project& pr) {
+    const double H_rem = kHsDepth - kHsExc, dsig = kHsGamma * kHsExc;
+    const double u = hss_run(pr);
+    check(u > 0.0, "the K0 and excavation phases converged");
+    if (u <= 0.0) return;
+
+    // (a) The published law, as the manual's model rides it: the reloading curve, 2 gamma_0.7.
+    const double cf = hss_heave(dsig, H_rem, 2.0);
+    const double cf_virgin = hss_heave(dsig, H_rem, 1.0);
+    std::printf("      heave: closed form %.6e m | file run %.6e m (%+.2f%%); riding the VIRGIN"
+                " backbone instead would give %.6e (%+.1f%%)\n",
+                cf, u, 100.0 * (u - cf) / cf, cf_virgin, 100.0 * (cf_virgin - cf) / cf);
+    check(std::fabs(u - cf) < 0.02 * cf, "heave within 2% of the small-strain closed form");
+
+    // (b) The plain-HS twin, from the same file with the overlay switched off (G0 = 0). It must
+    // reproduce ITS closed form -- elastic unloading at E_ur -- and it does so exactly, which is
+    // what establishes that this window is quasi-elastic and the comparison in (a) is a
+    // stiffness measurement rather than a plasticity one. It is also the differential witness:
+    // the overlay is not a small correction here, it is a factor of four.
+    const double u_hs = hss_run(build_hss_at(kHsExc, 0.0));
+    const double cf_hs = hs_heave(dsig, H_rem);
+    std::printf("      plain HS twin: closed form %.6e m | run %.6e m (%+.3f%%), ratio to HSsmall %.3f\n",
+                cf_hs, u_hs, 100.0 * (u_hs - cf_hs) / cf_hs, u_hs / u);
+    check(u_hs > 0.0 && std::fabs(u_hs - cf_hs) < 1e-6 * cf_hs,
+          "the plain-HS twin reproduces elastic unloading at E_ur exactly (the window IS elastic)");
+    check(u_hs > 3.0 * u, "the small-strain overlay is not a small correction (>3x here)");
+
+    // (c) Identity: with G0 set to G_ur the overlay has nothing to add (E0 = E_ur), and the run
+    // must fall back onto plain HS BIT-FOR-BIT. This pins the overlay to the right place in the
+    // model -- a version that also touched the plastic moduli, or the failure surface, would
+    // not close this identity.
+    const double u_id = hss_run(build_hss_at(kHsExc, kHsEur / (2.0 * (1.0 + kHsNu))));
+    std::printf("      G0 = G_ur identity: %.12e vs plain HS %.12e\n", u_id, u_hs);
+    check(u_id > 0.0 && std::fabs(u_id - u_hs) <= 1e-12 * u_hs,
+          "G0 = G_ur reduces to plain HS bit-for-bit (the overlay sits on the elastic branch only)");
+
+    // (d) Not one point of the curve -- three. The degradation law is a function of strain, so
+    // three unloadings of different size sample three different points of it, and the closed
+    // form must hold at each. This is what pins Masing's factor: on the virgin backbone the
+    // deviations below would be +5% .. +21% instead of a fraction of a percent, growing with
+    // the strain, which is the signature of the wrong threshold rather than of discretisation.
+    for (double h : {1.0, 4.0}) {
+        const double uu = hss_run(build_hss_at(h, kHsG0));
+        const double c2 = hss_heave(kHsGamma * h, kHsDepth - h, 2.0);
+        const double c1 = hss_heave(kHsGamma * h, kHsDepth - h, 1.0);
+        std::printf("      h_exc = %.0f m: run %.6e | closed form %.6e (%+.2f%%) | virgin backbone %+.1f%%\n",
+                    h, uu, c2, 100.0 * (uu - c2) / c2, 100.0 * (c1 - c2) / c2);
+        check(uu > 0.0 && std::fabs(uu - c2) < 0.02 * c2,
+              "the closed form holds at another point of the degradation curve");
+    }
+}
+
 int main() {
     std::printf("Input corpus: checked-in .k2d == programmatic build, validated, solved from the file\n");
     const CorpusCase cases[] = {
@@ -2083,6 +2243,7 @@ int main() {
         {"kv-cst-002-hs-oedometer.k2d", build_hs_oedometer, oracle_hs_oedometer},
         {"kv-str-002-plaxis-sliding-block.k2d", build_sliding_block, oracle_sliding_block},
         {"kv-str-003-plaxis-beam-bending.k2d", build_beams, oracle_beams},
+        {"kv-cst-008-hssmall-unloading.k2d", build_hss, oracle_hss},
     };
     for (const CorpusCase& c : cases) run_case(c);
 

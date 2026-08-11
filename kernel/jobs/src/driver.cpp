@@ -421,6 +421,23 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                      "reads it in this build: the run allows tension beyond sigma_t = " +
                      dnum(m.tensile_strength) +
                      " kPa. Use Mohr-Coulomb where the cut-off governs the answer.");
+        // The model does not take a small-strain stiffness more than 20x its own unload/reload
+        // stiffness (MMM sec. 7.5: "Although Alpan suggests that the ratio E0/Eur can exceed 10
+        // for very soft clays, the maximum ratio E0/Eur or G0/Gur permitted in the HSsmall model
+        // is limited to 20"). The cap is applied in the engine, so the run is the reference
+        // code's run rather than a stiffer one -- and it is said out loud, because a G0 that is
+        // quietly reduced describes a different soil from the one the file asks for.
+        if (m.model == model::SoilModel::HSsmall && m.G0ref > 0.0) {
+            const double Gur_ref = m.Eurref / (2.0 * (1.0 + m.nu_ur));
+            const double cap = katai::core::HardeningSoilParams::kMaxG0Ratio * Gur_ref;
+            if (m.G0ref > cap)
+                warn(R, "K2D-M004", m.name,
+                     "Material \"" + m.name + "\" asks for G0 = " + dnum(m.G0ref) +
+                         " kPa, which is " + dnum(m.G0ref / Gur_ref) +
+                         " times its unload/reload shear modulus G_ur = " + dnum(Gur_ref) +
+                         " kPa. The model permits at most 20, so it is solved with G0 = " +
+                         dnum(cap) + " kPa. Lower G0, or raise Eur, to model the soil as entered.");
+        }
         // The pore fluid of a Hardening Soil material is sized at the REFERENCE unload/reload
         // stiffness. That is the model's own elastic pair -- not the unread E box it used to be
         // read from -- but HS stiffness is stress-dependent, so a soil far from p_ref carries a
