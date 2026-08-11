@@ -122,12 +122,26 @@ inline std::vector<char> active_nodes(const mesh::Mesh& mesh,
 
 // Fixes both components of nodes touching no active element (orphaned by excavation) →
 // the reduced system stays non-singular. Must be called BEFORE DofMap::finalize().
+//
+// `carried` (optional, node_count) exempts nodes that a STRUCTURAL element already holds:
+// such a node is not orphaned, and fixing it welds the structure to the outside world --
+// silently, because the run then converges on a model in which that structure carries
+// nothing. The exemption is for PLATES only. A plate is a Timoshenko beam: its axial,
+// bending and shear stiffness together hold BOTH in-plane translations of every node of
+// its chain, so releasing them leaves a solvable system. A geogrid or an anchor is
+// axial-only and an embedded beam has its own DOFs; exempting those would leave the
+// transverse direction singular, so they keep the fixity. Empty = nothing exempted (the
+// old behaviour, bit-for-bit).
+//
+// The case this exists for is the manual's own: PLAXIS 2D Validation Manual §2.3 builds a
+// beam by deactivating the soil cluster so that only the beams remain.
 inline void fix_inactive_nodes(const mesh::Mesh& mesh,
                                const std::vector<char>& active_element,
-                               DofMap& dofs) {
+                               DofMap& dofs,
+                               const std::vector<char>& carried = {}) {
     const std::vector<char> na = active_nodes(mesh, active_element);
     for (int n = 0; n < mesh.node_count; ++n) {
-        if (!na[n]) {
+        if (!na[n] && (carried.empty() || !carried[(size_t)n])) {
             dofs.fix_node_component(n, 0);
             dofs.fix_node_component(n, 1);
         }

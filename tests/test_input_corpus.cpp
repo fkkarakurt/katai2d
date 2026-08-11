@@ -153,6 +153,14 @@
 //   expected: 60.076 -- the manual's own formula evaluated at the phi_w it specifies. Its printed 60 uses tan(phi_w) = 0.5, i.e. 26.565 deg, so the manual is 0.13% self-inconsistent and the closed form is quoted here at the INPUT it publishes; PLAXIS reports 60.4
 //   band:     2% vs the closed form and 2% vs PLAXIS, as asserted below -- measured -0.59% (59.7202) on the file's own 0.25 m tri6 mesh, converging monotonically with refinement (-1.31% / -0.59% / -0.27% at 0.5 / 0.25 / 0.125 m). Four further checks make the number more than a coincidence: the block translates rigidly rather than shearing; the force is bit-identical when the imposed slip is doubled, so it is a plateau and not a stiffness reading; adhesion and friction each move the answer by exactly the closed form's amount, so the two terms are reproduced separately; and deleting the interface changes the answer by five orders of magnitude. That last one is a regression sentry: until 2026-08-10 the interface lay along a fixed boundary whose two split sides share coordinates, the boundary conditions fixed both, and the joint was welded shut in silence
 //
+// verify: KV-STR-003
+//   oracle:   published_benchmark
+//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems)
+//   locator:  Section 2.3, bending of beams. Two problems on a simply supported span of l = 2 m, with the characteristics of an HEB 200 steel beam, which in plane strain is a plate 1 m wide out of plane: EA = 1.64e6 kN, EI = 1200 kNm2, nu = 0.0, a single point load F = 100 kN at mid-span and a uniformly distributed load q = 100 kN/m. The manual publishes both extremes for both problems: point load M_max = 50.0 kNm and u_max = 13.96 mm, distributed load M_max = 50.0 kNm and u_max = 17.43 mm. Its build is reproduced as stated: the two beams are added to the bottom line of a block cluster with a spacing in between, point fixities at their end points, and the soil cluster deactivated so that only the beams remain on a very coarse mesh
+//   quantity: mid-span deflection and peak bending moment of BOTH beams from one run, the deflections from the nodal field and the moments from each element's own force diagram, run from the checked-in tests/corpus/kv-str-003-plaxis-beam-bending.k2d [m; kNm/m]
+//   expected: the Mindlin (Timoshenko) closed forms, stated in full and evaluated in the test rather than called from the plate header: w = F l^3/(48 EI) + F l/(4 kGA') and w = 5 q l^4/(384 EI) + q l^2/(8 kGA'), with the manual's own shear rigidity kGA' = k EA/(2(1+nu)), k = 5/6 (Material Models Manual Eq. 18-8). They evaluate to 13.96206 mm and 17.43428 mm, which is exactly where the published 13.96 and 17.43 come from -- a PLAXIS plate is shear-deformable, and Euler-Bernoulli alone would give 13.8896 and 17.3618. M_max = F l / 4 = q l^2 / 8 = 50 kNm
+//   band:     1% vs the closed form and 2% vs PLAXIS on the deflections, 2% vs the published 50 kNm on the moments, as asserted below -- measured -0.000% on BOTH deflections (13.96206 / 17.43428 mm) and +0.00% / +1.04% on the moments (50.00000 / 50.52083 kNm) on the file's own 0.25 m tri6 mesh. Five further witnesses make the pair more than a coincidence: the moment DISTRIBUTION follows F s/2 and q s(l-s)/2 station by station (worst 0.0000% and 1.0417% of M_max, not just the peak); the distributed beam's peak overshoots by exactly q h^2/12 -- the parabola the element's linear curvature cannot hold inside one element -- reproduced to five figures at h = 0.5 / 0.25 / 0.125 m (52.08333 / 50.52083 / 50.13021), so the residual is a structural discretisation bias that vanishes with h, and "a very coarse mesh is sufficient" is true of the displacements but not of the peak moment; bending and shear are moved SEPARATELY (EI x 4 divides the bending term alone, EA x 100 drives the answer onto the Euler-Bernoulli limit 13.8896 mm) and the run follows the closed form to -0.000% in each; the two spans are bit-for-bit independent; and with the beams deleted the model has no free DOF at all and the run refuses with "Every DOF is fixed; nothing to solve". That last one is the regression sentry for the fault this case was built to find: until 2026-08-11 a deactivated soil cluster pinned every translation of the beams standing in it (fix_inactive_nodes did not ask whether a structure held the node), so the beams were welded to the outside world along their whole length -- the only free DOFs left were their rotations, which was enough for the solve to converge, report "ok" and hand back max|u| = 0.000000e+00 with no warning of any kind
+//
 // verify: KV-SLP-002
 //   oracle:   published_benchmark
 //   source:   Griffiths and Lane (1999), "Slope stability analysis by finite elements", Geotechnique 49(3), Example 1
@@ -1784,6 +1792,275 @@ void oracle_sliding_block(const m::Project& pr) {
           "removing the interface changes the answer by orders of magnitude (it is not inert)");
 }
 
+// ------------------------------ KV-STR-003: bending of beams, PLAXIS Validation 2.3 ------
+// The manual's own PLATE verification, and the first case in the corpus where a plate -- not
+// the soil -- carries the entire load. Both of the manual's problems live in one model,
+// built as it builds them: a single point load on one beam and a uniformly distributed load
+// on another, "added to the bottom line with a spacing in between", with the soil cluster
+// deactivated so that only the beams remain, supported at their end points.
+//
+// Why the case exists: the parity register counted Plate as verified on the strength of
+// KV-STR-001, which is an ANCHOR prestress case -- the plate had no case of its own. Building
+// this one found the reason it had never run. With the soil deactivated every node of the
+// beam touches only passive elements, and fix_inactive_nodes pinned all of them: the beam was
+// welded to the outside world along its whole length, and the file read max|u| = 0.000000e+00
+// while reporting "ok" without one word of warning. Check (a) below is the sentry for that --
+// if the exemption is ever taken back, the deflection does not drift, it collapses to zero.
+constexpr double kBmEA = 1.64e6;     // HEB 200 in plane strain: a plate 1 m wide out of plane
+constexpr double kBmEI = 1200.0;
+constexpr double kBmNu = 0.0;
+constexpr double kBmL = 2.0;         // span
+constexpr double kBmGap = 1.0;       // "with a spacing in between"
+constexpr double kBmF = 100.0;       // point load at mid-span [kN]
+constexpr double kBmQ = 100.0;       // distributed load [kN/m]
+
+// The closed forms, written out here rather than called from the plate header: the comparison
+// must be the FE answer against the law, not the law against itself. A PLAXIS plate is a
+// Mindlin (Timoshenko) beam, so mid-span deflection is bending PLUS shear, with the manual's
+// own shear rigidity kGA' = k EA / (2(1+nu)), k = 5/6 (MMM Eq. 18-8).
+double beam_kGA(double EA, double nu) { return (5.0 / 6.0) * EA / (2.0 * (1.0 + nu)); }
+double beam_defl_point(double EA, double EI, double nu) {
+    return kBmF * kBmL * kBmL * kBmL / (48.0 * EI) + kBmF * kBmL / (4.0 * beam_kGA(EA, nu));
+}
+double beam_defl_udl(double EA, double EI, double nu) {
+    return 5.0 * kBmQ * kBmL * kBmL * kBmL * kBmL / (384.0 * EI) +
+           kBmQ * kBmL * kBmL / (8.0 * beam_kGA(EA, nu));
+}
+// Bending moment along the span. Both problems peak at 50 kNm: F l / 4 = q l^2 / 8.
+double beam_moment_point(double s) {
+    return s <= 0.5 * kBmL ? kBmF * s / 2.0 : kBmF * (kBmL - s) / 2.0;
+}
+double beam_moment_udl(double s) { return kBmQ * s * (kBmL - s) / 2.0; }
+
+m::Project build_beams_at(double EA, double EI, bool q_load, double elem_size) {
+    m::Project pr;
+    pr.name = "KV-STR-003 PLAXIS 2.3 bending of beams";
+    pr.x_min = 0.0; pr.x_max = 2.0 * kBmL + kBmGap;
+    pr.y_min = 0.0; pr.y_max = 1.0;
+    pr.has_water = false;
+    pr.initial_procedure = m::InitialProcedure::K0Procedure;
+    pr.mesh.elem_size = elem_size;   // the manual: "A very coarse mesh is sufficient"
+    pr.mesh.order = 6;
+    pr.mesh.auto_refine = false;
+
+    m::Material soil;             // never activated: the clusters exist to carry the beams
+    soil.name = "Soil (deactivated)";
+    soil.model = m::SoilModel::LinearElastic;
+    soil.E = 1.0e4; soil.nu = 0.3;
+    soil.k0_auto = false; soil.k0 = 0.5;
+    pr.materials.push_back(soil);
+
+    m::PlateMaterial heb;
+    heb.name = "HEB 200";
+    heb.EA = EA; heb.EI = EI; heb.nu = kBmNu; heb.w = 0.0;
+    pr.plates.push_back(heb);
+
+    for (int b = 0; b < 2; ++b) {
+        const double x0 = b == 0 ? 0.0 : kBmL + kBmGap;
+        m::SoilPolygon P;
+        P.name = b == 0 ? "Block F" : "Block q";
+        P.material = 0;
+        P.x = {x0, x0 + kBmL, x0 + kBmL, x0};
+        P.y = {0.0, 0.0, 1.0, 1.0};
+        // The manual's "point fixities on the end points of the beam": left end pinned, right
+        // end on a roller. The cluster is inactive, so these two edges hold nothing except the
+        // beam's own end nodes -- which is exactly what a point fixity is here.
+        P.edge_bc = {(int)m::BCType::Free, (int)m::BCType::VerticallyFixed,
+                     (int)m::BCType::Free, (int)m::BCType::FullyFixed};
+        pr.polygons.push_back(P);
+
+        m::StructElement S;
+        S.kind = m::StructKind::Plate;
+        S.name = b == 0 ? "Beam F" : "Beam q";
+        S.x1 = x0; S.y1 = 0.0; S.x2 = x0 + kBmL; S.y2 = 0.0;
+        S.material = 0;
+        pr.structs.push_back(S);
+    }
+
+    m::Load F;                    // "a single point load ... on a beam"
+    F.kind = m::LoadKind::Point;
+    F.name = "F";
+    F.x1 = 0.5 * kBmL; F.y1 = 0.0; F.x2 = 0.5 * kBmL; F.y2 = 0.0;
+    F.qx1 = F.qx2 = 0.0; F.qy1 = -kBmF; F.qy2 = 0.0;
+    pr.loads.push_back(F);
+
+    m::Load Q;                    // "a uniformly distributed load on a beam"
+    Q.kind = m::LoadKind::Distributed;
+    Q.name = "q";
+    Q.x1 = kBmL + kBmGap; Q.y1 = 0.0; Q.x2 = 2.0 * kBmL + kBmGap; Q.y2 = 0.0;
+    Q.qx1 = Q.qx2 = 0.0; Q.qy1 = Q.qy2 = -kBmQ;
+    pr.loads.push_back(Q);
+
+    pr.initial.poly_active = {0, 0};
+    pr.initial.struct_active = {1, 1};
+    pr.initial.load_active = {0, 0};
+    m::Phase load;
+    load.name = "Load";
+    load.poly_active = {0, 0};
+    load.struct_active = {1, 1};
+    load.load_active = {1, (char)(q_load ? 1 : 0)};
+    pr.phases.push_back(load);
+    return pr;
+}
+
+// 0.25 m: eight elements per span. Still the coarse mesh the manual asks for, and coarse
+// enough that the peak moment carries a visible discretisation bias -- see (c).
+constexpr double kBmH = 0.25;
+m::Project build_beams() { return build_beams_at(kBmEA, kBmEI, true, kBmH); }
+
+// One run of the model: each beam's mid-span deflection (downward positive) and the peak |M|
+// of its own force diagram.
+struct BeamRead {
+    bool ok = false;
+    double w_F = 0.0, w_q = 0.0, M_F = 0.0, M_q = 0.0, max_u = 0.0;
+    std::vector<katai::core::ForceStation> diag_F, diag_q;
+};
+BeamRead read_beams(const m::Project& pr) {
+    BeamRead r;
+    const auto M = katai::app::mesh_from_project(pr);
+    if (!M.ok) return r;
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    if (res.size() != 2 || !res[0].ok || !res[1].ok) return r;
+    const auto& R = res[1];
+    if (R.disp.size() != 2u * (size_t)R.mesh.node_count) return r;
+    r.max_u = R.max_disp;
+    const auto mid_deflection = [&](double x) {
+        for (int n = 0; n < R.mesh.node_count; ++n)
+            if (std::fabs(R.mesh.x[n] - x) < 1e-9 && std::fabs(R.mesh.y[n]) < 1e-9)
+                return -R.disp[2 * n + 1];
+        return -1.0;                       // no node there: every caller checks for it
+    };
+    r.w_F = mid_deflection(0.5 * kBmL);
+    r.w_q = mid_deflection(kBmL + kBmGap + 0.5 * kBmL);
+    for (const auto& sf : R.struct_forces) {
+        if (sf.name == "Beam F") { r.M_F = sf.max_M; r.diag_F = sf.stations; }
+        if (sf.name == "Beam q") { r.M_q = sf.max_M; r.diag_q = sf.stations; }
+    }
+    r.ok = true;
+    return r;
+}
+
+void oracle_beams(const m::Project& pr) {
+    const BeamRead R = read_beams(pr);
+    check(R.ok, "both phases converged and the beams' force diagrams were produced");
+    if (!R.ok) return;
+    check(R.w_F > 0.0 && R.w_q > 0.0, "a mesh node sits at each beam's mid-span");
+    if (R.w_F <= 0.0 || R.w_q <= 0.0) return;
+
+    // (a) The two published deflections. The closed form is Timoshenko because a PLAXIS plate
+    // is: the shear part is only 0.5% of the answer, but it is the whole difference between
+    // 13.889 mm (Euler-Bernoulli) and the 13.96 mm the manual prints.
+    const double w_F_cf = beam_defl_point(kBmEA, kBmEI, kBmNu);
+    const double w_q_cf = beam_defl_udl(kBmEA, kBmEI, kBmNu);
+    std::printf("      u_max point load: closed form %.5f mm | PLAXIS 13.96 | file run %.5f mm"
+                " (%+.3f%% vs closed form)\n",
+                1e3 * w_F_cf, 1e3 * R.w_F, 100.0 * (R.w_F - w_F_cf) / w_F_cf);
+    std::printf("      u_max distributed: closed form %.5f mm | PLAXIS 17.43 | file run %.5f mm"
+                " (%+.3f%% vs closed form)\n",
+                1e3 * w_q_cf, 1e3 * R.w_q, 100.0 * (R.w_q - w_q_cf) / w_q_cf);
+    check(std::fabs(R.w_F - w_F_cf) < 0.01 * w_F_cf, "point-load deflection within 1% of the closed form");
+    check(std::fabs(R.w_q - w_q_cf) < 0.01 * w_q_cf, "distributed deflection within 1% of the closed form");
+    check(std::fabs(R.w_F - 13.96e-3) < 0.02 * 13.96e-3, "point-load deflection within 2% of PLAXIS");
+    check(std::fabs(R.w_q - 17.43e-3) < 0.02 * 17.43e-3, "distributed deflection within 2% of PLAXIS");
+
+    // (b) The manual's OTHER published pair: M_max = 50.0 kNm in both problems. A deflection
+    // can be right for the wrong reason (a compensating support condition); the moment is read
+    // from the element's own force diagram, through a different code path, and pins the same
+    // answer.
+    std::printf("      M_max: manual 50.0 / 50.0 kNm | file run %.5f / %.5f kNm (%+.2f%% / %+.2f%%)\n",
+                R.M_F, R.M_q, 100.0 * (R.M_F - 50.0) / 50.0, 100.0 * (R.M_q - 50.0) / 50.0);
+    check(std::fabs(R.M_F - 50.0) < 0.02 * 50.0, "point-load peak moment within 2% of the manual's 50 kNm");
+    check(std::fabs(R.M_q - 50.0) < 0.02 * 50.0, "distributed peak moment within 2% of the manual's 50 kNm");
+
+    // (c) Not just the peak -- the whole DIAGRAM. One number can be a coincidence; a moment
+    // field that follows F s / 2 and q s (l - s) / 2 station by station cannot. The point-load
+    // beam's field is piecewise linear and the element reproduces it to round-off; the
+    // distributed beam's is a parabola sampled by an element whose curvature is linear, so it
+    // is banded on the scale of that interpolation.
+    struct Shape { const char* what; const std::vector<katai::core::ForceStation>* d;
+                   double (*law)(double); double x0, band; };
+    for (const Shape& sh : {Shape{"point load ", &R.diag_F, beam_moment_point, 0.0, 0.02},
+                            Shape{"distributed", &R.diag_q, beam_moment_udl, kBmL + kBmGap, 0.08}}) {
+        double worst = 0.0, worst_s = 0.0;
+        for (const auto& st : *sh.d) {
+            const double s = st.x - sh.x0;
+            if (s < 0.15 * kBmL || s > 0.85 * kBmL) continue;   // the ends carry M ~ 0
+            const double e = std::fabs(st.M - sh.law(s)) / 50.0;
+            if (e > worst) { worst = e; worst_s = s; }
+        }
+        std::printf("      M(s) %s: worst deviation from the closed form %.4f%% of M_max (at s = %.3f m)\n",
+                    sh.what, 100.0 * worst, worst_s);
+        check(worst < sh.band, "the moment DISTRIBUTION follows the closed form, not just its peak");
+    }
+
+    // (d) What the peak moment of the DISTRIBUTED beam does with mesh size, because it is the
+    // one published number this file does not reproduce exactly. Its moment field is a
+    // parabola and the element's curvature is linear, so the peak overshoots -- by exactly
+    // q h^2 / 12, the parabola the element cannot represent inside one span of length h. That
+    // is a structural bias, not scatter: it is reproduced to five figures at three mesh sizes
+    // and it vanishes as h -> 0. The deflection does not do this (it is exact at every mesh),
+    // so "a very coarse mesh is sufficient" is true of the manual's displacements and not of
+    // its peak moment -- worth knowing before reading a wall's M off a coarse run.
+    std::printf("      M_max(distributed) vs mesh: ");
+    for (double h : {0.5, kBmH, 0.125}) {
+        const BeamRead V = read_beams(build_beams_at(kBmEA, kBmEI, true, h));
+        const double rule = 50.0 + kBmQ * h * h / 12.0;
+        std::printf("h=%.3f: %.5f (rule %.5f) ", h, V.M_q, rule);
+        check(V.ok && std::fabs(V.M_q - rule) < 1e-4 * rule,
+              "the peak-moment overshoot is exactly q h^2 / 12 at this mesh size");
+    }
+    std::printf("\n");
+
+    // (e) The two TERMS of the deflection, separated. Bending and shear are added by the same
+    // formula, so matching the total once proves neither. Stiffening EI by 4 divides the
+    // bending term by 4 and leaves the shear term alone; stiffening EA by 100 does the
+    // opposite and drives the answer onto the Euler-Bernoulli limit (13.8896 mm, the number
+    // the manual would have published if a PLAXIS plate were not shear-deformable). The closed
+    // form predicts both, and the FE run must follow it in each.
+    struct Term { const char* what; double EA, EI; };
+    for (const Term& t : {Term{"EI x 4  ", kBmEA, 4.0 * kBmEI},
+                          Term{"EA x 100", 100.0 * kBmEA, kBmEI}}) {
+        const BeamRead V = read_beams(build_beams_at(t.EA, t.EI, true, kBmH));
+        const double cf_F = beam_defl_point(t.EA, t.EI, kBmNu), cf_q = beam_defl_udl(t.EA, t.EI, kBmNu);
+        std::printf("      %s: point %.6f mm (cf %.6f, %+.3f%%) | udl %.6f mm (cf %.6f, %+.3f%%)\n",
+                    t.what, 1e3 * V.w_F, 1e3 * cf_F, 100.0 * (V.w_F - cf_F) / cf_F,
+                    1e3 * V.w_q, 1e3 * cf_q, 100.0 * (V.w_q - cf_q) / cf_q);
+        check(V.ok && std::fabs(V.w_F - cf_F) < 0.01 * cf_F && std::fabs(V.w_q - cf_q) < 0.01 * cf_q,
+              "bending and shear each move the answer by exactly the closed form's amount");
+    }
+
+    // (f) The beams do not feel each other: switching the distributed load off leaves the
+    // point-loaded beam bit-for-bit where it was. Two spans in one file, one answer each.
+    const BeamRead A = read_beams(build_beams_at(kBmEA, kBmEI, false, kBmH));
+    std::printf("      with q switched off, the F beam reads %.12f mm (was %.12f)\n",
+                1e3 * A.w_F, 1e3 * R.w_F);
+    check(A.ok && std::fabs(A.w_F - R.w_F) <= 1e-12 * R.w_F, "the two spans are independent");
+
+    // (g) The sentry, and the clearest statement of what was wrong. Delete the beams and the
+    // model has no degrees of freedom left at all: the deactivated soil is entirely fixed, and
+    // the run says so and stops. That is the honest answer for this geometry. Before the fix,
+    // the beams were in exactly that state -- every translation pinned -- and only their
+    // rotation DOFs remained free, which was enough for the solve to succeed, report "ok" and
+    // hand back max|u| = 0. The difference between refusal and silence was three extra DOFs.
+    m::Project bare = build_beams();
+    bare.structs.clear();
+    bare.initial.struct_active.clear();
+    bare.phases[0].struct_active.clear();
+    const auto MB = katai::app::mesh_from_project(bare);
+    bool bare_refused = false;
+    std::string bare_msg;
+    if (MB.ok) {
+        const auto rb = katai::app::solve_phases(bare, MB.mesh,
+                                                 katai::app::initial_phase_from(bare.initial_procedure));
+        for (const auto& p : rb)
+            if (!p.ok) { bare_refused = true; bare_msg = p.message; break; }
+    }
+    std::printf("      with the beams removed: %s\n",
+                bare_refused ? bare_msg.c_str() : "(the run still solved something)");
+    check(bare_refused, "without the beams there is nothing left to solve, and the run says so");
+}
+
 int main() {
     std::printf("Input corpus: checked-in .k2d == programmatic build, validated, solved from the file\n");
     const CorpusCase cases[] = {
@@ -1805,6 +2082,7 @@ int main() {
         {"kv-slp-002-griffiths-lane-example1.k2d", build_gl_example1, oracle_gl_example1},
         {"kv-cst-002-hs-oedometer.k2d", build_hs_oedometer, oracle_hs_oedometer},
         {"kv-str-002-plaxis-sliding-block.k2d", build_sliding_block, oracle_sliding_block},
+        {"kv-str-003-plaxis-beam-bending.k2d", build_beams, oracle_beams},
     };
     for (const CorpusCase& c : cases) run_case(c);
 

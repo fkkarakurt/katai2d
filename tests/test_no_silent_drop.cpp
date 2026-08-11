@@ -384,6 +384,21 @@ void case_prescribed_disp_on_structure() {
           "prescribed displacement on a plate: warns that the plate does not see it (K2D-A003)");
     check(raised(r, "K2D-A004", core::DiagnosticSeverity::Note),
           "structure on a support: the reaction's missing structural share is noted (K2D-A004)");
+
+    // The SAME line prescribed to zero is not a motion, it is a support -- and a support line
+    // is the only way this schema can hold a plate at a point (edge_bc reaches model edges
+    // only). Nothing is understated there, so the warning must stay quiet; if it did not, it
+    // would send the user away from a force diagram that is correct. Pinned as deliberately as
+    // the warning above: a later tightening that forgets the distinction would silently put it
+    // back. The build's own beam verification (KV-STR-003) reads M off exactly such a model.
+    m::Project sup = pr;
+    sup.disps[0].name = "Support";
+    sup.disps[0].uy = 0.0;
+    const Run rs = solve(sup);
+    print_diags(rs);
+    check(rs.ok, "zero-valued support line on a plate: the run completes");
+    check(!raised(rs, "K2D-A003", core::DiagnosticSeverity::Warning),
+          "a support line (value 0) drives nothing, so it does NOT raise K2D-A003");
 }
 
 // 13. A linear Dynamic phase reports zeros for stress -- not because the soil is unstressed, but

@@ -1276,10 +1276,16 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // that has it). Its M / Q / N are then those of an undriven element -- near zero for a
         // plate whose only load is the imposed settlement. The condition is checked rather than
         // assumed, so a model whose structures stand clear of the driven line hears nothing.
+        //
+        // A component prescribed to ZERO is not a motion, it is a SUPPORT -- the format
+        // document's own words: "a set component with value 0 is a rigid support line". There
+        // is nothing for the structure to miss, its diagram is right, and warning here would
+        // send the user away from the very diagram this schema's only point-support idiom
+        // makes correct. Only a nonzero imposed value can be understated.
         if (!presc_entries.empty()) {
             std::vector<char> driven(mesh.node_count, 0);
             for (const auto& e : presc_entries)
-                if (e.node >= 0 && e.node < mesh.node_count) driven[e.node] = 1;
+                if (e.value != 0.0 && e.node >= 0 && e.node < mesh.node_count) driven[e.node] = 1;
             std::string hit;
             const auto touches = [&](int n) { return n >= 0 && n < mesh.node_count && driven[n]; };
             for (const auto& p : structures.plates)
@@ -1300,7 +1306,18 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     }
     // Staged construction: nodes touched only by passive (excavated / not-yet-filled) elements
     // would be singular -- fix them (their displacement is meaningless this phase).
-    if (!act.empty()) katai::core::fix_inactive_nodes(mesh, act, dofs);
+    // A node a PLATE runs through is NOT orphaned -- the beam's own stiffness holds it. Pinning
+    // it would weld the structure to the outside world and the phase would converge on a model
+    // in which that plate carries nothing, without saying so. The manual's own beam verification
+    // (PLAXIS 2D Validation Manual sec. 2.3) is built exactly this way: the soil cluster is
+    // deactivated so that only the beams remain, supported at their end points.
+    if (!act.empty()) {
+        std::vector<char> carried(mesh.node_count, 0);
+        const auto carry = [&](int n) { if (n >= 0 && n < mesh.node_count) carried[(size_t)n] = 1; };
+        for (const auto& p : structures.plates) for (int n : p.nodes) carry(n);
+        for (const auto& p : structures.plates5) for (int n : p.nodes) carry(n);
+        katai::core::fix_inactive_nodes(mesh, act, dofs, carried);
+    }
     dofs.finalize();
     // Reported support reactions are the SOIL's discrete B^T sigma: a structural element that
     // ends on a support adds its own end force to that support in reality, and this build does
