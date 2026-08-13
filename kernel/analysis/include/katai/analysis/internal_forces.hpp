@@ -138,17 +138,29 @@ public:
     // presc==null → no fixed-DOF displacement at all (the dynamic seismic path, in the
     // relative frame, does not use this). factor = (cur_target − cur_lambda): this step's
     // increment fraction.
-    // KNOWN HIDDEN LIMIT (declared): the ramp enters only the SOIL element loop — the
-    // structural element loops (plate/anchor/geogrid/interface/embedded) never read fixed
-    // DOFs (geq<0 → contribution 0), so a structural element on a boundary driven by a
-    // prescribed displacement does NOT see that motion. Prescribed ū is today a kernel/test
-    // path (not available as a deformation BC in the GUI); if added to the GUI, the TOTAL
-    // λ·ū must be carried into the structural elements (total-displacement formulation; the
-    // increment is not enough). Measured: in the first design of test_plate_plastic the
-    // plate did not see the driven middle node (M ~ 0).
+    // CLOSED 2026-08-13. This block used to declare a hidden limit: the ramp entered only the
+    // SOIL element loop, so a plate, geogrid, interface or embedded beam standing on a boundary
+    // driven by a prescribed displacement did not see that motion at all (geq < 0 => the node was
+    // read as ZERO). The declaration rested on a guard that had since expired -- "prescribed
+    // u_bar is today a kernel/test path, not available as a deformation BC in the GUI" -- because
+    // schema v2 added `disps`, which made it reachable from a .k2d file and from the GUI while
+    // the limit stayed declared and unrevisited. A declared limit is worth exactly the sentence
+    // that scopes it, and that sentence had stopped being true.
+    //
+    // Measured on the geogrid case (KV-STR-005) before the fix: a reinforcement pulled through a
+    // block by a prescribed edge reported its own axial force as 7.6363 kN/m where EA*eps is
+    // 2.0000, and the converged field was not affine when it had to be -- the node beside the
+    // driven edge sat 3.79% BELOW its own left neighbour, because the element next to it believed
+    // the driven node had never moved.
+    //
+    // The fix is the one the old comment prescribed: structural elements are TOTAL-displacement
+    // formulations, so they need the total lambda*u_bar applied so far, not the increment the
+    // soil loop uses. `factor` is this step's increment (cur_target - cur_lambda) and drives the
+    // soil; `total` is cur_target and drives the structures.
     struct Ramp {
         const Eigen::VectorXd* presc = nullptr;   // total_dofs
-        double factor = 0.0;
+        double factor = 0.0;                      // this step's INCREMENT fraction (soil)
+        double total = 0.0;                       // fraction applied by the END of this step
     };
 
     InternalForceAssembler(const mesh::Mesh& mesh, const DofMap& dofs,
@@ -201,6 +213,17 @@ public:
         const std::vector<GaussState>& committed = *st.committed;
         std::vector<GaussState>& trial = *st.trial;
         const bool has_presc = ramp.presc != nullptr;
+
+        // The TOTAL displacement of one GLOBAL dof, for the total-displacement structural
+        // formulations below. A fixed DOF is not simply zero: under a non-zero prescribed
+        // displacement it carries the share of u_bar applied so far. Passing the global dof
+        // rather than the equation is the whole point -- the equation of a fixed DOF is -1, and
+        // that is exactly the information the old code threw away.
+        const auto u_at = [&](int gdof) -> double {
+            const int eq = dofs.equation(gdof);
+            if (eq >= 0) return u_free(eq) + du_free(eq);
+            return has_presc ? ramp.total * (*ramp.presc)(gdof) : 0.0;
+        };
 
         Eigen::VectorXd f_int = Eigen::VectorXd::Zero(neq);
 
@@ -317,19 +340,19 @@ public:
         for (size_t pli = 0; pli < structures.plates.size(); ++pli) {
             const auto& pe = structures.plates[pli];
             plate::NodeCoords Xe;
-            std::array<int, 9> geq;
+            std::array<int, 9> geq, gd;
             for (int k = 0; k < 3; ++k) {
                 Xe(k, 0) = mesh.x[pe.nodes[k]];  // geometry: mesh node coordinate
                 Xe(k, 1) = mesh.y[pe.nodes[k]];
                 // Translational DOF: independent (wall) trans_dof if given, else share the mesh node.
                 const int tx = pe.trans_dof[2 * k + 0], ty = pe.trans_dof[2 * k + 1];
-                geq[3 * k + 0] = dofs.equation(tx >= 0 ? tx : dofs.global_dof(pe.nodes[k], 0));
-                geq[3 * k + 1] = dofs.equation(ty >= 0 ? ty : dofs.global_dof(pe.nodes[k], 1));
-                geq[3 * k + 2] = dofs.equation(pe.rot_dof[k]);
+                gd[3 * k + 0] = tx >= 0 ? tx : dofs.global_dof(pe.nodes[k], 0);
+                gd[3 * k + 1] = ty >= 0 ? ty : dofs.global_dof(pe.nodes[k], 1);
+                gd[3 * k + 2] = pe.rot_dof[k];
+                for (int c = 0; c < 3; ++c) geq[3 * k + c] = dofs.equation(gd[3 * k + c]);
             }
             plate::Dof up = plate::Dof::Zero();
-            for (int a = 0; a < 9; ++a)
-                if (geq[a] >= 0) up(a) = u_free(geq[a]) + du_free(geq[a]);
+            for (int a = 0; a < 9; ++a) up(a) = u_at(gd[a]);
             plate::Dof fp;
             plate::ElementMatrix Kbuf;
             const plate::ElementMatrix* Kp = nullptr;
@@ -357,18 +380,18 @@ public:
         for (size_t pli = 0; pli < structures.plates5.size(); ++pli) {
             const auto& pe = structures.plates5[pli];
             plate::NodeCoords5 Xe;
-            std::array<int, 15> geq;
+            std::array<int, 15> geq, gd;
             for (int k = 0; k < 5; ++k) {
                 Xe(k, 0) = mesh.x[pe.nodes[k]];
                 Xe(k, 1) = mesh.y[pe.nodes[k]];
                 const int tx = pe.trans_dof[2 * k + 0], ty = pe.trans_dof[2 * k + 1];
-                geq[3 * k + 0] = dofs.equation(tx >= 0 ? tx : dofs.global_dof(pe.nodes[k], 0));
-                geq[3 * k + 1] = dofs.equation(ty >= 0 ? ty : dofs.global_dof(pe.nodes[k], 1));
-                geq[3 * k + 2] = dofs.equation(pe.rot_dof[k]);
+                gd[3 * k + 0] = tx >= 0 ? tx : dofs.global_dof(pe.nodes[k], 0);
+                gd[3 * k + 1] = ty >= 0 ? ty : dofs.global_dof(pe.nodes[k], 1);
+                gd[3 * k + 2] = pe.rot_dof[k];
+                for (int c = 0; c < 3; ++c) geq[3 * k + c] = dofs.equation(gd[3 * k + c]);
             }
             plate::Dof5 up = plate::Dof5::Zero();
-            for (int a = 0; a < 15; ++a)
-                if (geq[a] >= 0) up(a) = u_free(geq[a]) + du_free(geq[a]);
+            for (int a = 0; a < 15; ++a) up(a) = u_at(gd[a]);
             plate::Dof5 fp;
             plate::ElementMatrix5 Kbuf;
             const plate::ElementMatrix5* Kp = nullptr;
@@ -407,14 +430,16 @@ public:
             if (Lgeom < 1e-30) continue;
             const Eigen::Vector2d dir = dvec / Lgeom;
             const double kk = an.EA / (an.L > 0.0 ? an.L : Lgeom);
-            const int idx[4] = {dofs.equation(dofs.global_dof(an.node_a, 0)),
-                                dofs.equation(dofs.global_dof(an.node_a, 1)),
-                                an.node_b >= 0 ? dofs.equation(dofs.global_dof(an.node_b, 0)) : -1,
-                                an.node_b >= 0 ? dofs.equation(dofs.global_dof(an.node_b, 1)) : -1};
+            const int gdx[4] = {dofs.global_dof(an.node_a, 0), dofs.global_dof(an.node_a, 1),
+                                an.node_b >= 0 ? dofs.global_dof(an.node_b, 0) : -1,
+                                an.node_b >= 0 ? dofs.global_dof(an.node_b, 1) : -1};
+            const int idx[4] = {dofs.equation(gdx[0]), dofs.equation(gdx[1]),
+                                gdx[2] >= 0 ? dofs.equation(gdx[2]) : -1,
+                                gdx[3] >= 0 ? dofs.equation(gdx[3]) : -1};
             const double g[4] = {-dir(0), -dir(1), dir(0), dir(1)};  // ∂U/∂u
             double U = 0.0;
             for (int i = 0; i < 4; ++i)
-                if (idx[i] >= 0) U += g[i] * (u_free(idx[i]) + du_free(idx[i]));
+                if (gdx[i] >= 0) U += g[i] * u_at(gdx[i]);
             const double Up_c = (*st.anchor_c)[ai];
             // The lock-off force rides on the elastic response: N = N0 + k(U - U_p). It is a
             // constant, so it enters the residual and not the tangent -- a prestressed anchor is
@@ -444,16 +469,17 @@ public:
         for (size_t gi = 0; gi < structures.geogrids.size(); ++gi) {
             const auto& ge = structures.geogrids[gi];
             geogrid::NodeCoords Xe;
-            int geq[6];
+            int geq[6], gd[6];
             for (int k = 0; k < 3; ++k) {
                 Xe(k, 0) = mesh.x[ge.nodes[k]];
                 Xe(k, 1) = mesh.y[ge.nodes[k]];
-                geq[2 * k + 0] = dofs.equation(dofs.global_dof(ge.nodes[k], 0));
-                geq[2 * k + 1] = dofs.equation(dofs.global_dof(ge.nodes[k], 1));
+                gd[2 * k + 0] = dofs.global_dof(ge.nodes[k], 0);
+                gd[2 * k + 1] = dofs.global_dof(ge.nodes[k], 1);
+                geq[2 * k + 0] = dofs.equation(gd[2 * k + 0]);
+                geq[2 * k + 1] = dofs.equation(gd[2 * k + 1]);
             }
             geogrid::Dof ug = geogrid::Dof::Zero();
-            for (int a = 0; a < 6; ++a)
-                if (geq[a] >= 0) ug(a) = u_free(geq[a]) + du_free(geq[a]);
+            for (int a = 0; a < 6; ++a) ug(a) = u_at(gd[a]);
             for (int q = 0; q < geogrid::kGaussCount; ++q) {
                 const auto kin = geogrid::axial_kin(Xe, gxi[q]);
                 const double eps = (kin.Be * ug)(0);
@@ -487,18 +513,18 @@ public:
                 const auto fr = iface::edge_frame(Xe, ncpts[q].xi);
                 const double c = fr.c, s = fr.s, wJ = ncpts[q].w * fr.J;
                 // Equation indices of the 4 DOFs: soil x,y (base) + structure x,y (extra DOFs).
-                const int idx[4] = {dofs.equation(dofs.global_dof(ie.soil_nodes[nd], 0)),
-                                    dofs.equation(dofs.global_dof(ie.soil_nodes[nd], 1)),
-                                    dofs.equation(ie.struct_dof[2 * nd + 0]),
-                                    dofs.equation(ie.struct_dof[2 * nd + 1])};
+                const int gdx[4] = {dofs.global_dof(ie.soil_nodes[nd], 0),
+                                    dofs.global_dof(ie.soil_nodes[nd], 1),
+                                    ie.struct_dof[2 * nd + 0], ie.struct_dof[2 * nd + 1]};
+                const int idx[4] = {dofs.equation(gdx[0]), dofs.equation(gdx[1]),
+                                    dofs.equation(gdx[2]), dofs.equation(gdx[3])};
                 const double a[4] = {-c, -s, c, s};   // ∂Δu_s/∂dof
                 const double b[4] = {s, -c, -s, c};   // ∂Δu_n/∂dof
                 double du_s = 0.0, du_n = 0.0;
-                for (int i = 0; i < 4; ++i)
-                    if (idx[i] >= 0) {
-                        const double ui = u_free(idx[i]) + du_free(idx[i]);
-                        du_s += a[i] * ui; du_n += b[i] * ui;
-                    }
+                for (int i = 0; i < 4; ++i) {
+                    const double ui = u_at(gdx[i]);
+                    du_s += a[i] * ui; du_n += b[i] * ui;
+                }
                 const size_t si = ii * iface::kPointCount + q;
                 const auto ret = iface::coulomb_return(ie.props, du_s, du_n, (*st.iface_c)[si],
                                                        ie.sigma_n0[q]);
@@ -525,18 +551,18 @@ public:
                 const int nd = ncpts5[q].node;
                 const auto fr = iface::edge_frame5(Xe, ncpts5[q].xi);
                 const double c = fr.c, s = fr.s, wJ = ncpts5[q].w * fr.J;
-                const int idx[4] = {dofs.equation(dofs.global_dof(ie.soil_nodes[nd], 0)),
-                                    dofs.equation(dofs.global_dof(ie.soil_nodes[nd], 1)),
-                                    dofs.equation(ie.struct_dof[2 * nd + 0]),
-                                    dofs.equation(ie.struct_dof[2 * nd + 1])};
+                const int gdx[4] = {dofs.global_dof(ie.soil_nodes[nd], 0),
+                                    dofs.global_dof(ie.soil_nodes[nd], 1),
+                                    ie.struct_dof[2 * nd + 0], ie.struct_dof[2 * nd + 1]};
+                const int idx[4] = {dofs.equation(gdx[0]), dofs.equation(gdx[1]),
+                                    dofs.equation(gdx[2]), dofs.equation(gdx[3])};
                 const double a[4] = {-c, -s, c, s};
                 const double b[4] = {s, -c, -s, c};
                 double du_s = 0.0, du_n = 0.0;
-                for (int i = 0; i < 4; ++i)
-                    if (idx[i] >= 0) {
-                        const double ui = u_free(idx[i]) + du_free(idx[i]);
-                        du_s += a[i] * ui; du_n += b[i] * ui;
-                    }
+                for (int i = 0; i < 4; ++i) {
+                    const double ui = u_at(gdx[i]);
+                    du_s += a[i] * ui; du_n += b[i] * ui;
+                }
                 const size_t si = ii * iface::kPointCount5 + q;
                 const auto ret = iface::coulomb_return(ie.props, du_s, du_n, (*st.iface5_c)[si],
                                                        ie.sigma_n0[q]);
@@ -558,13 +584,14 @@ public:
         // skin splits each point with [N_b,−N_s]. Since E (the soil element) is known in this
         // assembler, N_s = E::shape_functions.
         // Shared helper: axial return mapping + scatter at one coupling point (eq,cx,cy lists).
-        auto axial_couple = [&](const int* eqp, const double* cxp, const double* cyp, int nc,
+        auto axial_couple = [&](const int* eqp, const int* gdp, const double* cxp,
+                                const double* cyp, int nc,
                                 const Eigen::Vector2d& tang, double k_a, double k_n, double cap,
                                 double wJ, double slip_c, double& slip_t) {
             const Eigen::Vector2d nrm(-tang(1), tang(0));
             Eigen::Vector2d dur(0.0, 0.0);
             for (int d = 0; d < nc; ++d)
-                if (eqp[d] >= 0) { const double ud = u_free(eqp[d]) + du_free(eqp[d]); dur(0) += cxp[d] * ud; dur(1) += cyp[d] * ud; }
+                if (gdp[d] >= 0) { const double ud = u_at(gdp[d]); dur(0) += cxp[d] * ud; dur(1) += cyp[d] * ud; }
             const double dua = dur.dot(tang), dun = dur.dot(nrm);
             double ta = k_a * (dua - slip_c), Da = k_a;
             if (cap > 0.0 && std::fabs(ta) > cap) { ta = std::copysign(cap, ta); slip_t = dua - ta / k_a; Da = 0.0; }
@@ -588,16 +615,17 @@ public:
             const auto& eb = structures.embedded_beams[bi];
             for (const auto& el : eb.elements) {  // (1) beam (Timoshenko) stiffness
                 plate::NodeCoords Xe;
-                std::array<int, 9> geq;
+                std::array<int, 9> geq, gd;
                 for (int k = 0; k < 3; ++k) {
                     Xe(k, 0) = eb.node_x[el[k]]; Xe(k, 1) = eb.node_y[el[k]];
-                    geq[3 * k + 0] = ebeam::trans_eq(eb, el[k], 0, dofs);
-                    geq[3 * k + 1] = ebeam::trans_eq(eb, el[k], 1, dofs);
-                    geq[3 * k + 2] = dofs.equation(eb.dof_phi[el[k]]);
+                    gd[3 * k + 0] = ebeam::trans_gdof(eb, el[k], 0, dofs);
+                    gd[3 * k + 1] = ebeam::trans_gdof(eb, el[k], 1, dofs);
+                    gd[3 * k + 2] = eb.dof_phi[el[k]];
+                    for (int c = 0; c < 3; ++c) geq[3 * k + c] = dofs.equation(gd[3 * k + c]);
                 }
                 const plate::ElementMatrix Kp = plate::stiffness(Xe, eb.props);
                 plate::Dof up = plate::Dof::Zero();
-                for (int a = 0; a < 9; ++a) if (geq[a] >= 0) up(a) = u_free(geq[a]) + du_free(geq[a]);
+                for (int a = 0; a < 9; ++a) up(a) = u_at(gd[a]);
                 const plate::Dof fp = Kp * up;
                 for (int a = 0; a < 9; ++a) {
                     if (geq[a] < 0) continue;
@@ -612,32 +640,44 @@ public:
                 const auto& sp = eb.skin[pi];
                 if (!sp.ok) continue;
                 const auto Ns = E::shape_functions(sp.xi_s, sp.eta_s);
-                std::array<int, NC> eq; std::array<double, NC> cx, cy; int nc = 0;
+                std::array<int, NC> eq, gdx; std::array<double, NC> cx, cy; int nc = 0;
                 for (int i = 0; i < 3; ++i) {
-                    eq[nc] = ebeam::trans_eq(eb, sp.beam_node[i], 0, dofs); cx[nc] = sp.Nb(i); cy[nc] = 0.0; ++nc;
-                    eq[nc] = ebeam::trans_eq(eb, sp.beam_node[i], 1, dofs); cx[nc] = 0.0; cy[nc] = sp.Nb(i); ++nc;
+                    for (int c = 0; c < 2; ++c) {
+                        gdx[nc] = ebeam::trans_gdof(eb, sp.beam_node[i], c, dofs);
+                        eq[nc] = gdx[nc] >= 0 ? dofs.equation(gdx[nc]) : -1;
+                        cx[nc] = c == 0 ? sp.Nb(i) : 0.0; cy[nc] = c == 0 ? 0.0 : sp.Nb(i); ++nc;
+                    }
                 }
                 for (int j = 0; j < E::kNodeCount; ++j) {
                     const int sn = mesh.node_of(sp.soil_elem, j);
-                    eq[nc] = dofs.equation(dofs.global_dof(sn, 0)); cx[nc] = -Ns(j); cy[nc] = 0.0; ++nc;
-                    eq[nc] = dofs.equation(dofs.global_dof(sn, 1)); cx[nc] = 0.0; cy[nc] = -Ns(j); ++nc;
+                    for (int c = 0; c < 2; ++c) {
+                        gdx[nc] = dofs.global_dof(sn, c);
+                        eq[nc] = dofs.equation(gdx[nc]);
+                        cx[nc] = c == 0 ? -Ns(j) : 0.0; cy[nc] = c == 0 ? 0.0 : -Ns(j); ++nc;
+                    }
                 }
-                axial_couple(eq.data(), cx.data(), cy.data(), nc, sp.tang, sp.k_a, sp.k_n, sp.t_max,
+                axial_couple(eq.data(), gdx.data(), cx.data(), cy.data(), nc, sp.tang, sp.k_a, sp.k_n, sp.t_max,
                              sp.wJ, (*st.eskin_c)[skin_off + pi], (*st.eskin_t)[skin_off + pi]);
             }
             skin_off += eb.skin.size();
             if (eb.foot.D_foot > 0.0 && eb.foot.ok) {  // (3) foot (axial spring, cap F_max; wJ=1)
                 const auto Ns = E::shape_functions(eb.foot.xi_s, eb.foot.eta_s);
                 constexpr int NF = 2 + 2 * E::kNodeCount;
-                std::array<int, NF> eq; std::array<double, NF> cx, cy; int nc = 0;
-                eq[nc] = ebeam::trans_eq(eb, eb.foot.beam_node, 0, dofs); cx[nc] = 1.0; cy[nc] = 0.0; ++nc;
-                eq[nc] = ebeam::trans_eq(eb, eb.foot.beam_node, 1, dofs); cx[nc] = 0.0; cy[nc] = 1.0; ++nc;
+                std::array<int, NF> eq, gdx; std::array<double, NF> cx, cy; int nc = 0;
+                for (int c = 0; c < 2; ++c) {
+                    gdx[nc] = ebeam::trans_gdof(eb, eb.foot.beam_node, c, dofs);
+                    eq[nc] = gdx[nc] >= 0 ? dofs.equation(gdx[nc]) : -1;
+                    cx[nc] = c == 0 ? 1.0 : 0.0; cy[nc] = c == 0 ? 0.0 : 1.0; ++nc;
+                }
                 for (int j = 0; j < E::kNodeCount; ++j) {
                     const int sn = mesh.node_of(eb.foot.soil_elem, j);
-                    eq[nc] = dofs.equation(dofs.global_dof(sn, 0)); cx[nc] = -Ns(j); cy[nc] = 0.0; ++nc;
-                    eq[nc] = dofs.equation(dofs.global_dof(sn, 1)); cx[nc] = 0.0; cy[nc] = -Ns(j); ++nc;
+                    for (int c = 0; c < 2; ++c) {
+                        gdx[nc] = dofs.global_dof(sn, c);
+                        eq[nc] = dofs.equation(gdx[nc]);
+                        cx[nc] = c == 0 ? -Ns(j) : 0.0; cy[nc] = c == 0 ? 0.0 : -Ns(j); ++nc;
+                    }
                 }
-                axial_couple(eq.data(), cx.data(), cy.data(), nc, eb.foot.tang, eb.foot.D_foot, 0.0,
+                axial_couple(eq.data(), gdx.data(), cx.data(), cy.data(), nc, eb.foot.tang, eb.foot.D_foot, 0.0,
                              eb.foot.f_max, 1.0, (*st.efoot_c)[bi], (*st.efoot_t)[bi]);
             }
         }

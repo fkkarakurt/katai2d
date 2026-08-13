@@ -157,7 +157,14 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         const TangentMode tmode =
             hs_consistent_mode ? TangentMode::kConsistent : TangentMode::kContinuum;
         typename detail::InternalForceAssembler<E, Kin>::Ramp ramp;
-        if (has_presc) { ramp.presc = &presc; ramp.factor = cur_target - cur_lambda; }
+        // factor drives the SOIL (an increment, against committed Gauss states); total drives the
+        // STRUCTURAL elements, which are total-displacement formulations and need the whole share
+        // of u_bar standing at the end of this step. See Ramp in internal_forces.hpp.
+        if (has_presc) {
+            ramp.presc = &presc;
+            ramp.factor = cur_target - cur_lambda;
+            ramp.total = cur_target;
+        }
         // The time share is proportional to this increment's Δλ (SoftSoilCreep; time_interval=0 → 0, old path).
         fasm.dt_day = options.time_interval * std::max(0.0, cur_target - cur_lambda);
         return fasm.assemble(u_struct, du_free, build_tangent, tmode, astate, ramp, builder,

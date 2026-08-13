@@ -193,6 +193,14 @@
 //   expected: FoS between the published pair 1.380 (Bishop-Morgenstern) and 1.4 (Griffiths-Lane FE)
 //   band:     4% vs Bishop-Morgenstern 1.380, as asserted below -- measured FoS 1.384 (+0.3%) on the file's own 1.0 m tri6 mesh; the mechanism must also displace
 //
+// verify: KV-STR-005
+//   oracle:   closed_form
+//   source:   the geogrid as specified in the PLAXIS 2D Reference Manual sec 6.5: "geogrids are flexible elastic or elastoplastic elements that represent a grid or sheet of fabric. Geogrids can only sustain tensile forces, but not compressive forces", with the axial stiffness defined in Eq. 6-51 as "the ratio of the axial force F per unit width and the axial strain (eps = dl/l)", EA = F/eps
+//   locator:  a geogrid's translational degrees of freedom ARE the soil's -- it is a conforming chain of mesh nodes with no rotation -- so making the soil strain uniformly makes the geogrid strain with it, exactly. A homogeneous weightless block held at u_x = 0 on one side and pulled to u_x = D on the other deforms affinely, u_x = D x/L, so every horizontal fibre carries eps = D/L; the reinforcement spans the full width, so its ends sit ON the two boundaries and its elongation is D whatever the soil does. Its tension is then constant along its length, which means it applies no body force to the soil and the affine field remains the exact solution -- the closed form is not an approximation of this problem, it is this problem
+//   quantity: axial force in the reinforcement, and the tension cut-off it stops at, run from the checked-in tests/corpus/kv-str-005-geogrid-tension.k2d [kN/m]
+//   expected: EA D/L = 5000 x 0.004/10 = 2.0 kN/m elastic, and N_p = 3.0 kN/m past the cut-off, stated in full and evaluated in the test rather than called from the geogrid header
+//   band:     1%, as asserted below -- measured 2.000000 kN/m, +0.000%, at EVERY station of the diagram on the file's own 0.5 m tri6 mesh. The fixture proves itself first: with no reinforcement the edge reaction is 21.978022 kN/m against the plane-strain closed form E/(1-nu^2) eps H = 21.978022, +0.0000%, so the field really is affine and the fibre strain really is D/L. Five further witnesses: the force is linear in BOTH inputs moved separately (twice the stretch and twice the stiffness each double it); past N_p it stops at N_p and doubling the stretch again changes nothing, while the elastic twin at the same stretch carries what it was told to; compressing the block instead of stretching it leaves the reinforcement carrying NOTHING, which is the manual's other sentence about this element; and the soil reaction is bit-for-bit identical with and without the reinforcement, which is what a constant-tension member must do and is the affine argument itself, measured. Building this case found a silent-wrong that was not the geogrid's: EVERY structural element (plate, plate5, geogrid, anchor, interface, embedded beam) read a node held by a NON-ZERO prescribed displacement as if it had not moved, because the element loops built their displacement vector from FREE degrees of freedom only. The limit was declared in internal_forces.hpp behind a guard that had expired -- "prescribed u_bar is today a kernel/test path, not available as a deformation BC in the GUI" -- which schema v2 made false when it added `disps`. Before the fix this case read 7.6363 kN/m instead of 2.0000, and its converged field was not affine: the node beside the driven edge sat 3.79% below its own left neighbour
+//
 // verify: KV-STR-004
 //   oracle:   closed_form
 //   source:   the embedded beam (pile row) as specified in the PLAXIS 2D Reference Manual sec 5.6.3 (connection point) and sec 6.6.3 (skin and base resistance), with the element formulation in the Scientific Manual sec 7.5. The manual fixes the loading path for us twice over: the material data set carries "only the bearing capacity (skin resistance and base resistance)" and not the stiffness response, and "embedded beams are not meant to be used as laterally loaded piles and will therefore not show accurate failure loads when subjected to transverse forces" -- so the defining quantity of this element is its AXIAL capacity
@@ -201,6 +209,7 @@
 //   expected: (T_skin,max L + F_max,base)/L_spacing = (100 x 10 + 500)/2.5 = 600 kN/m, stated in full and evaluated in the test rather than called from the driver
 //   band:     2%, as asserted below -- measured 600.0000 kN/m, -0.00%, on the file's own 1.0 m tri6 mesh. The fixture obeys two rules the manual states: the soil is MOHR-COULOMB and not Linear Elastic, because PLAXIS ignores the shaft resistance AND the spacing inside a linear elastic cluster (it counts that as structure rather than soil), so an LE fixture would measure the one case PLAXIS treats differently; and its cohesion is far above anything mobilised, so the plateau measured is the pile's declared capacity and not a soil bearing failure. Soil and pile are weightless, so the load carried is the load applied. Five further witnesses: doubling the head load leaves the pile force at 600.0000 while the head goes on settling (0.116 -> 0.479 m), which is a limit load and not a stiffness reading; the two capacity terms are moved one at a time and each moves the total by exactly its own share (base 500 -> 100 kN gives 440.0000 against 440.0000, skin 100 -> 50 kN/m gives 400.0000 against 400.0000); doubling the out-of-plane spacing halves the capacity to 300.0000, ratio 0.5000 exactly, which is the check that Eq 6-65's division by L_spacing reaches the capacities and not only the stiffnesses; halving the element size leaves the capacity where it was, so nothing here is discretisation (a prediction of this case's own draft, that the tied node's Newton-Cotes share of the skin could not mobilise, was refuted by that measurement and is recorded in the test); and the sentry -- with the connection FREE, which is what this engine did for every pile until 2026-08-13 with no way to ask for anything else, the pile carries 0.0000 kN/m at its head, because a point load is delivered to the nearest SOIL node and reaches a free pile top only through the skin springs. Building this case also found and fixed two constants: Eq 6-65's division by L_spacing was not applied at all, leaving every skin and foot spring 2.5x too stiff at the default spacing, and the foot used D/2 where Eq 6-67 defines R_eq = sqrt(12 EI/EA)/2 = 0.433 D for a solid circular pile. The stiffness function's only consumer is the driver -- the element test passes its springs by hand -- so that factor of 2.5 stood while all 150 tests were green
 #include <katai/analysis/response_spectrum.hpp>
+#include <katai/mesh/boundary_extraction.hpp>   // collect_chain: the chain a geogrid is built on
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/jobs/driver.hpp>
 #include <katai/jobs/flow_driver.hpp>
@@ -2749,6 +2758,263 @@ void oracle_pile(const m::Project& pr) {
           "a FREE head cannot deliver the load to the pile: the fault this case was built to find");
 }
 
+// ------------------------------ KV-STR-005: a geogrid's axial force and tension cut-off ------
+// The geogrid's first case from a `.k2d` file. The manual's definition IS the oracle: "the axial
+// stiffness is the ratio of the axial force F per unit width and the axial strain
+// (eps = dl/l)", EA = F/eps (Reference Manual Eq. 6-51), and "geogrids can only sustain tensile
+// forces, but not compressive forces" (sec 6.5).
+//
+// The fixture turns that definition into something a file can ask for. A geogrid's translational
+// degrees of freedom ARE the soil's -- the line is a conforming chain of mesh nodes with no
+// rotation -- so if the soil is made to strain uniformly, the geogrid strains with it, exactly.
+// A homogeneous block held at u_x = 0 on one side and pulled to u_x = D on the other deforms
+// affinely: u_x = D x/L, and every horizontal fibre has eps = D/L. The geogrid spans the full
+// width, so its ends sit ON the two boundaries and its elongation is D whatever the soil does;
+// its tension is then constant along its length, which means it applies no body force to the
+// soil and the affine field stays the exact solution. N = EA D/L is therefore not an
+// approximation of this problem -- it is this problem.
+constexpr double kGgL = 10.0;      // block width [m] = the geogrid's length
+constexpr double kGgH = 5.0;       // block height [m]
+constexpr double kGgY = 2.0;       // the geogrid's level [m]
+constexpr double kGgEA = 5000.0;   // axial stiffness [kN/m]
+constexpr double kGgNp = 3.0;      // tension cut-off [kN/m]
+constexpr double kGgD = 0.004;     // imposed stretch [m] -> eps = 4e-4, N = 2.0 kN/m (elastic)
+constexpr double kGgHm = 0.5;      // element size [m]
+
+// Eq. 6-51 rearranged, with the manual's tension cut-off applied on top, written out here rather
+// than called from the geogrid header.
+double geogrid_force(double EA, double stretch, double L, double Np) {
+    const double N = EA * stretch / L;
+    if (N <= 0.0) return 0.0;                      // tension only: compression carries nothing
+    return (Np > 0.0 && N > Np) ? Np : N;
+}
+
+m::Project build_geogrid_at(double EA, double Np, double stretch, bool plastic, bool with_grid,
+                            double h) {
+    m::Project pr;
+    pr.name = "KV-STR-005 geogrid axial force and tension cut-off";
+    pr.x_min = 0; pr.x_max = kGgL; pr.y_min = 0; pr.y_max = kGgH;
+    pr.has_water = false;
+    pr.mesh.elem_size = h; pr.mesh.order = 6;
+
+    m::Material s;
+    s.name = "Fill";
+    s.model = m::SoilModel::LinearElastic;
+    s.gamma_unsat = s.gamma_sat = 0.0;     // weightless: the imposed stretch is the only action
+    s.E = 10000.0; s.nu = 0.3;
+    pr.materials.push_back(s);
+
+    m::GeogridMaterial gm;
+    gm.name = "Reinforcement";
+    gm.elastoplastic = plastic;
+    gm.EA = EA; gm.Np = Np;
+    pr.geogrids.push_back(gm);
+
+    m::SoilPolygon P;
+    P.name = "Fill"; P.material = 0;
+    P.x = {0, kGgL, kGgL, 0};
+    P.y = {0, 0, kGgH, kGgH};
+    // Bottom held vertically and the left side horizontally: enough to remove the rigid body
+    // motions and nothing more, so the block is free to contract laterally and the strain field
+    // stays affine. The right side is driven by the prescribed displacement below.
+    P.edge_bc = {3, 0, 0, 2};
+    pr.polygons.push_back(P);
+
+    if (with_grid) {
+        m::StructElement S;
+        S.kind = m::StructKind::Geogrid;
+        S.name = "Reinforcement";
+        S.x1 = 0.0; S.y1 = kGgY; S.x2 = kGgL; S.y2 = kGgY;
+        S.material = 0;
+        pr.structs.push_back(S);
+    }
+
+    m::PrescribedDisp D;
+    D.name = "Stretch";
+    D.x1 = kGgL; D.y1 = 0.0; D.x2 = kGgL; D.y2 = kGgH;
+    D.set_ux = true;  D.ux = stretch;
+    D.set_uy = false; D.uy = 0.0;
+    pr.disps.push_back(D);
+
+    const std::vector<char> on(with_grid ? 1u : 0u, 1);
+    pr.initial.poly_active = {1};
+    pr.initial.struct_active = on;
+    pr.initial.disp_active = {0};
+    m::Phase pull;
+    pull.name = "Stretch";
+    pull.poly_active = {1};
+    pull.struct_active = on;
+    pull.disp_active = {1};
+    pr.phases.push_back(pull);
+    return pr;
+}
+
+m::Project build_geogrid() {
+    return build_geogrid_at(kGgEA, kGgNp, kGgD, false, true, kGgHm);
+}
+
+// One run: the geogrid's axial force (its stations are all at the same tension here, so the
+// extreme is the value) and the horizontal reaction the prescribed edge has to supply.
+struct GgRead {
+    bool ok = false;
+    double N = 0.0, Rx = 0.0;
+};
+GgRead read_geogrid(const m::Project& pr) {
+    GgRead r;
+    const auto M = katai::app::mesh_from_project(pr);
+    if (!M.ok) return r;
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    if (res.size() != 2 || !res[0].ok || !res[1].ok) return r;
+    const auto& R = res[1];
+    if (std::getenv("KATAI_GG_DUMP")) {
+        std::vector<std::pair<double, double>> nu;
+        for (int n = 0; n < R.mesh.node_count; ++n)
+            if (std::fabs(R.mesh.y[n] - kGgY) < 1e-9 && R.mesh.x[n] > 9.4)
+                nu.push_back({R.mesh.x[n], R.disp[2 * n]});
+        std::sort(nu.begin(), nu.end());
+        std::printf("      [%s] u_x:", pr.structs.empty() ? "bare " : "grid ");
+        for (const auto& p : nu)
+            std::printf(" [x=%.4f u=%.4e aff=%.4e]", p.first, p.second, kGgD * p.first / kGgL);
+        std::printf("\n");
+    }
+    for (const auto& sf : R.struct_forces)
+        if (sf.name == "Reinforcement" && !sf.stations.empty()) {
+            if (std::getenv("KATAI_GG_DUMP")) {
+                std::printf("      stations (%zu):", sf.stations.size());
+                for (size_t i = 0; i < sf.stations.size(); ++i)
+                    if (i < 4 || i + 4 >= sf.stations.size() || i == sf.stations.size() / 2)
+                        std::printf(" [x=%.2f N=%.4f]", sf.stations[i].x, sf.stations[i].N);
+                std::printf("\n");
+                // The nodal field along the reinforcement near the driven end, against the affine
+                // solution u_x = D x/L. This separates a wrong DISPLACEMENT from a wrong FORCE
+                // RECOVERY: only one of the two can be the fault.
+                std::vector<std::pair<double, double>> nu;
+                for (int n = 0; n < R.mesh.node_count; ++n)
+                    if (std::fabs(R.mesh.y[n] - kGgY) < 1e-9 && R.mesh.x[n] > 9.4)
+                        nu.push_back({R.mesh.x[n], R.disp[2 * n]});
+                std::sort(nu.begin(), nu.end());
+                std::printf("      u_x along the fibre:");
+                for (const auto& p : nu)
+                    std::printf(" [x=%.4f u=%.3e aff=%.3e]", p.first, p.second,
+                                kGgD * p.first / kGgL);
+                std::printf("\n");
+                // The DRIVEN EDGE itself: every node on x = L was told u_x = D. Any node there
+                // that did not get it is a hole in the prescribed displacement, and the field
+                // beside it has to bend around the hole.
+                std::vector<std::pair<double, double>> ed;
+                for (int n = 0; n < R.mesh.node_count; ++n)
+                    if (std::fabs(R.mesh.x[n] - kGgL) < 1e-9) ed.push_back({R.mesh.y[n], R.disp[2 * n]});
+                std::sort(ed.begin(), ed.end());
+                int missed = 0;
+                for (const auto& p : ed) if (std::fabs(p.second - kGgD) > 1e-12) ++missed;
+                std::printf("      driven edge: %zu nodes, %d did NOT receive u_x = D:", ed.size(),
+                            missed);
+                for (const auto& p : ed)
+                    if (std::fabs(p.second - kGgD) > 1e-12)
+                        std::printf(" [y=%.4f u=%.3e]", p.first, p.second);
+                std::printf("\n");
+            }
+            r.N = sf.stations[sf.stations.size() / 2].N;   // mid-span: away from the ends
+        }
+    if (R.reaction.size() == 2u * (size_t)R.mesh.node_count)
+        for (int n = 0; n < R.mesh.node_count; ++n)
+            if (std::fabs(R.mesh.x[n] - kGgL) < 1e-9) r.Rx += R.reaction[2 * n];
+    r.ok = true;
+    return r;
+}
+
+void oracle_geogrid(const m::Project& pr) {
+    const double want = kGgEA * kGgD / kGgL;              // Eq. 6-51, elastic (below N_p)
+    const GgRead r = read_geogrid(pr);
+    const GgRead rn0 = read_geogrid(build_geogrid_at(kGgEA, kGgNp, kGgD, false, false, kGgHm));
+    check(r.ok, "the reinforced block solves");
+    if (!r.ok) return;
+    // The soil's own answer first, because it is what makes the geogrid's readable: with no
+    // reinforcement the edge reaction must be the plane-strain closed form E/(1-nu^2) eps H
+    // exactly. If it is, the strain field IS affine and the geogrid's fibre strain is D/L.
+    const double Rx_soil = 10000.0 / (1.0 - 0.3 * 0.3) * (kGgD / kGgL) * kGgH;
+    std::printf("      unreinforced edge reaction %.6f kN/m vs E/(1-nu^2) eps H = %.6f (%+.4f%%)\n",
+                std::fabs(rn0.Rx), Rx_soil, 100.0 * (std::fabs(rn0.Rx) / Rx_soil - 1.0));
+    check(rn0.ok && std::fabs(std::fabs(rn0.Rx) / Rx_soil - 1.0) < 0.005,
+          "the bare block reproduces the affine closed form, so the fibre strain is D/L");
+
+    // The chain the driver turns into quadratic elements. It is built by collecting every mesh
+    // node ON the line and sorting them along it, and the driver then reads them as
+    // corner, mid, corner, mid, ... -- {chain[2e], chain[2e+2], chain[2e+1]}. Nothing checks
+    // that assumption, so it is checked here: every element's middle node must be the midpoint
+    // of its two ends, or the element is not the element the code thinks it is.
+    {
+        const auto MM = katai::app::mesh_from_project(pr);
+        const auto chain = katai::mesh::collect_chain(MM.mesh, 0.0, kGgY, kGgL, kGgY);
+        double worst = 0.0; int worst_e = -1;
+        for (size_t e = 0; 2 * e + 2 < chain.size(); ++e) {
+            const int a = chain[2 * e], b = chain[2 * e + 2], mid = chain[2 * e + 1];
+            const double mx = 0.5 * (MM.mesh.x[a] + MM.mesh.x[b]);
+            const double my = 0.5 * (MM.mesh.y[a] + MM.mesh.y[b]);
+            const double d = std::hypot(MM.mesh.x[mid] - mx, MM.mesh.y[mid] - my);
+            if (d > worst) { worst = d; worst_e = (int)e; }
+        }
+        std::printf("      chain: %zu nodes, %s; worst mid-node offset %.3e m at element %d\n",
+                    chain.size(), chain.size() % 2 ? "odd (as required)" : "EVEN",
+                    worst, worst_e);
+        if (worst_e >= 0 && worst > 1e-9) {
+            const int a = chain[2 * worst_e], b = chain[2 * worst_e + 2], mid = chain[2 * worst_e + 1];
+            std::printf("        element %d: A x=%.4f  mid x=%.4f  B x=%.4f\n", worst_e,
+                        MM.mesh.x[a], MM.mesh.x[mid], MM.mesh.x[b]);
+        }
+        check(chain.size() % 2 == 1 && worst < 1e-9,
+              "every element on the chain has its middle node at its own midpoint");
+    }
+    std::printf("      geogrid N: %.6f kN/m   EA eps = %.6f   (%+.3f%%)\n",
+                r.N, want, 100.0 * (r.N / want - 1.0));
+    check(std::fabs(r.N / want - 1.0) < 0.01, "the geogrid carries EA times the imposed strain");
+
+    // (a) LINEAR IN BOTH FACTORS, SEPARATELY. Eq. 6-51 has two inputs and each must move the
+    // force by exactly its own factor; one agreeing number could be two errors cancelling.
+    const GgRead r2 = read_geogrid(build_geogrid_at(kGgEA, kGgNp, 2.0 * kGgD, false, true, kGgHm));
+    const GgRead re = read_geogrid(build_geogrid_at(2.0 * kGgEA, kGgNp, kGgD, false, true, kGgHm));
+    std::printf("      stretch x2: %.6f (x%.4f) | EA x2: %.6f (x%.4f) kN/m\n",
+                r2.N, r2.N / r.N, re.N, re.N / r.N);
+    check(r2.ok && std::fabs(r2.N / r.N - 2.0) < 0.01, "twice the strain, twice the force");
+    check(re.ok && std::fabs(re.N / r.N - 2.0) < 0.01, "twice the stiffness, twice the force");
+
+    // (b) THE CUT-OFF IS A PLATEAU. Past N_p the force stops at N_p however hard the block is
+    // pulled -- a limit, not a stiffness. The elastic twin at the same stretch shows what it
+    // would have carried without the cut-off, so the cut-off is measured against something.
+    const double big = 4.0 * kGgD;                       // EA eps = 8 kN/m against N_p = 3
+    const GgRead rp = read_geogrid(build_geogrid_at(kGgEA, kGgNp, big, true, true, kGgHm));
+    const GgRead rp2 = read_geogrid(build_geogrid_at(kGgEA, kGgNp, 2.0 * big, true, true, kGgHm));
+    const GgRead rel = read_geogrid(build_geogrid_at(kGgEA, kGgNp, big, false, true, kGgHm));
+    std::printf("      cut-off: N %.6f and %.6f kN/m at 1x and 2x the stretch (N_p = %.3f); "
+                "elastic twin %.6f\n", rp.N, rp2.N, kGgNp, rel.N);
+    check(rp.ok && std::fabs(rp.N / kGgNp - 1.0) < 0.01, "past N_p the geogrid carries N_p");
+    check(rp2.ok && std::fabs(rp2.N - rp.N) < 0.01 * kGgNp, "and doubling the stretch changes nothing");
+    check(rel.ok && rel.N > 2.0 * kGgNp, "while the elastic twin carries what it was told to");
+
+    // (c) TENSION ONLY. The manual's other sentence about this element: it "can only sustain
+    // tensile forces, but not compressive forces". Push the block instead of pulling it and the
+    // reinforcement must carry nothing at all -- not a small number, nothing.
+    const GgRead rc = read_geogrid(build_geogrid_at(kGgEA, kGgNp, -kGgD, false, true, kGgHm));
+    std::printf("      block compressed: geogrid N = %.3e kN/m\n", rc.N);
+    check(rc.ok && rc.N < 1e-6 * want, "in compression the geogrid carries nothing");
+
+    // (d) THE REINFORCEMENT MUST NOT DISTURB THE SOIL AT ALL. A member carrying CONSTANT tension
+    // has zero force divergence, so it loads nothing but its own two ends -- both of which are
+    // held here. The soil's stress field, and with it the reaction its supports carry, must
+    // therefore be bit-for-bit what the bare block gives. That is a sharper statement than the
+    // draft of this check attempted: it tried to read the geogrid's share OUT of the reaction,
+    // which `SolveResult.reaction` cannot supply, because v1 sums the SOIL contribution only and
+    // says so ("a structural end force landing on a fixed node is not included in v1"). The
+    // measurement then proves the affine argument the whole case rests on, rather than merely
+    // agreeing with it.
+    const double dR = std::fabs(r.Rx) - std::fabs(rn0.Rx);
+    std::printf("      soil reaction with the grid %.6f / without %.6f -> difference %.3e kN/m\n",
+                std::fabs(r.Rx), std::fabs(rn0.Rx), dR);
+    check(std::fabs(dR) < 1e-9 * Rx_soil,
+          "a constant-tension member leaves the soil field exactly where it found it");
+}
+
 int main() {
     std::printf("Input corpus: checked-in .k2d == programmatic build, validated, solved from the file\n");
     const CorpusCase cases[] = {
@@ -2775,6 +3041,7 @@ int main() {
         {"kv-cst-009-soft-soil-oedometer.k2d", build_ss, oracle_ss},
         {"kv-cst-010-soft-soil-creep-column.k2d", build_ssc, oracle_ssc},
         {"kv-str-004-axial-pile-capacity.k2d", build_pile, oracle_pile},
+        {"kv-str-005-geogrid-tension.k2d", build_geogrid, oracle_geogrid},
     };
     for (const CorpusCase& c : cases) run_case(c);
 
