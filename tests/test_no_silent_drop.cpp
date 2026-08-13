@@ -26,7 +26,7 @@
 //   source:   KATAI 2D input-safety property (no input may be discarded in silence): the independent path is the same problem with the object drawn where the mesh actually takes it, plus global vertical equilibrium of the support reactions
 //   locator:  each fixture changes ONE field of tests/corpus/kv-fnd-008-strip-load.k2d (a weightless elastic half-plane, 40 x 20 m, tri6, 4 m strip at q = 100 kPa) and solves it from that project; sum of the base reactions must equal the load actually applied, and a clipped object must reproduce the explicitly shortened object
 //   quantity: the diagnostic severity and code raised by each perturbation [-]; the summed base reaction of the runs that continue [kN/m]; peak displacement of a clipped plate against the explicitly shortened plate [m]
-//   expected: refusals K2D-G001 (point load off the mesh), K2D-G003 (line load off the mesh), K2D-G005 (plate off the mesh), K2D-G007 (geogrid off the mesh), K2D-G008 (anchor with no end in the soil); warnings K2D-G002 (point load snapped), K2D-G004 (line load clipped), K2D-G006 (structure clipped), K2D-G009 (wall/interface not on mesh edges -> bonded), K2D-M001 (tension cut-off on a model that ignores it), K2D-A001 (linear dynamic reports zero stress), K2D-A003 (a structure does not receive a prescribed displacement); note K2D-A004 (reactions exclude the structural end force); the unperturbed case raises NOTHING and carries 4 m x 100 kPa = 400 kN/m; the half-outside strip carries 2 m x 100 kPa = 200 kN/m
+//   expected: refusals K2D-G001 (point load off the mesh), K2D-G003 (line load off the mesh), K2D-G005 (plate off the mesh), K2D-G007 (geogrid off the mesh), K2D-G008 (anchor with no end in the soil); warnings K2D-G002 (point load snapped), K2D-G004 (line load clipped), K2D-G006 (structure clipped), K2D-G009 (wall/interface not on mesh edges -> bonded), note K2D-M001 (tension cut-off applied sequentially on Hardening Soil), K2D-A001 (linear dynamic reports zero stress), K2D-A003 (a structure does not receive a prescribed displacement); note K2D-A004 (reactions exclude the structural end force); the unperturbed case raises NOTHING and carries 4 m x 100 kPa = 400 kN/m; the half-outside strip carries 2 m x 100 kPa = 200 kN/m
 //   band:     exact on severity and code; 1e-9 relative on the equilibrium sums (the same discrete B^T sigma the supports see, so the residual is round-off, measured ~1e-13); 1e-12 m on the clipped-versus-shortened plate, which is a bit-level identity because the mesher clips structural lines in the arrangement, so both models are the SAME mesh and the same assembly
 
 #include <katai/jobs/driver.hpp>
@@ -348,7 +348,7 @@ void case_wall_above_soil() {
 //     about what the run declares, and a full Hardening Soil solve on the benchmark's own mesh
 //     would cost minutes to assert one string.
 void case_tension_cutoff_ignored() {
-    std::printf("\n== tension cut-off set on a model that does not read it ==\n");
+    std::printf("\n== tension cut-off on Hardening Soil: applied, and its one boundary stated ==\n");
     m::Project pr = reference();
     pr.materials[0].model = m::SoilModel::HardeningSoil;
     pr.materials[0].tension_cutoff = true;
@@ -358,8 +358,8 @@ void case_tension_cutoff_ignored() {
     pr.loads[0].qy1 = pr.loads[0].qy2 = -10.0;
     const Run r = solve(pr);
     print_diags(r);
-    check(raised(r, "K2D-M001", core::DiagnosticSeverity::Warning),
-          "tension cut-off ignored: warns with K2D-M001");
+    check(raised(r, "K2D-M001", core::DiagnosticSeverity::Note),
+          "tension cut-off on Hardening Soil: states its sequential application (K2D-M001)");
 }
 
 // 12. A plate standing on a line that is pushed down. The prescribed-displacement ramp reaches

@@ -414,13 +414,20 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // applies a tension cut-off to these models by DEFAULT, and so does this schema, so a
         // silent omission here is a systematic difference from the reference code in the
         // unsafe direction -- the soil takes tension it should not.
-        if (m.tension_cutoff && (entry->hardening_family || entry->softsoil_family))
-            warn(R, "K2D-M001", m.name,
+        // CLOSED 2026-08-13: these models now read the cut-off (MMM Eq. 3-11, applied to the
+        // principal stresses their own return produced -- materials/mohr_coulomb.hpp,
+        // apply_rankine_cap). What remains is a formulation boundary worth stating, and only
+        // where it can actually bite: the cap is applied SEQUENTIALLY after the model's own
+        // surfaces rather than as one coupled multi-surface solve. The correction is compressive,
+        // so it moves away from every tensile surface; the one surface it can in principle
+        // disturb is the Hardening Soil family's CAP, and that is not iterated back.
+        if (m.tension_cutoff && entry->hardening_family)
+            note(R, "K2D-M001", m.name,
                  "Material \"" + m.name + "\" (" + constitutive_name(m.model) +
-                     ") has the tension cut-off switched on, but only the Mohr-Coulomb return "
-                     "reads it in this build: the run allows tension beyond sigma_t = " +
-                     dnum(m.tensile_strength) +
-                     " kPa. Use Mohr-Coulomb where the cut-off governs the answer.");
+                     ") applies the tension cut-off at sigma_t = " + dnum(m.tensile_strength) +
+                     " kPa after its own return, not as one coupled multi-surface solve. Where "
+                     "the cut-off and the volumetric cap are active at the same point, the cap "
+                     "is not re-checked against the capped stress.");
         // The model does not take a small-strain stiffness more than 20x its own unload/reload
         // stiffness (MMM sec. 7.5: "Although Alpan suggests that the ratio E0/Eur can exceed 10
         // for very soft clays, the maximum ratio E0/Eur or G0/Gur permitted in the HSsmall model

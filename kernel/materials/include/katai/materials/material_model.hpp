@@ -288,12 +288,20 @@ struct HsReturnCore {
     int nsub;                   // substep count used by hs_integrate
 };
 
+// The material's own tension cut-off, as the cap the principal returns take. PLAXIS switches
+// the cut-off ON by default, and so does this schema, so `off` here is a deliberate choice by
+// the engineer and not a default nobody looked at.
+inline double tension_cap_of(const MaterialModel& m) {
+    return m.tension_cutoff ? m.tensile_strength : kNoTensionCap;
+}
+
 // nsub_fixed: >0 pins the hs_integrate substep count (so the numerical consistent
 // tangent's perturbed runs follow the SAME substep sequence as the base run).
 inline HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
                                    const Eigen::Vector3d& comm_in_plane, double comm_zz,
                                    const Eigen::Vector3d& trial_in_plane, double trial_zz,
-                                   double gamma_p_n, double pp_n, int nsub_fixed = 0) {
+                                   double gamma_p_n, double pp_n, int nsub_fixed = 0,
+                                   double sigma_t_cap = kNoTensionCap) {
     const double cxx = comm_in_plane(0), cyy = comm_in_plane(1), cxy = comm_in_plane(2);
     const double cmean = 0.5 * (cxx + cyy);
     const double cR = std::sqrt(0.25 * (cxx - cyy) * (cxx - cyy) + cxy * cxy);
@@ -324,7 +332,12 @@ inline HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
     Ce /= Eur;
     const Eigen::Vector3d deps_p = Ce * (sigHS - sig_n_cp);
     const HsIntegrated ret = hs_integrate(pe, sig_n_cp, gamma_p_n, pp_n, deps_p, nsub_fixed);
-    const double r[3] = {-ret.stress(2), -ret.stress(1), -ret.stress(0)};  // tension, desc
+    double r[3] = {-ret.stress(2), -ret.stress(1), -ret.stress(0)};  // tension, desc
+    // Tension cut-off (MMM Eq. 3-11), applied to the principals the model's own return produced.
+    // Off by default, and the branch is not taken when the largest principal is admissible, so
+    // every run without a cut-off is bit-identical to the one before this existed.
+    const bool capped = apply_rankine_cap(r, sigma_t_cap, lame_from(Eur, pe.nu_ur).lambda,
+                                          lame_from(Eur, pe.nu_ur).mu);
 
     // Analytic consistent (continuum) tangent: the shared principal-space assembly (spin +
     // out-of-plane coupling) used by Mohr-Coulomb, fed J(i,j)=J_comp(2-i,2-j) where J_comp =
@@ -353,7 +366,7 @@ inline HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
     out.zz = pz;
     out.gamma_p = ret.gamma_p;
     out.pp = ret.pp;
-    out.plastic = ret.plastic;
+    out.plastic = ret.plastic || capped;
     out.nsub = ret.nsub;
     return out;
 }
@@ -396,7 +409,7 @@ inline void hs_forward(const MaterialModel& m, const GaussState& committed,
 
     const HsReturnCore c = hs_return_core(pe, Eur, committed.stress, committed.stress_zz,
                                           pred.in_plane, pred.zz, committed.gamma_p,
-                                          committed.pp, nsub_fixed);
+                                          committed.pp, nsub_fixed, tension_cap_of(m));
     trial.stress = c.in_plane;
     trial.stress_zz = c.zz;
     trial.gamma_p = c.gamma_p;
@@ -456,7 +469,8 @@ inline SsReturnCore ss_return_core(const softsoil::Params& P,
                                    const Eigen::Vector4d& de4, double pp_n,
                                    int nsub_fixed = 0,
                                    const softsoilcreep::Params* ssc = nullptr,
-                                   double dt_day = 0.0) {
+                                   double dt_day = 0.0,
+                                   double sigma_t_cap = kNoTensionCap) {
     const double cxx = comm_in_plane(0), cyy = comm_in_plane(1), cxy = comm_in_plane(2);
 
     // SS elastic trial in Voigt (tension-positive): exponentially EXACT mean + linear
@@ -518,7 +532,10 @@ inline SsReturnCore ss_return_core(const softsoil::Params& P,
         ret_plastic = ret.cap_active || ret.mc_active;
         ret_nsub = ret.nsub;
     }
-    const double r[3] = {-ret_sig(2), -ret_sig(1), -ret_sig(0)};   // tension-positive, descending rank
+    double r[3] = {-ret_sig(2), -ret_sig(1), -ret_sig(0)};   // tension-positive, descending rank
+    // Tension cut-off (MMM Eq. 3-11); see the Hardening Soil branch. K_tr and G are this step's
+    // secant moduli, so the cap is returned on the same elasticity the step was taken with.
+    const bool ss_capped = apply_rankine_cap(r, sigma_t_cap, K_tr - 2.0 * G / 3.0, G);
 
     SsReturnCore out;
     double pa = 0.0, pb = 0.0, pz = 0.0;   // coaxial reconstruction (in the trial eigenframe)
@@ -535,7 +552,7 @@ inline SsReturnCore ss_return_core(const softsoil::Params& P,
     out.pp = ret_pp;
     out.K = K_tr;
     out.G = G;
-    out.plastic = ret_plastic;
+    out.plastic = ret_plastic || ss_capped;
     out.nsub = ret_nsub;
     return out;
 }
@@ -551,7 +568,8 @@ inline void ss_forward(const MaterialModel& m, const GaussState& committed,
     Eigen::Vector4d de4;
     de4 << de(0), de(1), de(2), 0.0;
     const SsReturnCore c = ss_return_core(m.ssoil, committed.stress, committed.stress_zz, de4,
-                                          committed.pp, nsub_fixed);
+                                          committed.pp, nsub_fixed, nullptr, 0.0,
+                                          tension_cap_of(m));
     trial.stress = c.in_plane;
     trial.stress_zz = c.zz;
     trial.pp = c.pp;
@@ -576,7 +594,8 @@ inline void ssc_forward(const MaterialModel& m, const GaussState& committed,
     de4 << de(0), de(1), de(2), 0.0;
     const softsoil::Params S = m.ssc.ss();
     const SsReturnCore c = ss_return_core(S, committed.stress, committed.stress_zz, de4,
-                                          committed.pp, nsub_fixed, &m.ssc, dt_day);
+                                          committed.pp, nsub_fixed, &m.ssc, dt_day,
+                                          tension_cap_of(m));
     trial.stress = c.in_plane;
     trial.stress_zz = c.zz;
     trial.pp = c.pp;
@@ -793,7 +812,8 @@ inline void integrate_point_axisym(const MaterialModel& m,
             const Eigen::Vector4d s_tr_ur = s_n + De_ur * strain_increment;
             const HsReturnCore c = hs_return_core(pe, Eur, committed.stress, committed.stress_zz,
                                                   s_tr_ur.head<3>(), s_tr_ur(3),
-                                                  committed.gamma_p, committed.pp);
+                                                  committed.gamma_p, committed.pp, 0,
+                                                  tension_cap_of(m));
             trial.stress = c.in_plane;
             trial.stress_zz = c.zz;
             trial.gamma_p = c.gamma_p;
@@ -811,7 +831,7 @@ inline void integrate_point_axisym(const MaterialModel& m,
                     const HsReturnCore cp = hs_return_core(
                         pe, Eur, committed.stress, committed.stress_zz,
                         s_tr_p.head<3>(), s_tr_p(3), committed.gamma_p, committed.pp,
-                        c.nsub);
+                        c.nsub, tension_cap_of(m));
                     tangent(0, j) = (cp.in_plane(0) - c.in_plane(0)) / h;
                     tangent(1, j) = (cp.in_plane(1) - c.in_plane(1)) / h;
                     tangent(2, j) = (cp.in_plane(2) - c.in_plane(2)) / h;
@@ -838,7 +858,8 @@ inline void integrate_point_axisym(const MaterialModel& m,
             // Tangent: elastic (K_tr,G) isotropic 4×4; plastic by FD, same rationale as the
             // plane-strain branch.
             const SsReturnCore c = ss_return_core(m.ssoil, committed.stress, committed.stress_zz,
-                                                  strain_increment, committed.pp);
+                                                  strain_increment, committed.pp, 0, nullptr,
+                                                  0.0, tension_cap_of(m));
             trial.stress = c.in_plane;
             trial.stress_zz = c.zz;
             trial.pp = c.pp;
@@ -858,7 +879,7 @@ inline void integrate_point_axisym(const MaterialModel& m,
                     dep(j) += h;
                     const SsReturnCore cq =
                         ss_return_core(m.ssoil, committed.stress, committed.stress_zz, dep,
-                                       committed.pp, c.nsub);
+                                       committed.pp, c.nsub, nullptr, 0.0, tension_cap_of(m));
                     tangent(0, j) = (cq.in_plane(0) - c.in_plane(0)) / h;
                     tangent(1, j) = (cq.in_plane(1) - c.in_plane(1)) / h;
                     tangent(2, j) = (cq.in_plane(2) - c.in_plane(2)) / h;
@@ -873,7 +894,7 @@ inline void integrate_point_axisym(const MaterialModel& m,
             const softsoil::Params S = m.ssc.ss();
             const SsReturnCore c = ss_return_core(S, committed.stress, committed.stress_zz,
                                                   strain_increment, committed.pp, 0, &m.ssc,
-                                                  dt_day);
+                                                  dt_day, tension_cap_of(m));
             trial.stress = c.in_plane;
             trial.stress_zz = c.zz;
             trial.pp = c.pp;
@@ -893,7 +914,8 @@ inline void integrate_point_axisym(const MaterialModel& m,
                     dep(j) += h;
                     const SsReturnCore cq =
                         ss_return_core(S, committed.stress, committed.stress_zz, dep,
-                                       committed.pp, c.nsub, &m.ssc, dt_day);
+                                       committed.pp, c.nsub, &m.ssc, dt_day,
+                                       tension_cap_of(m));
                     tangent(0, j) = (cq.in_plane(0) - c.in_plane(0)) / h;
                     tangent(1, j) = (cq.in_plane(1) - c.in_plane(1)) / h;
                     tangent(2, j) = (cq.in_plane(2) - c.in_plane(2)) / h;

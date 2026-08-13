@@ -44,6 +44,55 @@ struct MohrCoulombParams {
     double tensile_strength = 0.0;  // sigma_t >= 0 (tension-positive)
 };
 
+// "No cap": the sentinel that keeps every pre-existing caller on its old path exactly.
+inline constexpr double kNoTensionCap = 1e300;
+
+// The tension cut-off as a STANDALONE principal-space return, for the models whose own return
+// mapping already produced an admissible stress: Hardening Soil, HS small, Soft Soil and Soft
+// Soil Creep. PLAXIS applies the cut-off to those models too -- the Material Models Manual lists
+// "sigma_t Tension cut-off and tensile strength" among the Hardening Soil's failure parameters
+// ("as in Mohr-Coulomb model"), and where a model does NOT have one it says so by name (NGI-ADP,
+// UDCAM-S). Mohr-Coulomb keeps its own fully-coupled cascade in mc_return_mapping and does not
+// come through here, so that path stays bit-identical.
+//
+// Eq. 3-11, verbatim: f4 = sigma'1 - sigma_t <= 0, f5 = sigma'2 - sigma_t <= 0,
+// f6 = sigma'3 - sigma_t <= 0, "for these three yield functions an associated flow rule is
+// adopted", sigma_t zero by default. Tension positive.
+//
+// With isotropic elasticity D_e = lambda (1 x 1) + 2 mu I in principal space, the associated
+// multi-surface return is closed form. For an active set A of size n, d(sigma_j) = -(lambda S +
+// 2 mu dlambda_j) with S = sum of the multipliers, so:
+//   |A|=1:  dlambda_1 = (s1 - st)/(lambda + 2 mu)
+//   |A|=2:  S = (s1 + s2 - 2 st)/(2 lambda + 2 mu),  dlambda_1 - dlambda_2 = (s1 - s2)/(2 mu)
+//   |A|=3:  S = (s1 + s2 + s3 - 3 st)/(3 lambda + 2 mu),  each dlambda_j from its own row
+// The active set is found by the standard cascade: cap the largest, and if that pulls the next
+// one above sigma_t as well (it cannot -- the correction is compressive -- but if the next was
+// already above it), widen. `r` is tension-positive and DESCENDING; it stays sorted, because
+// every step lowers the larger principals by at least as much as the smaller ones.
+//
+// DECLARED: this is a SEQUENTIAL return -- the base model's surfaces are satisfied first, then
+// the cap -- not a fully coupled multi-surface solve across both sets. The correction is
+// compressive, so it moves away from the tensile side of the base model's surfaces; what it can
+// in principle touch is the cap of the Hardening Soil family, and that is not iterated back.
+// The tangent handed to Newton is the base model's, so convergence may take extra iterations
+// where the cut-off is active, but the converged stress is the one returned here.
+// Returns true when the cap did anything.
+inline bool apply_rankine_cap(double* r, double sigma_t, double lambda, double mu) {
+    if (r[0] <= sigma_t) return false;                     // the largest principal is admissible
+    const double s0 = r[0], s1 = r[1], s2 = r[2];
+    // |A| = 1
+    double dl0 = (s0 - sigma_t) / (lambda + 2.0 * mu);
+    double n1 = s1 - lambda * dl0, n2 = s2 - lambda * dl0;
+    if (n1 <= sigma_t) { r[0] = sigma_t; r[1] = n1; r[2] = n2; return true; }
+    // |A| = 2
+    const double S2 = (s0 + s1 - 2.0 * sigma_t) / (2.0 * (lambda + mu));
+    n2 = s2 - lambda * S2;
+    if (n2 <= sigma_t) { r[0] = sigma_t; r[1] = sigma_t; r[2] = n2; return true; }
+    // |A| = 3: hydrostatic tension apex
+    r[0] = r[1] = r[2] = sigma_t;
+    return true;
+}
+
 // Lame constants derived from (E, nu).
 struct LameConstants {
     double lambda = 0.0;
