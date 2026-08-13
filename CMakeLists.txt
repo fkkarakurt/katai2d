@@ -14,6 +14,36 @@ if(CCACHE_PROGRAM)
   message(STATUS "ccache found: ${CCACHE_PROGRAM}")
   set(CMAKE_C_COMPILER_LAUNCHER   "${CCACHE_PROGRAM}")
   set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+
+  # ccache and the precompiled header below CANCEL EACH OTHER OUT unless ccache is told to
+  # tolerate the PCH. Measured on this tree 2026-08-13, before the setting existed:
+  #
+  #   Cacheable calls:    2790 / 8150 (34%)      Hits: 148 / 2790 (5.3%)
+  #   Uncacheable calls:  5355 / 8150 (66%)  --  "Could not use precompiled header": 5307 (99%)
+  #
+  # Two features that each look like a build-time win, and together are a build-time loss: the
+  # PCH saves parsing on a compile that then runs in full, while ccache would have skipped the
+  # compile entirely. With sloppiness set, the same translation unit went from ~50 s to a 5 s
+  # rebuild (100% hit) and the uncacheable share fell from 66% to 10%.
+  #
+  # This is deliberately a WARNING and not a silent `ccache --set-config`: the cache is the
+  # developer's, machine-wide, and a build system that edits it behind their back is the kind of
+  # invisible action this project refuses everywhere else. The build scripts export
+  # CCACHE_SLOPPINESS for their own runs, which is why they never see this.
+  execute_process(COMMAND "${CCACHE_PROGRAM}" --get-config sloppiness
+                  OUTPUT_VARIABLE _ccache_sloppiness OUTPUT_STRIP_TRAILING_WHITESPACE
+                  ERROR_QUIET)
+  if(NOT "$ENV{CCACHE_SLOPPINESS}" MATCHES "pch_defines" AND
+     NOT "${_ccache_sloppiness}" MATCHES "pch_defines")
+    message(WARNING
+      "ccache will cache almost nothing here: its `sloppiness` does not include `pch_defines`, "
+      "so every compilation that uses the precompiled header is reported as "
+      "\"Could not use precompiled header\" and recompiled in full (measured: 66% of all calls, "
+      "5.3% hit rate). Fix it once, per machine:\n"
+      "    ccache --set-config sloppiness=pch_defines,time_macros\n"
+      "or configure with -D KATAI_PCH=OFF to trade PCH parsing for cacheability. "
+      "Verify with `ccache -s -v` (Uncacheable calls should fall to a few percent).")
+  endif()
 endif()
 
 # --- Build KPI: parallel job pools (memory-bound compilation) --------------
@@ -24,13 +54,34 @@ endif()
 # `-j2` (2→4 concurrent compiles = ~2× speedup). KPI: docs/DECISIONS D15.
 if(CMAKE_GENERATOR MATCHES "Ninja")
   cmake_host_system_information(RESULT _ncore QUERY NUMBER_OF_PHYSICAL_CORES)
+  cmake_host_system_information(RESULT _nlogical QUERY NUMBER_OF_LOGICAL_CORES)
+  cmake_host_system_information(RESULT _rammb QUERY TOTAL_PHYSICAL_MEMORY)
   if(NOT _ncore OR _ncore LESS 2)
     set(_ncore 4)
   endif()
-  set_property(GLOBAL PROPERTY JOB_POOLS compile_pool=${_ncore} link_pool=3)
+  if(NOT _nlogical OR _nlogical LESS _ncore)
+    set(_nlogical ${_ncore})
+  endif()
+  # The pool was pinned to the PHYSICAL core count, which on a 4c/8t box left half the machine
+  # idle. What actually bounds it is RAM, not cores: too many heavy template TUs at once is what
+  # produces MSVC C1060 "out of heap". So bound it by both -- two logical threads kept for the
+  # rest of the machine, and roughly 2 GB of headroom per concurrent compilation, which is above
+  # the peak measured for the heaviest TUs here (nonlinear_solver, dynamics_nonlinear).
+  math(EXPR _by_cpu "${_nlogical} - 2")
+  math(EXPR _by_ram "${_rammb} / 2048")
+  set(_jobs ${_by_cpu})
+  if(_by_ram LESS _jobs)
+    set(_jobs ${_by_ram})
+  endif()
+  if(_jobs LESS 2)
+    set(_jobs 2)
+  endif()
+  set(KATAI_COMPILE_JOBS "${_jobs}" CACHE STRING "Concurrent compilations (RAM-bound; C1060 guard)")
+  set_property(GLOBAL PROPERTY JOB_POOLS compile_pool=${KATAI_COMPILE_JOBS} link_pool=3)
   set(CMAKE_JOB_POOL_COMPILE compile_pool)
   set(CMAKE_JOB_POOL_LINK    link_pool)
-  message(STATUS "Ninja job pools: compile=${_ncore}, link=3 (C1060 guard + parallelism)")
+  message(STATUS "Ninja job pools: compile=${KATAI_COMPILE_JOBS} "
+                 "(${_nlogical} logical threads, ${_rammb} MB RAM), link=3")
 endif()
 
 # --- Source encoding -------------------------------------------------------

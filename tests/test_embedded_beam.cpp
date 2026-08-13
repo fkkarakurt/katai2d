@@ -169,7 +169,7 @@ void test_axial_pile_in_soil() {
 
     // Internal-force diagram (PLAXIS Output -> embedded beam N/Q/M): under a pure axial head load the
     // axial force at the head equals the applied P (head equilibrium) and the bending moment ~ 0.
-    const auto diag = katai::core::embedded_beam_force_diagram(beam, r.displacement);
+    const auto diag = katai::core::embedded_beam_force_diagram(beam, dofs, r.displacement);
     double Nmax = 0.0, Mmax = 0.0, N_at_head = 0.0, ytop = -1e30, N_at_toe = 0.0, ybot = 1e30;
     for (const auto& st : diag) {
         Nmax = std::fmax(Nmax, std::fabs(st.N));

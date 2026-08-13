@@ -105,6 +105,16 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
             }
         }
 
+    // NOTE (measured 2026-08-13, kept so it is not retried): the embedded beam's CONNECTION POINT
+    // is deliberately NOT injected here as an input vertex. Carrying it looked like the exact way
+    // to make a hinged connection a degree-of-freedom identity, but an isolated interior point
+    // cascades through Ruppert refinement: on the test_gui_solve fixture one such point cost
+    // **+146 nodes, more than the +126 of a plate CONFORMED along the whole 8 m shaft**. Paying
+    // more to stay non-conforming than conforming would have cost is not a trade worth making.
+    // The connection is tied to the nearest existing node in the driver instead, which is the
+    // convention this tree already applies to every structural point attachment (a point load,
+    // an anchor end), diagnostic included. See docs/references/embedded-beam-formulation.md 7.1.
+
     std::vector<double> px, py;
     std::vector<std::array<int, 2>> segs, outline;
     const double tol = 1e-6;

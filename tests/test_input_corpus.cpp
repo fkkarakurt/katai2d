@@ -192,6 +192,14 @@
 //   quantity: slope factor of safety by phi-c reduction, run as the file's INITIAL procedure (initial_procedure = Safety) from the checked-in tests/corpus/kv-slp-002-griffiths-lane-example1.k2d, dimensionalised as H = 10 m, gamma = 20 kN/m3, c' = 10 kPa [-]
 //   expected: FoS between the published pair 1.380 (Bishop-Morgenstern) and 1.4 (Griffiths-Lane FE)
 //   band:     4% vs Bishop-Morgenstern 1.380, as asserted below -- measured FoS 1.384 (+0.3%) on the file's own 1.0 m tri6 mesh; the mechanism must also displace
+//
+// verify: KV-STR-004
+//   oracle:   closed_form
+//   source:   the embedded beam (pile row) as specified in the PLAXIS 2D Reference Manual sec 5.6.3 (connection point) and sec 6.6.3 (skin and base resistance), with the element formulation in the Scientific Manual sec 7.5. The manual fixes the loading path for us twice over: the material data set carries "only the bearing capacity (skin resistance and base resistance)" and not the stiffness response, and "embedded beams are not meant to be used as laterally loaded piles and will therefore not show accurate failure loads when subjected to transverse forces" -- so the defining quantity of this element is its AXIAL capacity
+//   locator:  a pile row is smeared over a metre of wall, so every per-pile quantity is divided by the out-of-plane spacing exactly as EA, EI and the pile weight are (the reason Eq 6-65 divides the interface stiffnesses by L_spacing). Its ultimate axial load is therefore the skin resistance over the embedded length plus the base resistance, all per metre of wall. The head is pushed far past that limit and the PILE's own axial force is read, not the applied load: the load is applied at a soil node that the hinged head shares, so the soil carries the remainder and the plateau lives in the pile's force diagram
+//   quantity: axial force at the head of the pile row under a head load of 1500 kN/m, far above its capacity, run from the checked-in tests/corpus/kv-str-004-axial-pile-capacity.k2d [kN/m]
+//   expected: (T_skin,max L + F_max,base)/L_spacing = (100 x 10 + 500)/2.5 = 600 kN/m, stated in full and evaluated in the test rather than called from the driver
+//   band:     2%, as asserted below -- measured 600.0000 kN/m, -0.00%, on the file's own 1.0 m tri6 mesh. The fixture obeys two rules the manual states: the soil is MOHR-COULOMB and not Linear Elastic, because PLAXIS ignores the shaft resistance AND the spacing inside a linear elastic cluster (it counts that as structure rather than soil), so an LE fixture would measure the one case PLAXIS treats differently; and its cohesion is far above anything mobilised, so the plateau measured is the pile's declared capacity and not a soil bearing failure. Soil and pile are weightless, so the load carried is the load applied. Five further witnesses: doubling the head load leaves the pile force at 600.0000 while the head goes on settling (0.116 -> 0.479 m), which is a limit load and not a stiffness reading; the two capacity terms are moved one at a time and each moves the total by exactly its own share (base 500 -> 100 kN gives 440.0000 against 440.0000, skin 100 -> 50 kN/m gives 400.0000 against 400.0000); doubling the out-of-plane spacing halves the capacity to 300.0000, ratio 0.5000 exactly, which is the check that Eq 6-65's division by L_spacing reaches the capacities and not only the stiffnesses; halving the element size leaves the capacity where it was, so nothing here is discretisation (a prediction of this case's own draft, that the tied node's Newton-Cotes share of the skin could not mobilise, was refuted by that measurement and is recorded in the test); and the sentry -- with the connection FREE, which is what this engine did for every pile until 2026-08-13 with no way to ask for anything else, the pile carries 0.0000 kN/m at its head, because a point load is delivered to the nearest SOIL node and reaches a free pile top only through the skin springs. Building this case also found and fixed two constants: Eq 6-65's division by L_spacing was not applied at all, leaving every skin and foot spring 2.5x too stiff at the default spacing, and the foot used D/2 where Eq 6-67 defines R_eq = sqrt(12 EI/EA)/2 = 0.433 D for a solid circular pile. The stiffness function's only consumer is the driver -- the element test passes its springs by hand -- so that factor of 2.5 stood while all 150 tests were green
 #include <katai/analysis/response_spectrum.hpp>
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/jobs/driver.hpp>
@@ -2534,6 +2542,213 @@ void oracle_ssc(const m::Project& pr) {
     check(u_ss >= 0.0 && u_ss < 0.01 * u, "without the creep model, time alone moves nothing");
 }
 
+// ------------------------------ KV-STR-004: axial capacity of a pile row --------------------
+// The embedded beam's first case from a `.k2d` file, and the manual chooses the loading path
+// for us: "embedded beams are not meant to be used as laterally loaded piles and will therefore
+// not show accurate failure loads when subjected to transverse forces" (Reference Manual sec
+// 6.6.4), and the material data set carries "only the bearing capacity" -- skin and base. So the
+// defining quantity is the AXIAL capacity, and it has an exact closed form.
+//
+// Why the case exists, and what building it found. The parity register had the embedded beam as
+// "implemented, unverified", and everything the verification touched turned out to be wrong:
+//   * Eq 6-65's division by L_spacing was not applied at all, so every skin and foot spring was
+//     2.5x too stiff at the default spacing. The function's only consumer is the driver -- the
+//     element test passes its stiffnesses by hand -- so the constant was wrong by a factor of
+//     2.5 while all 150 tests were green.
+//   * The foot used D/2 where Eq 6-67 defines R_eq = sqrt(12 EI/EA)/2, which for a solid
+//     circular pile is 0.433 D, not 0.5 D.
+//   * The connection point was always FREE. PLAXIS connects it HINGED to the soil node when no
+//     structure shares it, and a point load is carried by the nearest SOIL node -- so a pile
+//     row could not be loaded at its head at all. Check (e) is the sentry for that one.
+//
+// Fixture, and the two rules behind it. The soil is MOHR-COULOMB and not Linear Elastic because
+// PLAXIS ignores the shaft resistance and the spacing inside a linear elastic cluster (it counts
+// that as structure, not soil), so an LE fixture would measure the one case PLAXIS treats
+// differently. Its cohesion is set far above anything the run mobilises, so the plateau measured
+// is the PILE's declared capacity and not a soil bearing failure. Soil and pile are weightless,
+// so the load carried is the load applied and nothing else.
+constexpr double kPlL = 10.0;        // embedded length [m]
+constexpr double kPlD = 0.4;         // pile diameter [m]
+constexpr double kPlLs = 2.5;        // out-of-plane spacing [m]
+constexpr double kPlE = 3.0e7;       // pile stiffness [kN/m2]
+constexpr double kPlTskin = 100.0;   // skin resistance cap, per pile [kN/m]
+constexpr double kPlFbase = 500.0;   // base resistance, per pile [kN]
+constexpr double kPlLoad = 1500.0;   // head load [kN/m of wall] -- far above the capacity
+constexpr double kPlH = 1.0;         // element size [m]
+constexpr double kPlTop = 16.0, kPlW = 16.0, kPlX = 8.0;
+
+// The closed form, written out here rather than read from the driver: the ultimate axial load of
+// a pile row is its skin resistance over the embedded length plus its base resistance, and the
+// row carries it per metre of WALL, so every per-pile quantity is divided by the spacing --
+// exactly as EA, EI and the pile weight are (PLAXIS Reference sec 6.6.3, Eq 6-65's own reason).
+double pile_capacity(double Tskin, double L, double Fbase, double Ls) {
+    return (Tskin * L + Fbase) / Ls;
+}
+
+m::Project build_pile_at(double Tskin, double Fbase, double Ls, double load, int conn, double h) {
+    m::Project pr;
+    pr.name = "KV-STR-004 axial capacity of a pile row";
+    pr.x_min = 0; pr.x_max = kPlW; pr.y_min = 0; pr.y_max = kPlTop;
+    pr.has_water = false;                   // dry, and said so rather than left to a default
+    pr.mesh.elem_size = h; pr.mesh.order = 6;
+
+    m::Material s;
+    s.name = "Sand";
+    s.model = m::SoilModel::MohrCoulomb;
+    s.gamma_unsat = s.gamma_sat = 0.0;      // weightless: the applied load is the only load
+    s.E = 30000.0; s.nu = 0.3;
+    s.c = 1000.0;                           // far above anything mobilised: the soil never fails
+    s.phi = 30.0; s.psi = 0.0;
+    pr.materials.push_back(s);
+
+    m::EmbeddedBeamMaterial em;
+    em.name = "Bored pile";
+    em.E = kPlE; em.gamma = 0.0; em.diameter = kPlD; em.Lspacing = Ls;
+    em.Tskin_max = Tskin; em.Fmax_base = Fbase;
+    pr.embedded.push_back(em);
+
+    m::SoilPolygon P;
+    P.name = "Soil"; P.material = 0;
+    P.x = {0, kPlW, kPlW, 0};
+    P.y = {0, 0, kPlTop, kPlTop};
+    P.edge_bc = {4, 2, 0, 2};               // base fixed, sides on rollers, surface free
+    pr.polygons.push_back(P);
+
+    m::StructElement S;
+    S.kind = m::StructKind::EmbeddedBeam;
+    S.name = "Pile row";
+    S.x1 = kPlX; S.y1 = kPlTop; S.x2 = kPlX; S.y2 = kPlTop - kPlL;
+    S.material = 0;
+    S.conn = conn;                          // 0 hinged (PLAXIS's default), 1 free
+    pr.structs.push_back(S);
+
+    m::Load F;
+    F.kind = m::LoadKind::Point;
+    F.name = "Head load";
+    F.x1 = kPlX; F.y1 = kPlTop; F.x2 = kPlX; F.y2 = kPlTop;
+    F.qx1 = F.qx2 = 0.0; F.qy1 = -load; F.qy2 = 0.0;
+    pr.loads.push_back(F);
+
+    pr.initial.poly_active = {1};
+    pr.initial.struct_active = {1};
+    pr.initial.load_active = {0};
+    m::Phase load_phase;
+    load_phase.name = "Head load";
+    load_phase.poly_active = {1};
+    load_phase.struct_active = {1};
+    load_phase.load_active = {1};
+    pr.phases.push_back(load_phase);
+    return pr;
+}
+
+m::Project build_pile() {
+    return build_pile_at(kPlTskin, kPlFbase, kPlLs, kPlLoad, 0, kPlH);
+}
+
+// One run: the axial force the pile carries AT ITS HEAD (the station with the largest y), and
+// the head settlement. The force diagram is per metre of wall, like the beam's own EA/EI.
+struct PileRead {
+    bool ok = false;
+    double N_head = 0.0, u_head = 0.0, max_u = 0.0;
+};
+PileRead read_pile(const m::Project& pr) {
+    PileRead r;
+    const auto M = katai::app::mesh_from_project(pr);
+    if (!M.ok) return r;
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    if (res.size() != 2 || !res[0].ok || !res[1].ok) return r;
+    const auto& R = res[1];
+    r.max_u = R.max_disp;
+    // An embedded beam reports its diagram AS A PLATE would (kind 0: it produces N/Q/M), so the
+    // element is found by name rather than by kind -- the model has exactly one structure.
+    for (const auto& sf : R.struct_forces) {
+        if (sf.name != "Pile row" || sf.stations.empty()) continue;
+        const katai::core::ForceStation* head = &sf.stations.front();
+        for (const auto& st : sf.stations)
+            if (st.y > head->y) head = &st;
+        r.N_head = std::fabs(head->N);
+        r.u_head = -head->uy;
+        r.ok = true;
+    }
+    return r;
+}
+
+void oracle_pile(const m::Project& pr) {
+    const double cap = pile_capacity(kPlTskin, kPlL, kPlFbase, kPlLs);
+    const PileRead r = read_pile(pr);
+    check(r.ok, "pile row solves and reports a force diagram");
+    if (!r.ok) return;
+    std::printf("      N at the pile head: %.4f kN/m  (T_max L + F_max)/Ls = %.4f  (%+.2f%%)\n",
+                r.N_head, cap, 100.0 * (r.N_head / cap - 1.0));
+    std::printf("      head settlement %.6f m, max|u| %.6f m\n", r.u_head, r.max_u);
+    // The head load is FAR above the capacity, so the pile is fully mobilised and what it carries
+    // is its capacity, no matter how hard the head is pushed. The soil takes the remainder -- the
+    // plateau is in the PILE's force, not in the total applied load, because the load is applied
+    // at a soil node that the hinged head shares.
+    check(std::fabs(r.N_head / cap - 1.0) < 0.02, "the pile carries exactly its declared capacity");
+
+    // (a) PLATEAU. Doubling the load must not change what the pile carries: a limit load, not a
+    // stiffness reading. This is the same instrument as the sliding block's plateau.
+    const PileRead r2 = read_pile(build_pile_at(kPlTskin, kPlFbase, kPlLs, 2.0 * kPlLoad, 0, kPlH));
+    std::printf("      load x2: N_head %.4f kN/m (settlement %.6f m)\n", r2.N_head, r2.u_head);
+    check(r2.ok && std::fabs(r2.N_head - r.N_head) < 0.01 * cap,
+          "load x2 leaves the pile force unchanged: a plateau, not a stiffness");
+    check(r2.u_head > 1.2 * r.u_head, "and the head goes on settling, so the run is past the limit");
+
+    // (b) THE TWO TERMS, SEPARATELY. Skin and base are independent inputs and each must move the
+    // capacity by exactly its own share -- one number agreeing could be a coincidence of two
+    // errors, two numbers moving independently cannot.
+    // Note the schema's convention, which a first draft of this check walked straight into: ZERO
+    // means UNLIMITED for both caps, not zero capacity, so the base is moved between two non-zero
+    // values rather than switched off (with Fmax_base = 0 the pile read 724 kN/m -- an unbounded
+    // base, exactly as documented).
+    const PileRead rs = read_pile(build_pile_at(kPlTskin, 100.0, kPlLs, kPlLoad, 0, kPlH));
+    const PileRead rb = read_pile(build_pile_at(50.0, kPlFbase, kPlLs, kPlLoad, 0, kPlH));
+    const double cap_s = pile_capacity(kPlTskin, kPlL, 100.0, kPlLs);
+    const double cap_b = pile_capacity(50.0, kPlL, kPlFbase, kPlLs);
+    std::printf("      base 500->100: %.4f vs %.4f | skin halved: %.4f vs %.4f kN/m\n",
+                rs.N_head, cap_s, rb.N_head, cap_b);
+    check(rs.ok && std::fabs(rs.N_head / cap_s - 1.0) < 0.03, "the base term moves by its own share");
+    check(rb.ok && std::fabs(rb.N_head / cap_b - 1.0) < 0.03, "the skin term moves by its own share");
+
+    // (c) SPACING. Everything about a row is per metre of wall, so doubling the out-of-plane
+    // spacing must halve the capacity EXACTLY. This is the check that the /L_spacing of Eq 6-65
+    // reaches the capacities as well as the stiffnesses.
+    const PileRead rl = read_pile(build_pile_at(kPlTskin, kPlFbase, 2.0 * kPlLs, kPlLoad, 0, kPlH));
+    const double cap_l = pile_capacity(kPlTskin, kPlL, kPlFbase, 2.0 * kPlLs);
+    std::printf("      spacing x2: %.4f vs %.4f kN/m (ratio to base case %.4f)\n",
+                rl.N_head, cap_l, rl.N_head / r.N_head);
+    check(rl.ok && std::fabs(rl.N_head / cap_l - 1.0) < 0.03, "twice the spacing, half the capacity");
+
+    // (d) MESH INDEPENDENCE, and a prediction of this test's own that the measurement refuted.
+    // The draft expected a residual: at a hinged connection the skin point ON the tied node
+    // cannot slip -- both sides of that joint are the same degree of freedom -- so its
+    // Newton-Cotes share of the skin capacity looked like it could never mobilise, which would
+    // leave a deviation shrinking with the element size, the sibling of the beam case's q h^2/12.
+    // It does not happen: the capacity is EXACT at both densities. A limit load carried by
+    // caps rather than by stiffnesses has nothing left for the discretisation to bias, and the
+    // load simply redistributes to the points that can still take it. Recorded because a
+    // prediction that failed is worth as much as one that held.
+    const PileRead rf = read_pile(build_pile_at(kPlTskin, kPlFbase, kPlLs, kPlLoad, 0, 0.5 * kPlH));
+    std::printf("      h/2: N_head %.4f kN/m (%+.2f%%) vs h: %+.2f%%\n", rf.N_head,
+                100.0 * (rf.N_head / cap - 1.0), 100.0 * (r.N_head / cap - 1.0));
+    check(rf.ok && std::fabs(rf.N_head / cap - 1.0) < 0.02,
+          "halving the element size leaves the capacity where it was: no mesh dependence");
+
+    // (e) THE SENTRY. With the connection FREE -- which is what this engine did for every pile
+    // until 2026-08-13, with no way to ask for anything else -- the head load goes into the soil
+    // beside the pile and reaches it only through the skin springs. The pile then carries a small
+    // fraction of its capacity and the head settles several times as far. If the hinged default
+    // is ever taken back, this does not drift: it collapses.
+    const PileRead rfree = read_pile(build_pile_at(kPlTskin, kPlFbase, kPlLs, kPlLoad, 1, kPlH));
+    std::printf("      connection FREE: N_head %.4f kN/m (%.1f%% of capacity), settlement %.6f m "
+                "vs hinged %.6f m\n",
+                rfree.N_head, 100.0 * rfree.N_head / cap, rfree.u_head, r.u_head);
+    check(rfree.ok && rfree.N_head < 0.5 * cap,
+          "a FREE head cannot deliver the load to the pile: the fault this case was built to find");
+}
+
 int main() {
     std::printf("Input corpus: checked-in .k2d == programmatic build, validated, solved from the file\n");
     const CorpusCase cases[] = {
@@ -2559,6 +2774,7 @@ int main() {
         {"kv-cst-008-hssmall-unloading.k2d", build_hss, oracle_hss},
         {"kv-cst-009-soft-soil-oedometer.k2d", build_ss, oracle_ss},
         {"kv-cst-010-soft-soil-creep-column.k2d", build_ssc, oracle_ssc},
+        {"kv-str-004-axial-pile-capacity.k2d", build_pile, oracle_pile},
     };
     for (const CorpusCase& c : cases) run_case(c);
 

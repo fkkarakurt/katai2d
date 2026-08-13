@@ -288,8 +288,11 @@ inline std::vector<ForceStation> geogrid_force_diagram(
 // (beam.node_x/node_y, NOT mesh nodes) -> it reuses the validated plate::forces kernel + Barlow
 // shear, exactly like plate_force_diagram but reading the beam's geometry/DOFs instead of the mesh.
 // `disp` is the converged full global-DOF solution (NewtonResult.displacement).
+// At a HINGED connection point the tied beam node has no translation DOFs of its own -- they are
+// the mesh node's -- so the DofMap is needed to read them back (ebeam::trans_gdof).
 inline std::vector<ForceStation> embedded_beam_force_diagram(
-    const ebeam::EmbeddedBeam& beam, const Eigen::VectorXd& disp, int stations_per_elem = 5) {
+    const ebeam::EmbeddedBeam& beam, const DofMap& dofs, const Eigen::VectorXd& disp,
+    int stations_per_elem = 5) {
     std::vector<ForceStation> out;
     if (stations_per_elem < 2) stations_per_elem = 2;
     double s_acc = 0.0;
@@ -300,8 +303,10 @@ inline std::vector<ForceStation> embedded_beam_force_diagram(
         for (int k = 0; k < 3; ++k) { X(k, 0) = beam.node_x[el[k]]; X(k, 1) = beam.node_y[el[k]]; }
         plate::Dof u = plate::Dof::Zero();
         for (int k = 0; k < 3; ++k) {
-            u(3 * k + 0) = disp[beam.dof_x[el[k]]];
-            u(3 * k + 1) = disp[beam.dof_y[el[k]]];
+            const int gx = ebeam::trans_gdof(beam, el[k], 0, dofs);
+            const int gy = ebeam::trans_gdof(beam, el[k], 1, dofs);
+            u(3 * k + 0) = gx >= 0 ? disp[gx] : 0.0;
+            u(3 * k + 1) = gy >= 0 ? disp[gy] : 0.0;
             u(3 * k + 2) = disp[beam.dof_phi[el[k]]];
         }
         const auto Qr = detail::plate_reduced_shear(X, beam.props, u);  // Barlow shear samples

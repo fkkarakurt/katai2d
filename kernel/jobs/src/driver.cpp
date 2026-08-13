@@ -1200,6 +1200,46 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         if (by.front() > by.back()) {   // build_embedded_beam: node 0 = toe (foot) -> deeper (lower y) end
             std::reverse(bx.begin(), bx.end()); std::reverse(by.begin(), by.end());
         }
+        // CONNECTION POINT (PLAXIS Ref. sec 5.6.3). Hinged -- PLAXIS's default when no structure
+        // shares the point -- ties the beam's top translations to the mesh node there, which the
+        // mesher carries as a vertex precisely so this is an exact DOF identity and not an
+        // interpolation or a penalty. Free leaves the top coupled through the skin springs alone.
+        int conn_beam_node = -1, conn_mesh_node = -1;
+        if (s.conn == 0) {
+            double ccx = 0.0, ccy = 0.0;
+            embedded_connection_point(s, ccx, ccy);
+            // Which END of the (possibly reversed) polyline is the connection point?
+            conn_beam_node = std::hypot(bx.front() - ccx, by.front() - ccy) <=
+                             std::hypot(bx.back() - ccx, by.back() - ccy) ? 0 : nbn - 1;
+            double bestd = 1e300;
+            for (int n = 0; n < mesh.node_count; ++n) {
+                const double d = std::hypot(mesh.x[n] - ccx, mesh.y[n] - ccy);
+                if (d < bestd) { bestd = d; conn_mesh_node = n; }
+            }
+            // The tie lands on the NEAREST node, which is what this tree does with every
+            // structural point attachment (a point load, an anchor end) and for the same reason:
+            // the mesher is not asked to insert a vertex, because measuring that showed a single
+            // isolated interior point costing more refinement than conforming the whole shaft
+            // would (mesh_builder.cpp). The two questions are answered separately, as with a
+            // point load: "is it on the soil?" is geometry, and "is the snap large?" is
+            // discretisation, measured against the element size THERE.
+            const double h_here = element_size_at(mesh, ccx, ccy);
+            if (conn_mesh_node < 0 || h_here <= 0.0) {
+                refuse(R, "K2D-G012", esub,
+                       "Embedded beam \"" + s.name + "\" has a hinged connection point at (" +
+                           dnum(ccx) + ", " + dnum(ccy) +
+                           ") that is not on the mesh, so its head would be tied to nothing. "
+                           "Move the pile head onto a soil region, or set the connection to free.");
+                return R;
+            }
+            if (bestd > 0.25 * h_here)
+                warn(R, "K2D-G013", esub,
+                     "Embedded beam \"" + s.name + "\" is connected to the soil at node (" +
+                         dnum(mesh.x[conn_mesh_node]) + ", " + dnum(mesh.y[conn_mesh_node]) +
+                         "), " + dnum(bestd) + " m from the head as drawn (" + dnum(ccx) + ", " +
+                         dnum(ccy) + ") -- the element there is " + dnum(h_here) +
+                         " m. Refine the mesh at the pile head if that distance matters.");
+        }
         const double Ls = em.Lspacing > 1e-9 ? em.Lspacing : 1.0;
         const double A = kPi * em.diameter * em.diameter / 4.0;     // circular massive pile
         const double Imom = kPi * std::pow(em.diameter, 4) / 64.0;
@@ -1215,12 +1255,13 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // Skin/foot spring stiffnesses from the PLAXIS default interface-stiffness factors --
         // engine-owned now (Stage B9, embedded_beam.hpp: default_interface_stiffness).
         double k_axial, k_lateral, D_foot;
-        katai::core::ebeam::default_interface_stiffness(Ls, em.diameter, G, k_axial, k_lateral,
-                                                        D_foot);
+        katai::core::ebeam::default_interface_stiffness(Ls, em.diameter, G, pp.EA, pp.EI,
+                                                        k_axial, k_lateral, D_foot);
         const double t_max = em.Tskin_max > 0.0 ? em.Tskin_max / Ls : -1.0;
         const double f_max = em.Fmax_base > 0.0 ? em.Fmax_base / Ls : -1.0;
         structures.embedded_beams.push_back(katai::core::ebeam::build_embedded_beam(
-            mesh, dofs, bx, by, pp, k_axial, k_lateral, t_max, D_foot, f_max));
+            mesh, dofs, bx, by, pp, k_axial, k_lateral, t_max, D_foot, f_max,
+            conn_beam_node, conn_mesh_node));
         // Force-diagram bookkeeping (kind 3 = embedded beam; produces N/Q/M like a plate).
         diag_specs.push_back({3, s.name, structures.embedded_beams.size() - 1,
                               structures.embedded_beams.size()});

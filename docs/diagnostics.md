@@ -43,7 +43,8 @@ the code is never reworded, reused or retired into something else.
 | `K2D-G009` | warning | A **wall or interface** line does not lie on mesh edges, so the mesh cannot be split along it: the element acts bonded to the soil, with no slip and no gap. That is stiffer, and generally less conservative, than the model drawn. |
 | `K2D-G010` | refusal | A **wall's toe** — the deeper end the plate hangs from — is not a mesh node, so neither the plate nor its interfaces can be built. Usually the toe was drawn outside the soil. |
 | `K2D-G011` | refusal | A **prescribed displacement** line catches no node, so it would impose nothing. |
-| `K2D-G012` | refusal | An **embedded beam** has no material assigned, or a non-positive length or diameter. |
+| `K2D-G012` | refusal | An **embedded beam** has no material assigned, a non-positive length or diameter, or a hinged connection point that is not on the mesh at all (its head would be tied to nothing). |
+| `K2D-G013` | warning | An **embedded beam** with a hinged connection is tied to the nearest mesh node, and that node is more than a quarter of the local element size from the pile head as drawn. The pile is connected where the message says, not where it was drawn; refine the mesh at the head if that distance matters. |
 
 Codes in the `K2D-M…` family are about a **material parameter** the selected model does not read;
 `K2D-A…` about a limit of the **analysis** that shapes how a result may be read.

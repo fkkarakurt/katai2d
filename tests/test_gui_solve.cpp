@@ -167,6 +167,11 @@ void test_embedded_beam() {
     const auto R1 = katai::app::solve_gravity_le(p1, m1.mesh, katai::app::InitialPhase::K0Procedure);
     check(R0.ok && R1.ok, "embedded-beam solves ok");
     // mesh must be IDENTICAL with/without the pile (embedded beam is non-conforming, like an anchor).
+    // The mesh must be IDENTICAL with and without the pile: the embedded beam is non-conforming
+    // end to end -- the shaft crosses elements at any orientation, and even the hinged connection
+    // point is tied to the NEAREST EXISTING node rather than inserted as a vertex. Inserting it
+    // was measured and rejected: one isolated interior point cost +146 nodes where conforming the
+    // whole 8 m shaft as a plate cost +126 (mesh_builder.cpp carries the note).
     check(m0.mesh.node_count == m1.mesh.node_count, "embedded beam does not change the mesh");
     std::printf("  embedded beam: no-pile max|u|=%.4e  pile max|u|=%.4e  ratio=%.3f\n",
                 R0.max_disp, R1.max_disp, R1.max_disp / R0.max_disp);

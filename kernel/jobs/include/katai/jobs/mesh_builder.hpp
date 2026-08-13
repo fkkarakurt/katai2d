@@ -56,6 +56,22 @@ struct MeshOptions {
     double grading = 0.5;        // size growth per unit distance from a source
 };
 
+// The CONNECTION POINT of an embedded beam (PLAXIS 2D Ref. Man. sec 5.6.3): for a pile it is
+// "the point on the embedded beam that has the highest y-coordinate in the model", and "in the
+// rare case of an exactly horizontal embedded beam defined as a Pile, Top refers to the point
+// ... that has the lowest x-coordinate". Returns true and writes (cx, cy) for an embedded beam.
+//
+// The mesher carries this ONE point as a vertex so a hinged connection is an exact degree-of-
+// freedom identity rather than an interpolation; the shaft stays mesh-nonconforming. Both the
+// mesher and the driver must agree on it to the last bit, which is why there is one definition.
+inline bool embedded_connection_point(const model::StructElement& s, double& cx, double& cy) {
+    if (s.kind != model::StructKind::EmbeddedBeam) return false;
+    const bool second = (s.y2 != s.y1) ? (s.y2 > s.y1) : (s.x2 < s.x1);
+    cx = second ? s.x2 : s.x1;
+    cy = second ? s.y2 : s.y1;
+    return true;
+}
+
 // max_area  : target maximum triangle area [m^2] (> 0).
 // order     : 6 (tri6) or 15 (tri15).
 // min_angle : Ruppert quality bound; <= ~20.7 deg guarantees termination.

@@ -89,7 +89,7 @@ inline StructForce force_diagram(const DiagSpec& sp, const Structures& structure
         d.stations.push_back(st);
         d.yielded = af.yielded;
     } else if (sp.kind == 3) {     // embedded beam (pile row): N, Q, M along the pile
-        d.stations = embedded_beam_force_diagram(structures.embedded_beams[sp.begin], disp);
+        d.stations = embedded_beam_force_diagram(structures.embedded_beams[sp.begin], dofs, disp);
     } else {                       // geogrid: N at the Gauss stations, arc-length accumulated
         double s_off = 0.0;
         for (size_t gi = sp.begin; gi < sp.end; ++gi) {

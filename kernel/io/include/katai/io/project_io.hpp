@@ -84,7 +84,15 @@ namespace katai::model {
 // An older build reads neither and computes the flow straight THROUGH a cut-off wall: the head
 // difference the wall was drawn to hold does not appear, the uplift under an excavation comes out
 // too low and the inflow too high. Unsafe in both, and invisible in the result.
-inline constexpr int kProjectFileVersion = 12;
+// v13 (2026-08): the embedded beam's CONNECTION POINT (`structs[].conn`, 0 hinged / 1 free), and
+// with it a corrected default. Until now the beam's top was always FREE -- coupled to the soil
+// only through the skin springs -- which is not what PLAXIS does: with no structure sharing the
+// point it connects the beam node HINGED to the soil node there. The consequence was not subtle
+// and not visible: a point load at a pile head is carried by the nearest SOIL node, so with a
+// free top the pile barely engaged (measured: a 10 m concrete pile row changed max|u| by 0.7%),
+// and a pile row could not be loaded at its head at all. An older build reads no `conn` and
+// solves the free version of every file, which is a different structure with the same drawing.
+inline constexpr int kProjectFileVersion = 13;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -522,6 +530,7 @@ inline std::string project_to_json(const Project& p) {
         wfield(o, "material", (double)s.material);
         wfield(o, "iface_pos", s.iface_pos); wfield(o, "iface_neg", s.iface_neg);
         wfield(o, "iface_material", (double)s.iface_material);
+        wfield(o, "conn", (double)s.conn);
         wfield(o, "flow_barrier", (double)s.flow_barrier);
         wfield(o, "hyd_res", s.hydraulic_resistance);
         wfield(o, "coarseness", s.coarseness);
@@ -766,6 +775,15 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             s.iface_pos = j.flag("iface_pos", false);
             s.iface_neg = j.flag("iface_neg", false);
             s.iface_material = (int)j.num("iface_material", -1);
+            // Connection point of an embedded beam. An unknown value must not land on the
+            // default quietly: hinged and free are different structures, not different settings.
+            const int cnv = (int)j.num("conn", 0);
+            s.conn = (cnv >= 0 && cnv <= 1) ? cnv : 0;
+            if (notes && !(cnv >= 0 && cnv <= 1))
+                notes->push_back({katai::io::Severity::Error,
+                                  "structs[" + std::to_string(p.structs.size()) + "].conn",
+                                  "connection type must be 0 (hinged) or 1 (free); read " +
+                                      std::to_string(cnv) + ", using hinged"});
             // Cross permeability: an unknown value must not land on "fully permeable" quietly --
             // that is the reading in which a cut-off wall stops being one.
             const int fbv = (int)j.num("flow_barrier", 0);

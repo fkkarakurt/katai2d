@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **12** · Current `.res` version: **5**
+Current `.k2d` version: **13** · Current `.res` version: **5**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -25,7 +25,10 @@ Undrained (C) drainage type (`materials[i].drainage` = 4), which an older build 
 wells and drains (`hydros`, `phases[i].hydro`), which an older build would ignore and solve the
 same ground with no dewatering in it, and **v12** the cross permeability of walls and interfaces
 (`structs[i].flow_barrier`, `hyd_res`), which an older build would ignore and compute the flow
-straight through a cut-off wall. Every bump
+straight through a cut-off wall, and **v13** the embedded beam's connection point
+(`structs[i].conn`), which an older build would ignore and leave every pile top free of the soil
+— the reading in which a point load at a pile head is carried by the ground beside it rather than
+by the pile, and the same drawing settles several times as much. Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
 than one that was tensioned against it -- so it must refuse the file instead.
@@ -250,6 +253,7 @@ with `name` (default `"Soil"`) as above.
 | `iface_pos` | bool | — | `false` | Positive-side interface attached |
 | `iface_neg` | bool | — | `false` | Negative-side interface attached |
 | `iface_material` | int | — | `-1` | Soil material override for the interfaces (−1 = adjacent soil) |
+| `conn` | int | — | `0` | **Embedded beam only** — how the connection point (the pile top: the end with the highest y, or for an exactly horizontal pile the lowest x) is attached (PLAXIS Reference §5.6.3). `0` hinged: the beam's top translations *are* the soil's there, "the same displacement, but not necessarily the same rotation" — PLAXIS's default when no structure shares the point, and what makes a pile loadable at its head. `1` free: coupled to the soil through the skin springs only, which is what PLAXIS sets for a grout body so a ground anchor does not shed axial force at the connection. The mesher carries the connection point as a node either way, so switching this changes the physics and not the mesh |
 | `flow_barrier` | int | — | `0` | Cross permeability in a groundwater calculation: 0 fully permeable (no effect on flow), 1 impermeable (the two sides get separate pore-pressure DOFs), 2 semi-permeable (PLAXIS Ref Table 5-2). Plates and interfaces only |
 | `hyd_res` | num | day | `0` | Hydraulic resistance d/k of a semi-permeable barrier: the head difference divided by the discharge per unit area of wall |
 

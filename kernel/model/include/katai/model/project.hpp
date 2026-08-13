@@ -244,6 +244,20 @@ struct StructElement {
     // NOT carried yet — a declared gap rather than a silent zero.
     int flow_barrier = 0;
     double hydraulic_resistance = 0.0;   // d/k [day], read when flow_barrier = 2
+    // EMBEDDED BEAM ONLY -- how the beam's connection point is attached (PLAXIS Reference sec
+    // 5.6.3). The connection point is the pile's top: the end with the highest y, or for an
+    // exactly horizontal pile the end with the lowest x.
+    //   0 hinged  — the beam's top translations ARE the soil's there: "they undergo exactly the
+    //               same displacement, but not necessarily in the same rotation". This is
+    //               PLAXIS's DEFAULT when no structure shares the point, and it is what makes a
+    //               pile loadable at its head at all.
+    //   1 free    — "not directly coupled with the soil element in which the beam top is
+    //               located, but the interaction through the interface elements is still
+    //               present". PLAXIS sets this intrinsically for a Grout body, so that a ground
+    //               anchor does not lose axial force into the soil at the connection.
+    // PLAXIS's third type, Rigid (rotation coupled too, to a plate), is out of scope and
+    // declared in docs/references/embedded-beam-formulation.md sec 8.
+    int conn = 0;
 };
 
 enum class LoadKind { Point, Distributed };

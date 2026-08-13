@@ -16,6 +16,13 @@ $root = Split-Path -Parent $PSScriptRoot
 $vcvars = "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
 if (-not (Test-Path $vcvars)) { throw "vcvars64.bat bulunamadi: $vcvars" }
 
+# ccache caches NOTHING here unless it is told to tolerate the precompiled header: without this,
+# every PCH-using compilation is reported "Could not use precompiled header" and recompiled in
+# full. Measured 2026-08-13: 66% of calls uncacheable, 5.3% hit rate; with it, a rebuilt
+# translation unit went from ~50 s to 5 s. Exported per build rather than written into the
+# developer's machine-wide ccache.conf, so a scripted build is correct on a fresh machine.
+if (-not $env:CCACHE_SLOPPINESS) { $env:CCACHE_SLOPPINESS = "pch_defines,time_macros" }
+
 # Import the vcvars64 environment into this PowerShell session (once).
 # 2>nul: even without vswhere.exe on PATH, VS finds itself from its own location
 # (cl.exe works); we suppress that harmless stderr noise.

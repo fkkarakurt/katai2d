@@ -65,7 +65,15 @@ m::Project block(m::SoilModel model, Struct st, bool water, double q) {
         m::StructElement e; e.kind = m::StructKind::Geogrid; e.material = 0;
         e.x1 = 2; e.y1 = 5; e.x2 = 18; e.y2 = 5; pr.structs.push_back(e);
     } else if (st == Embedded) {
-        m::EmbeddedBeamMaterial em; pr.embedded.push_back(em);
+        // WEIGHTLESS in this matrix, and deliberately so. The embedded beam is the only structure
+        // whose default material carries weight (gamma = 24), and a pile's own weight is NOT part
+        // of what the K0 procedure seeds -- it is a genuine out-of-balance load, so the pile
+        // settles on its skin and foot springs and the phase resolves it (SolveResult.nil_step).
+        // That is physics, not a wiring fault, and leaving it in would make invariant (I1) measure
+        // it instead of what (I1) is about. The effect is not dropped: test_k0_admissibility pins
+        // it explicitly below, because a bound relaxed on purpose has to be pinned as consciously
+        // as one that fires.
+        m::EmbeddedBeamMaterial em; em.gamma = 0.0; pr.embedded.push_back(em);
         m::StructElement e; e.kind = m::StructKind::EmbeddedBeam; e.material = 0;
         e.x1 = 10; e.y1 = 1.5; e.x2 = 10; e.y2 = 9.5; pr.structs.push_back(e);
     }
@@ -100,6 +108,19 @@ void test_k0_admissibility() {
             }
         }
     }
+    // The confound removed from the matrix above, pinned here rather than dropped: a pile that
+    // DOES carry its own weight settles measurably more in the very same K0 phase, because that
+    // weight is not in the geostatic seed. If this ever stopped being true, the reason the matrix
+    // runs a weightless pile would have quietly stopped applying.
+    m::Project pw = block(m::SoilModel::LinearElastic, Embedded, false, 0.0);
+    pw.embedded[0].gamma = 24.0;
+    const auto Mw = katai::app::mesh_from_project(pw, 1.0, 6);
+    const auto Rw = katai::app::solve_gravity_le(pw, Mw.mesh, InitialPhase::K0Procedure);
+    const auto R0 = run(m::SoilModel::LinearElastic, 6, Embedded, false, 0.0, InitialPhase::K0Procedure);
+    std::printf("  K0 with a WEIGHTED pile: max|u|=%.3e vs weightless %.3e (ratio %.2f)\n",
+                Rw.max_disp, R0.max_disp, Rw.max_disp / std::fmax(R0.max_disp, 1e-30));
+    check(Rw.ok && Rw.max_disp > 1.5 * R0.max_disp,
+          "a pile's own weight is an out-of-balance load the K0 phase must resolve");
 }
 
 void test_structures_matter() {

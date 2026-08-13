@@ -255,6 +255,10 @@ NB_MODULE(_core, m) {
         .def_rw("iface_pos", &api::StructElement::iface_pos)
         .def_rw("iface_neg", &api::StructElement::iface_neg)
         .def_rw("iface_material", &api::StructElement::iface_material)
+        .def_rw("conn", &api::StructElement::conn,
+                "embedded beam only: connection point of the pile top -- 0 hinged (its "
+                "translations are the soil's there; PLAXIS's default), 1 free (coupled through "
+                "the skin springs only). PLAXIS Ref sec 5.6.3")
         .def_rw("flow_barrier", &api::StructElement::flow_barrier,
                 "cross permeability in flow: 0 fully permeable, 1 impermeable, "
                 "2 semi-permeable (PLAXIS Ref Table 5-2)")

@@ -58,8 +58,8 @@ void assemble_embedded_beams(const mesh::Mesh& mesh, const DofMap& dofs,
             std::array<int, 9> eq;
             for (int k = 0; k < 3; ++k) {
                 Xe(k, 0) = eb.node_x[el[k]]; Xe(k, 1) = eb.node_y[el[k]];   // the beam's OWN coordinates
-                eq[3 * k + 0] = dofs.equation(eb.dof_x[el[k]]);
-                eq[3 * k + 1] = dofs.equation(eb.dof_y[el[k]]);
+                eq[3 * k + 0] = ebeam::trans_eq(eb, el[k], 0, dofs);
+                eq[3 * k + 1] = ebeam::trans_eq(eb, el[k], 1, dofs);
                 eq[3 * k + 2] = dofs.equation(eb.dof_phi[el[k]]);
             }
             detail::scatter<9>(eq, plate::stiffness(Xe, eb.props), builder);
@@ -70,8 +70,8 @@ void assemble_embedded_beams(const mesh::Mesh& mesh, const DofMap& dofs,
             const auto Ns = E::shape_functions(sp.xi_s, sp.eta_s);
             std::array<int, NC> eq; std::array<double, NC> cx, cy; int nc = 0;
             for (int i = 0; i < 3; ++i) {
-                eq[nc] = dofs.equation(eb.dof_x[sp.beam_node[i]]); cx[nc] = sp.Nb(i); cy[nc] = 0.0; ++nc;
-                eq[nc] = dofs.equation(eb.dof_y[sp.beam_node[i]]); cx[nc] = 0.0; cy[nc] = sp.Nb(i); ++nc;
+                eq[nc] = ebeam::trans_eq(eb, sp.beam_node[i], 0, dofs); cx[nc] = sp.Nb(i); cy[nc] = 0.0; ++nc;
+                eq[nc] = ebeam::trans_eq(eb, sp.beam_node[i], 1, dofs); cx[nc] = 0.0; cy[nc] = sp.Nb(i); ++nc;
             }
             for (int j = 0; j < E::kNodeCount; ++j) {
                 const int sn = mesh.node_of(sp.soil_elem, j);
@@ -84,8 +84,8 @@ void assemble_embedded_beams(const mesh::Mesh& mesh, const DofMap& dofs,
             const auto Ns = E::shape_functions(eb.foot.xi_s, eb.foot.eta_s);
             constexpr int NF = 2 + 2 * E::kNodeCount;
             std::array<int, NF> eq; std::array<double, NF> cx, cy; int nc = 0;
-            eq[nc] = dofs.equation(eb.dof_x[eb.foot.beam_node]); cx[nc] = 1.0; cy[nc] = 0.0; ++nc;
-            eq[nc] = dofs.equation(eb.dof_y[eb.foot.beam_node]); cx[nc] = 0.0; cy[nc] = 1.0; ++nc;
+            eq[nc] = ebeam::trans_eq(eb, eb.foot.beam_node, 0, dofs); cx[nc] = 1.0; cy[nc] = 0.0; ++nc;
+            eq[nc] = ebeam::trans_eq(eb, eb.foot.beam_node, 1, dofs); cx[nc] = 0.0; cy[nc] = 1.0; ++nc;
             for (int j = 0; j < E::kNodeCount; ++j) {
                 const int sn = mesh.node_of(eb.foot.soil_elem, j);
                 eq[nc] = dofs.equation(dofs.global_dof(sn, 0)); cx[nc] = -Ns(j); cy[nc] = 0.0; ++nc;
@@ -321,8 +321,8 @@ void assemble_structural_mass(const mesh::Mesh& mesh, const DofMap& dofs,
                 std::array<int, 9> eq;
                 for (int k = 0; k < 3; ++k) {
                     Xe(k, 0) = eb.node_x[el[k]]; Xe(k, 1) = eb.node_y[el[k]];
-                    eq[3 * k + 0] = dofs.equation(eb.dof_x[el[k]]);
-                    eq[3 * k + 1] = dofs.equation(eb.dof_y[el[k]]);
+                    eq[3 * k + 0] = ebeam::trans_eq(eb, el[k], 0, dofs);
+                    eq[3 * k + 1] = ebeam::trans_eq(eb, el[k], 1, dofs);
                     eq[3 * k + 2] = dofs.equation(eb.dof_phi[el[k]]);
                 }
                 Eigen::Matrix<double, 9, 9> Me = Eigen::Matrix<double, 9, 9>::Zero();
@@ -404,7 +404,7 @@ void assemble_structural_weight(const mesh::Mesh& mesh, const DofMap& dofs,
                 for (int k = 0; k < 3; ++k) {
                     Xe(k, 0) = eb.node_x[el[k]];
                     Xe(k, 1) = eb.node_y[el[k]];
-                    eqy[k] = dofs.equation(eb.dof_y[el[k]]);
+                    eqy[k] = ebeam::trans_eq(eb, el[k], 1, dofs);
                 }
                 for (int q = 0; q < 3; ++q) {
                     const auto e = plate::detail::edge_kin(Xe, xi3[q]);
