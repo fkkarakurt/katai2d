@@ -68,7 +68,25 @@ except katai.Refusal as e:
     check("materials[0].E" in str(e), "Refusal names the field path")
     check(e.report is not None and not e.report.ok(), "Refusal carries the report")
 
-# (5) Provenance is visible.
+# (5) Structural forces are readable from a script, and they are the SAME numbers the C++
+# corpus test pins. KV-STR-004 is the embedded beam at its declared capacity, so the value is
+# known independently: (T_skin,max L + F_max)/L_spacing = (100 x 10 + 500)/2.5 = 600 kN/m. A
+# binding that merely returned "something" would pass a smoke test; this one has to land on the
+# closed form the case exists to reproduce.
+project, _ = katai.load_project(f"{CORPUS}/kv-str-004-axial-pile-capacity.k2d")
+job = katai.run(project)
+res = job.results()[-1]
+check(len(res.struct_forces) == 1, "the pile row reports one force diagram to Python")
+pile = res.struct_forces[0]
+check(pile.name == "Pile row", f"and it names itself: {pile.name}")
+check(len(pile.stations) > 2, f"with a diagram along it: {len(pile.stations)} stations")
+head = max(pile.stations, key=lambda st: st.y)
+cap = (100.0 * 10.0 + 500.0) / 2.5
+check(abs(abs(head.N) / cap - 1.0) < 0.02,
+      f"axial force at the head {abs(head.N):.4f} kN/m vs (T_max L + F_max)/Ls = {cap:.4f}")
+check(res.struct_forces[0].max_N > 0.0, "the summary extremes come through too")
+
+# (6) Provenance is visible.
 check(isinstance(katai.backend_name(), str) and katai.backend_name() != "",
       f"backend: {katai.backend_name()}")
 

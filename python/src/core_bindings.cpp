@@ -519,6 +519,53 @@ NB_MODULE(_core, m) {
                    (d.subject.empty() ? "" : " " + d.subject) + ": " + d.message + ">";
         });
 
+    // One station of a structural force diagram, and the diagram itself. Until now a script
+    // could read the soil field and the support reactions but not what any STRUCTURE carried --
+    // so a pile's axial force, a wall's bending moment or a geogrid's tension were reachable from
+    // C++ and the GUI and nowhere else. A capability that the scripting surface cannot express is
+    // one a parameter study, a benchmark or a thesis cannot use.
+    nb::class_<katai::core::ForceStation>(m, "ForceStation")
+        .def_ro("s", &katai::core::ForceStation::s, "arc length from the first node [m]")
+        .def_ro("x", &katai::core::ForceStation::x, "[m]")
+        .def_ro("y", &katai::core::ForceStation::y, "[m]")
+        .def_ro("N", &katai::core::ForceStation::N, "axial force, TENSION POSITIVE [kN/m]")
+        .def_ro("Q", &katai::core::ForceStation::Q, "shear force [kN/m]")
+        .def_ro("M", &katai::core::ForceStation::M, "bending moment [kNm/m]")
+        .def_ro("ux", &katai::core::ForceStation::ux, "[m]")
+        .def_ro("uy", &katai::core::ForceStation::uy, "[m]")
+        .def("__repr__", [](const katai::core::ForceStation& f) {
+            char b[160];
+            std::snprintf(b, sizeof(b), "<ForceStation s=%.4g (%.4g, %.4g) N=%.6g Q=%.6g M=%.6g>",
+                          f.s, f.x, f.y, f.N, f.Q, f.M);
+            return std::string(b);
+        });
+
+    nb::class_<katai::core::StructForce>(m, "StructForce")
+        .def_ro("name", &katai::core::StructForce::name, "the name the element carries in the file")
+        .def_ro("kind", &katai::core::StructForce::kind,
+                "0 plate (an embedded beam reports as one: it produces N/Q/M), 1 anchor, "
+                "2 geogrid")
+        .def_ro("yielded", &katai::core::StructForce::yielded,
+                "an anchor reached F_max, or a plate formed an M-N hinge")
+        .def_ro("max_N", &katai::core::StructForce::max_N, "[kN/m]")
+        .def_ro("max_Q", &katai::core::StructForce::max_Q, "[kN/m]")
+        .def_ro("max_M", &katai::core::StructForce::max_M, "[kNm/m]")
+        .def_ro("envelope", &katai::core::StructForce::envelope,
+                "Dynamic phase: each station holds max|.| over the shaking, so the extremes at "
+                "different stations occur at DIFFERENT times -- a design envelope, not a state "
+                "of equilibrium")
+        .def_ro("superposed", &katai::core::StructForce::superposed,
+                "Dynamic phase: the parent phase's static action is included, so these are TOTAL "
+                "design actions; when False the dynamic action stands alone and must be "
+                "superposed by hand")
+        .def_prop_ro("stations",
+                     [](const katai::core::StructForce& f) { return f.stations; },
+                     "list[ForceStation] along the element")
+        .def("__repr__", [](const katai::core::StructForce& f) {
+            return "<StructForce '" + f.name + "' " + std::to_string(f.stations.size()) +
+                   " station(s)>";
+        });
+
     nb::class_<api::SolveResult>(m, "SolveResult")
         .def_ro("ok", &api::SolveResult::ok)
         .def_ro("message", &api::SolveResult::message)
@@ -543,6 +590,9 @@ NB_MODULE(_core, m) {
         .def_prop_ro("reaction", [](const api::SolveResult& r) { return r.reaction; },
                      "support reactions at fixed dofs [kN/m], (2*node_count) like displacement; "
                      "soil contribution, static phases only (empty otherwise)")
+        .def_prop_ro("struct_forces", [](const api::SolveResult& r) { return r.struct_forces; },
+                     "one StructForce per drawn structural line (plate, wall, anchor, geogrid, "
+                     "embedded beam); empty when the model has no structures")
         .def_prop_ro("diagnostics", [](const api::SolveResult& r) { return r.diagnostics; },
                      "everything the run did that the file does not literally say: clipped "
                      "geometry, a fallback taken, the refusal that stopped it (list[Diagnostic])")
