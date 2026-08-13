@@ -193,6 +193,14 @@
 //   expected: FoS between the published pair 1.380 (Bishop-Morgenstern) and 1.4 (Griffiths-Lane FE)
 //   band:     4% vs Bishop-Morgenstern 1.380, as asserted below -- measured FoS 1.384 (+0.3%) on the file's own 1.0 m tri6 mesh; the mechanism must also displace
 //
+// verify: KV-CST-011
+//   oracle:   closed_form
+//   source:   the tension cut-off as specified in the PLAXIS 2D Material Models Manual sec 3.2 (Eq. 3-11) and sec 3.3.10: three additional yield functions f4 = sigma'1 - sigma_t <= 0, f5 = sigma'2 - sigma_t <= 0, f6 = sigma'3 - sigma_t <= 0, for which "an associated flow rule is adopted", with sigma_t taken equal to zero by default. That the Hardening Soil family carries it too is the manual's own statement: its parameter table lists "sigma_t Tension cut-off and tensile strength" under "failure parameters as in Mohr-Coulomb model", and the models that genuinely lack one (NGI-ADP, UDCAM-S) are named as lacking it
+//   locator:  a Hardening Soil column carries its own weight, so the vertical stress stays compressive and the ground keeps its stiffness, and a prescribed edge then stretches it horizontally, which drives the HORIZONTAL stress into tension. That separation is what makes the case converge with the cap active: a weightless block pulled the same way simply comes apart, and the earlier attempts did exactly that (2%, 4%, 54%, 17%, 37% of the applied load before collapse -- an unconverged run's load fraction is not a measurement, and those did not even order themselves). The imposed strain is 2e-4
+//   quantity: the largest principal stress anywhere in the model after a converged run, and the run's peak displacement, from the checked-in tests/corpus/kv-cst-011-tension-cutoff-hs.k2d [kPa; m]
+//   expected: the yield condition itself -- no principal stress above sigma_t -- together with the identity that a cut-off the tension never reaches must change nothing at all
+//   band:     as asserted below. With the cut-off at zero the largest principal stress in the model is +1.4753 kPa against +3.1220 kPa for the same soil without it, and the residual is shown to be STRESS RECOVERY rather than the return mapping: nodal stresses are extrapolated and averaged from the Gauss points, which the return caps exactly, so a recovery residual must vanish with the element size -- measured 1.4753 kPa at h = 1 m falling to 0.3346 kPa at h/2, a factor of 4.41 for a factor of 2, roughly the second order an extrapolation should show. A third density (h/4) was tried and did not converge on this fixture, so the trend is stated over the two that were measured rather than three that were not. The pair that makes this more than a difference: with sigma_t = 5 kPa, above anything the run reaches, the result is BIT-IDENTICAL to the same model with the cut-off switched off (9.547553e-04 m twice over), so the cap is provably inert until it bites, while sigma_t = 0 moves the same model to 8.995284e-04 m. Until 2026-08-13 none of this happened: `K2D-M001` had declared since 2026-08-08 that only the Mohr-Coulomb return read the cut-off, while the schema switches it on by DEFAULT as PLAXIS does, so every Hardening Soil, HS small, Soft Soil and Soft Soil Creep run in this engine allowed tension past sigma_t -- a systematic difference from the reference code in the unsafe direction
+//
 // verify: KV-STR-005
 //   oracle:   closed_form
 //   source:   the geogrid as specified in the PLAXIS 2D Reference Manual sec 6.5: "geogrids are flexible elastic or elastoplastic elements that represent a grid or sheet of fabric. Geogrids can only sustain tensile forces, but not compressive forces", with the axial stiffness defined in Eq. 6-51 as "the ratio of the axial force F per unit width and the axial strain (eps = dl/l)", EA = F/eps
@@ -3015,6 +3023,141 @@ void oracle_geogrid(const m::Project& pr) {
           "a constant-tension member leaves the soil field exactly where it found it");
 }
 
+// ------------------------------ KV-CST-011: tension cut-off on Hardening Soil ----------------
+// The manual's Eq. 3-11 IS the oracle, and it is an inequality rather than a number: the cut-off
+// adds three yield functions f4 = sigma'1 - sigma_t <= 0, f5 and f6 on the other two principals,
+// with an associated flow rule. So the thing to measure is admissibility -- after a converged
+// run with the cut-off on, NO point of the model may carry a principal stress above sigma_t --
+// and the thing to prove alongside it is that the cap is inert until it bites.
+//
+// Fixture, and why it is this one. A Hardening Soil column carries its own weight, so the
+// vertical stress stays compressive and the ground keeps its stiffness; a prescribed edge then
+// stretches it horizontally, which drives the HORIZONTAL stress into tension. That separation is
+// what makes the case converge: a weightless block pulled the same way simply comes apart, and
+// three earlier attempts did exactly that, reporting 2%, 4%, 54%, 17% and 37% of the applied
+// load before collapse. Those percentages are not a measurement -- an unconverged run's load
+// fraction is not a physical quantity, and they did not even order themselves monotonically.
+// The strain here is 2e-4, small enough that the run converges with the cap active.
+constexpr double kTcW = 2.0, kTcH = 4.0;      // column [m]
+constexpr double kTcGamma = 20.0;             // unit weight, so the vertical stays compressive
+constexpr double kTcC = 10.0, kTcPhi = 30.0;  // c well below c cot(phi) at the sigma_t used
+constexpr double kTcDx = 0.0004;              // imposed stretch [m] -> 2e-4 horizontal strain
+constexpr double kTcHm = 1.0;                 // element size [m]
+constexpr double kTcSigT = 5.0;               // the "high" cut-off the tension never reaches
+
+m::Project build_tension_cutoff_at(bool cutoff, double sigma_t, double dx, double h) {
+    m::Project pr;
+    pr.name = "KV-CST-011 tension cut-off on Hardening Soil";
+    pr.x_min = 0; pr.x_max = kTcW; pr.y_min = 0; pr.y_max = kTcH;
+    pr.has_water = false;
+    pr.mesh.elem_size = h; pr.mesh.order = 6;
+
+    m::Material s;
+    s.name = "Sand";
+    s.model = m::SoilModel::HardeningSoil;
+    s.gamma_unsat = s.gamma_sat = kTcGamma;
+    s.E = 30000.0; s.nu = 0.3;                 // not read by HS; its own pair drives the model
+    s.c = kTcC; s.phi = kTcPhi; s.psi = 0.0;
+    s.tension_cutoff = cutoff;
+    s.tensile_strength = sigma_t;
+    pr.materials.push_back(s);
+
+    m::SoilPolygon P;
+    P.name = "Sand"; P.material = 0;
+    P.x = {0, kTcW, kTcW, 0};
+    P.y = {0, 0, kTcH, kTcH};
+    P.edge_bc = {4, 0, 0, 2};                  // base fixed, right driven, top free, left u_x = 0
+    pr.polygons.push_back(P);
+
+    m::PrescribedDisp D;
+    D.name = "Stretch";
+    D.x1 = kTcW; D.y1 = 0.0; D.x2 = kTcW; D.y2 = kTcH;
+    D.set_ux = true;  D.ux = dx;
+    D.set_uy = false; D.uy = 0.0;
+    pr.disps.push_back(D);
+
+    pr.initial.poly_active = {1};
+    pr.initial.disp_active = {0};
+    m::Phase pull;
+    pull.name = "Stretch";
+    pull.poly_active = {1};
+    pull.disp_active = {1};
+    pr.phases.push_back(pull);
+    return pr;
+}
+
+m::Project build_tension_cutoff() {
+    return build_tension_cutoff_at(true, 0.0, kTcDx, kTcHm);
+}
+
+struct TcRead {
+    bool ok = false;
+    double max_principal = -1e30;   // the largest principal stress anywhere (tension-positive)
+    double max_u = 0.0;
+};
+TcRead read_tension_cutoff(const m::Project& pr) {
+    TcRead r;
+    const auto M = katai::app::mesh_from_project(pr);
+    if (!M.ok) return r;
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    if (res.size() != 2 || !res[0].ok || !res[1].ok) return r;
+    const auto& R = res[1];
+    r.max_u = R.max_disp;
+    for (const auto& sv : R.stress.stress) {                 // [sxx, syy, sxy], tension-positive
+        const double mean = 0.5 * (sv(0) + sv(1)), hd = 0.5 * (sv(0) - sv(1));
+        r.max_principal = std::fmax(r.max_principal, mean + std::hypot(hd, sv(2)));
+    }
+    r.ok = true;
+    return r;
+}
+
+void oracle_tension_cutoff(const m::Project& pr) {
+    const TcRead on = read_tension_cutoff(pr);                                    // sigma_t = 0
+    check(on.ok, "the stretched Hardening Soil column converges with the cut-off active");
+    if (!on.ok) return;
+
+    // (a) ADMISSIBILITY -- Eq. 3-11 itself. Nodal stresses are RECOVERED from the Gauss points
+    // (extrapolated and averaged), so a converged field may overshoot the integration points it
+    // came from by a little; the band is that recovery, not the return mapping, which caps every
+    // Gauss point exactly.
+    const TcRead off = read_tension_cutoff(build_tension_cutoff_at(false, 0.0, kTcDx, kTcHm));
+    std::printf("      max principal stress: cut-off ON %+.4f kPa | OFF %+.4f kPa\n",
+                on.max_principal, off.max_principal);
+    check(off.ok && off.max_principal > 2.0 * on.max_principal,
+          "the cut-off more than halves the tension the same soil carries");
+    // Whether the residual is the RECOVERY or the RETURN is not a matter of opinion: the return
+    // mapping caps every Gauss point exactly, so a residual that is recovery overshoot must
+    // vanish with the element size, while one left by the return mapping would not. Measured:
+    // 1.4753 kPa at h = 1 m falls to 0.3346 kPa at h/2 -- a factor of 4.4 for a factor of 2, so
+    // recovery overshoot, and roughly second order as an extrapolation from Gauss points should
+    // be. A third level (h/4) was tried and did NOT converge on this fixture, so the trend is
+    // stated over the two densities that were measured rather than three that were not.
+    const TcRead on2 = read_tension_cutoff(build_tension_cutoff_at(true, 0.0, kTcDx, 0.5 * kTcHm));
+    std::printf("      max principal with the cut-off at zero: h %.4f -> h/2 %.4f kPa (x%.2f)\n",
+                on.max_principal, on2.max_principal, on.max_principal / on2.max_principal);
+    check(on2.ok && on2.max_principal < 0.5 * on.max_principal,
+          "and the tension left over falls with the mesh: it is stress recovery, not the return");
+
+    // (b) THE PAIR THAT MAKES IT MORE THAN A DIFFERENCE. Set sigma_t above anything the run
+    // reaches and the cap must do NOTHING -- not approximately, bit-for-bit nothing, because the
+    // return mapping never enters its branch. That identity is what separates "the cap is wired"
+    // from "something changed the answer".
+    const TcRead high = read_tension_cutoff(build_tension_cutoff_at(true, kTcSigT, kTcDx, kTcHm));
+    std::printf("      max|u|: cut-off OFF %.6e | sigma_t = %.1f kPa %.6e | sigma_t = 0 %.6e\n",
+                off.max_u, kTcSigT, high.max_u, on.max_u);
+    check(high.ok && high.max_u == off.max_u,
+          "a cut-off the tension never reaches leaves the run BIT-IDENTICAL");
+    check(std::fabs(on.max_u - off.max_u) > 1e-6 * off.max_u,
+          "a cut-off at zero measurably changes the same model");
+
+    // (c) THE SOIL IS STILL THERE. The column must not have quietly collapsed into the cap: its
+    // vertical stress stays compressive under its own weight, which is the whole reason this
+    // fixture converges where a weightless block does not.
+    check(on.max_u > 0.0 && on.max_u < 10.0 * kTcDx,
+          "the column deforms by the order of the stretch imposed, not by a collapse");
+}
+
 int main() {
     std::printf("Input corpus: checked-in .k2d == programmatic build, validated, solved from the file\n");
     const CorpusCase cases[] = {
@@ -3042,6 +3185,7 @@ int main() {
         {"kv-cst-010-soft-soil-creep-column.k2d", build_ssc, oracle_ssc},
         {"kv-str-004-axial-pile-capacity.k2d", build_pile, oracle_pile},
         {"kv-str-005-geogrid-tension.k2d", build_geogrid, oracle_geogrid},
+        {"kv-cst-011-tension-cutoff-hs.k2d", build_tension_cutoff, oracle_tension_cutoff},
     };
     for (const CorpusCase& c : cases) run_case(c);
 
