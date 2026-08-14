@@ -183,7 +183,7 @@
 //   locator:  Section 2.3, bending of beams. Two problems on a simply supported span of l = 2 m, with the characteristics of an HEB 200 steel beam, which in plane strain is a plate 1 m wide out of plane: EA = 1.64e6 kN, EI = 1200 kNm2, nu = 0.0, a single point load F = 100 kN at mid-span and a uniformly distributed load q = 100 kN/m. The manual publishes both extremes for both problems: point load M_max = 50.0 kNm and u_max = 13.96 mm, distributed load M_max = 50.0 kNm and u_max = 17.43 mm. Its build is reproduced as stated: the two beams are added to the bottom line of a block cluster with a spacing in between, point fixities at their end points, and the soil cluster deactivated so that only the beams remain on a very coarse mesh
 //   quantity: mid-span deflection and peak bending moment of BOTH beams from one run, the deflections from the nodal field and the moments from each element's own force diagram, run from the checked-in tests/corpus/kv-str-003-plaxis-beam-bending.k2d [m; kNm/m]
 //   expected: the Mindlin (Timoshenko) closed forms, stated in full and evaluated in the test rather than called from the plate header: w = F l^3/(48 EI) + F l/(4 kGA') and w = 5 q l^4/(384 EI) + q l^2/(8 kGA'), with the manual's own shear rigidity kGA' = k EA/(2(1+nu)), k = 5/6 (Material Models Manual Eq. 18-8). They evaluate to 13.96206 mm and 17.43428 mm, which is exactly where the published 13.96 and 17.43 come from -- a PLAXIS plate is shear-deformable, and Euler-Bernoulli alone would give 13.8896 and 17.3618. M_max = F l / 4 = q l^2 / 8 = 50 kNm
-//   band:     1% vs the closed form and 2% vs PLAXIS on the deflections, 2% vs the published 50 kNm on the moments, as asserted below -- measured -0.000% on BOTH deflections (13.96206 / 17.43428 mm) and +0.00% / +1.04% on the moments (50.00000 / 50.52083 kNm) on the file's own 0.25 m tri6 mesh. Five further witnesses make the pair more than a coincidence: the moment DISTRIBUTION follows F s/2 and q s(l-s)/2 station by station (worst 0.0000% and 1.0417% of M_max, not just the peak); the distributed beam's peak overshoots by exactly q h^2/12 -- the parabola the element's linear curvature cannot hold inside one element -- reproduced to five figures at h = 0.5 / 0.25 / 0.125 m (52.08333 / 50.52083 / 50.13021), so the residual is a structural discretisation bias that vanishes with h, and "a very coarse mesh is sufficient" is true of the displacements but not of the peak moment; bending and shear are moved SEPARATELY (EI x 4 divides the bending term alone, EA x 100 drives the answer onto the Euler-Bernoulli limit 13.8896 mm) and the run follows the closed form to -0.000% in each; the two spans are bit-for-bit independent; and with the beams deleted the model has no free DOF at all and the run refuses with "Every DOF is fixed; nothing to solve". That last one is the regression sentry for the fault this case was built to find: until 2026-08-11 a deactivated soil cluster pinned every translation of the beams standing in it (fix_inactive_nodes did not ask whether a structure held the node), so the beams were welded to the outside world along their whole length -- the only free DOFs left were their rotations, which was enough for the solve to converge, report "ok" and hand back max|u| = 0.000000e+00 with no warning of any kind
+//   band:     1% vs the closed form and 2% vs PLAXIS on the deflections, 2% vs the published 50 kNm on the moments, as asserted below -- measured -0.000% on BOTH deflections (13.96206 / 17.43428 mm) and +0.00% / +1.04% on the moments (50.00000 / 50.52083 kNm) on the file's own 0.25 m tri6 mesh. Five further witnesses make the pair more than a coincidence: the moment DISTRIBUTION follows F s/2 and q s(l-s)/2 station by station (worst 0.0000% and 1.0417% of M_max, not just the peak); the distributed beam's peak overshoots by exactly q h^2/12 -- the parabola the element's linear curvature cannot hold inside one element -- reproduced to five figures at h = 0.5 / 0.25 / 0.125 m (52.08333 / 50.52083 / 50.13021), so the residual is a structural discretisation bias that vanishes with h, and "a very coarse mesh is sufficient" is true of the displacements but not of the peak moment; that same triplet is then put through the standard grid-convergence procedure (Roache 1994; Celik et al. 2008, implemented in katai/math/grid_convergence.hpp) and yields an observed order of exactly p = 2.0000 in monotonic convergence and inside the asymptotic range, with a Richardson value of 50.00000 kNm -- the manual's published number, recovered from three meshes NONE of which produces it -- so the peak moment quoted above carries a NUMERICAL UNCERTAINTY of +/- 0.3247% (GCI at the observed order, safety factor 1.25); and because q h^2/12 makes the order analytically known here in advance, this case tests the error estimator as much as the estimator bands the case, which is worth having when every other sweep in this suite runs where the answer is not known; bending and shear are moved SEPARATELY (EI x 4 divides the bending term alone, EA x 100 drives the answer onto the Euler-Bernoulli limit 13.8896 mm) and the run follows the closed form to -0.000% in each; the two spans are bit-for-bit independent; and with the beams deleted the model has no free DOF at all and the run refuses with "Every DOF is fixed; nothing to solve". That last one is the regression sentry for the fault this case was built to find: until 2026-08-11 a deactivated soil cluster pinned every translation of the beams standing in it (fix_inactive_nodes did not ask whether a structure held the node), so the beams were welded to the outside world along their whole length -- the only free DOFs left were their rotations, which was enough for the solve to converge, report "ok" and hand back max|u| = 0.000000e+00 with no warning of any kind
 //
 // verify: KV-SLP-002
 //   oracle:   published_benchmark
@@ -217,6 +217,7 @@
 //   expected: (T_skin,max L + F_max,base)/L_spacing = (100 x 10 + 500)/2.5 = 600 kN/m, stated in full and evaluated in the test rather than called from the driver
 //   band:     2%, as asserted below -- measured 600.0000 kN/m, -0.00%, on the file's own 1.0 m tri6 mesh. The fixture obeys two rules the manual states: the soil is MOHR-COULOMB and not Linear Elastic, because PLAXIS ignores the shaft resistance AND the spacing inside a linear elastic cluster (it counts that as structure rather than soil), so an LE fixture would measure the one case PLAXIS treats differently; and its cohesion is far above anything mobilised, so the plateau measured is the pile's declared capacity and not a soil bearing failure. Soil and pile are weightless, so the load carried is the load applied. Five further witnesses: doubling the head load leaves the pile force at 600.0000 while the head goes on settling (0.116 -> 0.479 m), which is a limit load and not a stiffness reading; the two capacity terms are moved one at a time and each moves the total by exactly its own share (base 500 -> 100 kN gives 440.0000 against 440.0000, skin 100 -> 50 kN/m gives 400.0000 against 400.0000); doubling the out-of-plane spacing halves the capacity to 300.0000, ratio 0.5000 exactly, which is the check that Eq 6-65's division by L_spacing reaches the capacities and not only the stiffnesses; halving the element size leaves the capacity where it was, so nothing here is discretisation (a prediction of this case's own draft, that the tied node's Newton-Cotes share of the skin could not mobilise, was refuted by that measurement and is recorded in the test); and the sentry -- with the connection FREE, which is what this engine did for every pile until 2026-08-13 with no way to ask for anything else, the pile carries 0.0000 kN/m at its head, because a point load is delivered to the nearest SOIL node and reaches a free pile top only through the skin springs. Building this case also found and fixed two constants: Eq 6-65's division by L_spacing was not applied at all, leaving every skin and foot spring 2.5x too stiff at the default spacing, and the foot used D/2 where Eq 6-67 defines R_eq = sqrt(12 EI/EA)/2 = 0.433 D for a solid circular pile. The stiffness function's only consumer is the driver -- the element test passes its springs by hand -- so that factor of 2.5 stood while all 150 tests were green
 #include <katai/analysis/response_spectrum.hpp>
+#include <katai/math/grid_convergence.hpp>   // KV-STR-003's peak-moment band (Roache/Celik GCI)
 #include <katai/mesh/boundary_extraction.hpp>   // collect_chain: the chain a geogrid is built on
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/jobs/driver.hpp>
@@ -2052,14 +2053,44 @@ void oracle_beams(const m::Project& pr) {
     // so "a very coarse mesh is sufficient" is true of the manual's displacements and not of
     // its peak moment -- worth knowing before reading a wall's M off a coarse run.
     std::printf("      M_max(distributed) vs mesh: ");
+    double M_of_h[3] = {0.0, 0.0, 0.0};   // in the loop's order: h = 0.5, 0.25, 0.125
+    int mesh_level = 0;
     for (double h : {0.5, kBmH, 0.125}) {
         const BeamRead V = read_beams(build_beams_at(kBmEA, kBmEI, true, h));
         const double rule = 50.0 + kBmQ * h * h / 12.0;
         std::printf("h=%.3f: %.5f (rule %.5f) ", h, V.M_q, rule);
         check(V.ok && std::fabs(V.M_q - rule) < 1e-4 * rule,
               "the peak-moment overshoot is exactly q h^2 / 12 at this mesh size");
+        M_of_h[mesh_level++] = V.M_q;
     }
     std::printf("\n");
+
+    // (d2) THE NUMERICAL UNCERTAINTY OF THAT PEAK MOMENT, by the standard procedure (Roache
+    // 1994; Celik et al. 2008; see katai/math/grid_convergence.hpp). This case can do something
+    // almost none can: CHECK the estimator as well as be measured by it. The discretisation
+    // error here is known in closed form -- q h^2/12 -- so the observed order is not something
+    // to be discovered but something already known to be 2, and Richardson extrapolation must
+    // land on the manual's published 50.0 kNm, which is a number NONE of the three meshes
+    // produces (they give 52.08, 50.52, 50.13). An error estimator that is only ever run where
+    // the answer is unknown is an estimator nobody has tested.
+    {
+        namespace gc = katai::math;
+        gc::GridTriplet t;                                  // 1 = finest
+        t.h1 = 0.125;    t.h2 = kBmH;       t.h3 = 0.5;
+        t.phi1 = M_of_h[2]; t.phi2 = M_of_h[1]; t.phi3 = M_of_h[0];
+        const gc::ConvergenceEstimate e = gc::grid_convergence_band(t);
+        std::printf("      GCI: p = %.4f (%s), extrapolated %.5f kNm, band +/- %.4f%% [%s]\n",
+                    e.p, gc::convergence_kind_name(e.kind), e.phi_extrapolated, 100.0 * e.band,
+                    e.band_basis.c_str());
+        check(e.ok, "the peak-moment triplet yields a convergence estimate");
+        check(e.kind == gc::ConvergenceKind::MonotonicConvergence,
+              "the peak moment converges monotonically as the mesh is refined");
+        check(std::fabs(e.p - 2.0) < 0.01,
+              "the observed order is the 2 that q h^2/12 predicts analytically");
+        check(std::fabs(e.phi_extrapolated - 50.0) < 0.01,
+              "Richardson extrapolation recovers the published 50.0 kNm from three meshes that all miss it");
+        check(e.asymptotic, "the triplet is inside the asymptotic range, so the order may be quoted");
+    }
 
     // (e) The two TERMS of the deflection, separated. Bending and shear are added by the same
     // formula, so matching the total once proves neither. Stiffening EI by 4 divides the

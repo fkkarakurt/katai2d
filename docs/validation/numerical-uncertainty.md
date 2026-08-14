@@ -264,13 +264,47 @@ closed form is **cancellation, not accuracy**: the converged finite element answ
 the looser run happens to sit nearer the analytic value on the way there. Reporting it as "more
 accurate" would be exactly the kind of luck this document exists to strip out.
 
-## 6. What this does not yet cover
+## 7. The one case that tests the estimator back: KV-STR-003's peak moment
+
+Every sweep above runs where the discretisation error is unknown — which is the point of an
+estimator, and also the reason an estimator is hard to trust. The beam-bending case is the
+exception, and it was worth banding for that reason alone.
+
+Its distributed-load beam has a peak moment whose error is known **in closed form**: the moment
+field is a parabola and the element's curvature is linear, so the peak overshoots by exactly
+`q h²/12` — reproduced to five figures at three densities. The order of that error is therefore
+not something to be discovered from the data; it is analytically **2**, decided before any run.
+Feeding those three moments to the same `grid_convergence_band()` that bands everything else:
+
+| h [m] | peak moment [kNm] | overshoot vs 50.0 |
+|---|---|---|
+| 0.5 | 52.08333 | +2.08333 |
+| 0.25 (the file's own mesh) | 50.52083 | +0.52083 |
+| 0.125 | 50.13021 | +0.13021 |
+
+- observed order **p = 2.0000**, monotonic convergence, inside the asymptotic range;
+- Richardson value **50.00000 kNm** — the manual's published number, recovered from three meshes
+  **none of which produces it**;
+- reported band on the file's own mesh: **± 0.3247 %** (GCI at the observed order, Fs = 1.25).
+
+The order it recovers is the order the algebra already knew, and the value it extrapolates to is
+the value the reference publishes. That is a check of the estimator, not of the beam — and it
+costs nothing, because the three runs were already there as a witness that the overshoot was a
+bias rather than scatter. It also puts a number on the warning attached to that witness: a peak
+moment read off a coarse run is not merely "a bit high", it is high by an amount this procedure
+will quantify for any mesh triplet the user cares to produce.
+
+## 8. What this does not yet cover
 
 The register is deliberately explicit about its own gaps, since an absent row must never read as
 a passed one:
 
-- **Fourteen of the sixteen corpus cases have no sweep yet.** KV-FND-008 and KV-SLP-002 are the
-  first two.
+- **Most of the corpus has no sweep yet.** The corpus is now **25 files** behind **53 declared
+  cases**; four carry a band (KV-FND-008 via KV-NUM-005, KV-SLP-002, the Giroud rigid footing,
+  and KV-STR-003 as of 2026-08-14). The arithmetic of the gap is not the obstacle it looks like:
+  a three-level nested sweep on a linear elastic case costs about **2.6 seconds**, so what is
+  missing here is written oracles and probes, not machine time. The nonlinear families are the
+  genuinely expensive ones.
 - **Tolerance independence is measured for two families, not all.** KV-NUM-007 covers the slope
   factor of safety (strength-reduction trials at 1e-3, spread 0.0000% below it and unsafe-sided
   above) and the Hardening Soil oedometer KV-CST-002 at its default 1e-2. The soft-soil family,
