@@ -1780,6 +1780,44 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             return R;
         }
         init = *io.init_states;
+        // RESET SMALL STRAIN (PLAXIS's phase option; Material Models Manual sec. 7.6). The
+        // inherited state carries the small-strain history with it, which is exactly right when
+        // the phases continue one loading path and exactly wrong when they do not -- the
+        // manual's own case being a surcharge placed and removed to leave a preconsolidation
+        // pressure behind, where the strain history it also leaves is an artefact of how the
+        // state was built rather than something the soil would still remember.
+        //
+        // Only gamma_hist is cleared. Stress, gamma_p and the cap pressure pp are the state of
+        // the ground and are NOT the strain history: resetting them would delete the
+        // overconsolidation the surcharge was applied to create, which is the opposite of what
+        // this option is for.
+        if (io.config && io.config->reset_small_strain) {
+            int cleared = 0;
+            for (auto& gs : init)
+                if (gs.gamma_hist != 0.0) { gs.gamma_hist = 0.0; ++cleared; }
+            // Whether any material can even feel it is a different question from whether the
+            // flag was honoured, and the user asked a question that deserves an answer either
+            // way: a reset that met no small-strain material is a no-op, and saying so is
+            // cheaper than letting someone conclude their stiffness was restored.
+            const bool any_hssmall = std::any_of(
+                pr.materials.begin(), pr.materials.end(), [](const model::Material& m) {
+                    return m.model == model::SoilModel::HSsmall && m.G0ref > 0.0;
+                });
+            const std::string& pname = io.config->name;
+            if (!any_hssmall)
+                note(R, "K2D-M005", pname,
+                     "Phase \"" + pname +
+                         "\" asks for the small-strain history to be reset, but no material in "
+                         "this model is Hardening Soil with small-strain stiffness, so there is "
+                         "no history to reset and the phase is unchanged.");
+            else
+                note(R, "K2D-M005", pname,
+                     "Phase \"" + pname + "\" starts with the small-strain history RESET: " +
+                         std::to_string(cleared) +
+                         " stress points meet it at G0 instead of the stiffness the earlier "
+                         "phases had degraded them to. Stress, shear hardening and the "
+                         "preconsolidation pressure are carried over untouched.");
+        }
     } else if (use_k0) {
         init = katai::core::compute_k0_initial_stress_layered(mesh, k0opt);
         const int ng = mesh.element_count > 0 ? (int)(init.size() / mesh.element_count) : 0;

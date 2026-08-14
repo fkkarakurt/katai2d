@@ -443,6 +443,27 @@ struct Phase {
     // question being asked (establishing an initial state, or a long-term stage), which PLAXIS
     // supports for exactly the same reason.
     bool ignore_undrained = false;
+    // RESET SMALL STRAIN (PLAXIS "Reset small strain", Material Models Manual sec. 7.6): start
+    // this phase with the small-strain history cleared, so a Hardening Soil small material meets
+    // it at its maximum stiffness G0 instead of wherever the previous phases left it.
+    //
+    // The manual's own reason for the option is that strain history outlives its cause. Its
+    // example is overconsolidation modelled by placing and removing a surcharge: the loading is
+    // there to leave a preconsolidation pressure behind, but it also leaves a strain history
+    // that -- in the real soil -- ageing erased long before the analysis begins. "Unfortunately,
+    // strain history is already triggered by adding and removing a surcharge. In this case the
+    // strain history can be reset manually, by using the Reset small strain option."
+    //
+    // It carries extra weight in THIS engine. Sec. 7.2 derives gamma_hist from a strain history
+    // TENSOR H that is partially or fully reset whenever a reversal is detected (a Simpson brick
+    // criterion; the manual refers the transformation of H to Benz (2006)). This tree accumulates
+    // a monotone SCALAR instead and detects no reversal, which is declared in
+    // docs/references/hssmall-formulation.md sec. 7: an unloading that FOLLOWS a loading phase
+    // stays on the degraded stiffness rather than recovering G0, so the answer is softer than
+    // the reference code's. Until the tensor exists, this flag is the engineer's only way to say
+    // "the history up to here is not the history that matters now" -- which turns a systematic
+    // difference into a controlled one.
+    bool reset_small_strain = false;
     // NUMERICAL CONTROLS for this phase (PLAXIS "Numerical control parameters"). Zero means
     // "let the program choose", which is what every project that never touches them says, so
     // the defaults stay exactly where they are: derived from the material class (Hardening Soil

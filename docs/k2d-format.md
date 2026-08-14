@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **13** · Current `.res` version: **5**
+Current `.k2d` version: **14** · Current `.res` version: **5**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -28,7 +28,10 @@ same ground with no dewatering in it, and **v12** the cross permeability of wall
 straight through a cut-off wall, and **v13** the embedded beam's connection point
 (`structs[i].conn`), which an older build would ignore and leave every pile top free of the soil
 — the reading in which a point load at a pile head is carried by the ground beside it rather than
-by the pile, and the same drawing settles several times as much. Every bump
+by the pile, and the same drawing settles several times as much, and **v14** the small-strain
+history reset (`phases[i].resetsmall`), which an older build would ignore and run the phase on
+the stiffness the earlier phases had already degraded, so the settlements and deflections it
+reports are systematically larger than the ones the file asks for. Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
 than one that was tensioned against it -- so it must refuse the file instead.
@@ -346,6 +349,7 @@ with `name` (default `"Well"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
 | `wy` | num[] | m | `[]` | Phase phreatic polyline, y (used when `water_override`) |
 | `mstage` | num | — | `1` | Fraction of this phase's staged change to apply (PLAXIS Σ Mstage). Staged (non-initial) phases only. Written only when below 1 |
 | `ignoreund` | bool | — | `false` | Solve Undrained (A)/(B) materials as drained in this phase (PLAXIS "Ignore und. behaviour"); strength parameters unchanged. Written only when true |
+| `resetsmall` | bool | — | `false` | Clear the Hardening Soil small-strain history at the start of this phase (PLAXIS "Reset small strain", Material Models Manual sec. 7.6), so the soil meets the phase at G0 instead of the stiffness earlier phases degraded it to. Stress, shear hardening `gamma_p` and the preconsolidation pressure are carried over untouched — the option resets the *history*, not the state. Staged (non-initial) phases only; raises `K2D-M005` saying how many stress points it cleared, or that no small-strain material was present to clear. Written only when true |
 | `tol` | num | — | *by material class* | Tolerated relative force residual (PLAXIS "Tolerated error"). Written only when set |
 | `loadsteps` | int | — | *by material class* | Load increments for this phase. Not PLAXIS's "Max steps": KATAI splits the load into a fixed number of increments (with adaptive cut-back), it does not step automatically to a cap. Written only when set |
 | `maxiter` | int | — | *by phase strategy* | Newton iterations per increment (PLAXIS "Max iterations"). Written only when set |

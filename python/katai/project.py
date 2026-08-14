@@ -386,7 +386,7 @@ class _Phases:
 
     def _add(self, name, ptype, *, activate=(), deactivate=(), duration=None,
              steps=None, tolerance=None, load_steps=None, max_iterations=None,
-             apply_fraction=None, ignore_undrained=None):
+             apply_fraction=None, ignore_undrained=None, reset_small_strain=None):
         ph = _core.Phase()
         ph.name = name
         ph.type = ptype
@@ -396,6 +396,12 @@ class _Phases:
         # and leaves the rest for a later phase.
         if apply_fraction is not None: ph.sum_mstage = apply_fraction
         if ignore_undrained is not None: ph.ignore_undrained = ignore_undrained
+        # PLAXIS's "Reset small strain": start this phase with the HS-small strain history
+        # cleared, so the soil meets it at G0. Use it when the phases before this one built a
+        # state rather than continued a loading path -- a surcharge placed and removed to leave
+        # an overconsolidation behind leaves a strain history too, and that history is an
+        # artefact of the modelling, not something the soil would still remember.
+        if reset_small_strain is not None: ph.reset_small_strain = reset_small_strain
         # Numerical controls; unset = the program chooses by material class. They are
         # written into the .k2d, so a script that pins them publishes a run someone
         # else can reproduce exactly.
@@ -410,7 +416,9 @@ class _Phases:
 
         ``apply_fraction=0.5`` applies half of the stage (PLAXIS Sum-Mstage) and
         leaves the rest; ``ignore_undrained=True`` solves undrained materials as
-        drained for this phase."""
+        drained for this phase; ``reset_small_strain=True`` clears the HS-small
+        strain history first, so the soil meets this phase at G0 instead of the
+        stiffness the earlier phases degraded it to (PLAXIS "Reset small strain")."""
         return self._add(name, _core.PhaseType.Plastic, **kw)
 
     def consolidation(self, name, *, duration, steps, **kw):

@@ -67,6 +67,7 @@ KEY_TO_ATTR = {
     "siteclass": "site_class",
     "mstage": "sum_mstage",
     "ignoreund": "ignore_undrained",
+    "resetsmall": "reset_small_strain",
     "tol": "tolerance",
     "loadsteps": "load_steps",
     "maxiter": "max_iterations",
@@ -167,6 +168,7 @@ def coverage_project():
     # phase sets them.
     ph.sum_mstage = 0.5
     ph.ignore_undrained = True
+    ph.reset_small_strain = True
     ph.tolerance = 1e-5
     ph.load_steps = 12
     ph.max_iterations = 40

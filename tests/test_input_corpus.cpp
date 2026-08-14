@@ -177,6 +177,14 @@
 //   expected: the closed form above with G0^ref = 187.5 MPa (E_0 = 450 MPa = 5 E_ur), gamma_0.7 = 1.5e-4, E_ur^ref = 90 MPa, nu_ur = 0.2 -> 7.1322e-4 m
 //   band:     2%, as asserted below -- measured -0.30% (7.1108e-4) on the file's own 1.0 m tri6 mesh. UNLOADING is the point: in the HS family a deviatoric LOADING path is plastic from the first increment (the K0 state is seeded onto the shear surface), so there is no elastic window in which to measure a stiffness, whereas excavating moves away from both surfaces and is purely quasi-elastic. That the window really is elastic is not assumed but shown: the plain-HS twin, the same file with the overlay switched off (G0 = 0), reproduces ITS closed form -- elastic unloading at E_ur -- to +0.000%, and it heaves 4.500x as much, so the overlay is not a small correction here. Two further witnesses: setting G0 = G_ur makes the overlay redundant (E_0 = E_ur) and the run falls back onto plain HS BIT-FOR-BIT, which pins the overlay to the elastic branch alone (a version that also touched the plastic moduli or the failure surface could not close that identity); and the law is sampled at three points of the degradation curve, h_exc = 1 / 2 / 4 m, holding to -0.14% / -0.30% / -0.72%. Those three also pin Masing's factor: riding the VIRGIN backbone (gamma_0.7 instead of 2 gamma_0.7) would read +5.7% / +12.9% / +34.8% high, a deviation that grows with strain -- the signature of the wrong threshold, not of discretisation. The build did ride the virgin backbone until 2026-08-11
 //
+// verify: KV-CST-012
+//   oracle:   closed_form
+//   source:   the "Reset small strain" calculation-phase option as specified in the PLAXIS Material Models Manual sec. 7.6 (Model Initialisation), which exists because strain history outlives its cause: "Usually the overconsolidation's cause has vanished long before the start of calculation, so that the strain history should be reset afterwards. Unfortunately, strain history is already triggered by adding and removing a surcharge. In this case the strain history can be reset manually, by using the Reset small strain option in the calculation phases window." The history itself is sec. 7.2: gamma_hist = sqrt(3) ||H de|| / ||de|| (Eq 7-4), where H is a deviatoric strain-history TENSOR that is "partially or fully reset" whenever a reversal is detected by a criterion after Simpson's brick model (1992), the transformation of H being referred to Benz (2006)
+//   locator:  the manual's own procedure, built as it describes it: a 60 kPa surcharge is placed on the surface of the KV-CST-008 column and then removed, which leaves the overconsolidation it was applied for AND a strain history that is an artefact of how the state was built. The phase that is then measured is the SAME excavation KV-CST-008 verifies, so its oracle was established without this option ever being used. With m = 0 the stiffness is stress-independent, so the surcharge cycle can change nothing about the excavation except the history -- which is what makes the comparison an identity rather than an approximation
+//   quantity: heave of the excavated floor after a surcharge cycle, with and without the phase's small-strain history reset, from the checked-in tests/corpus/kv-cst-012-reset-small-strain.k2d [m]
+//   expected: with the reset, KV-CST-008's fresh-K0 answer, because a history reset to zero IS the fresh-K0 state; without it, a measurably softer run
+//   band:     0.1% against the fresh-K0 run and 2% against its closed form, as asserted below -- measured +0.0012% (7.110903e-04 m against 7.110815e-04 m) and -0.30% against the closed form, the same deviation KV-CST-008 reports, since it is the same computation reached by a different route. THREE further witnesses. The DIFFERENTIAL: the same file with the flag off heaves 3.200038e-03 m, 4.50x as much -- carrying the history is not a small correction. The DECLARED LIMIT, measured: that un-reset run falls onto the PLAIN Hardening Soil run of the same soil (3.200105e-03 m, a difference of -0.002%), which is what "the overlay has degraded to its G_ur floor" means quantified -- this tree accumulates a monotone scalar and detects no reversal (docs/references/hssmall-formulation.md sec. 7), so an unloading that FOLLOWS a loading phase recovers nothing on its own, and until this option existed there was no way for the engineer to say so. The SENTRY: on plain Hardening Soil, which has no small-strain history at all, the flag is BIT-FOR-BIT inert (3.200105e-03 m with and without) and the run says why (K2D-M005 reports that no material could feel it) -- a reset that had reached stress, shear hardening or the preconsolidation pressure would fail that check, and those are precisely the quantities the surcharge was applied to establish
+//
 // verify: KV-STR-003
 //   oracle:   published_benchmark
 //   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems)
@@ -2293,6 +2301,109 @@ void oracle_hss(const m::Project& pr) {
     }
 }
 
+// --------------------- KV-CST-012: Reset small strain (MMM sec. 7.6), from the file -------
+// The manual's own use for the option, built as the manual describes it: a surcharge is placed
+// and removed. Its purpose is to leave an overconsolidation behind -- but it also leaves a
+// STRAIN HISTORY, and in the real soil ageing erased that long before the analysis begins.
+// "Unfortunately, strain history is already triggered by adding and removing a surcharge. In
+// this case the strain history can be reset manually, by using the Reset small strain option."
+//
+// The measured phase is then the SAME excavation KV-CST-008 verifies against a closed form, so
+// the reset run has an oracle that was established without it: if resetting really returns the
+// soil to G0, this run must land on the fresh-K0 answer. The fixture keeps m = 0, so the
+// stiffness is stress-independent and the only thing the surcharge cycle can change about the
+// excavation is the history -- which is what makes the comparison clean rather than merely close.
+constexpr double kRsSurcharge = 60.0;   // kPa placed on the surface, then removed
+
+m::Project build_hss_history(bool reset, bool plain_hs) {
+    m::Project pr = build_hss_at(kHsExc, kHsG0);
+    pr.name = "KV-CST-012 reset small strain";
+    // The sentry twin is plain Hardening Soil, NOT HSsmall with G0 = 0: the validator refuses
+    // that combination, and it is right to -- an HSsmall material without a G0 is not a model.
+    if (plain_hs) pr.materials[0].model = m::SoilModel::HardeningSoil;
+
+    m::Load q;
+    q.kind = m::LoadKind::Distributed;
+    q.name = "Surcharge";
+    q.x1 = 0.0; q.y1 = kHsDepth; q.x2 = 2.0; q.y2 = kHsDepth;
+    q.qy1 = q.qy2 = -kRsSurcharge;
+    pr.loads.push_back(q);
+
+    pr.initial.poly_active = {1, 1};
+    pr.initial.load_active = {0};
+    pr.phases.clear();
+    m::Phase on;  on.name  = "Surcharge on";  on.poly_active  = {1, 1}; on.load_active  = {1};
+    m::Phase off; off.name = "Surcharge off"; off.poly_active = {1, 1}; off.load_active = {0};
+    m::Phase cut; cut.name = "Excavate";      cut.poly_active = {1, 0}; cut.load_active = {0};
+    cut.reset_small_strain = reset;
+    pr.phases.push_back(on);
+    pr.phases.push_back(off);
+    pr.phases.push_back(cut);
+    return pr;
+}
+m::Project build_hss_reset() { return build_hss_history(true, false); }
+
+// max|u| of the LAST phase (the excavation). Negative = some phase did not converge.
+double hss_run_last(const m::Project& pr) {
+    const auto M = katai::app::mesh_from_project(pr);
+    if (!M.ok) return -1.0;
+    const auto res = katai::app::solve_phases(pr, M.mesh,
+                                              katai::app::initial_phase_from(pr.initial_procedure));
+    if (res.empty()) return -1.0;
+    for (const auto& r : res)
+        if (!r.ok) return -1.0;
+    return res.back().max_disp;
+}
+
+void oracle_hss_reset(const m::Project& pr) {
+    const double H_rem = kHsDepth - kHsExc, dsig = kHsGamma * kHsExc;
+    const double u_reset = hss_run_last(pr);
+    check(u_reset > 0.0, "the surcharge cycle and the reset excavation all converged");
+    if (u_reset <= 0.0) return;
+
+    // (a) THE ORACLE, and it is not this case's own: the fresh-K0 excavation of KV-CST-008,
+    // whose closed form (the Hardin-Drnevich secant law integrated over 1D unloading) is
+    // verified there to -0.30%. A reset that genuinely returns the soil to G0 has to reproduce
+    // it, because with m = 0 nothing else about the excavation has changed.
+    const double u_fresh = hss_run(build_hss());
+    const double cf = hss_heave(dsig, H_rem, 2.0);
+    std::printf("      reset run %.6e m | fresh-K0 run %.6e m (%+.4f%%) | closed form %.6e (%+.2f%%)\n",
+                u_reset, u_fresh, 100.0 * (u_reset - u_fresh) / u_fresh, cf,
+                100.0 * (u_reset - cf) / cf);
+    check(u_fresh > 0.0 && std::fabs(u_reset - u_fresh) < 1e-3 * u_fresh,
+          "the reset excavation lands on the fresh-K0 answer: the history really is back at zero");
+    check(std::fabs(u_reset - cf) < 0.02 * cf,
+          "and therefore on KV-CST-008's closed form, which was established without this option");
+
+    // (b) THE DIFFERENTIAL. Same file, same three phases, one flag: without the reset the soil
+    // meets the excavation on the stiffness the surcharge degraded it to.
+    const double u_keep = hss_run_last(build_hss_history(false, false));
+    std::printf("      history KEPT %.6e m -> %.2fx the reset run\n", u_keep, u_keep / u_reset);
+    check(u_keep > 0.0, "the run without the reset also converged");
+    check(u_keep > 3.0 * u_reset,
+          "carrying the history is not a small correction: it more than trebles the heave");
+
+    // (c) THE DECLARED LIMIT, MEASURED. This tree accumulates a monotone scalar and detects no
+    // reversal (docs/references/hssmall-formulation.md sec. 7), so an unloading that FOLLOWS a
+    // loading phase stays on the G_ur floor. That is not a figure of speech: the un-reset HSsmall
+    // run falls onto the PLAIN HS run -- the same soil with no small-strain overlay at all --
+    // which is exactly what "the overlay has degraded to its floor" means, quantified.
+    const double u_plain = hss_run_last(build_hss_history(false, true));
+    std::printf("      plain HS (no overlay) %.6e m -> the un-reset HSsmall run differs by %+.3f%%\n",
+                u_plain, 100.0 * (u_keep - u_plain) / u_plain);
+    check(u_plain > 0.0 && std::fabs(u_keep - u_plain) < 1e-3 * u_plain,
+          "without the reset the small-strain overlay has degraded onto its plain-HS floor");
+
+    // (d) THE SENTRY. On plain Hardening Soil there is no small-strain history to reset, so the
+    // flag must change NOTHING -- bit for bit. A reset that reached stress, hardening or the
+    // preconsolidation pressure would fail here, and those are exactly the quantities the
+    // surcharge was applied to establish.
+    const double u_plain_reset = hss_run_last(build_hss_history(true, true));
+    std::printf("      plain HS with the flag set: %.12e vs %.12e\n", u_plain_reset, u_plain);
+    check(u_plain_reset > 0.0 && u_plain_reset == u_plain,
+          "on a model with no small-strain history the reset is bit-for-bit inert");
+}
+
 // ------------------------------ KV-CST-009: Soft Soil oedometer, MMM ch. 10 --------------
 // The Soft Soil model's defining behaviour is logarithmic compression with a SEPARATE
 // unloading line and a memory for the pre-consolidation stress, and this case walks the same
@@ -3212,6 +3323,7 @@ int main() {
         {"kv-str-002-plaxis-sliding-block.k2d", build_sliding_block, oracle_sliding_block},
         {"kv-str-003-plaxis-beam-bending.k2d", build_beams, oracle_beams},
         {"kv-cst-008-hssmall-unloading.k2d", build_hss, oracle_hss},
+        {"kv-cst-012-reset-small-strain.k2d", build_hss_reset, oracle_hss_reset},
         {"kv-cst-009-soft-soil-oedometer.k2d", build_ss, oracle_ss},
         {"kv-cst-010-soft-soil-creep-column.k2d", build_ssc, oracle_ssc},
         {"kv-str-004-axial-pile-capacity.k2d", build_pile, oracle_pile},

@@ -92,7 +92,18 @@ namespace katai::model {
 // free top the pile barely engaged (measured: a 10 m concrete pile row changed max|u| by 0.7%),
 // and a pile row could not be loaded at its head at all. An older build reads no `conn` and
 // solves the free version of every file, which is a different structure with the same drawing.
-inline constexpr int kProjectFileVersion = 13;
+//
+// v14 (2026-08): RESET SMALL STRAIN (`phases[].resetsmall`), PLAXIS's phase option of the same
+// name (Material Models Manual sec. 7.6). The flag says the Hardening Soil small history is to
+// be cleared at the start of the phase, so the soil meets it at G0. An older build reads no
+// such key and runs the phase with whatever history the earlier phases accumulated -- which is
+// the degraded stiffness, not the reset one. The direction is systematic: the run comes out
+// SOFTER than the file asks for, with more settlement and more wall deflection, and nothing in
+// the output says a stiffness reset was requested and dropped. The file's own reason for the
+// reset -- typically a surcharge placed and removed to leave a preconsolidation pressure, whose
+// strain history ageing would long since have erased -- is invisible to that older build, so
+// the phase it runs is a different problem with the same drawing.
+inline constexpr int kProjectFileVersion = 14;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -348,6 +359,7 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     // ordinary case (the whole stage, undrained soil behaving undrained), so it costs no bytes.
     if (ph.sum_mstage != 1.0) wfield(o, "mstage", ph.sum_mstage);
     if (ph.ignore_undrained) wfield(o, "ignoreund", true);
+    if (ph.reset_small_strain) wfield(o, "resetsmall", true);
     closeobj(o); o += ',';
 }
 inline Phase rphase(const Json& j) {
@@ -388,6 +400,7 @@ inline Phase rphase(const Json& j) {
     ph.max_iterations = (int)j.num("maxiter", ph.max_iterations);
     ph.sum_mstage = j.num("mstage", ph.sum_mstage);
     ph.ignore_undrained = j.flag("ignoreund", ph.ignore_undrained);
+    ph.reset_small_strain = j.flag("resetsmall", ph.reset_small_strain);
     return ph;
 }
 

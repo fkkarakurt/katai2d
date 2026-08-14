@@ -395,6 +395,10 @@ NB_MODULE(_core, m) {
                 "1 = the whole stage")
         .def_rw("ignore_undrained", &api::Phase::ignore_undrained,
                 "treat Undrained (A)/(B) materials as drained in this phase")
+        .def_rw("reset_small_strain", &api::Phase::reset_small_strain,
+                "clear the HS-small strain history at the start of this phase, so the soil "
+                "meets it at G0 (PLAXIS 'Reset small strain'); stress, hardening and the "
+                "preconsolidation pressure are carried over untouched")
         // Numerical controls; 0 = let the program choose (the material-class default).
         .def_rw("tolerance", &api::Phase::tolerance,
                 "tolerated relative force residual; 0 = chosen by material class")
