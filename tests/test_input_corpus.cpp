@@ -183,7 +183,7 @@
 //   locator:  the manual's own procedure, built as it describes it: a 60 kPa surcharge is placed on the surface of the KV-CST-008 column and then removed, which leaves the overconsolidation it was applied for AND a strain history that is an artefact of how the state was built. The phase that is then measured is the SAME excavation KV-CST-008 verifies, so its oracle was established without this option ever being used. With m = 0 the stiffness is stress-independent, so the surcharge cycle can change nothing about the excavation except the history -- which is what makes the comparison an identity rather than an approximation
 //   quantity: heave of the excavated floor after a surcharge cycle, with and without the phase's small-strain history reset, from the checked-in tests/corpus/kv-cst-012-reset-small-strain.k2d [m]
 //   expected: with the reset, KV-CST-008's fresh-K0 answer, because a history reset to zero IS the fresh-K0 state; without it, a measurably softer run
-//   band:     0.1% against the fresh-K0 run and 2% against its closed form, as asserted below -- measured +0.0012% (7.110903e-04 m against 7.110815e-04 m) and -0.30% against the closed form, the same deviation KV-CST-008 reports, since it is the same computation reached by a different route. THREE further witnesses. The DIFFERENTIAL: the same file with the flag off heaves 3.200038e-03 m, 4.50x as much -- carrying the history is not a small correction. The DECLARED LIMIT, measured: that un-reset run falls onto the PLAIN Hardening Soil run of the same soil (3.200105e-03 m, a difference of -0.002%), which is what "the overlay has degraded to its G_ur floor" means quantified -- this tree accumulates a monotone scalar and detects no reversal (docs/references/hssmall-formulation.md sec. 7), so an unloading that FOLLOWS a loading phase recovers nothing on its own, and until this option existed there was no way for the engineer to say so. The SENTRY: on plain Hardening Soil, which has no small-strain history at all, the flag is BIT-FOR-BIT inert (3.200105e-03 m with and without) and the run says why (K2D-M005 reports that no material could feel it) -- a reset that had reached stress, shear hardening or the preconsolidation pressure would fail that check, and those are precisely the quantities the surcharge was applied to establish
+//   band:     0.1% against the fresh-K0 run and 2% against its closed form, as asserted below -- measured +0.0256% (7.112634e-04 m against 7.110815e-04 m) and -0.27% against the closed form, essentially the deviation KV-CST-008 reports, since it is the same computation reached by a different route. THREE further witnesses. The DIFFERENTIAL: the same file with the flag off heaves 3.200775e-03 m, 4.50x as much -- carrying the history is not a small correction. The DECLARED LIMIT, measured: that un-reset run lands within 0.03% of the PLAIN Hardening Soil run of the same soil (3.200105e-03 m, a difference of +0.021%), which is what "the overlay has degraded to its G_ur floor" means quantified -- this tree accumulates a monotone scalar and detects no reversal (docs/references/hssmall-formulation.md sec. 8), so an unloading that FOLLOWS a loading phase recovers nothing on its own, and until this option existed there was no way for the engineer to say so. That residual is not overlay: it was -0.002% until sec. 7.9.1 landed on 2026-08-15, and the sign flipped because the surcharge phase now reaches a Li & Dafalias contraction that plain HS does not have -- with a fully spent overlay the two models share a STIFFNESS, not an answer. The SENTRY: on plain Hardening Soil, which has no small-strain history at all, the flag is BIT-FOR-BIT inert (3.200105e-03 m with and without) and the run says why (K2D-M005 reports that no material could feel it) -- a reset that had reached stress, shear hardening or the preconsolidation pressure would fail that check, and those are precisely the quantities the surcharge was applied to establish
 //
 // verify: KV-STR-003
 //   oracle:   published_benchmark
@@ -2384,10 +2384,17 @@ void oracle_hss_reset(const m::Project& pr) {
           "carrying the history is not a small correction: it more than trebles the heave");
 
     // (c) THE DECLARED LIMIT, MEASURED. This tree accumulates a monotone scalar and detects no
-    // reversal (docs/references/hssmall-formulation.md sec. 7), so an unloading that FOLLOWS a
+    // reversal (docs/references/hssmall-formulation.md sec. 8), so an unloading that FOLLOWS a
     // loading phase stays on the G_ur floor. That is not a figure of speech: the un-reset HSsmall
-    // run falls onto the PLAIN HS run -- the same soil with no small-strain overlay at all --
-    // which is exactly what "the overlay has degraded to its floor" means, quantified.
+    // run lands within 0.03% of the PLAIN HS run -- the same soil with no small-strain overlay at
+    // all -- which is what "the overlay has degraded to its floor" means, quantified.
+    // The residual is no longer overlay, and the sign of it flipped when sec. 7.9.1 landed
+    // (2026-08-15): a spent overlay used to leave HSsmall a hair SOFTER than plain HS (-0.002%),
+    // and it now leaves it a hair STIFFER in this heave (+0.021%), because the surcharge phase
+    // reaches the Li & Dafalias branch that plain HS does not have and contracts slightly more
+    // under it. So the two models no longer converge onto each other even with the overlay fully
+    // spent; they converge onto each other's STIFFNESS. The band below is what the claim can
+    // honestly carry, and the claim is about the overlay, not about the whole model.
     const double u_plain = hss_run_last(build_hss_history(false, true));
     std::printf("      plain HS (no overlay) %.6e m -> the un-reset HSsmall run differs by %+.3f%%\n",
                 u_plain, 100.0 * (u_keep - u_plain) / u_plain);

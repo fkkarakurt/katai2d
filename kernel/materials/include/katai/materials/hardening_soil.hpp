@@ -26,6 +26,14 @@ struct HardeningSoilParams {
     double cohesion = 0.0;   // c' (effective)
     double friction = 0.0;   // φ' [rad]
     double dilatancy = 0.0;  // ψ' [rad]
+    // The dilatancy cut-off has ENGAGED for this Gauss point (e ≥ e_max). The caller signals it
+    // here as well as by zeroing ψ, because for HSsmall those stopped being the same thing when
+    // sec. 7.9.1 landed: that rule reads ψ only through φ_cv, so a zeroed ψ moves φ_cv up to φ
+    // and switches the Li & Dafalias branch ON everywhere below failure — which would turn a
+    // "stop dilating" option into a source of contraction. The manual's cut-off says the
+    // MOBILISED angle itself "is automatically set back to zero"; this flag is what keeps
+    // ψ_m = 0 meaning ψ_m = 0.
+    bool dilatancy_cut = false;
     double Rf = 0.9;         // failure ratio (qa = qf/Rf)
     double nu_ur = 0.2;      // unloading-reloading Poisson
 

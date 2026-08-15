@@ -398,10 +398,15 @@ inline void hs_forward(const MaterialModel& m, const GaussState& committed,
                        Eigen::Matrix3d* tangent_out = nullptr, int nsub_fixed = 0,
                        bool* plastic_out = nullptr, int* nsub_out = nullptr) {
     HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
-    // Dilatancy cut-off: with psi = 0 the mobilised dilatancy sin(psi_m) is clamped to [0, 0]
-    // inside the return core, which IS Eq. 5.16b -- the rule enters where the manual puts it,
-    // and nothing else in the HS machinery has to know about void ratios.
-    if (dilatancy_cut(m, committed)) pe.dilatancy = 0.0;
+    // Dilatancy cut-off: psi = 0 clamps the mobilised dilatancy sin(psi_m) to [0, 0] inside the
+    // return core, which IS Eq. 5.16b -- the rule enters where the manual puts it, and nothing
+    // else in the HS machinery has to know about void ratios. The flag carries the SAME fact a
+    // second way because for HSsmall the two stopped being equivalent: sec. 7.9.1 reads psi only
+    // through phi_cv, so zeroing psi alone would move phi_cv up to phi and switch the Li &
+    // Dafalias contraction on everywhere below failure -- a "stop dilating" option that starts
+    // producing volume loss. The cut-off's own words are that psi_m "is automatically set back
+    // to zero", so it is set back to zero.
+    if (dilatancy_cut(m, committed)) { pe.dilatancy = 0.0; pe.dilatancy_cut = true; }
     const double Eur = hs_frozen_Eur(pe, committed.stress, committed.stress_zz);
     const LameConstants lame_ur = lame_from(Eur, pe.nu_ur);
     const PlaneStrainStress comm{committed.stress, committed.stress_zz};
@@ -797,10 +802,15 @@ inline void integrate_point_axisym(const MaterialModel& m,
             // tangent is D_T = algo_jacobian * D_e_axisym (Psi from the shared principal
             // assembly), exactly mirroring Mohr-Coulomb.
             HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
-    // Dilatancy cut-off: with psi = 0 the mobilised dilatancy sin(psi_m) is clamped to [0, 0]
-    // inside the return core, which IS Eq. 5.16b -- the rule enters where the manual puts it,
-    // and nothing else in the HS machinery has to know about void ratios.
-    if (dilatancy_cut(m, committed)) pe.dilatancy = 0.0;
+    // Dilatancy cut-off: psi = 0 clamps the mobilised dilatancy sin(psi_m) to [0, 0] inside the
+    // return core, which IS Eq. 5.16b -- the rule enters where the manual puts it, and nothing
+    // else in the HS machinery has to know about void ratios. The flag carries the SAME fact a
+    // second way because for HSsmall the two stopped being equivalent: sec. 7.9.1 reads psi only
+    // through phi_cv, so zeroing psi alone would move phi_cv up to phi and switch the Li &
+    // Dafalias contraction on everywhere below failure -- a "stop dilating" option that starts
+    // producing volume loss. The cut-off's own words are that psi_m "is automatically set back
+    // to zero", so it is set back to zero.
+    if (dilatancy_cut(m, committed)) { pe.dilatancy = 0.0; pe.dilatancy_cut = true; }
             const double Eur = hs_frozen_Eur(pe, committed.stress, committed.stress_zz);
             const double nu = pe.nu_ur;
             const double f = Eur / ((1.0 + nu) * (1.0 - 2.0 * nu));

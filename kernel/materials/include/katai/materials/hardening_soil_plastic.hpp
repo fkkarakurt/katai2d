@@ -4,7 +4,9 @@
 // Elastic: stress-dependent Eur (frozen at σ3 at the start of the step). Shear yield
 // surface (Schanz 1999):
 //   f = f̄(q) − γ^p ,   f̄(q) = (2/Ei) q/(1−q/qa) − 2q/Eur ,   q = σ1 − σ3
-// Non-associated flow: mobilized dilatancy ψ_m (Rowe), m_g = (1, R, R), R = ε3^p/ε1^p.
+// Non-associated flow: mobilized dilatancy ψ_m, m_g = (1, R, R), R = ε3^p/ε1^p. ψ_m is Rowe's
+// where Rowe is non-negative; below the phase-transformation line HS takes zero and HSsmall
+// takes Li & Dafalias instead — one rule, `detail::hs_dilatancy` (see its comment).
 //   Rowe (PLAXIS Eq 6-14): ε_v^p/ε_q^p = −sinψ_m (DILATION, comp-pos ⇒ ε_v^p<0) ⇒
 //   R = −(1+sinψ_m)/(2−sinψ_m) ; hardening (Eq 6-10) γ^p=−(2ε1^p−ε_v^p) ⇒ dγ^p=h·dλ,
 //   h = 1−2R = (4+sinψ_m)/(2−sinψ_m). At ψ_m=0, R=−½, h=2 (volumetrically neutral, the
@@ -46,6 +48,89 @@ inline Eigen::Matrix3d hs_elastic(double E, double nu) {
     return d;
 }
 
+// Mobilized dilatancy ψ_m as a function of the mobilized friction angle φ_m. This rule has
+// FOUR callers (the two principal returns and their two cap-coupled siblings) and used to be
+// written out four times; a rule that is right in three copies and stale in the fourth is a
+// silently wrong answer on whichever stress path reaches the fourth. One definition, four
+// bindings.
+//
+// HS (Ref. Man. Eq 6-14, Rowe):  sinψ_m = (sinφ_m − sinφ_cv)/(1 − sinφ_m·sinφ_cv), cut off to
+// [0, sinψ]. Where Rowe returns a NEGATIVE value the Hardening Soil model takes ψ_m = 0.
+//
+// HSsmall (Mat. Models Man. sec 7.9.1, after Li & Dafalias (2000)): that zero cut-off "may
+// sometimes yield too little plastic volumetric strains", so wherever Rowe is negative the
+// small-strain model puts a small CONTRACTION there instead of nothing:
+//   sinψ_m = (1/10)·(−M_c·exp[(1/15)·ln((M_c/M_d)·(q/q_a))] + M_d)          (Eq 7-19)
+//   M_c    = 6·sinφ_cv/(3 − sinφ_cv)                                        (Eq 7-20)
+//   M_d    = 6·sinφ_m /(3 − sinφ_m )                                        (Eq 7-21)
+//   q/q_a  = max([(1−sinφ_cv)/sinφ_cv]·[sinφ_m/(1−sinφ_m)], 1e−4)           (Eq 7-22)
+//   sinφ_m ≥ sinφ/(2 − sinφ)                                                (Eq 7-23)
+// Eq 7-22's q/q_a is its own definition, NOT the model's deviatoric hyperbola ratio q/q_a of
+// Eq 6-3; the two are unrelated quantities that share a name.
+//
+// The two branches MEET EXACTLY, and that is the property worth knowing: at φ_m = φ_cv we get
+// M_d = M_c and q/q_a = 1, so the logarithm vanishes and Eq 7-19 returns exactly 0 — which is
+// also precisely where Rowe changes sign. The composite rule is continuous by CONSTRUCTION,
+// not to a tolerance. Eq 7-23 then bounds how contractant it can get, since sinψ_m falls
+// monotonically as φ_m drops: the floor is the most negative ψ_m the model can produce.
+// (test_hssmall pins both.)
+//
+// MEASURED AGAINST THE MANUAL'S OWN FIGURE 7-10 — and they disagree. Digitising that plot
+// (φ=35°, ψ=5°) confirms every structural feature of Eq 7-19: the upper branch is pure Rowe to
+// ±0.01°, the curve vanishes at φ_cv = 30.80°, the plateau starts at the Eq 7-23 floor of
+// 23.71°, and the 1/15 exponent reproduces the plot's curvature to better than 1%. Only the
+// AMPLITUDE differs, by a constant factor: the figure is 1.29× the printed equation
+// everywhere (plateau −2.167° drawn against −1.679° computed), i.e. the plot behaves as if the
+// leading 1/10 were 1/7.74. We implement the EQUATION, because an equation printed in the
+// specification outranks a constant reverse-engineered from a raster plot, and because 1.29 is
+// not a number the manual states anywhere. The gap is declared in hssmall-formulation.md; both
+// readings are small contractions and the difference between them is far smaller than the
+// difference between either and the ψ_m = 0 this replaces.
+struct HsDilatancy {
+    double sin_cs = 0.0;        // sinφ_cv (Rowe, from the input φ and ψ)
+    double sin_psi = 0.0;       // sinψ — the upper cut-off
+    double c_cot = 0.0;         // c·cotφ — the cohesion shift of the mobilized-φ definition
+    double Mc = 0.0;            // Eq 7-20 (HSsmall branch only)
+    double sphi_m_floor = 0.0;  // Eq 7-23 (HSsmall branch only)
+    bool li_dafalias = false;   // HSsmall (G0_ref>0) with a usable φ_cv
+
+    double operator()(double sphi_m) const {
+        const double rowe = (sphi_m - sin_cs) / (1.0 - sphi_m * sin_cs);
+        if (rowe >= 0.0) return std::min(rowe, sin_psi);
+        if (!li_dafalias) return 0.0;                                   // HS: the zero cut-off
+        const double s = std::max(sphi_m, sphi_m_floor);                // Eq 7-23
+        const double Md = 6.0 * s / (3.0 - s);                          // Eq 7-21
+        const double qqa =
+            std::max((1.0 - sin_cs) / sin_cs * (s / (1.0 - s)), 1e-4);  // Eq 7-22
+        return 0.1 * (-Mc * std::exp(std::log((Mc / Md) * qqa) / 15.0) + Md);  // Eq 7-19
+    }
+
+    // sinφ_m from the mobilized stress state (Eq 7-18 / Eq 6-13, σ1 = q + σ3, comp-positive).
+    double from_q(double q, double s3v) const {
+        const double s1 = q + s3v;
+        const double denom = s1 + s3v + 2.0 * c_cot;
+        return (*this)(denom > 1e-12 ? q / denom : 0.0);
+    }
+};
+
+inline HsDilatancy hs_dilatancy(const HardeningSoilParams& p) {
+    HsDilatancy d;
+    const double sphi = std::sin(p.friction), cphi = std::cos(p.friction);
+    const double sps = std::sin(p.dilatancy);
+    d.sin_cs = (sphi - sps) / (1.0 - sphi * sps);  // critical state
+    d.sin_psi = sps > 0.0 ? sps : 0.0;
+    d.c_cot = (sphi > 1e-12) ? p.cohesion * cphi / sphi : 0.0;
+    // φ_cv = 0 (a φ = 0 Tresca soil) would divide by zero in Eq 7-22 — but it also makes Rowe
+    // non-negative everywhere, so the branch is unreachable there; the guard says so rather
+    // than relying on it.
+    d.li_dafalias = p.G0_ref > 0.0 && !p.dilatancy_cut && d.sin_cs > 1e-12 && sphi < 1.0;
+    if (d.li_dafalias) {
+        d.Mc = 6.0 * d.sin_cs / (3.0 - d.sin_cs);  // Eq 7-20
+        d.sphi_m_floor = sphi / (2.0 - sphi);      // Eq 7-23
+    }
+    return d;
+}
+
 }  // namespace detail
 
 // One shear-hardening step: committed (σ_n, γ_n) + strain increment dε → updated state +
@@ -81,18 +166,9 @@ inline HsShearStep hs_shear_step(const HardeningSoilParams& p,
         return out;
     }
 
-    // Mobilized dilatancy (Rowe). φ_cs constant (from input φ, ψ); ψ_m varies with q.
-    const double sphi = std::sin(p.friction), cphi = std::cos(p.friction);
-    const double sps = std::sin(p.dilatancy);
-    const double sin_cs = (sphi - sps) / (1.0 - sphi * sps);  // critical state
-    const double c_cot = (sphi > 1e-12) ? p.cohesion * cphi / sphi : 0.0;
-    auto sin_psi_m = [&](double q, double s3v) {
-        const double s1 = q + s3v;
-        const double denom = s1 + s3v + 2.0 * c_cot;
-        const double sphi_m = denom > 1e-12 ? q / denom : 0.0;
-        const double sm = (sphi_m - sin_cs) / (1.0 - sphi_m * sin_cs);
-        return std::min(std::max(sm, 0.0), sps > 0.0 ? sps : 0.0);  // cut-off [0, sinψ]
-    };
+    // Mobilized dilatancy. φ_cs constant (from input φ, ψ); ψ_m varies with q.
+    const detail::HsDilatancy dil = detail::hs_dilatancy(p);
+    auto sin_psi_m = [&](double q, double s3v) { return dil.from_q(q, s3v); };
 
     // Local Newton: dλ such that f(σ(dλ), γ+h·dλ) = 0. σ(dλ) = σ_tr − dλ·D_e·m_g.
     double dlam = 0.0;
@@ -168,16 +244,8 @@ inline HsPrincipalReturn hs_shear_correct(const HardeningSoilParams& p,
     HsPrincipalReturn out{sig_tr, gamma_p_n};
     if (fbar(q_tr) - gamma_p_n <= 1e-12 * (1.0 + std::fabs(gamma_p_n))) return out;
 
-    const double sphi = std::sin(p.friction), cphi = std::cos(p.friction);
-    const double sps = std::sin(p.dilatancy);
-    const double sin_cs = (sphi - sps) / (1.0 - sphi * sps);
-    const double c_cot = (sphi > 1e-12) ? p.cohesion * cphi / sphi : 0.0;
-    auto sin_psi_m = [&](double q, double s3v) {
-        const double s1 = q + s3v, denom = s1 + s3v + 2.0 * c_cot;
-        const double sphi_m = denom > 1e-12 ? q / denom : 0.0;
-        const double sm = (sphi_m - sin_cs) / (1.0 - sphi_m * sin_cs);
-        return std::min(std::max(sm, 0.0), sps > 0.0 ? sps : 0.0);
-    };
+    const detail::HsDilatancy dil = detail::hs_dilatancy(p);
+    auto sin_psi_m = [&](double q, double s3v) { return dil.from_q(q, s3v); };
 
     double dlam = 0.0, q = q_tr;
     Eigen::Vector3d sig = sig_tr;
@@ -319,10 +387,7 @@ inline HsState hs_return_principal(const HardeningSoilParams& p,
     const double ev_n = p.cap_beta > 0.0 ? p.cap_ev_from_pc(pp_n) : 0.0;
     const double Ei = p.Ei(s3), qa = p.q_asymptote(s3), qf = p.q_failure(s3);
     const Eigen::Matrix3d De = detail::hs_elastic(Eur, nu);
-    const double sphi = std::sin(p.friction), cphi = std::cos(p.friction);
-    const double sps = std::sin(p.dilatancy);
-    const double sin_cs = (sphi - sps) / (1.0 - sphi * sps);
-    const double c_cot = (sphi > 1e-12) ? p.cohesion * cphi / sphi : 0.0;
+    const detail::HsDilatancy dil = detail::hs_dilatancy(p);
     // von Mises cap (symmetric) — δ·q̃ was asymmetric and broke the oedometer K0.
     const Eigen::Matrix3d Hc = (3.0 / (alpha * alpha)) *
                                (Eigen::Matrix3d::Identity() - (1.0 / 3.0) * Eigen::Matrix3d::Ones()) +
@@ -340,12 +405,7 @@ inline HsState hs_return_principal(const HardeningSoilParams& p,
                                  (s(2) - s(0)) * (s(2) - s(0)));  // 3·J2
         return j3 / (alpha * alpha) + pm * pm - pp * pp;
     };
-    auto spm_of = [&](double q) {
-        const double s1 = q + s3, denom = s1 + s3 + 2.0 * c_cot;
-        const double sphi_m = denom > 1e-12 ? q / denom : 0.0;
-        const double sm = (sphi_m - sin_cs) / (1.0 - sphi_m * sin_cs);
-        return std::min(std::max(sm, 0.0), sps > 0.0 ? sps : 0.0);
-    };
+    auto spm_of = [&](double q) { return dil.from_q(q, s3); };
     auto shear_dir = [&](double q) {
         const double spm = spm_of(q), R = -(1.0 + spm) / (2.0 - spm);
         return Eigen::Vector3d(1.0, R, R);
@@ -508,10 +568,7 @@ inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
     const double Eur = p.Eur(s3_stiff), nu = p.nu_ur;
     const double Ei = p.Ei(s3_stiff), qa = p.q_asymptote(s3_stiff), qf = p.q_failure(s3_stiff);
     const Eigen::Matrix3d De = detail::hs_elastic(Eur, nu);
-    const double sphi = std::sin(p.friction), cphi = std::cos(p.friction);
-    const double sps = std::sin(p.dilatancy);
-    const double sin_cs = (sphi - sps) / (1.0 - sphi * sps);
-    const double c_cot = (sphi > 1e-12) ? p.cohesion * cphi / sphi : 0.0;
+    const detail::HsDilatancy dil = detail::hs_dilatancy(p);
     const double alpha = p.cap_alpha;
     // The cap deviatoric measure: symmetric von Mises q (q²=3J2). This is EQUIVALENT to
     // the reduced form of PLAXIS's asymmetric q̃ measure (MMM Eq 6-26) on the OEDOMETER
@@ -539,12 +596,7 @@ inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
                                  (s(2) - s(0)) * (s(2) - s(0)));  // 3·J2 (von Mises q²)
         return j3 / (alpha * alpha) + pm * pm - ppv * ppv;
     };
-    auto spm_of = [&](double q) {
-        const double s1 = q + s3_stiff, dn = s1 + s3_stiff + 2.0 * c_cot;
-        const double sphi_m = dn > 1e-12 ? q / dn : 0.0;
-        const double sm = (sphi_m - sin_cs) / (1.0 - sphi_m * sin_cs);
-        return std::min(std::max(sm, 0.0), sps > 0.0 ? sps : 0.0);
-    };
+    auto spm_of = [&](double q) { return dil.from_q(q, s3_stiff); };
 
     // Substep count: split the elastic stress change into ~1%·(|σ|+pref) pieces (robust, cheap).
     const Eigen::Vector3d dsig_e = De * dstrain;
