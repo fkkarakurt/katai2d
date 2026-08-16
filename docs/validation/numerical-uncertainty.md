@@ -258,13 +258,74 @@ and the load stepping.
 | 1e-6 | 0.019044 m | +0.998% |
 
 Three things to read off it. The default costs **0.59%** on this quantity — bounded, and no
-longer unknown. **1e-4 is already converged**: two more orders change the answer by 0.005%, so
-the cost is the first step and nothing beyond it. And the default's *smaller* deviation from the
-closed form is **cancellation, not accuracy**: the converged finite element answer is +1.0%, and
-the looser run happens to sit nearer the analytic value on the way there. Reporting it as "more
-accurate" would be exactly the kind of luck this document exists to strip out.
+longer unknown. **1e-4 is already converged** *at this step count*: two more orders change the
+answer by 0.005%. And the default's *smaller* deviation from the closed form is **cancellation,
+not accuracy**: the tolerance-converged answer is +1.0% at these 40 increments, and the looser
+run happens to sit nearer the analytic value on the way there. Reporting it as "more accurate"
+would be exactly the kind of luck this document exists to strip out.
 
-## 7. The one case that tests the estimator back: KV-STR-003's peak moment
+⚠️ **That +1.0% was left unaccounted for here, and §7 now accounts for it.** It is not one error
+but three, and only one of them is a discretisation: the mesh contributes nothing at all on this
+case, the load path is worth about 0.46% of it at 40 increments, and the ~0.54% remainder is a
+model deviation rather than a numerical one. The row above is therefore a tolerance sweep at a
+fixed step count, not a statement that the case is converged.
+
+## 7. The nonlinear family: where the error actually lives, and why this case gets no band
+
+Everything above bands a MESH. For a path-dependent model that is the wrong axis to start on,
+and KV-CST-002 is where it shows. Its converged deviation from the closed form was recorded in
+§6 as "+1.0%" with no account of what the 1% was made of. **KV-NUM-009** takes the same case
+apart on three axes independently, and the answer is that only one of them is a discretisation
+at all.
+
+| axis swept | range swept | what it is worth |
+|---|---|---|
+| **mesh** | 0.5 → 0.125 m, **85 → 1105 nodes** | **5e-15 relative** — round-off |
+| **iteration tolerance** | 1e-2 → 1e-8 | 1e-6 and 1e-8 agree to six figures; the HS default of **1e-2 is not converged** and makes a step sweep non-monotone |
+| **load increments** | 10 → 160, tolerance converged | **+3.47% → +0.54%**, i.e. 2.9 percentage points |
+| what is left | — | **≈ +0.54%**, and it is not numerical |
+
+**The mesh contributes nothing, and that is a fact about the case rather than a limitation of
+the sweep.** The column is weightless, so σ₁ is the surcharge and the strain field is uniform; a
+uniform field lies exactly in the element space, so refinement has nothing to improve. This is
+the estimator's `Exact` branch meeting a real problem. A mesh band published for this case would
+have been a fiction dressed as rigour.
+
+**The load path dominates — and it is not a Richardson parameter.** The estimator needs
+`φ(d) = φ_exact + C·d^p`. A path-dependent integration with its own adaptive substepping does not
+supply one, and the sweep says so in its own numbers: the observed order computed from the three
+overlapping triplets of a **single monotone-looking sweep** comes out **2.204, 0.469 and 1.132** —
+a factor of 4.7 apart. Triplets that disagree with themselves by that much are not in an
+asymptotic range, and 1/(r^p − 1) turns a small wobble at p = 0.47 into a large and
+confident-looking correction. Refined further the sweep stops improving at all: past about 160
+increments it settles onto a **±0.02% noise floor** and starts to oscillate. So this case reports
+its measured **spread** and refuses a GCI. That refusal is the result, not a gap in it.
+
+**What survives is a model deviation, and its signature identifies it.** After an exact mesh, a
+converged tolerance and a 16× refined path, ~0.5% remains. A pure offset in the fitted stiffness
+would show the same relative deviation on every stress range; this one does not:
+
+| stress range | deviation from the closed form |
+|---|---|
+| 50 → 100 kPa | **−0.2425%** |
+| 100 → 200 kPa | **+0.6419%** |
+| 200 → 400 kPa | **+1.0952%** |
+
+Near zero at the reference pressure and growing away from it **with a sign change** — the mark of
+a cap whose α and β were calibrated at p_ref (`hs_calibrate_cap`, as PLAXIS derives them by
+simulating an oedometer). It is a difference between the model and the closed form, not between
+the computation and the model. Reporting it as numerical uncertainty would be wrong in both
+directions: it would inflate the number and blame the wrong thing.
+
+**And there is a ceiling on path refinement, declared because a study that cannot be repeated is
+not a study.** The tolerated error is an ABSOLUTE force residual, so shrinking the increment does
+not shrink what each increment has to achieve. Refining the SEATING phase of this weightless
+column — whose confining stress starts near zero, where the HS stiffness is smallest — to 160
+increments at 1e-6 does not converge at all rather than converging better. The sweep above
+therefore pins the seating phase at 40 and moves only the staged phase, and KV-NUM-009 pins the
+failure itself, so that the day it stops failing the sentence gets rewritten.
+
+## 8. The one case that tests the estimator back: KV-STR-003's peak moment
 
 Every sweep above runs where the discretisation error is unknown — which is the point of an
 estimator, and also the reason an estimator is hard to trust. The beam-bending case is the
@@ -294,21 +355,33 @@ bias rather than scatter. It also puts a number on the warning attached to that 
 moment read off a coarse run is not merely "a bit high", it is high by an amount this procedure
 will quantify for any mesh triplet the user cares to produce.
 
-## 8. What this does not yet cover
+## 9. What this does not yet cover
 
 The register is deliberately explicit about its own gaps, since an absent row must never read as
 a passed one:
 
-- **Most of the corpus has no sweep yet.** The corpus is now **25 files** behind **53 declared
+- **Most of the corpus has no sweep yet.** The corpus is now **26 files** behind **55 declared
   cases**; four carry a band (KV-FND-008 via KV-NUM-005, KV-SLP-002, the Giroud rigid footing,
-  and KV-STR-003 as of 2026-08-14). The arithmetic of the gap is not the obstacle it looks like:
+  and KV-STR-003 as of 2026-08-14), and one has been swept and **deliberately given none**
+  (KV-CST-002 via KV-NUM-009, §7). The arithmetic of the gap is not the obstacle it looks like:
   a three-level nested sweep on a linear elastic case costs about **2.6 seconds**, so what is
-  missing here is written oracles and probes, not machine time. The nonlinear families are the
-  genuinely expensive ones.
+  missing here is written oracles and probes, not machine time. The nonlinear families cost more
+  — KV-NUM-009's three sweeps take about 170 s together — but §7 shows that the expense is not
+  the real difficulty either: **the difficulty is that a mesh triplet is often not the axis the
+  error is on**, and finding the axis has to precede banding it.
+- **No band exists for a path-dependent quantity, and §7 explains why rather than promising one.**
+  Richardson extrapolation requires a single smooth discretisation parameter. Load-step
+  refinement is not one here, and the honest output for such a case is a measured spread plus the
+  reason. What would change that is a constitutive integration whose local error is controlled to
+  a set tolerance rather than by an adaptive substep count with a ceiling, and a RELATIVE
+  convergence criterion so that refining the path does not eventually make every increment
+  unsatisfiable (the ceiling measured in §7). Both are engine changes, not reporting changes.
 - **Tolerance independence is measured for two families, not all.** KV-NUM-007 covers the slope
   factor of safety (strength-reduction trials at 1e-3, spread 0.0000% below it and unsafe-sided
-  above) and the Hardening Soil oedometer KV-CST-002 at its default 1e-2. The soft-soil family,
-  the consolidation and the dynamic paths have not been swept. The controls are now per phase in
+  above) and the Hardening Soil oedometer KV-CST-002, whose tolerance §7 now carries out to 1e-8:
+  1e-6 and 1e-8 agree to six figures, so that family's converged tolerance is known and the
+  shipped default of 1e-2 is measured to be short of it. The soft-soil family, the consolidation
+  and the dynamic paths have not been swept. The controls are now per phase in
   the `.k2d` (v7: `tol`, `loadsteps`, `maxiter`) and reach the solver by the same route as the
   driver seam, which **KV-NUM-008** pins as an identity — a control that is read, validated and
   echoed but not applied would leave a sweep proving nothing, which is not a hypothetical.
