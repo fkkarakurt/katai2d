@@ -9,6 +9,14 @@ version: "0.7.1"
 date-released: "2026-08-09"
 license: Apache-2.0
 repository-code: "https://github.com/fkkarakurt/katai2d"
+url: "https://kataigeo.com"
+# The archived record. Without this, GitHub's "Cite this repository" button produces an
+# entry with no persistent identifier -- which is the one thing a citation is for.
+doi: "10.5281/zenodo.20692282"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.20692282"
+    description: "Archived record on Zenodo (concept DOI)"
 abstract: >-
   KATAI 2D is a verification-first two-dimensional finite element engine for
   geotechnical engineering: staged construction, groundwater flow,
