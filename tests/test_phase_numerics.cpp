@@ -42,6 +42,14 @@
 //   expected: the observed order is 1, because backward Euler is first order and that is decided before the run; it is STABLE across overlapping triplets, unlike the load path of KV-NUM-009; Richardson extrapolation of three time steps recovers Terzaghi's closed form; and the band contains the true error, which can be checked here rather than trusted because the exact answer is known
 //   band:     +/- 0.2480% on the file's own 120 steps (GCI at the observed order, Fs = 1.25), and the actual error there is 0.1965%, so the band contains it. Observed order 0.9850 from 120/60/30 and 0.9924 from 240/120/60 -- the two agree to 0.007, which is what an asymptotic range looks like and is exactly what KV-NUM-009's load path could not produce (2.204 / 0.469 / 1.132). Richardson U(dt->0) = 0.763961996 against the series' 0.763950331, +0.00153%. The mesh, again, is not the axis: 169 -> 1884 nodes moves U by 1.7e-8
 
+// verify: KV-NUM-011
+//   oracle:   closed_form
+//   source:   1D SH site response of a damped elastic shear column on a rigid base at fundamental-mode resonance (Kramer 1996, Geotechnical Earthquake Engineering, ch. 7): |u_surf| = (4/pi) A/(w_1^2 2 xi), w_1 = 2 pi Vs/(4H) -- the same closed form KV-DYN-002 is measured against; the estimator is Roache (1994) / Celik et al. (2008), ASME J. Fluids Eng. 130(7):078001, applied on the TIME axis. The order Newmark alone justifies is 2: katai/analysis/dynamics.hpp integrates with gamma = 1/2, beta = 1/4 (average acceleration, no numerical damping)
+//   locator:  tests/corpus/kv-dyn-002-resonant-column.k2d, swept on two axes -- the DURATION over 10/20/40 cycles at a fixed 0.0025 s step, and the time step over 800/1600/3200 steps at 40 cycles where the resonant buildup is finished -- plus two mesh densities
+//   quantity: peak surface displacement |u_surf| of the resonant phase [m], and the observed order of the time refinement [-]
+//   expected: the duration is an axis of its own, because a resonant amplitude is built up rather than imposed; the time axis is a proper refinement axis and extrapolates onto the closed form; and its observed order is NOT the scheme's 2
+//   band:     the prediction FAILED and that is the finding. Observed order 3.147 at 40 cycles, 3.147 and 2.998 at 160 cycles, and 3.097 / 2.795 on a grid deliberately INCOMMENSURATE with the period (T/dt = 18.43, 36.86, 73.72, 147.45), which eliminates sampling phase-lock as the explanation -- the order is about 3, reproducibly, where average-acceleration Newmark alone justifies 2. What the quantity is explains it: a PEAK of a resonant response, not the response at an instant, and a derived quantity need not inherit its scheme's order. So "the algebra fixes the order before the run", true for KV-STR-003's q h^2/12 and for KV-NUM-010's backward Euler, is NOT a general rule, and this is the case that bounds it. The axis is nonetheless clean: Richardson lands on the closed form to -0.036% at 40 cycles and -0.031% at 160, from two independent grids agreeing to 1e-5. Duration: the shipped 20 cycles is 0.21% short of steady state (envelope 1 - exp(-xi w t) = 0.9981) and 40 cycles is converged, so at the file's own settings the buildup is worth about as much as the time step. Mesh: 459 -> 6389 nodes moves |u| by 4.5e-6
+
 #include <katai/io/project_io.hpp>
 #include <katai/io/validate.hpp>
 #include <katai/math/grid_convergence.hpp>
@@ -494,6 +502,123 @@ int main() {
         std::printf("  relative change over a %.0fx node count: %.2e\n", (double)nm[2] / nm[0], dm);
         check(dm < 1e-6,
               "the mesh contributes essentially nothing to an integral quantity like U either");
+    }
+
+    // --- 8. WHERE "THE ALGEBRA DECIDES THE ORDER" STOPS BEING TRUE (KV-NUM-011) --------------
+    // KV-STR-003 knew its order was 2 before any run (the moment overshoot is q h^2/12) and
+    // KV-NUM-010 knew its order was 1 (backward Euler). It is tempting to generalise that, and
+    // this case is the counterexample that stops it. Newmark here is gamma = 1/2, beta = 1/4 --
+    // average acceleration, no numerical damping, SECOND order -- so the prediction was p = 2.
+    // The measurement says 3, reproducibly. The order belongs to the QUANTITY as much as to the
+    // scheme, and the published quantity here is the PEAK of a resonant response, not the
+    // response at an instant.
+    std::printf("\n== when the scheme's order is not the quantity's order (KV-NUM-011) ==\n");
+
+    m::Project dy;
+    const std::string dy_path = std::string(KATAI_CORPUS_DIR) + "/kv-dyn-002-resonant-column.k2d";
+    if (!m::load_project(dy_path, dy, &err, nullptr)) {
+        std::printf("FAIL: cannot load %s: %s\n", dy_path.c_str(), err.c_str());
+        return 1;
+    }
+    check(!dy.phases.empty(), "the dynamic case has a phase to control");
+
+    const double dyE = 208000.0, dyNu = 0.3, dyGam = 19.62, dyH = 20.0, dyA = 1.0, dyXi = 0.05;
+    const double Gs = dyE / (2.0 * (1.0 + dyNu)), rho = dyGam / katai::app::kGammaWater * 1.0;
+    const double f1 = std::sqrt(Gs / (dyGam / 9.81)) / (4.0 * dyH);
+    const double w1 = 2.0 * 3.14159265358979323846 * f1;
+    const double u_ex = (4.0 / 3.14159265358979323846) * dyA / (w1 * w1 * 2.0 * dyXi);
+    (void)rho;
+    std::printf("  f_1 = %.4f Hz, steady-state |u_surf| = %.9f m (closed form)\n", f1, u_ex);
+
+    const auto peak_u = [&](int steps, double duration, double elem) -> double {
+        m::Project pr = dy;
+        pr.phases[0].duration = duration;
+        pr.phases[0].time_steps = steps;
+        if (elem > 0.0) pr.mesh.elem_size = elem;
+        const auto Md = katai::app::mesh_from_project(pr);
+        if (!Md.ok) return -1.0;
+        const auto r = katai::app::solve_phases(
+            pr, Md.mesh, katai::app::initial_phase_from(pr.initial_procedure));
+        if (r.size() < 2 || !r[1].ok) return -1.0;
+        return r[1].max_disp;
+    };
+
+    // (a) THE DURATION IS AN AXIS OF ITS OWN, and at the shipped settings it costs about as much
+    //     as the time step. A resonant amplitude is BUILT UP, not imposed: the envelope goes like
+    //     1 - exp(-xi w t), so the file's 20 cycles is still 1 - exp(-2 pi 0.05 20) = 0.9981 of
+    //     the way there. Sweeping dt without knowing that would attribute the shortfall to the
+    //     integrator. dt is held at 0.0025 s throughout so only the duration moves.
+    const double cycles[3] = {10.0, 20.0, 40.0};
+    double u_dur[3] = {0, 0, 0};
+    bool dur_ok = true;
+    for (int i = 0; i < 3; ++i) {
+        const double dur = cycles[i] / f1;
+        u_dur[i] = peak_u((int)std::llround(dur / 0.0025), dur, 0.0);
+        if (u_dur[i] < 0.0) { dur_ok = false; break; }
+        std::printf("  %4.0f cycles (%5.1f s)  |u| = %.9f  (%+.4f%%)  envelope %.6f\n", cycles[i],
+                    dur, u_dur[i], 100.0 * (u_dur[i] - u_ex) / u_ex,
+                    1.0 - std::exp(-2.0 * 3.14159265358979323846 * dyXi * cycles[i]));
+    }
+    check(dur_ok, "the dynamic case solves at every duration");
+    if (dur_ok) {
+        check(std::fabs(u_dur[1] - u_ex) / u_ex > 1.5e-3,
+              "at the shipped 20 cycles the resonant amplitude is still measurably short");
+        check(std::fabs(u_dur[2] - u_ex) / u_ex < 5e-4,
+              "by 40 cycles the buildup is done, so a time sweep there measures the time step");
+    }
+
+    // (b) THE TIME AXIS, at a duration where the buildup is finished so it is the only thing
+    //     moving. It IS a proper refinement axis -- monotone, extrapolable, and the extrapolated
+    //     value lands on the closed form. What it is NOT is second order.
+    const int dsteps[3] = {800, 1600, 3200};
+    const double dyn_dur = 40.0 / f1;   // 16 s
+    double u_dt[3] = {0, 0, 0};
+    bool dt_ok = true;
+    for (int i = 0; i < 3; ++i) {
+        u_dt[i] = peak_u(dsteps[i], dyn_dur, 0.0);
+        if (u_dt[i] < 0.0) { dt_ok = false; break; }
+        std::printf("  %5d steps (dt = %.6f s, %.0f per cycle)  |u| = %.9f  (%+.4f%%)\n",
+                    dsteps[i], dyn_dur / dsteps[i], (1.0 / f1) / (dyn_dur / dsteps[i]), u_dt[i],
+                    100.0 * (u_dt[i] - u_ex) / u_ex);
+    }
+    check(dt_ok, "the dynamic case solves at every time-step count");
+    if (dt_ok) {
+        katai::math::OrderPolicy dyn_axis;
+        dyn_axis.p_assumed = 2.0;   // what Newmark alone would justify
+        dyn_axis.p_min = 0.75;
+        dyn_axis.p_max = 4.0;
+        katai::math::GridTriplet g;
+        g.h1 = dyn_dur / dsteps[2]; g.h2 = dyn_dur / dsteps[1]; g.h3 = dyn_dur / dsteps[0];
+        g.phi1 = u_dt[2];           g.phi2 = u_dt[1];           g.phi3 = u_dt[0];
+        const auto e = katai::math::grid_convergence_band(g, dyn_axis);
+        std::printf("  %s, observed order p = %.4f -- Newmark alone would give 2\n",
+                    katai::math::convergence_kind_name(e.kind), e.p);
+        std::printf("  Richardson |u|(dt->0) = %.9f  (%+.5f%% vs the closed form)\n",
+                    e.phi_extrapolated, 100.0 * (e.phi_extrapolated - u_ex) / u_ex);
+        std::printf("  band on this triplet: +/- %.4f%% (%s)\n", 100.0 * e.band,
+                    e.band_basis.c_str());
+        check(e.ok && e.kind == katai::math::ConvergenceKind::MonotonicConvergence,
+              "the time refinement converges monotonically: it is a proper axis");
+        check(std::fabs(e.phi_extrapolated - u_ex) / u_ex < 1e-3,
+              "and it extrapolates onto the closed-form resonant amplitude");
+        // THE POINT. Asserted as an inequality against the predicted order, because the finding
+        // is that the prediction is wrong, and a test that merely recorded 3.1 would go quiet the
+        // day the mechanism changed. Measured 3.147 here; 3.147 and 2.998 at 160 cycles; and
+        // 3.097 / 2.795 on a grid deliberately INCOMMENSURATE with the period, which eliminates
+        // sampling phase-lock as the explanation. What remains is that this quantity is a peak of
+        // a resonant response, and a peak does not have to inherit the scheme's order.
+        check(e.p > 2.3,
+              "the observed order is NOT the scheme's 2: the quantity has an order of its own");
+    }
+
+    // (c) And the mesh, for the third corpus case in a row, is not the axis.
+    const double u_m1 = peak_u(3200, dyn_dur, 0.8);
+    const double u_m2 = peak_u(3200, dyn_dur, 0.4);
+    check(u_m1 > 0.0 && u_m2 > 0.0, "the dynamic case solves at both mesh densities");
+    if (u_m1 > 0.0 && u_m2 > 0.0) {
+        std::printf("  elem 0.8 m |u| = %.9f   elem 0.4 m |u| = %.9f   relative change %.2e\n",
+                    u_m1, u_m2, std::fabs(u_m2 - u_m1) / u_m1);
+        check(std::fabs(u_m2 - u_m1) / u_m1 < 1e-4, "the mesh is not where this error lives either");
     }
 
     std::printf(g_failures ? "\n%d CHECK(S) FAILED\n" : "\nall checks passed\n", g_failures);

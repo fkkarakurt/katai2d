@@ -334,7 +334,8 @@ error actually lives on.
 
 **The order was decided before the run, as it was for the beam.** `consolidation.hpp` integrates
 **fully implicitly (α = 1)** — backward Euler, global error O(Δt). The prediction is therefore
-**p = 1**, and it is not something to be discovered from the data. The default `OrderPolicy`
+**p = 1**, and it is not something to be discovered from the data. (That this works twice does not
+make it a rule; §7c is the case where the same reasoning predicts 2 and the measurement returns 3.) The default `OrderPolicy`
 window of [0.5, 4.0] is not used either: that bracket exists because it is what a tri6 *mesh* can
 deliver, and a time axis is entitled to its own, so the sweep is run with [0.75, 1.5] and a
 fallback order of 1 rather than 2.
@@ -359,6 +360,51 @@ And the mesh, for the second corpus case running: **1.7e-8** over an 11× node c
 a row whose error lives where no mesh sweep would ever have found it. The pair is the point:
 §7 refuses a band because the axis will not carry one, §7b publishes one because it will, and the
 same estimator and the same reasoning produced both.
+
+### 7c. Where "the algebra fixes the order" stops: KV-NUM-011
+
+Twice now the order has been known before the run — 2 for the beam's `q h²/12`, 1 for backward
+Euler. That is a tempting rule, and **KV-NUM-011 is the case that bounds it.** `dynamics.hpp`
+integrates with **γ = ½, β = ¼** — average acceleration, no numerical damping, unambiguously
+**second order** — so the prediction was p = 2. The measurement says **3**.
+
+**Two axes, and the first one is not a discretisation at all.** A resonant amplitude is *built
+up*, not imposed: the envelope approaches steady state like `1 − exp(−ξωt)`, so the file's 20
+cycles is 0.9981 of the way there. Sweeping Δt without knowing that would charge the shortfall to
+the integrator.
+
+| duration | \|u_surf\| | vs closed form |
+|---|---|---|
+| 10 cycles | 0.049374659 | −4.3172% |
+| **20 cycles (shipped)** | 0.051494210 | **−0.2098%** |
+| 40 cycles | 0.051588308 | −0.0274% |
+
+At the shipped settings the buildup is worth about as much as the time step. With the duration
+taken out to 40 cycles, the time axis alone:
+
+| time steps (40 cycles) | \|u_surf\| | vs closed form |
+|---|---|---|
+| 800 | 0.049972794 | −3.1581% |
+| 1600 | 0.051401970 | −0.3885% |
+| 3200 | 0.051563299 | −0.0759% |
+
+- **observed order p = 3.147**, where the scheme alone justifies 2;
+- 3.147 and 2.998 at 160 cycles, and **3.097 / 2.795 on a grid deliberately INCOMMENSURATE with
+  the period** (T/Δt = 18.43, 36.86, 73.72, 147.45) — which **eliminates sampling phase-lock** as
+  the explanation. The order is about 3, reproducibly, on two unrelated grids;
+- the axis is nonetheless clean: Richardson lands on the closed form to **−0.036%**, and the two
+  independent grids agree with each other to 1e-5;
+- band on this triplet: **± 0.0498%**.
+
+**What the quantity is explains it.** The published number is the *peak* of a resonant response,
+not the response at an instant, and a derived quantity does not have to inherit its scheme's
+order. So the rule is: **the order is a property of the quantity as much as of the integrator, and
+it may only be asserted in advance when the quantity's relation to the discretisation is itself
+known** — as it is for the beam's algebraic overshoot and for Terzaghi's U, and as it is not here.
+The test asserts `p > 2.3` rather than `p ≈ 3.147`, because the finding is that the prediction
+fails, and pinning the exact value would go quiet the day the mechanism changed.
+
+And the mesh, for the **third** corpus case running: 459 → 6389 nodes moves \|u\| by 4.5e-6.
 
 ## 8. The one case that tests the estimator back: KV-STR-003's peak moment
 
@@ -395,20 +441,27 @@ will quantify for any mesh triplet the user cares to produce.
 The register is deliberately explicit about its own gaps, since an absent row must never read as
 a passed one:
 
-- **Most of the corpus has no sweep yet.** The corpus is now **26 files** behind **56 declared
-  cases**; five carry a band (KV-FND-008 via KV-NUM-005, KV-SLP-002, the Giroud rigid footing,
-  KV-STR-003 as of 2026-08-14, and KV-CON-002 via KV-NUM-010 on its TIME axis), and one has been
-  swept and **deliberately given none** (KV-CST-002 via KV-NUM-009, §7). The arithmetic of the gap is not the obstacle it looks like:
+- **Most of the corpus has no sweep yet.** The corpus is now **26 files** behind **57 declared
+  cases**; six carry a band (KV-FND-008 via KV-NUM-005, KV-SLP-002, the Giroud rigid footing,
+  KV-STR-003 as of 2026-08-14, KV-CON-002 via KV-NUM-010 and KV-DYN-002 via KV-NUM-011, the last
+  two on their TIME axes), and one has been swept and **deliberately given none** (KV-CST-002 via
+  KV-NUM-009, §7). The arithmetic of the gap is not the obstacle it looks like:
   a three-level nested sweep on a linear elastic case costs about **2.6 seconds**, so what is
   missing here is written oracles and probes, not machine time. The nonlinear families cost more
   — KV-NUM-009's three sweeps take about 170 s together — but §7 shows that the expense is not
   the real difficulty either: **the difficulty is that a mesh triplet is often not the axis the
   error is on**, and finding the axis has to precede banding it.
-- **The consolidation path is now swept; the soft-soil and dynamic ones are not.** KV-NUM-010
-  bands the time axis of KV-CON-002 and validates the band against a known answer. Soft Soil
-  Creep has a time axis of the same kind and has not been touched; neither has the Newmark
-  dynamic path, whose predicted order (2, for average acceleration) would make it the natural
-  next control after this one.
+- **The consolidation and dynamic paths are now swept; the soft-soil one is not.** KV-NUM-010
+  bands the time axis of KV-CON-002 and KV-NUM-011 that of KV-DYN-002, both validated against a
+  known answer. Soft Soil Creep has a time axis of the same kind and has not been touched. Nor
+  has the *coupled* (flow-deformation) path, which has both.
+- **Why the observed order of KV-NUM-011 is 3 rather than the scheme's 2 is measured, not
+  explained.** Phase-lock between the sampling grid and the period was tested and eliminated; the
+  remaining account — that a peak of a resonant response is a derived quantity with an order of
+  its own — is consistent with everything measured but is not derived. The band does not depend
+  on the account: it is computed from the observed order, and it is validated by landing on the
+  closed form. But an explanation would let the order be predicted for the next such quantity
+  instead of discovered.
 - **No band exists for a path-dependent quantity, and §7 explains why rather than promising one.**
   Richardson extrapolation requires a single smooth discretisation parameter. Load-step
   refinement is not one here, and the honest output for such a case is a measured spread plus the
