@@ -99,6 +99,18 @@ set_tests_properties(test_python_dsl PROPERTIES
   LABELS "python;api"
   ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
 
+# Structural elements from the script -- the layer that used to stop exactly where
+# real engineering starts -- plus the summary layer that makes a result readable.
+# Checked by SOLVING against the checked-in KV-STR-005 rather than by byte-identity;
+# the file's own builder writes redundant all-active vectors, so the two describe the
+# same run and only the ANSWER can be compared bit for bit. The test says why.
+add_test(NAME test_python_structures
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/structures.py
+                 ${PROJECT_SOURCE_DIR}/tests/corpus)
+set_tests_properties(test_python_structures PROPERTIES
+  LABELS "python;api;model"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
 # The schema-coverage gate: every key the .k2d writer emits must be reachable,
 # faithful and writable through the bindings. The key universe is extracted by
 # importing check_k2d_spec.py itself, so this gate and the format gate can never
@@ -124,7 +136,7 @@ set_tests_properties(test_python_stubs PROPERTIES
 # problem and refuses (non-zero exit) if the result leaves the corpus band the
 # same case is pinned to. An example that drifts from the API or the physics
 # fails the suite, not the first reader who tries it.
-foreach(example slope_stability consolidation_terzaghi staged_excavation)
+foreach(example slope_stability consolidation_terzaghi staged_excavation anchored_excavation)
   add_test(NAME test_python_example_${example}
            COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/examples/${example}.py)
   set_tests_properties(test_python_example_${example} PROPERTIES

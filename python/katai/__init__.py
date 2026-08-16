@@ -45,6 +45,11 @@ __version__ = _core.__version__   # the ONE identity (<katai/api/version.hpp>)
 # `katai._core.Project`; `load_project` returns that raw form.
 from .project import Project  # noqa: F401,E402
 
+# Readable output for a scripted run. The result carries everything already; these
+# select, label and format it, so seeing what happened does not require writing a
+# numpy scan first. (The formatted client deliverable is the Studio report.)
+from .summary import extremes, summary  # noqa: F401,E402
+
 
 class Refusal(RuntimeError):
     """The engine or the input contract refused the run, honestly.

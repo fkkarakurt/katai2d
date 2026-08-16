@@ -51,6 +51,23 @@ _FLOW = {
     "closed": _core.FlowBCType.Closed,
     "seepage": _core.FlowBCType.Seepage,
 }
+_BARRIER = {
+    "permeable": 0,          # the default: the flow net runs through the line
+    "impermeable": 1,        # a screen; the two sides' pore pressures are separated
+    "semi_permeable": 2,     # passes q = dh / R, R = d/k [day]
+}
+_CONNECTION = {"hinged": 0, "free": 1}   # embedded-beam top attachment
+# Design approaches, by the name the code itself uses. "none" is the default: the
+# phase is a characteristic-value analysis and no partial factors are applied.
+_DESIGN = {
+    "none": _core.DesignApproach.None_,   # the binding spells it None_; the engineer types "none"
+    "ec7_da1_c1": _core.DesignApproach.EC7_DA1_C1,
+    "ec7_da1_c2": _core.DesignApproach.EC7_DA1_C2,
+    "ec7_da2": _core.DesignApproach.EC7_DA2,
+    "ec7_da3": _core.DesignApproach.EC7_DA3,
+    "tbdy2018_static": _core.DesignApproach.TBDY2018_Static,
+    "tbdy2018_seismic": _core.DesignApproach.TBDY2018_Seismic,
+}
 _WAVE = {
     "harmonic": _core.SeismicWave.Harmonic,
     "ricker": _core.SeismicWave.Ricker,
@@ -89,6 +106,10 @@ class RegionHandle(_Handle):
 
 class LoadHandle(_Handle):
     pass
+
+
+class StructHandle(_Handle):
+    """A structural element (wall, anchor, geogrid, pile, interface)."""
 
 
 class DispHandle(_Handle):
@@ -299,6 +320,135 @@ class _Loads:
         return LoadHandle(len(self._prj._loads) - 1, name)
 
 
+class _Structures:
+    """``prj.structures`` -- retaining walls, anchors, geogrids, piles, interfaces.
+
+    Every element is one line from ``a`` to ``b`` [m] plus the property set it is
+    made of, created in a single call, and every one returns a handle that phases
+    activate and deactivate exactly like a load or a region -- which is how a wall
+    gets installed before the excavation that needs it::
+
+        wall = prj.structures.plate((0, 0), (0, -12), EA=1.2e7, EI=1.0e5)
+        prj.phases.plastic("Install wall", activate=[wall])
+        prj.phases.plastic("Excavate", deactivate=[pit])
+
+    Stiffnesses are PER METRE out of plane, as everywhere else in a plane-strain
+    analysis. Anchors and piles are the exception and say so: they are discrete
+    members, so they carry a ``spacing`` [m] and the engine divides by it.
+    """
+
+    def __init__(self, prj):
+        self._prj = prj
+
+    def _add(self, kind, a, b, name, material_index, *, barrier=None,
+             resistance=0.0, interfaces=None, coarseness=1.0, conn=None):
+        S = _core.StructElement()
+        S.kind = kind
+        S.name = name
+        S.x1, S.y1, S.x2, S.y2 = a[0], a[1], b[0], b[1]
+        S.material = material_index
+        S.coarseness = coarseness
+        if interfaces in ("both", "positive"): S.iface_pos = True
+        if interfaces in ("both", "negative"): S.iface_neg = True
+        if interfaces not in (None, "none", "both", "positive", "negative"):
+            raise ValueError("interfaces must be 'positive', 'negative', 'both' or 'none'")
+        if barrier is not None:
+            S.flow_barrier = _pick(_BARRIER, barrier, "flow barrier")
+            S.hydraulic_resistance = resistance
+            if barrier == "semi_permeable" and not resistance > 0.0:
+                raise ValueError("a semi-permeable line needs resistance=d/k [day] > 0")
+        if conn is not None:
+            S.conn = _pick(_CONNECTION, conn, "connection")
+        self._prj._structs.append(S)
+        return StructHandle(len(self._prj._structs) - 1, name)
+
+    def plate(self, a, b, *, EA, EI, w=0.0, nu=0.0, Mp=0.0, Np=0.0,
+              elastoplastic=None, name="Plate", interfaces=None, barrier=None,
+              resistance=0.0, coarseness=1.0):
+        """A wall, lining or slab: EA [kN/m], EI [kN m2/m], self-weight w [kN/m/m].
+
+        ``Mp`` / ``Np`` (0 = elastic) make it elastoplastic -- the plastic moment
+        and axial force it cannot exceed. ``interfaces='both'`` puts a soil-
+        structure interface on each side, which is what makes a wall able to slip
+        rather than glue the soil to it. ``barrier='impermeable'`` makes it a
+        groundwater screen ('semi_permeable' needs ``resistance`` = d/k [day])."""
+        M = _core.PlateMaterial()
+        M.name, M.EA, M.EI, M.w, M.nu = name, EA, EI, w, nu
+        M.Mp, M.Np = Mp, Np
+        # A capacity the engine never reads is worse than no capacity: the plate's caps are
+        # only applied when the elastoplastic flag is set, so giving Mp or Np turns it on.
+        # Pass elastoplastic=False explicitly to keep a stated capacity DORMANT.
+        M.elastoplastic = (Mp > 0.0 or Np > 0.0) if elastoplastic is None else elastoplastic
+        self._prj._plates.append(M)
+        return self._add(_core.StructKind.Plate, a, b, name, len(self._prj._plates) - 1,
+                         barrier=barrier, resistance=resistance, interfaces=interfaces,
+                         coarseness=coarseness)
+
+    def anchor(self, a, b, *, EA, spacing=1.0, prestress=0.0, Fmax_tens=0.0,
+               Fmax_comp=0.0, elastoplastic=None, name="Anchor", coarseness=1.0):
+        """A node-to-node anchor or strut: EA [kN], out-of-plane ``spacing`` [m].
+
+        ``prestress`` [kN] is the lock-off force, tension-positive: the member is
+        tensioned against the wall when it is installed, and that force holds the
+        excavation before anything moves. It is an elastic spring from there on,
+        so the force follows the wall rather than staying put. ``Fmax_tens`` /
+        ``Fmax_comp`` (0 = unlimited) cap it."""
+        M = _core.AnchorMaterial()
+        M.name, M.EA, M.Lspacing, M.prestress = name, EA, spacing, prestress
+        M.Fmax_tens, M.Fmax_comp = Fmax_tens, Fmax_comp
+        M.elastoplastic = ((Fmax_tens > 0.0 or Fmax_comp > 0.0)
+                           if elastoplastic is None else elastoplastic)
+        self._prj._anchors.append(M)
+        return self._add(_core.StructKind.Anchor, a, b, name,
+                         len(self._prj._anchors) - 1, coarseness=coarseness)
+
+    def geogrid(self, a, b, *, EA, Np=0.0, elastoplastic=None, name="Geogrid",
+                coarseness=1.0):
+        """A tension-only reinforcement sheet: EA [kN/m], tension cap ``Np``
+        [kN/m] (0 = unlimited). It carries no compression and no bending -- the
+        force goes to zero rather than negative, which is the whole point of it.
+
+        Giving ``Np`` ARMS the cap (the engine applies it only when the element is
+        marked elastoplastic, so a bare cap would silently do nothing); pass
+        ``elastoplastic=False`` to state a capacity and deliberately leave it off."""
+        M = _core.GeogridMaterial()
+        M.name, M.EA, M.Np = name, EA, Np
+        # The engine reads the cap only when the flag is set (driver: Np applies if
+        # elastoplastic && Np > 0), so a bare Np= would otherwise be a silent no-op.
+        M.elastoplastic = (Np > 0.0) if elastoplastic is None else elastoplastic
+        self._prj._geogrids.append(M)
+        return self._add(_core.StructKind.Geogrid, a, b, name,
+                         len(self._prj._geogrids) - 1, coarseness=coarseness)
+
+    def pile(self, a, b, *, E, diameter, spacing, gamma=24.0, Tskin_max=0.0,
+             Fmax_base=0.0, connection="hinged", name="Pile", coarseness=1.0):
+        """An embedded beam (pile row): E [kN/m2], ``diameter`` [m], out-of-plane
+        ``spacing`` [m], unit weight ``gamma`` [kN/m3].
+
+        ``Tskin_max`` [kN/m] and ``Fmax_base`` [kN] are the shaft and base
+        capacities -- CAREFUL, 0 means UNLIMITED here, not zero capacity.
+        ``connection`` is how the pile top attaches to the soil: 'hinged' (the
+        default, and PLAXIS's) means the top moves with the soil, which is what
+        makes the pile loadable at its head at all; 'free' leaves it coupled only
+        through the shaft interface, as a grout body is."""
+        M = _core.EmbeddedBeamMaterial()
+        M.name, M.E, M.gamma, M.diameter, M.Lspacing = name, E, gamma, diameter, spacing
+        M.Tskin_max, M.Fmax_base = Tskin_max, Fmax_base
+        self._prj._embedded.append(M)
+        return self._add(_core.StructKind.EmbeddedBeam, a, b, name,
+                         len(self._prj._embedded) - 1, conn=connection,
+                         coarseness=coarseness)
+
+    def interface(self, a, b, *, name="Interface", barrier=None, resistance=0.0,
+                  coarseness=1.0):
+        """A bare soil-structure interface line: it takes the strength of the soil
+        beside it, reduced by that soil's ``Rinter``. Use this for a slip surface
+        that has no structure on it; a wall's own interfaces come from
+        ``plate(..., interfaces='both')``."""
+        return self._add(_core.StructKind.Interface, a, b, name, -1,
+                         barrier=barrier, resistance=resistance, coarseness=coarseness)
+
+
 class _Displacements:
     """``prj.displacements`` -- line prescribed displacements (PLAXIS style)."""
 
@@ -386,7 +536,8 @@ class _Phases:
 
     def _add(self, name, ptype, *, activate=(), deactivate=(), duration=None,
              steps=None, tolerance=None, load_steps=None, max_iterations=None,
-             apply_fraction=None, ignore_undrained=None, reset_small_strain=None):
+             apply_fraction=None, ignore_undrained=None, reset_small_strain=None,
+             design=None, water=None):
         ph = _core.Phase()
         ph.name = name
         ph.type = ptype
@@ -402,6 +553,17 @@ class _Phases:
         # an overconsolidation behind leaves a strain history too, and that history is an
         # artefact of the modelling, not something the soil would still remember.
         if reset_small_strain is not None: ph.reset_small_strain = reset_small_strain
+        # Design code: the partial factors of EC7 or TBDY 2018 applied to THIS phase, so a
+        # characteristic run and its design check live in one file and are read side by side.
+        # Unset = characteristic values, which is what an unfactored analysis means.
+        if design is not None: ph.design_approach = _pick(_DESIGN, design, "design approach")
+        # A phase-level water table: staged dewatering without touching the project's own.
+        # water=y lowers/raises a horizontal table; water=[(x, y), ...] gives a phreatic line.
+        if water is not None:
+            pts = [(None, water)] if isinstance(water, (int, float)) else list(water)
+            ph.water_override = True
+            ph.wx = [x for x, _ in pts] if pts[0][0] is not None else []
+            ph.wy = [y for _, y in pts]
         # Numerical controls; unset = the program chooses by material class. They are
         # written into the .k2d, so a script that pins them publishes a run someone
         # else can reproduce exactly.
@@ -429,6 +591,22 @@ class _Phases:
     def safety(self, name="Safety", **kw):
         """phi-c reduction of the current state -> factor of safety."""
         return self._add(name, _core.PhaseType.Safety, **kw)
+
+    def transient_flow(self, name, *, duration, steps, **kw):
+        """Time-dependent GROUNDWATER FLOW alone: heads and the free surface move,
+        the skeleton does not. duration [day], ``steps`` time steps over it. Use it
+        for a drawdown or a filling reservoir when the deformation is not the
+        question; for both at once use :meth:`fully_coupled`."""
+        return self._add(name, _core.PhaseType.TransientFlow,
+                         duration=duration, steps=steps, **kw)
+
+    def fully_coupled(self, name, *, duration, steps, **kw):
+        """Fully coupled flow-deformation: pore pressure and displacement solved
+        TOGETHER over time. Differs from :meth:`consolidation` in that the
+        hydraulic boundary conditions may change during the phase -- the coupling
+        runs both ways rather than dissipating a pressure that is already there."""
+        return self._add(name, _core.PhaseType.FullyCoupled,
+                         duration=duration, steps=steps, **kw)
 
     def dynamic(self, name, *, duration, steps, wave="harmonic", amplitude=1.0,
                 frequency=1.0, damping=0.05, rayleigh=None, record=None,
@@ -497,6 +675,11 @@ class Project:
         self._materials = []
         self._polygons = []
         self._loads = []
+        self._structs = []
+        self._plates = []
+        self._anchors = []
+        self._geogrids = []
+        self._embedded = []
         self._disps = []
         self._hydros = []
         self._water = None
@@ -508,6 +691,7 @@ class Project:
         self.geometry = _Geometry(self)
         self.water = _Water(self)
         self.loads = _Loads(self)
+        self.structures = _Structures(self)
         self.displacements = _Displacements(self)
         self.dewatering = _Dewatering(self)
         self.phases = _Phases(self)
@@ -532,6 +716,10 @@ class Project:
     def _extent(self):
         xs = [x for p in self._polygons for x in p.x]
         ys = [y for p in self._polygons for y in p.y]
+        # A wall toed below the soil block, or an anchor reaching outside it, is still part of
+        # the model: the extent has to contain it or the mesher never sees the element.
+        xs += [v for S in self._structs for v in (S.x1, S.x2)]
+        ys += [v for S in self._structs for v in (S.y1, S.y2)]
         if not xs:
             raise ValueError("the project has no soil regions; add geometry first")
         return min(xs), max(xs), min(ys), max(ys)
@@ -561,6 +749,11 @@ class Project:
         pr.materials = self._materials
         pr.polygons = self._polygons
         pr.loads = self._loads
+        pr.structs = self._structs
+        pr.plates = self._plates
+        pr.anchors = self._anchors
+        pr.geogrids = self._geogrids
+        pr.embedded = self._embedded
         pr.disps = self._disps
         pr.hydros = self._hydros
 
@@ -575,10 +768,13 @@ class Project:
                       if isinstance(h, DispHandle)]
         excl_hydros = [h.index for h in self._initial_exclude
                        if isinstance(h, HydroHandle)]
+        excl_structs = [h.index for h in self._initial_exclude
+                        if isinstance(h, StructHandle)]
         load_state = [1] * len(self._loads)
         poly_state = [1] * len(self._polygons)
         disp_state = [1] * len(self._disps)
         hydro_state = [1] * len(self._hydros)
+        struct_state = [1] * len(self._structs)
         if excl_loads:
             for i in excl_loads:
                 load_state[i] = 0
@@ -595,6 +791,10 @@ class Project:
             for i in excl_hydros:
                 hydro_state[i] = 0
             initial.hydro_active = hydro_state
+        if excl_structs:
+            for i in excl_structs:
+                struct_state[i] = 0
+            initial.struct_active = struct_state
         for field, value in self._initial_numerics.items():
             if value is not None:
                 setattr(initial, field, value)
@@ -605,7 +805,7 @@ class Project:
         phases = []
         for ph, activate, deactivate in self._phase_toggles:
             touched_loads = touched_polys = touched_disps = False
-            touched_hydros = False
+            touched_hydros = touched_structs = False
             for h in activate + deactivate:
                 on = 1 if h in activate else 0
                 if isinstance(h, LoadHandle):
@@ -620,6 +820,9 @@ class Project:
                 elif isinstance(h, HydroHandle):
                     hydro_state[h.index] = on
                     touched_hydros = True
+                elif isinstance(h, StructHandle):
+                    struct_state[h.index] = on
+                    touched_structs = True
                 else:
                     raise ValueError(f"cannot toggle {h!r}")
             if touched_loads:
@@ -630,6 +833,8 @@ class Project:
                 ph.disp_active = list(disp_state)
             if touched_hydros:
                 ph.hydro_active = list(hydro_state)
+            if touched_structs:
+                ph.struct_active = list(struct_state)
             phases.append(ph)
         pr.phases = phases
         return pr
