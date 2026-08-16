@@ -325,6 +325,41 @@ increments at 1e-6 does not converge at all rather than converging better. The s
 therefore pins the seating phase at 40 and moves only the staged phase, and KV-NUM-009 pins the
 failure itself, so that the day it stops failing the sentence gets rewritten.
 
+### 7b. The other half of the same argument: KV-NUM-010, where the axis *is* clean
+
+A refusal is only worth something if the same procedure produces a band when it should. Otherwise
+"no band" and "the machinery does not work" are the same observation. **KV-NUM-010** is the
+control: Terzaghi consolidation, swept by exactly the estimator that bands meshes, on the axis its
+error actually lives on.
+
+**The order was decided before the run, as it was for the beam.** `consolidation.hpp` integrates
+**fully implicitly (α = 1)** — backward Euler, global error O(Δt). The prediction is therefore
+**p = 1**, and it is not something to be discovered from the data. The default `OrderPolicy`
+window of [0.5, 4.0] is not used either: that bracket exists because it is what a tri6 *mesh* can
+deliver, and a time axis is entitled to its own, so the sweep is run with [0.75, 1.5] and a
+fallback order of 1 rather than 2.
+
+| time steps (Tv = 0.5) | U | vs Terzaghi |
+|---|---|---|
+| 30 | 0.758035991 | −0.7742% |
+| 60 | 0.760967928 | −0.3904% |
+| 120 (the file's own) | 0.762449266 | −0.1965% |
+| 240 | 0.763193873 | −0.0990% |
+
+- observed order **p = 0.9850** from 120/60/30 and **0.9924** from 240/120/60 — the two agree to
+  **0.007**. *That* is what an asymptotic range looks like, and it is precisely what §7's load
+  path could not produce (2.204 / 0.469 / 1.132 from one sweep);
+- Richardson **U(Δt→0) = 0.763961996** against the series' 0.763950331 — **+0.0015%**, the closed
+  form recovered from three time steps alone;
+- band on the file's own 120 steps: **± 0.2480%**, and the true error there is **0.1965%**, so the
+  band **contains** it — checkable here rather than merely trusted, because the exact answer is
+  known.
+
+And the mesh, for the second corpus case running: **1.7e-8** over an 11× node count. Two cases in
+a row whose error lives where no mesh sweep would ever have found it. The pair is the point:
+§7 refuses a band because the axis will not carry one, §7b publishes one because it will, and the
+same estimator and the same reasoning produced both.
+
 ## 8. The one case that tests the estimator back: KV-STR-003's peak moment
 
 Every sweep above runs where the discretisation error is unknown — which is the point of an
@@ -360,15 +395,20 @@ will quantify for any mesh triplet the user cares to produce.
 The register is deliberately explicit about its own gaps, since an absent row must never read as
 a passed one:
 
-- **Most of the corpus has no sweep yet.** The corpus is now **26 files** behind **55 declared
-  cases**; four carry a band (KV-FND-008 via KV-NUM-005, KV-SLP-002, the Giroud rigid footing,
-  and KV-STR-003 as of 2026-08-14), and one has been swept and **deliberately given none**
-  (KV-CST-002 via KV-NUM-009, §7). The arithmetic of the gap is not the obstacle it looks like:
+- **Most of the corpus has no sweep yet.** The corpus is now **26 files** behind **56 declared
+  cases**; five carry a band (KV-FND-008 via KV-NUM-005, KV-SLP-002, the Giroud rigid footing,
+  KV-STR-003 as of 2026-08-14, and KV-CON-002 via KV-NUM-010 on its TIME axis), and one has been
+  swept and **deliberately given none** (KV-CST-002 via KV-NUM-009, §7). The arithmetic of the gap is not the obstacle it looks like:
   a three-level nested sweep on a linear elastic case costs about **2.6 seconds**, so what is
   missing here is written oracles and probes, not machine time. The nonlinear families cost more
   — KV-NUM-009's three sweeps take about 170 s together — but §7 shows that the expense is not
   the real difficulty either: **the difficulty is that a mesh triplet is often not the axis the
   error is on**, and finding the axis has to precede banding it.
+- **The consolidation path is now swept; the soft-soil and dynamic ones are not.** KV-NUM-010
+  bands the time axis of KV-CON-002 and validates the band against a known answer. Soft Soil
+  Creep has a time axis of the same kind and has not been touched; neither has the Newmark
+  dynamic path, whose predicted order (2, for average acceleration) would make it the natural
+  next control after this one.
 - **No band exists for a path-dependent quantity, and §7 explains why rather than promising one.**
   Richardson extrapolation requires a single smooth discretisation parameter. Load-step
   refinement is not one here, and the honest output for such a case is a measured spread plus the

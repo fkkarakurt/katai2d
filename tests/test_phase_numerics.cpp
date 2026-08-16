@@ -34,8 +34,17 @@
 //   expected: the mesh contributes nothing (a weightless column has a uniform strain field, which is exact in the element space); the load path dominates; its observed order is NOT stable across triplets of one sweep, so no GCI band may be quoted from it; and the residual left over is a model deviation, identified by growing with stress level and changing sign near p_ref rather than staying a constant fraction
 //   band:     no band is published for this case, deliberately, and the measurements are why. Mesh: 85 -> 1105 nodes changes the answer by 5e-15 relative, which is round-off. Load path: 10 -> 160 increments moves it +3.47% -> +0.54% (a 16x refinement worth 2.9 percentage points against the mesh's zero), and the observed order from the three overlapping triplets of that one sweep is 2.204, 0.469, 1.132 -- a factor of 4.7 apart, so the triplets are not in an asymptotic range and a Richardson extrapolation built on any of them would be an invented number. Tolerance: 1e-6 and 1e-8 agree to six figures, so the sweep above is tolerance-converged, while the Hardening Soil default of 1e-2 is not and makes the same sweep non-monotone. Residual: -0.2425% over 50-100 kPa, +0.6419% over 100-200, +1.0952% over 200-400 -- near zero at the reference pressure and growing away from it with a sign change, the signature of a cap calibrated at p_ref, not of a discretisation. Ceiling: refining the seating phase to 160 increments at 1e-6 does not converge at all, because the tolerated error is an absolute residual and the increment it must satisfy keeps shrinking
 
+// verify: KV-NUM-010
+//   oracle:   closed_form
+//   source:   Terzaghi (1943) one-dimensional consolidation, degree-of-consolidation series U(Tv) = 1 - sum_j (2/M^2) exp(-M^2 Tv), M = (2j+1) pi/2, Tv = cv t / H_dr^2, cv = k Eoed / gamma_w -- the same closed form KV-CON-002 is measured against; the estimator is the solution-verification procedure of Roache (1994) and Celik et al. (2008), ASME J. Fluids Eng. 130(7):078001, applied on the TIME axis, whose order is fixed in advance by the scheme: katai/analysis/consolidation.hpp integrates fully implicitly (alpha = 1), i.e. backward Euler, whose global error is O(dt)
+//   locator:  tests/corpus/kv-con-002-terzaghi-column.k2d with the phase ended at Tv = 0.5, swept over 30/60/120/240 time steps at the file's own 0.4 m tri6 mesh, and over 0.8/0.4/0.2 m at a pinned 240 steps
+//   quantity: degree of consolidation U at Tv = 0.5 [-]; the observed order of the time refinement [-]; and the GCI band on the file's own 120 steps [%]
+//   expected: the observed order is 1, because backward Euler is first order and that is decided before the run; it is STABLE across overlapping triplets, unlike the load path of KV-NUM-009; Richardson extrapolation of three time steps recovers Terzaghi's closed form; and the band contains the true error, which can be checked here rather than trusted because the exact answer is known
+//   band:     +/- 0.2480% on the file's own 120 steps (GCI at the observed order, Fs = 1.25), and the actual error there is 0.1965%, so the band contains it. Observed order 0.9850 from 120/60/30 and 0.9924 from 240/120/60 -- the two agree to 0.007, which is what an asymptotic range looks like and is exactly what KV-NUM-009's load path could not produce (2.204 / 0.469 / 1.132). Richardson U(dt->0) = 0.763961996 against the series' 0.763950331, +0.00153%. The mesh, again, is not the axis: 169 -> 1884 nodes moves U by 1.7e-8
+
 #include <katai/io/project_io.hpp>
 #include <katai/io/validate.hpp>
+#include <katai/math/grid_convergence.hpp>
 #include <katai/jobs/driver.hpp>
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/model/project.hpp>
@@ -358,6 +367,134 @@ int main() {
     settlement(seat_fine, M.mesh, {}, &ok);
     std::printf("  seating phase at 160 increments, tol 1e-6: %s\n", ok ? "converged" : "does NOT converge");
     check(!ok, "refining the seating phase past the ceiling fails openly instead of drifting");
+
+    // --- 7. THE SAME QUESTION WHERE THE AXIS *IS* CLEAN (KV-NUM-010) -------------------------
+    // KV-NUM-009 refused a band. A refusal is only worth something if the same procedure, applied
+    // to a case whose axis IS a proper discretisation parameter, produces one -- otherwise the
+    // refusal is indistinguishable from the machinery not working. Terzaghi consolidation is that
+    // case, and its order is known before any run: consolidation.hpp integrates FULLY IMPLICITLY
+    // (alpha = 1), which is backward Euler, whose global error is O(dt). The prediction is p = 1,
+    // decided by the algebra, exactly as KV-STR-003's peak moment was decided at p = 2.
+    std::printf("\n== the same procedure where the axis is clean (KV-NUM-010) ==\n");
+
+    m::Project tz;
+    const std::string tz_path = std::string(KATAI_CORPUS_DIR) + "/kv-con-002-terzaghi-column.k2d";
+    if (!m::load_project(tz_path, tz, &err, nullptr)) {
+        std::printf("FAIL: cannot load %s: %s\n", tz_path.c_str(), err.c_str());
+        return 1;
+    }
+    check(!tz.phases.empty(), "the consolidation case has a phase to control");
+
+    // The end of the phase is moved to Tv = 0.5, where U is still moving fast enough to measure a
+    // step error against. Every run then ends at the SAME physical time, so what is compared is
+    // one quantity rather than one label.
+    const double tzH = 12.0, tzE = 1000.0, tzK = 0.1, tzQ = 10.0;
+    const double cv = tzK * tzE / katai::app::kGammaWater;   // nu = 0 -> Eoed = E
+    const double s_inf = tzQ * tzH / tzE;
+    const double Tv_end = 0.5;
+    const double t_end = Tv_end * tzH * tzH / cv;
+    double u_exact = 1.0;                                    // Terzaghi's series at Tv_end
+    for (int j = 0; j < 80; ++j) {
+        const double Mj = (2 * j + 1) * 3.14159265358979323846 / 2.0;
+        u_exact -= (2.0 / (Mj * Mj)) * std::exp(-Mj * Mj * Tv_end);
+    }
+    std::printf("  Tv = %.2f, Terzaghi U = %.9f (closed form, series)\n", Tv_end, u_exact);
+
+    const auto degree_of_consolidation = [&](int nsteps, double elem, int* nodes) -> double {
+        m::Project pr = tz;
+        pr.phases[0].duration = t_end;
+        pr.phases[0].time_steps = nsteps;
+        if (elem > 0.0) pr.mesh.elem_size = elem;
+        const auto Mt = katai::app::mesh_from_project(pr);
+        if (!Mt.ok) return -1.0;
+        if (nodes) *nodes = Mt.mesh.node_count;
+        const auto r = katai::app::solve_phases(
+            pr, Mt.mesh, katai::app::initial_phase_from(pr.initial_procedure));
+        if (r.size() != 2 || !r[1].ok || r[1].consol_settlement.empty()) return -1.0;
+        return r[1].consol_settlement.back() / s_inf;
+    };
+
+    // (a) The time axis, four densities so the order can be checked for STABILITY and not just
+    //     computed once -- which is precisely what KV-NUM-009's load path failed.
+    const int nst[4] = {30, 60, 120, 240};
+    double U[4] = {0, 0, 0, 0};
+    bool time_ok = true;
+    for (int i = 0; i < 4; ++i) {
+        U[i] = degree_of_consolidation(nst[i], 0.0, nullptr);
+        if (U[i] < 0.0) { time_ok = false; break; }
+        std::printf("  %4d time steps  U = %.9f  (%+.4f%% vs Terzaghi)\n", nst[i], U[i],
+                    100.0 * (U[i] - u_exact) / u_exact);
+    }
+    check(time_ok, "the consolidation case solves at every time-step count");
+
+    if (time_ok) {
+        // The window comes from the INTEGRATOR, not from the elements. The default OrderPolicy
+        // brackets [0.5, 4.0] because that is what a tri6 mesh can deliver; a backward-Euler time
+        // axis is first order, so an observed order far from 1 here is evidence that the triplet
+        // is not asymptotic rather than evidence about the discretisation, and the assumed order
+        // to fall back on is 1 rather than 2.
+        katai::math::OrderPolicy time_axis;
+        time_axis.p_assumed = 1.0;
+        time_axis.p_min = 0.75;
+        time_axis.p_max = 1.5;
+
+        // The file's own 120 steps as the finest of the reported triplet, so the band published
+        // is the band for the run the corpus actually ships.
+        katai::math::GridTriplet g;
+        g.h1 = t_end / 120.0; g.h2 = t_end / 60.0; g.h3 = t_end / 30.0;
+        g.phi1 = U[2];        g.phi2 = U[1];       g.phi3 = U[0];
+        const auto e = katai::math::grid_convergence_band(g, time_axis);
+        std::printf("  triplet 120/60/30: %s, observed order p = %.4f (backward Euler predicts 1)\n",
+                    katai::math::convergence_kind_name(e.kind), e.p);
+        std::printf("  Richardson U(dt->0) = %.9f  (%+.5f%% vs Terzaghi)\n", e.phi_extrapolated,
+                    100.0 * (e.phi_extrapolated - u_exact) / u_exact);
+        std::printf("  band on the file's own 120 steps: +/- %.4f%% (%s)\n", 100.0 * e.band,
+                    e.band_basis.c_str());
+        check(e.ok && e.kind == katai::math::ConvergenceKind::MonotonicConvergence,
+              "the time refinement converges monotonically");
+        check(std::fabs(e.p - 1.0) < 0.1,
+              "the observed order is the one backward Euler was known to have: 1");
+        check(e.asymptotic, "the triplet is inside the asymptotic range, so the order may be quoted");
+        check(std::fabs(e.phi_extrapolated - u_exact) / u_exact < 5e-4,
+              "Richardson recovers Terzaghi's closed form from three time steps alone");
+
+        // The order is STABLE, which is the property KV-NUM-009's load path lacked. Same sweep,
+        // the other overlapping triplet.
+        katai::math::GridTriplet g2;
+        g2.h1 = t_end / 240.0; g2.h2 = t_end / 120.0; g2.h3 = t_end / 60.0;
+        g2.phi1 = U[3];        g2.phi2 = U[2];        g2.phi3 = U[1];
+        const auto e2 = katai::math::grid_convergence_band(g2, time_axis);
+        std::printf("  triplet 240/120/60: p = %.4f -- the two triplets agree to %.3f\n", e2.p,
+                    std::fabs(e2.p - e.p));
+        check(std::fabs(e2.p - e.p) < 0.05,
+              "and it is STABLE across triplets: this axis really is asymptotic");
+
+        // The band has to CONTAIN the error it claims to bound, and here that can be checked
+        // rather than trusted, because the exact answer is known.
+        const double actual = std::fabs(U[2] - u_exact) / u_exact;
+        std::printf("  actual error at 120 steps %.4f%% vs band %.4f%%\n", 100.0 * actual,
+                    100.0 * e.band);
+        check(actual < e.band, "the published band contains the true error");
+    }
+
+    // (b) And the mesh, again, is not where the error is. Three densities at a pinned 240 steps.
+    //     Two corpus cases in a row whose error lives on an axis no mesh sweep would have found.
+    double Um[3] = {0, 0, 0};
+    int nm[3] = {0, 0, 0};
+    const double tz_sizes[3] = {0.8, 0.4, 0.2};
+    bool tz_mesh_ok = true;
+    for (int i = 0; i < 3; ++i) {
+        Um[i] = degree_of_consolidation(240, tz_sizes[i], &nm[i]);
+        if (Um[i] < 0.0) { tz_mesh_ok = false; break; }
+        std::printf("  elem %.1f m  %5d nodes  U = %.9f\n", tz_sizes[i], nm[i], Um[i]);
+    }
+    check(tz_mesh_ok, "the consolidation case solves at all three mesh densities");
+    if (tz_mesh_ok) {
+        const double dm = std::fabs(Um[2] - Um[0]) / Um[0];
+        std::printf("  relative change over a %.0fx node count: %.2e\n", (double)nm[2] / nm[0], dm);
+        check(dm < 1e-6,
+              "the mesh contributes essentially nothing to an integral quantity like U either");
+    }
 
     std::printf(g_failures ? "\n%d CHECK(S) FAILED\n" : "\nall checks passed\n", g_failures);
     return g_failures ? 1 : 0;
