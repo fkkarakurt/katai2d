@@ -559,11 +559,21 @@ class _Phases:
         if design is not None: ph.design_approach = _pick(_DESIGN, design, "design approach")
         # A phase-level water table: staged dewatering without touching the project's own.
         # water=y lowers/raises a horizontal table; water=[(x, y), ...] gives a phreatic line.
+        # The schema's phase water is a POLYLINE and needs >= 2 points, so a horizontal table
+        # is a two-point line spanning the model -- and the model's extent is not known until
+        # the geometry is complete. It is left empty here and filled in build(), exactly as
+        # prj.water.table() is; writing a one-point wy with an empty wx produced a project the
+        # validator refused ("0 x-value(s) but 1 y-value(s)"), which made the documented
+        # scalar form unusable.
         if water is not None:
-            pts = [(None, water)] if isinstance(water, (int, float)) else list(water)
             ph.water_override = True
-            ph.wx = [x for x, _ in pts] if pts[0][0] is not None else []
-            ph.wy = [y for _, y in pts]
+            if isinstance(water, (int, float)):
+                ph.wx = []                                    # spans, filled at build
+                ph.wy = [float(water), float(water)]
+            else:
+                pts = list(water)
+                ph.wx = [float(p[0]) for p in pts]
+                ph.wy = [float(p[1]) for p in pts]
         # Numerical controls; unset = the program chooses by material class. They are
         # written into the .k2d, so a script that pins them publishes a run someone
         # else can reproduce exactly.
@@ -835,6 +845,9 @@ class Project:
                 ph.hydro_active = list(hydro_state)
             if touched_structs:
                 ph.struct_active = list(struct_state)
+            # A phase's horizontal water table spans the model, like the project's own.
+            if ph.water_override and not ph.wx:
+                ph.wx = [pr.x_min, pr.x_max]
             phases.append(ph)
         pr.phases = phases
         return pr

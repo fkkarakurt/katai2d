@@ -4,6 +4,149 @@ All notable changes to KATAI 2D. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 MAJOR.MINOR.PATCH.
 
+## [0.8.0] - 2026-08-17
+
+Verification release, and the first one in which the Python surface reaches the
+whole engine. Six capabilities — the interface, the plate, the geogrid, the
+embedded beam, HS small, and Soft Soil with its creep — were implemented and
+tested at the element, but had never been run along the path a user actually
+takes: from a file, through the mesher and the driver. Run that way for the
+first time, **five of the six were wrong**, and one further cross-cutting fault
+(the tension cut-off) came out of the same work. Every closure arrives with a
+benchmark input checked in and a citation to the manual clause it implements:
+the verification record grows from 45 declared cases over 17 input files to
+**57 cases over 26 files**, and the suite to **152 tests**.
+
+The project file moves from version 12 to version 14. This build reads every
+older file unchanged; an older build refuses these, which is the point of the
+guard — each bump marks an input an older build would have dropped in silence.
+
+### Added
+
+- **The Python surface reaches the structural elements.** `prj.structures`
+  creates walls, anchors, geogrids, pile rows and bare interfaces, one call
+  each, and each returns a handle that phases activate and deactivate exactly
+  like a load or a region — which is the whole of staged construction. Before
+  this, a script that needed a wall had to drop to the raw bindings and assemble
+  the material list, the element list and the index between them by hand, so the
+  pleasant layer covered the tutorial and gave up at the first real job.
+  Interfaces come from the wall that needs them (`interfaces="both"`), a wall can
+  be made a groundwater screen, and a pile states how its head attaches — hinged
+  by default, as PLAXIS does.
+- **What a structure carries is readable from a script.** `ForceStation` and
+  `StructForce` are bound: the stations along an element with their arc length,
+  position, N, Q, M and displacement, plus the element's name, kind, yield flag
+  and extremes. A wall's bending moment and a pile's axial force existed in C++
+  and in the GUI and nowhere else — which is the surface a parameter study, a
+  benchmark or a thesis actually lives in.
+- **Flow phases, design codes and phase water from Python.**
+  `prj.phases.transient_flow(...)` and `.fully_coupled(...)`; `design=` selects
+  the EC7 or TBDY 2018 partial-factor catalogue for a single phase, so a
+  characteristic run and its design check live in one file; `water=` overrides
+  the table or the phreatic line for one phase, which is staged dewatering.
+- **`katai.summary()` and `katai.extremes()`.** A readable account of a scripted
+  run: the phases named, the extremes tabulated *with the place each occurs*,
+  the structural force envelopes, and every diagnostic the engine raised —
+  because those change how the numbers should be read. A field that is uniform
+  says so instead of inventing a location.
+- **"Reset small strain" as a phase option** (`.k2d` v14 `phases[].resetsmall`,
+  diagnostic `K2D-M005`), after Material Models Manual sec. 7.6. A surcharge
+  placed and removed to leave an overconsolidation behind also leaves a strain
+  history, and in the real soil ageing erased that long before the analysis
+  began. Verified by KV-CST-012 against an oracle established before the option
+  existed: with the reset the run lands on KV-CST-008's fresh-K₀ answer to
+  +0.0012%; without it, on a run 4.50× softer. On plain Hardening Soil, which
+  has no history to reset, the flag is bit-for-bit inert and the run says so.
+- **Li & Dafalias dilatancy below the phase-transformation line** for HS small
+  (Material Models Manual sec. 7.9.1, Eq. 7-19…7-23), measured against an oracle
+  written from the five equations and sharing no code with the kernel: worst
+  difference 0.00e+00 over the branch. Recorded honestly, because the manual
+  disagrees with itself here — Fig. 7-10 plots this function at 1.29× the
+  amplitude Eq. 7-19 gives, and a formula printed in the specification outranks
+  a constant reverse-engineered from a raster plot.
+- **Numerical-uncertainty cases on axes other than the mesh** (KV-NUM-009…011).
+  One of them measured a prediction wrong: the Newmark scheme was argued to be
+  second order and the sweep recovered three, so the rule that "the algebra
+  decides the order" is now bounded rather than assumed.
+
+### Fixed
+
+Each of these produced a converged run, a green suite and a wrong number.
+
+- **An interface drawn along a fixed boundary was welded shut.** Both sides of
+  the split sat at identical coordinates and boundary conditions are applied by
+  coordinate, so both were fully fixed: the block sheared elastically against
+  its own base instead of sliding, and every check in the run reported success.
+  PLAXIS's own sliding-block case (Validation Manual V8 §3.3) returned
+  **5,401,612 kN/m where the manual's arithmetic gives 60**. Which side holds the
+  support is now decided rather than copied. KV-STR-002 from the checked-in file:
+  59.7202 kN/m, and deleting the interface still returns 5.4e6 — that check is
+  the sentry that fails loudly if the rule is ever undone.
+- **Deactivating the soil welded the beams standing in it.** The manual builds
+  its beam-bending case by removing the soil cluster; every node of the
+  remaining beam then touched no active element and was pinned in both
+  translations. The solve converged, reported "ok" and handed back
+  max|u| = 0.000000e+00 with no diagnostic. A node a plate runs through is now
+  exempt; an axial-only element keeps the fixity. KV-STR-003 reproduces the
+  manual's 13.96 mm and 17.43 mm.
+- **HS small rode the virgin backbone.** Masing's rule (Eq. 7-11,
+  γ₀.₇,reloading = 2 γ₀.₇,virgin) was not applied, degrading the stiffness twice
+  as fast — measured **+5.7% / +12.9% / +34.8%** too much heave at three
+  unloading sizes, a deviation that grows with strain, which is the signature of
+  a wrong threshold rather than of discretisation. Sec. 7.5's ceiling on
+  E₀/E_ur was missing too; it is capped now and `K2D-M004` states the G₀ the run
+  actually used.
+- **The tension cut-off did not reach the models it belongs to.** `K2D-M001` had
+  declared since 2026-08-08 that only the Mohr-Coulomb return read it, while the
+  schema switches it on by default as PLAXIS does — so every Hardening Soil, HS
+  small, Soft Soil and Soft Soil Creep run in this engine allowed tension past
+  σ_t, a systematic difference from the reference code in the unsafe direction.
+  KV-CST-011 pins it, including the identity that a cut-off the tension never
+  reaches is bit-identical to no cut-off at all.
+- **Every embedded-beam interface spring was 2.5× too stiff.** Reference Manual
+  Eq. 6-65 divides all three springs by the out-of-plane spacing, as EA, EI, the
+  weight and both capacities are divided; only Eq. 6-66's dimensionless factors
+  were implemented. The foot also used D/2 where Eq. 6-67 defines
+  R_eq = √(12 EI/EA)/2. A pile row could not be loaded at its head, which is why
+  no case had ever run.
+- **Structural elements read a driven node as standing still**, so a geogrid
+  under a prescribed-displacement fixture carried nothing.
+- **A prescribed-displacement line set to zero raised a warning it had no
+  business raising** (`K2D-A003`): nothing is understated when the imposed value
+  is zero, and that is the only way this schema can support a plate at a point.
+- **K₀ = 0 is accepted.** With free vertical sides it is the *only* initial state
+  in equilibrium with them; negative K₀ is still refused, with a message that
+  says why.
+- **The installer compared a real hash against the number 55.** Without
+  `-UseBasicParsing`, Windows PowerShell 5.1 returns an `application/octet-stream`
+  body — which is what GitHub serves a `.sha256` attachment as — as a *byte
+  array*, so splitting it on whitespace split an array of bytes and element zero
+  was the first byte of the hash, as a number. The integrity check would have
+  "passed" for any file whose hash began with a matching byte. All web reads now
+  go through one helper that decodes explicitly, the checksum is extracted by
+  matching 64 hex characters, and a checksum file that does not contain 64 hex
+  characters is a hard failure — a checksum that cannot be read is not a checksum
+  that passed. TLS 1.2 is forced, since 5.1 still negotiates 1.0 on some builds.
+- **`CITATION.cff` carried no DOI**, so GitHub's "Cite this repository" button
+  produced an entry with nothing persistent in it — the one thing a citation
+  exists to provide. The archived record had a DOI all along; the file never
+  named it.
+
+### Changed
+
+- The Hardening Soil dilatancy rule had been written out four times, once per
+  return mapping. It is written once now, because a rule that is right in three
+  copies and stale in the fourth is a silently wrong answer on whichever stress
+  path reaches the fourth.
+- `docs/references/hssmall-formulation.md` is in English throughout.
+
+### Known limits, stated rather than implied
+
+- HS small accumulates a monotone strain-history scalar and detects no reversal
+  *inside* a phase; the manual refers that transformation to Benz (2006), which
+  is a source to obtain rather than to paraphrase. Between phases,
+  `resetsmall` is the manual's own remedy and is implemented.
+
 ## [0.7.1] - 2026-08-09
 
 Packaging release. No engine change: the same solver, the same results, the same

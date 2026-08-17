@@ -335,6 +335,29 @@ check('"hydros":[' in katai.project_to_json(built) and '"hydro":[0,1]' in katai.
       "both reach the file, with their per-phase activity")
 check(katai.validate_project(built).ok, "the dewatered model validates")
 
+# ------------------------------------------- staged water, from the easy surface --
+# The schema's phase water is a POLYLINE and needs two points; the documented scalar
+# form (water=y, "lower the table to here") therefore has to span the model, and the
+# extent is not known until the geometry is complete. Writing one y with no x built a
+# project the contract refused -- "0 x-value(s) but 1 y-value(s)" -- so the option was
+# reachable, documented and unusable. Coverage said it existed; nothing said it worked.
+prj = katai.Project("staged water", mesh_size=2.0, auto_refine=False)
+clay = prj.materials.mohr_coulomb("Clay", E=1.0e4, nu=0.3, c=10.0, phi=22.0,
+                                  gamma=18.0, k=1.0e-4)
+prj.geometry.rectangle(0.0, 0.0, 30.0, 12.0, material=clay, name="Ground")
+prj.water.table(11.0)
+prj.phases.plastic("Dewater", water=6.0)
+prj.phases.plastic("Sloped line", water=[(0.0, 6.0), (30.0, 3.0)])
+built = prj.build()
+check(list(built.phases[0].wx) == [0.0, 30.0] and list(built.phases[0].wy) == [6.0, 6.0],
+      "a scalar phase water table spans the model, like the project's own")
+check(list(built.phases[1].wx) == [0.0, 30.0] and list(built.phases[1].wy) == [6.0, 3.0],
+      "and an explicit phreatic line reaches the phase point for point")
+check(built.phases[0].water_override and built.phases[1].water_override,
+      "both phases say they override the project's water")
+check(katai.validate_project(built).ok,
+      "a staged-dewatering model built from the easy surface validates")
+
 # ------------------------------------------------- end to end: the slope RUNS --
 job_dsl = build_slope().run()
 file_prj, _ = katai.load_project(f"{CORPUS}/kv-slp-001-griffiths-lane-slope.k2d")

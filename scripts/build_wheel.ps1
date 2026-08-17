@@ -13,7 +13,10 @@
 #   * `katai info` runs from the console script,
 #   * a corpus case validates and solves with the pinned numbers,
 #   * the deliberately-past-collapse corpus case exits 5 (the honest refusal),
-#   * the slope example runs its corpus-band guard.
+#   * the slope example runs its corpus-band guard,
+#   * the anchored excavation runs its own -- a wall, an anchor and interfaces
+#     built through `prj.structures`, which is the half of the surface an
+#     import check cannot reach and the half a real job starts at.
 # "The wheel works" means "the numbers are still right", not "import succeeded".
 #
 # Usage:  .\scripts\build_wheel.ps1 [-SkipVerify]
@@ -53,7 +56,7 @@ if ($pyd.Name -match "cp(\d+)") {
 
 # ------------------------------------- the python-labelled tests, this config --
 # The bindings the wheel ships are exercised where they were built: the DSL
-# byte-identity, the schema coverage, the stub pin and the three examples.
+# byte-identity, the structures suite, the schema coverage, the stub pin and every example.
 ctest --test-dir (Join-Path $repo "build\wheel") -R "python" --output-on-failure -j 4
 if ($LASTEXITCODE -ne 0) { throw "the python test subset failed in the wheel configuration" }
 
@@ -185,7 +188,14 @@ if (-not $SkipVerify) {
     & $vpy (Join-Path $repo "python\examples\slope_stability.py")
     if ($LASTEXITCODE -ne 0) { throw "the installed wheel failed the slope example's corpus-band guard" }
 
-    Write-Host "verified: fresh venv, scrubbed environment -- console script exit codes 0/0/0/5 and the corpus-band guard all hold" -ForegroundColor Green
+    # The structural surface, from the INSTALLED wheel. `import katai` succeeding says
+    # nothing about whether prj.structures is in the build someone downloaded -- and a
+    # published wheel whose documented API was absent is exactly what this gate exists
+    # to catch. The example checks its own invariants and exits non-zero if they fail.
+    & $vpy (Join-Path $repo "python\examples\anchored_excavation.py")
+    if ($LASTEXITCODE -ne 0) { throw "the installed wheel failed the anchored-excavation example (prj.structures)" }
+
+    Write-Host "verified: fresh venv, scrubbed environment -- console script exit codes 0/0/0/5, the corpus-band guard and the structural surface all hold" -ForegroundColor Green
 }
 
 Write-Host "OK -> $($wheel.FullName) ($mb MB, tag $tag$(if ($stable) { '-abi3' }))" -ForegroundColor Green
