@@ -131,6 +131,20 @@ Each of these produced a converged run, a green suite and a wrong number.
   produced an entry with nothing persistent in it — the one thing a citation
   exists to provide. The archived record had a DOI all along; the file never
   named it.
+- **A verification case was asserting a result that only one solver backend
+  could produce.** KV-STR-004's mesh-independence probe halved the element size
+  under the fixture's 1500 kN/m overload. On MKL that converges and the pile
+  carries its 600.0000 kN/m capacity; on the vendored Eigen solver — same
+  source, same file, same mesh — the run reports a collapse mechanism after
+  equilibrating 10% of the load. Continuous integration builds the `portable`
+  composition, so it had been red since 2026-08-13 while every local run was
+  green. The probe now runs at 1300 kN/m, inside the range where both backends
+  return the capacity exactly (measured: 1200, 1300 and 1400 all give
+  600.0000 at both densities), and re-runs the coarse density at the same load
+  so the comparison is like-for-like. **The backend disagreement itself is not
+  closed** — it is characterised and declared in
+  `docs/validation/numerical-uncertainty.md` §10, together with what was tried
+  and did not work.
 
 ### Changed
 

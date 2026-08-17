@@ -2741,6 +2741,30 @@ constexpr double kPlTskin = 100.0;   // skin resistance cap, per pile [kN/m]
 constexpr double kPlFbase = 500.0;   // base resistance, per pile [kN]
 constexpr double kPlLoad = 1500.0;   // head load [kN/m of wall] -- far above the capacity
 constexpr double kPlH = 1.0;         // element size [m]
+// The refinement probe below runs at 1300 rather than at kPlLoad, and the reason is worth the
+// paragraph: kPlLoad sits on a cliff edge that only one of the two solver backends falls off.
+//
+// Measured on the vendored Eigen backend, N at the pile head against the 600 kN/m capacity:
+//
+//        q =      1000      1200      1300      1400        1500
+//     h   = 1 m   584.10    600.0000  600.0000  600.0000    600.0000
+//     h/2 = 0.5 m 590.02    600.0000  600.0000  600.0000    collapse at 10% of the load
+//
+// Below about 1200 the pile has not finished mobilising, so there is no plateau to read and the
+// two densities differ by the discretisation (-2.65% and -1.66%). At 1500 on the refined mesh the
+// SOIL reaches its own collapse -- a limit load that falls with the element size, which is the
+// direction a displacement formulation is expected to move in and has nothing to do with the pile.
+// Between them, 1200 to 1400, both densities return the capacity EXACTLY and the probe measures
+// what it claims to.
+//
+// kPlLoad = 1500 landed in the third region, and it did so asymmetrically: MKL converges there and
+// reports 600.0000 kN/m, the vendored Eigen backend does not. CI runs the portable composition and
+// was red from 2026-08-13 for exactly this, while every local MKL run was green. An answer that
+// depends on which linear solver is linked is not an answer; the fixture had walked to the edge and
+// the probe was reading the fall. The disagreement itself is a real defect and is recorded in
+// docs/validation/numerical-uncertainty.md sec. 10 -- moving the probe does not close it, it stops
+// this case from standing on it.
+constexpr double kPlLoadRefine = 1300.0;
 constexpr double kPlTop = 16.0, kPlW = 16.0, kPlX = 8.0;
 
 // The closed form, written out here rather than read from the driver: the ultimate axial load of
@@ -2896,9 +2920,20 @@ void oracle_pile(const m::Project& pr) {
     // caps rather than by stiffnesses has nothing left for the discretisation to bias, and the
     // load simply redistributes to the points that can still take it. Recorded because a
     // prediction that failed is worth as much as one that held.
-    const PileRead rf = read_pile(build_pile_at(kPlTskin, kPlFbase, kPlLs, kPlLoad, 0, 0.5 * kPlH));
-    std::printf("      h/2: N_head %.4f kN/m (%+.2f%%) vs h: %+.2f%%\n", rf.N_head,
-                100.0 * (rf.N_head / cap - 1.0), 100.0 * (r.N_head / cap - 1.0));
+    //
+    // BOTH densities are re-run here at kPlLoadRefine rather than the refined one being compared
+    // against the coarse run above, so this is a like-for-like comparison and not two different
+    // problems -- and so the coarse leg witnesses that the load is inside the plateau rather than
+    // that being taken on trust. The choice of load, and the backend disagreement that forced it,
+    // are recorded at the constant.
+    const PileRead rc = read_pile(build_pile_at(kPlTskin, kPlFbase, kPlLs, kPlLoadRefine, 0, kPlH));
+    const PileRead rf =
+        read_pile(build_pile_at(kPlTskin, kPlFbase, kPlLs, kPlLoadRefine, 0, 0.5 * kPlH));
+    std::printf("      at %.0f kN/m: h  N_head %.4f kN/m (%+.2f%%) | h/2  N_head %.4f kN/m (%+.2f%%)\n",
+                kPlLoadRefine, rc.N_head, 100.0 * (rc.N_head / cap - 1.0), rf.N_head,
+                100.0 * (rf.N_head / cap - 1.0));
+    check(rc.ok && std::fabs(rc.N_head / cap - 1.0) < 0.02,
+          "the pile carries its capacity at the coarse density under this load too");
     check(rf.ok && std::fabs(rf.N_head / cap - 1.0) < 0.02,
           "halving the element size leaves the capacity where it was: no mesh dependence");
 

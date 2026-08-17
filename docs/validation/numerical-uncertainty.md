@@ -487,3 +487,60 @@ a passed one:
 - **Only uniform refinement exists.** `refine_uniform` refines everywhere; a graded or adaptive
   refinement — finer where the error is, which is what the deep-wall case needs — is not
   implemented, and neither is an error estimator to drive it.
+
+## 10. The uncertainty that is not discretisation: two backends disagreeing (KV-STR-004)
+
+Everything above bands the distance between a computed number and the exact solution of its own
+equations, with the mesh or the time step as the axis. This section is about a different axis, and
+it was found the way the useful ones usually are: a test that had been green locally for a month
+was red on every CI run.
+
+The case is KV-STR-004, the axial capacity of a pile row. Its mesh-independence probe halved the
+element size under the fixture's 1500 kN/m head load. On the MKL composition the refined run
+converges and the pile carries **600.0000 kN/m**, its declared capacity, exactly as at the coarse
+density. On the `portable` composition — the same source, the same file, the same mesh, the
+vendored Eigen solver instead of PARDISO — the run does not converge and the driver reports a
+collapse mechanism after equilibrating **10%** of the load.
+
+Both cannot be right. The MKL answer is the one supported by everything else measured: the pile's
+capacity is a cap, and the sweep below shows it returning exactly 600.0000 at every load from 1200
+up on **both** backends and both densities.
+
+Measured on the Eigen backend, N at the pile head [kN/m], capacity 600:
+
+| element size | q = 1000 | 1200 | 1300 | 1400 | 1500 |
+|---|---|---|---|---|---|
+| h = 1 m | 584.10 | 600.0000 | 600.0000 | 600.0000 | 600.0000 |
+| h/2 = 0.5 m | 590.02 | 600.0000 | 600.0000 | 600.0000 | collapse at 10% |
+
+So the failure is confined to one cell of that table. Below 1200 the pile has not finished
+mobilising and there is no plateau to read; at 1500 on the refined mesh the model sits close enough
+to the **soil's** own collapse — a limit load that falls with element size, as a displacement
+formulation's does — for the outcome to turn on rounding. The probe now runs at 1300, inside the
+region where the two backends agree exactly, and the coarse density is re-run at the same load so
+that the comparison is like-for-like and the plateau is witnessed rather than assumed.
+
+**What this costs the project's claims, stated plainly.** The README and the project website say
+that the `portable` preset reproduces every published number with the vendored Eigen solver alone.
+That is true of every number this record publishes, and it was *not* true of the 1500 kN/m
+refined-mesh run — which was never a published number, but was asserted by a test, which is the
+same promise in a different place. The claim as written stands; the margin behind it is thinner
+than it looked.
+
+**What was tried and did not work.** PARDISO performs iterative refinement on its solutions by
+default and the Eigen backend did not, which is the obvious candidate for a difference of this
+shape. Adding two guarded refinement steps to `eigen_direct_solver.cpp` did not recover the run: it
+moved the reported equilibrated fraction from 10% to 0%. That result is itself informative — a
+perturbation at the level of the linear solve's own rounding changes where the driver decides a
+mechanism has formed, which says the load-stepping and collapse detection are the sensitive part,
+not the linear algebra. The change was reverted rather than shipped, because a modification to the
+solver that every result passes through has no business being in the tree on a hypothesis that the
+measurement refused.
+
+**Open, and not closed by moving the probe.** Why the driver reports a collapse mechanism at 10%
+of a load it carries fully at 1400, and why that verdict depends on the linear solver, is not
+explained. The honest reading is that the cut-back and mechanism-detection logic has a
+discontinuity near the collapse load rather than a smooth approach to it. Until that is understood,
+a number computed within a few percent of a model's own limit load should be treated as
+backend-dependent, and any case that must sit there needs to be measured on both compositions
+before it is asserted.
