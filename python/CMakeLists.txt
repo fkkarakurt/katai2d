@@ -124,6 +124,17 @@ set_tests_properties(test_python_schema_coverage PROPERTIES
   LABELS "python;api;io"
   ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR};PYTHONDONTWRITEBYTECODE=1")
 
+# The product-text gate: no other FE program is named in anything a user reads --
+# the command line's output and the package's docstrings here, the Studio's labels
+# and reports on its own side. Source COMMENTS and the validation record are out of
+# scope on purpose: naming the program a number was compared against is the point of
+# a comparison. A rule nobody was there for is a rule that comes back under the next
+# tooltip, so it is a test and not an edit.
+add_test(NAME test_product_text
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/product_text.py
+                 ${PROJECT_SOURCE_DIR}/cli ${CMAKE_CURRENT_SOURCE_DIR}/katai)
+set_tests_properties(test_product_text PROPERTIES LABELS "python;docs")
+
 # The stub-completeness pin: every public _core name must appear in the
 # generated _core.pyi (see the stubgen POST_BUILD step above).
 add_test(NAME test_python_stubs

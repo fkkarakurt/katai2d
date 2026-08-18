@@ -129,7 +129,7 @@ class _Materials:
     undrained values and no pore pressure is generated.
 
     For an undrained material the pore fluid's stiffness Kw/n follows the equivalent
-    undrained Poisson ratio ``nu_u`` (default 0.495, as in PLAXIS), or Skempton's B if
+    undrained Poisson ratio ``nu_u`` (0.495 by default), or Skempton's B if
     ``und_mode=1, skempton_B=...`` is given instead. Both are per material."""
 
     def __init__(self, prj):
@@ -428,7 +428,7 @@ class _Structures:
         ``Tskin_max`` [kN/m] and ``Fmax_base`` [kN] are the shaft and base
         capacities -- CAREFUL, 0 means UNLIMITED here, not zero capacity.
         ``connection`` is how the pile top attaches to the soil: 'hinged' (the
-        default, and PLAXIS's) means the top moves with the soil, which is what
+        default) means the top moves with the soil, which is what
         makes the pile loadable at its head at all; 'free' leaves it coupled only
         through the shaft interface, as a grout body is."""
         M = _core.EmbeddedBeamMaterial()
@@ -450,7 +450,7 @@ class _Structures:
 
 
 class _Displacements:
-    """``prj.displacements`` -- line prescribed displacements (PLAXIS style)."""
+    """``prj.displacements`` -- prescribed displacements along a line."""
 
     def __init__(self, prj):
         self._prj = prj
@@ -476,8 +476,8 @@ class _Displacements:
 
 
 class _Dewatering:
-    """``prj.dewatering`` -- wells and drains drawn inside the model (PLAXIS
-    "hydraulic conditions"). Both are lines, both switch on and off per phase
+    """``prj.dewatering`` -- wells and drains drawn inside the model, the
+    hydraulic conditions. Both are lines, both switch on and off per phase
     like loads, and they say two different things to the ground: a well
     prescribes how much water is taken out, a drain prescribes how low the
     head is held."""
@@ -505,7 +505,7 @@ class _Dewatering:
         drain only takes water away -- ground already drier than the drain is
         left alone; ``vacuum=True`` holds the head in both directions (vacuum
         consolidation). In a consolidation phase a drain sets the excess pore
-        pressure to zero, as in PLAXIS."""
+        pressure to zero."""
         H = _core.HydroLine()
         H.name = name
         H.kind = _core.HydroKind.Drain
@@ -527,7 +527,7 @@ class _PhaseBuilder:
 class _Phases:
     """``prj.phases`` -- staged construction after the initial phase, in order.
 
-    Activation is INHERITED from the previous phase (PLAXIS-style); pass
+    Activation is INHERITED from the previous phase; pass
     ``activate=[...]`` / ``deactivate=[...]`` with region or load handles to
     change only what the phase changes."""
 
@@ -543,11 +543,11 @@ class _Phases:
         ph.type = ptype
         if duration is not None: ph.duration = duration
         if steps is not None: ph.time_steps = steps
-        # apply_fraction is PLAXIS's Sum-Mstage: 0.5 applies half the staged change
-        # and leaves the rest for a later phase.
+        # apply_fraction is the staged-change fraction (Sum-Mstage): 0.5 applies half
+        # the staged change and leaves the rest for a later phase.
         if apply_fraction is not None: ph.sum_mstage = apply_fraction
         if ignore_undrained is not None: ph.ignore_undrained = ignore_undrained
-        # PLAXIS's "Reset small strain": start this phase with the HS-small strain history
+        # Reset small strain: start this phase with the HS-small strain history
         # cleared, so the soil meets it at G0. Use it when the phases before this one built a
         # state rather than continued a loading path -- a surcharge placed and removed to leave
         # an overconsolidation behind leaves a strain history too, and that history is an
@@ -586,11 +586,11 @@ class _Phases:
     def plastic(self, name, **kw):
         """A plastic (staged construction) phase: fill, excavate, install, load.
 
-        ``apply_fraction=0.5`` applies half of the stage (PLAXIS Sum-Mstage) and
+        ``apply_fraction=0.5`` applies half of the stage (Sum-Mstage) and
         leaves the rest; ``ignore_undrained=True`` solves undrained materials as
         drained for this phase; ``reset_small_strain=True`` clears the HS-small
         strain history first, so the soil meets this phase at G0 instead of the
-        stiffness the earlier phases degraded it to (PLAXIS "Reset small strain")."""
+        stiffness the earlier phases degraded it to."""
         return self._add(name, _core.PhaseType.Plastic, **kw)
 
     def consolidation(self, name, *, duration, steps, **kw):
