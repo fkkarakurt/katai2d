@@ -33,7 +33,7 @@ generated from the code and pinned to it by the test suite.
 
 ## Install
 
-Current release: **v0.8.0** (`.k2d` format v14).
+Current release: **v0.8.1** (`.k2d` format v14).
 Windows x64. Both artifacts are on the
 [Releases](https://github.com/fkkarakurt/katai2d/releases) page.
 
@@ -47,14 +47,14 @@ single self-contained file.
 irm https://raw.githubusercontent.com/fkkarakurt/katai2d/main/install.ps1 | iex
 ```
 
-Or download `katai2d-0.8.0-win64.zip` and unzip it anywhere.
+Or download `katai2d-0.8.1-win64.zip` and unzip it anywhere.
 
 ### Python
 
 One abi3 wheel serves every CPython ≥ 3.12 on Windows x64:
 
 ```powershell
-pip install katai2d-0.8.0-cp312-abi3-win_amd64.whl
+pip install katai2d-0.8.1-cp312-abi3-win_amd64.whl
 ```
 
 The wheel ships the `katai` package **and** the same `katai` command line — one
@@ -103,8 +103,8 @@ You do not have to take that on trust. Verify what you downloaded against the
 checksum published with the release:
 
 ```powershell
-(Get-FileHash .\katai2d-0.8.0-win64.zip -Algorithm SHA256).Hash.ToLower()
-# compare with katai2d-0.8.0-win64.zip.sha256 from the same release
+(Get-FileHash .\katai2d-0.8.1-win64.zip -Algorithm SHA256).Hash.ToLower()
+# compare with katai2d-0.8.1-win64.zip.sha256 from the same release
 ```
 
 and, if you want an independent opinion, upload the file to VirusTotal — it is

@@ -4,6 +4,61 @@ All notable changes to KATAI 2D. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 MAJOR.MINOR.PATCH.
 
+## [0.8.1] - 2026-08-19
+
+A correctness fix in what the results panel and the calculation report SHOW, a
+typesetting pass over the notation they show it in, and the maintainer's rule
+about naming other programs turned into a test.
+
+### Fixed
+
+- **A field nothing had computed was drawn, tabulated and printed as a result.**
+  S, the degree of saturation, is produced by the unsaturated flow — a transient
+  or a fully coupled phase — and by nothing else. Every other run leaves the
+  array empty and the field reader answers 1.0 when asked anyway, and nothing
+  filtered the ask: an ordinary static analysis offered S in the field selector,
+  painted a uniformly saturated model, tabulated "min 1.000, max 1.000", and
+  printed a saturation row in both reports — in the document that goes to a
+  client, beside numbers the solver did produce. Above a phreatic surface that
+  is not merely uncomputed, it is the one answer that is certainly wrong. A
+  field is now offered only where the run produced it.
+- **`tau_max` said more than it computed.** It is the radius of the Mohr circle
+  of the IN-PLANE stresses; the out-of-plane sigma_zz is not carried in the
+  nodal field, so wherever it falls outside the in-plane pair — which
+  plasticity can do — the true maximum shear is larger than the number shown.
+  The field is now named `τmax (in-plane)`.
+- **The report's columns fanned out.** `printf` pads by bytes, and the typeset
+  names are not one byte per column; the extreme-value table is now padded by
+  characters, which also fixes a Turkish material or load name having done the
+  same thing since long before this release.
+
+### Changed
+
+- **The notation is typeset.** The interface and the reports wrote symbols the
+  way a source file has to write them — `sigma'_yy`, `phi'`, `lambda*`,
+  `kN/m3`, `>=`, `[deg]`. They now read `σ′yy`, `φ′`, `λ*`, `kN/m³`, `≥`, `[°]`:
+  225 pieces of user-visible text across the Studio and both report languages.
+  The UI font loads Greek, the prime, super/subscripts and the mathematical
+  operators to make it possible, measured against the font before it was used.
+  Indices stay plain letters on purpose — Unicode has no subscript y and no
+  subscript w, and subscripting most of a set while three of it cannot be is
+  worse than subscripting none.
+- **No other FE program is named in anything a user reads.** Twenty-two
+  Studio tooltips and ten Python docstrings named one; every one of them was
+  making a point that stands without the brand, and every one of them still
+  makes it. Source comments and the validation record are deliberately out of
+  scope: where a default came from is worth recording, and a comparison is
+  worthless without naming what was compared against.
+
+### Added
+
+- `test_product_text` (and `test_studio_product_text`): one scanner over both
+  trees, reading string literals and docstrings only — it lexes past comments
+  rather than splitting lines on `//`, so it sees what a user sees. Checked
+  against a fixture that must fail it.
+- Four checks pinning the saturation rule from both sides, and one that
+  measures the report's column alignment in characters.
+
 ## [0.8.0] - 2026-08-17
 
 Verification release, and the first one in which the Python surface reaches the
