@@ -2751,19 +2751,26 @@ constexpr double kPlH = 1.0;         // element size [m]
 //     h/2 = 0.5 m 590.02    600.0000  600.0000  600.0000    collapse at 10% of the load
 //
 // Below about 1200 the pile has not finished mobilising, so there is no plateau to read and the
-// two densities differ by the discretisation (-2.65% and -1.66%). At 1500 on the refined mesh the
-// SOIL reaches its own collapse -- a limit load that falls with the element size, which is the
-// direction a displacement formulation is expected to move in and has nothing to do with the pile.
-// Between them, 1200 to 1400, both densities return the capacity EXACTLY and the probe measures
-// what it claims to.
+// two densities differ by the discretisation (-2.65% and -1.66%). Between 1200 and 1400 both
+// densities return the capacity EXACTLY, which is where a mesh-independence probe belongs.
 //
-// kPlLoad = 1500 landed in the third region, and it did so asymmetrically: MKL converges there and
-// reports 600.0000 kN/m, the vendored Eigen backend does not. CI runs the portable composition and
-// was red from 2026-08-13 for exactly this, while every local MKL run was green. An answer that
-// depends on which linear solver is linked is not an answer; the fixture had walked to the edge and
-// the probe was reading the fall. The disagreement itself is a real defect and is recorded in
-// docs/validation/numerical-uncertainty.md sec. 10 -- moving the probe does not close it, it stops
-// this case from standing on it.
+// The 1500 cell was not a cliff in the soil, which is what this comment used to say. It was the
+// per-increment ITERATION LIMIT, then 80. The fixture is weightless with the tension cut-off on, so
+// the point load makes most of the model a no-tension material -- measured on the coarse mesh, same
+// file, one field changed: 561 Newton iterations with the cut-off against 57 without, 2 per
+// increment. On the refined mesh the increments need up to 96 while their out-of-balance force
+// falls monotonically; PARDISO's path needed 88 and survived the budget by cutting back, Eigen's
+// needed 96 and reported a collapse mechanism instead. CI runs the portable composition and was red
+// from 2026-08-13 for exactly that, while every local MKL run was green.
+//
+// The driver now derives the limit from the material class (200 where the tangent is nonsymmetric),
+// and at that budget the two backends converge to max|u| = 0.1822167 m on this cell -- seven figures
+// apart, with the MKL run 1.8x faster than it was at 80. The measurement, and what it costs the
+// project's claims, are in docs/validation/numerical-uncertainty.md sec. 10; the verdict a
+// non-converged run may publish is pinned by KV-NUM-012.
+//
+// The probe stays at 1300 all the same. It exists to measure DISCRETISATION, and 1300 is inside the
+// range where both densities return the capacity exactly, so it reads the mesh and nothing else.
 constexpr double kPlLoadRefine = 1300.0;
 constexpr double kPlTop = 16.0, kPlW = 16.0, kPlX = 8.0;
 

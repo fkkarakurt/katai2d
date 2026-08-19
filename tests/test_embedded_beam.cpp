@@ -6,6 +6,7 @@
 // This verifies the beam stiffness + the skin coupling assembly + point location of the pile in the
 // (non-conforming) soil mesh. (Soil deformation coupling via N_s is exercised in a later step.)
 #include <katai/analysis/nonlinear_solver.hpp>
+#include <katai/analysis/phase_solver/static_phase.hpp>  // non_convergence_message (the verdict)
 #include <katai/analysis/structural_forces.hpp>   // embedded_beam_force_diagram (Output)
 #include <katai/fem/assembly/dof_map.hpp>
 #include <katai/fem/elements/embedded_beam.hpp>
@@ -225,12 +226,90 @@ void test_pile_capacity() {
     check(std::fabs(Q_limit - Q_ult) < 0.03 * Q_ult, "ultimate axial capacity = T_max L + F_max");
 }
 
+// verify: KV-NUM-012
+//   oracle:   independent_path
+//   source:   incremental limit analysis as this solver implements it (PLAXIS 2D Reference Manual, "Tolerated error" and "Max iterations"): the equilibrated fraction of a load-controlled solve is the incremental collapse load ONLY when no increment of the remaining load can be equilibrated at any step size. "Max iterations" is documented there as a patience setting -- an increment that needs more is cut back and retried, not solved differently -- so a fraction reached because that setting ran out is a statement about the setting, not about the soil
+//   locator:  one pile fixture (skin cap T_max, foot cap F_max, soil held fixed) solved three ways: past its capacity with an adequate iteration limit, at HALF its capacity with the limit set to 1, and at half its capacity with an adequate limit. The third run is the independent path that convicts the second: the same model, the same load, a different budget
+//   quantity: the abandonment reason the solver records for each run, and whether the published message claims an incremental limit load [enumeration, text]
+//   expected: past capacity -> the tangent goes singular along the mechanism (or no descent exists) and the message publishes the limit load; half capacity at limit 1 -> the iteration budget, no limit-load claim, and the limit named; half capacity at limit 50 -> converged at load factor 1, which is what makes the second run's silence the correct answer
+//   band:     exact -- an enumeration and the presence or absence of one claim, not a number with a tolerance
+// This is the check KV-STR-004 needed and did not have. Its refined-mesh run reported "a collapse
+// mechanism after 10% of the load" on the Eigen backend and full convergence on MKL; the measured
+// cause was neither the mesh nor the linear algebra but the 80-iteration budget, which the run had
+// been exceeding by a handful of iterations while its out-of-balance force fell monotonically.
+// One sentence was printed for all three abandonment reasons, so the run could not say that.
+void test_non_convergence_names_its_reason() {
+    const RectangularDomain domain{0.0, 0.0, 6.0, 11.0, 0};
+    Mesh mesh = katai::mesh::generate_structured_tri6(domain, 6, 11);
+
+    const double xw = 3.3, y0 = 0.5, y1 = 9.5, L = y1 - y0;
+    const int ne = 12, nbn = 2 * ne + 1;
+    std::vector<double> bx(nbn, xw), by(nbn);
+    for (int i = 0; i < nbn; ++i) by[i] = y0 + L * i / (nbn - 1);
+
+    DofMap dofs(mesh.node_count, 2);
+    const double Ep = 3.0e7, d = 0.4;
+    plate::PlateProps pp; pp.EA = Ep * d; pp.EI = Ep * d * d * d / 12.0; pp.nu = 0.0;
+    const double T_max = 50.0, F_max = 200.0, Q_ult = T_max * L + F_max;
+    auto beam = ebeam::build_embedded_beam(mesh, dofs, bx, by, pp, 1.0e4, 1.0e4,
+                                           T_max, 1.0e5, F_max);
+    for (int n = 0; n < mesh.node_count; ++n) { dofs.fix_node_component(n, 0); dofs.fix_node_component(n, 1); }
+    dofs.finalize();
+
+    const std::vector<MaterialModel> mm = {{MaterialType::LinearElastic, 2.0e4, 0.3}};
+    katai::core::Structures st; st.embedded_beams = {beam};
+    const int head = nbn - 1;
+    auto run = [&](double P, int max_iterations) {
+        Eigen::VectorXd f = Eigen::VectorXd::Zero(dofs.equation_count());
+        f(dofs.equation(beam.dof_y[head])) = -P;
+        return katai::core::solve_nonlinear(mesh, dofs, mm, f, solve_unsym,
+                                            {80, max_iterations, 1e-7}, {}, {}, st);
+    };
+
+    // (a) Past capacity, with the iterations it needs: the pile plunges, and no iteration budget
+    // was involved in saying so.
+    const auto over = run(1.3 * Q_ult, 50);
+    const std::string m_over = katai::core::non_convergence_message(over);
+    std::printf("  past capacity : %s\n", m_over.c_str());
+    check(!over.converged, "past capacity: does not converge");
+    check(over.last_abandonment == katai::core::NewtonResult::Abandonment::SolveRefused ||
+              over.last_abandonment == katai::core::NewtonResult::Abandonment::NoDescent,
+          "past capacity: the increment was abandoned for a mechanism, not for a setting");
+    check(over.budget_exhausted == 0, "past capacity: no increment ran out of iterations");
+    check(m_over.find("incremental limit (collapse) load") != std::string::npos,
+          "past capacity: the message publishes the limit load");
+
+    // (b) UNDER capacity, with an iteration limit of one. The same model carries this load when
+    // the budget is adequate, so anything the run says about capacity here would be false.
+    const auto starved = run(0.5 * Q_ult, 1);
+    const std::string m_starved = katai::core::non_convergence_message(starved);
+    std::printf("  starved budget: %s\n", m_starved.c_str());
+    check(!starved.converged, "iteration limit 1: does not converge");
+    check(starved.last_abandonment == katai::core::NewtonResult::Abandonment::IterationBudget &&
+              starved.budget_exhausted > 0,
+          "iteration limit 1: the abandonment is recorded as the iteration budget");
+    // The claim, not the word: the message is allowed to say "NOT a collapse load", and must.
+    check(m_starved.find("incremental limit (collapse) load") == std::string::npos &&
+              m_starved.find("NOT a collapse load") != std::string::npos,
+          "iteration limit 1: the message withdraws the limit-load claim in as many words");
+    check(m_starved.find("iterations") != std::string::npos &&
+              m_starved.find(std::to_string(starved.iteration_limit)) != std::string::npos,
+          "iteration limit 1: the message names the limit that stopped it");
+
+    // The fixture is not vacuous: the same load with the ordinary budget converges, which is what
+    // makes the starved run's silence about capacity the correct answer.
+    const auto ok = run(0.5 * Q_ult, 50);
+    check(ok.converged && ok.load_factor > 0.999,
+          "half the capacity converges when the budget is adequate");
+}
+
 } // namespace
 
 int main() {
     test_axial_pile_fixed_soil();
     test_axial_pile_in_soil();
     test_pile_capacity();
+    test_non_convergence_names_its_reason();
     if (g_failures == 0) {
         std::printf("OK: embedded beam skin interaction verified (axial pile, closed form)\n");
         return 0;

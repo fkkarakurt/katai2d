@@ -12,8 +12,8 @@ driven from the command line or from Python.
 Every capability is pinned to a closed-form solution, an independent
 computation path that shares no code with the solver, or a published benchmark
 — **self-consistency does not count as verification** — and the whole record
-ships with the source: **57 declared verification cases**, **26 benchmark
-`.k2d` input files** anyone can rerun, **152 automated tests**.
+ships with the source: **58 declared verification cases**, **26 benchmark
+`.k2d` input files** anyone can rerun, **153 automated tests**.
 
 **Status: pre-release.** The engine and its validation record are under active
 development; interfaces and the file format may still change. What ships in

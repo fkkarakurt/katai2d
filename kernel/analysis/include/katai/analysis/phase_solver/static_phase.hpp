@@ -50,6 +50,55 @@
 
 namespace katai::core {
 
+// What a phase that did not reach full load may honestly say about itself.
+//
+// One sentence used to be printed for every non-convergence: "a collapse mechanism
+// formed ... the remaining load exceeds the soil capacity", followed by the claim that
+// the equilibrated fraction IS the incremental limit load. That is true of exactly one
+// of the three ways an increment is abandoned, and KV-STR-004 was measured ending in
+// another: every abandoned increment there was still reducing its out-of-balance force
+// and simply ran out of iterations, on a mesh where the same file converges to full load
+// once the per-increment limit is raised. The load factor was a patience setting, printed
+// as a capacity -- and because which increments survive an 80-iteration budget depends on
+// the linear solver's rounding, the same file "collapsed" on one backend and carried its
+// full load on the other.
+//
+// So the message names the reason the solver actually stopped for, and only the mechanism
+// case keeps the limit-load reading. The counts come from the solver's own record; nothing
+// here re-derives them, so a message cannot drift from what happened.
+inline std::string non_convergence_message(const NewtonResult& nr) {
+    const std::string pct = std::to_string((int)std::lround(100.0 * nr.load_factor));
+    std::string msg = "Did not fully converge: equilibrated " + pct + "% of the applied load. ";
+    switch (nr.last_abandonment) {
+        case NewtonResult::Abandonment::IterationBudget:
+            msg += "The last increment ran out of iterations (" +
+                   std::to_string(nr.iteration_limit) +
+                   " per increment) while its out-of-balance force was still falling, so this "
+                   "fraction is a limit of the iteration budget and NOT a collapse load. Raise "
+                   "the phase's iteration limit and re-run before reading it as a capacity.";
+            break;
+        case NewtonResult::Abandonment::SolveRefused:
+            msg += "No increment of the remaining load could be equilibrated at any step size: "
+                   "the tangent stiffness went singular along a mechanism and the solver could "
+                   "not return a direction, which is what a collapse mechanism does to it. This "
+                   "equilibrated fraction is the incremental limit (collapse) load.";
+            break;
+        case NewtonResult::Abandonment::NoDescent:
+        case NewtonResult::Abandonment::None:
+            msg += "No increment of the remaining load could be equilibrated at any step size: a "
+                   "collapse mechanism formed (the remaining load exceeds the soil capacity). "
+                   "This equilibrated fraction is the incremental limit (collapse) load.";
+            break;
+    }
+    // A limit load read off a run that ALSO spent increments on the iteration budget is a lower
+    // bound twice over, so the count travels with it rather than being left in the solver.
+    if (nr.last_abandonment != NewtonResult::Abandonment::IterationBudget && nr.budget_exhausted > 0)
+        msg += " " + std::to_string(nr.budget_exhausted) +
+               " earlier increment(s) also ran out of iterations, so the load reached before the "
+               "mechanism may be an underestimate.";
+    return msg;
+}
+
 // The phase's neutral configuration.
 struct StaticPhase {
     bool baseline = false;        // ramp external loads about the internal-force baseline B
@@ -124,12 +173,9 @@ inline bool solve_static_phase(
     R.load_factor = nr.load_factor;
     R.timings = nr.timings;
     R.iterations = nr.total_iterations;
+    R.stopped_by = nr.converged ? NewtonResult::Abandonment::None : nr.last_abandonment;
     if (!nr.converged) {
-        R.message = "Did not fully converge: equilibrated " +
-                    std::to_string((int)std::lround(100.0 * nr.load_factor)) +
-                    "% of the applied load before a collapse mechanism formed (the remaining load "
-                    "exceeds the soil capacity). This equilibrated fraction is the incremental "
-                    "limit (collapse) load.";
+        R.message = non_convergence_message(nr);
         return false;
     }
     if (out_states) *out_states = nr.gauss_states;   // committed -> next phase

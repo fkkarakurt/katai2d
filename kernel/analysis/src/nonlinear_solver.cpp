@@ -184,6 +184,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     // PLAXIS/ABAQUS automatic stepping). When every increment converges at the
     // initial size (no cutback) the scheme reduces exactly to fixed N-step loading,
     // so the tri6 benchmarks are unchanged.
+    result.iteration_limit = options.max_iterations;
     const double init_dlam = 1.0 / options.load_steps;
     const double min_dlam = init_dlam / 8.0;  // smaller -> declare collapse
     double lambda = 0.0;        // committed load fraction
@@ -207,7 +208,11 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
 
         Eigen::VectorXd du_free = Eigen::VectorXd::Zero(neq);
         bool step_converged = false;
-        int stall = 0;  // ardÄ±ÅŸÄ±k "descent yok" iterasyon sayacÄ±
+        // How this increment ended, if it did not converge. Set at each exit from the
+        // iteration loop so the abandonment is named where it happens rather than
+        // guessed afterwards from the iteration count.
+        NewtonResult::Abandonment ended = NewtonResult::Abandonment::IterationBudget;
+        int stall = 0;  // consecutive iterations that produced no descent
         for (int iter = 0; iter < options.max_iterations; ++iter) {
             builder.clear();
             const Eigen::VectorXd f_int = assemble(du_free, true, &builder);
@@ -230,7 +235,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             bool solved = true;
             try {
                 delta = linear_solve(kt, residual);
-            } catch (const math::SingularSystem&) {
+            } catch (const math::SingularSystem& refusal) {
                 // The tangent is singular at this iterate and the solver refused to
                 // return a vector that does not satisfy it. That is the normal state
                 // at a limit load: once a collapse mechanism forms -- a pile whose
@@ -255,6 +260,10 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 // really a bug.
                 solved = false;
                 ++result.refused_solves;
+                ended = NewtonResult::Abandonment::SolveRefused;
+                if (debug)
+                    std::fprintf(stderr, "  lambda %.4f iter %d  SOLVE REFUSED: %s\n",
+                                 target_lambda, iter, refusal.what());
             }
             result.timings.linear_solve += elapsed(t_lin);
             ++result.timings.n_solve;
@@ -277,6 +286,11 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 alpha *= 0.5;
             }
             ++result.total_iterations;
+            if (debug)
+                std::fprintf(stderr, "      alpha=%.6f %s |delta|=%.4e |du|=%.4e\n", alpha,
+                             improved ? "descent" : "NO-DESCENT",
+                             delta.lpNorm<Eigen::Infinity>(),
+                             du_free.lpNorm<Eigen::Infinity>());
             // Persistent no-descent means the Newton direction is useless for this
             // increment (too large -> singular/indefinite tangent); abandon it so
             // the outer loop cuts the increment rather than grinding to
@@ -285,7 +299,13 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             // consecutive failures -- this keeps cutback cheap without spuriously
             // collapsing recoverable steps.
             stall = improved ? 0 : stall + 1;
-            if (stall >= 4) break;
+            if (stall >= 4) {
+                ended = NewtonResult::Abandonment::NoDescent;
+                if (debug)
+                    std::fprintf(stderr, "  lambda %.4f iter %d  ABANDONED: four consecutive "
+                                         "iterations without descent\n", target_lambda, iter);
+                break;
+            }
             du_free += alpha * delta;
         }
 
@@ -311,7 +331,16 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             // remaining increments stay consistent too.
             hs_consistent_mode = true;
         } else {
+            // The increment is abandoned: record WHY before the size is halved, so the
+            // phase can report the reason it actually stopped for.
+            if (ended == NewtonResult::Abandonment::NoDescent) ++result.no_descent;
+            else if (ended == NewtonResult::Abandonment::IterationBudget) ++result.budget_exhausted;
+            result.last_abandonment = ended;
             dlam *= 0.5;  // sub-stepping: shrink the increment and retry
+            if (debug)
+                std::fprintf(stderr, "  cutback at lambda %.4f: dlam %.6f (minimum %.6f), "
+                                     "%d refused solve(s) so far\n",
+                             lambda, dlam, min_dlam, result.refused_solves);
             if (dlam < min_dlam) {
                 result.converged = false;
                 break;  // true collapse: no equilibrium even at the smallest increment
@@ -439,7 +468,7 @@ NewtonResult solve_nonlinear(const mesh::Mesh& mesh, const DofMap& dofs,
                              const Eigen::VectorXd& constant_force,
                              const std::vector<MaterialProfile>& profile,
                              const StructuralInit& init_struct) {
-    // Eleman tipi (mesh) Ã— kinematik (options) â†’ derleme-zamanÄ± monomorfik iÃ§ dÃ¶ngÃ¼.
+    // Element type (mesh) x kinematics (options) -> a monomorphic compile-time inner loop.
     const bool axi = options.kinematics == Kinematics::Axisymmetric;
     const Eigen::VectorXd& pd = prescribed_displacement;
     const Eigen::VectorXd& cf = constant_force;

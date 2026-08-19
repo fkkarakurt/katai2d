@@ -109,7 +109,6 @@ UNDECLARED_AT_ADOPTION: frozenset[str] = frozenset({
     "test_dynamics_nonlinear.cpp",
     "test_earth_pressure.cpp",
     "test_effective_stress.cpp",
-    "test_embedded_beam.cpp",
     "test_embedded_wall.cpp",
     "test_excavation.cpp",
     "test_excavation_wall.cpp",

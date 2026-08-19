@@ -7,12 +7,19 @@ message in the source tree must therefore be English. Localized user-facing
 text is the one legitimate exemption, and it must be declared (see the escapes
 at the end of this docstring), never silent.
 
-Detection is deliberately two-tier so that the gate never cries wolf:
+Detection is deliberately three-tier so that the gate never cries wolf:
 
-  1. Turkish-specific letters (g-breve, dotless i, s-cedilla, ...) anywhere on a
+  1. Double-encoded UTF-8 (mojibake) anywhere on a line is a definite hit, and
+     it is checked FIRST because it hides the other two: a comment written as
+     UTF-8 and re-encoded from a legacy-codepage reading of its own bytes has
+     no Turkish letters left in it and no recognisable words either. Two such
+     comments sat in ``kernel/`` -- a subtree this gate reports as clean --
+     until the check existed. The line is reported RECOVERED, since its stored
+     form says nothing to a reader.
+  2. Turkish-specific letters (g-breve, dotless i, s-cedilla, ...) anywhere on a
      line are a definite hit. C++ identifiers cannot contain them, so any
      occurrence outside an exempt string literal is non-English prose.
-  2. ASCII-folded Turkish function words (``icin``, ``degil``, ``ancak``, ...)
+  3. ASCII-folded Turkish function words (``icin``, ``degil``, ``ancak``, ...)
      inside a *comment* are a definite hit. The word list contains only tokens
      that are not English words, so a single occurrence is conclusive. Ambiguous
      tokens that collide with English ("her", "var", "son", "once", "on", "an")
@@ -114,6 +121,32 @@ def display_path(path: Path, root: Path) -> str:
         return path.as_posix()
 
 
+def demojibake(line: str) -> str | None:
+    """Recover a double-encoded line, or None if the line is not one.
+
+    Text written once as UTF-8 and then re-encoded from a legacy-codepage
+    reading of those bytes -- s-cedilla stored as the pair A-ring, Y-diaeresis
+    -- defeats both detectors above: the two-byte form of every Turkish letter
+    becomes a pair of Latin-1 ones, and the folded words never form. The damage
+    is recognisable, though -- encoding the line back through the codepage that
+    misread it and decoding it as UTF-8 returns the original text, which no
+    line that was written correctly can do.
+
+    Found this way: two comments inside kernel/, a subtree the gate reports as
+    clean, that had been sitting in its scan set unread. cp1252 is tried first
+    because that is the Windows console default that produces these here; the
+    two codecs differ only in 0x80-0x9F, and that is exactly where the second
+    byte of s-cedilla and g-breve lands.
+    """
+    for codec in ("cp1252", "latin-1"):
+        try:
+            recovered = line.encode(codec).decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+        return recovered if recovered != line else None
+    return None
+
+
 def fold(text: str) -> str:
     """ASCII-fold so that 'icin' matches both 'icin' and its accented spelling."""
     swapped = text.replace("ı", "i").replace("İ", "I")  # katai-lang: allow (dotless-i folding)
@@ -205,6 +238,10 @@ def scan(path: Path, exempt_line: list[re.Pattern]) -> list[Hit]:
     for line_no, line in enumerate(lines, start=1):
         comment, in_block = comment_spans(line, in_block, style)
         if ALLOW_MARKER.search(line) or any(p.search(line) for p in exempt_line):
+            continue
+        recovered = demojibake(line)
+        if recovered is not None:
+            hits.append(Hit(path, line_no, "MOJIBAKE", recovered))
             continue
         if TURKISH_LETTERS.search(line):
             hits.append(Hit(path, line_no, "TR-CHAR", line))

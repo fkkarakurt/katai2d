@@ -1860,8 +1860,24 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             (has_hardening || has_softsoil)
                 ? 1e-2
                 : (nonlinear_soil ? 1e-6 : ((has_interfaces || has_embedded) ? 1e-8 : 1e-10));
+        // Iterations per increment. This is a PATIENCE setting, not an accuracy one: an increment
+        // that needs more is not solved differently, it is cut back and retried -- so the number
+        // decides, on its own, whether a slowly-converging increment is reported as a capacity.
+        // It was left at the phase strategy's 80 until KV-STR-004 measured what that costs. On
+        // that fixture's refined mesh the increments need up to 96 iterations while their
+        // out-of-balance force falls monotonically the whole way; at 80 the run reported "a
+        // collapse mechanism after 10% of the load" on the Eigen backend and full convergence on
+        // MKL, because which increments survive the budget turns on the linear solver's rounding.
+        // At 200 BOTH backends converge to max|u| = 0.1822167 m -- seven figures apart -- and the
+        // MKL run is 1.8x FASTER (37 s against 66 s), because the cut-backs a truncated increment
+        // triggers cost more than the iterations it was denied.
+        // Raising it is free where a real mechanism forms: a genuinely collapsing run ends when
+        // the tangent goes singular and the solver refuses (measured: same limit load, same 122
+        // iterations, at 80 and at 200), not by exhausting the budget.
+        const int iters_default = nonsym ? 200 : 0;   // 0 = the phase strategy's own limit
         const int steps = io.numeric.steps > 0 ? io.numeric.steps : steps_default;
         const double tol = io.numeric.tolerance > 0.0 ? io.numeric.tolerance : tol_default;
+        const int iters = io.numeric.max_iterations > 0 ? io.numeric.max_iterations : iters_default;
         const katai::core::LinearSolve solver = reusing_linear_solve(
             nonsym ? katai::linsolve::MatrixType::RealNonsymmetric
                    : katai::linsolve::MatrixType::RealSymmetricPositiveDefinite);
@@ -2203,7 +2219,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         stin.axisymmetric = axi;
         stin.load_steps = steps;
         stin.tolerance = tol;
-        stin.max_iterations = io.numeric.max_iterations;
+        stin.max_iterations = iters;
         // SumMstage: a partial stage is a construction step only where there IS a stage, so the
         // fraction is read on chained phases and left at 1 on the initial one (the validator
         // refuses it there rather than letting a scaled gravity look like a partial excavation).

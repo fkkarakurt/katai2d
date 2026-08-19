@@ -487,8 +487,7 @@ a passed one:
 - **Only uniform refinement exists.** `refine_uniform` refines everywhere; a graded or adaptive
   refinement — finer where the error is, which is what the deep-wall case needs — is not
   implemented, and neither is an error estimator to drive it.
-
-## 10. The uncertainty that is not discretisation: two backends disagreeing (KV-STR-004)
+## 10. The uncertainty that was not discretisation, and was not the linear algebra either (KV-STR-004)
 
 Everything above bands the distance between a computed number and the exact solution of its own
 equations, with the mesh or the time step as the axis. This section is about a different axis, and
@@ -499,48 +498,110 @@ The case is KV-STR-004, the axial capacity of a pile row. Its mesh-independence 
 element size under the fixture's 1500 kN/m head load. On the MKL composition the refined run
 converges and the pile carries **600.0000 kN/m**, its declared capacity, exactly as at the coarse
 density. On the `portable` composition — the same source, the same file, the same mesh, the
-vendored Eigen solver instead of PARDISO — the run does not converge and the driver reports a
-collapse mechanism after equilibrating **10%** of the load.
+vendored Eigen solver instead of PARDISO — the run reported a collapse mechanism after
+equilibrating **10%** of the load.
 
-Both cannot be right. The MKL answer is the one supported by everything else measured: the pile's
-capacity is a cap, and the sweep below shows it returning exactly 600.0000 at every load from 1200
-up on **both** backends and both densities.
+Both could not be right. What follows is the measurement that decided it, because the first two
+explanations offered here were both wrong.
 
-Measured on the Eigen backend, N at the pile head [kN/m], capacity 600:
+### What it is not
 
-| element size | q = 1000 | 1200 | 1300 | 1400 | 1500 |
-|---|---|---|---|---|---|
-| h = 1 m | 584.10 | 600.0000 | 600.0000 | 600.0000 | 600.0000 |
-| h/2 = 0.5 m | 590.02 | 600.0000 | 600.0000 | 600.0000 | collapse at 10% |
+**It is not the linear algebra.** The obvious reading — PARDISO performs iterative refinement on
+its solutions and the Eigen backend does not, so the Eigen tangent solve must be failing near a
+singular stiffness — was written into this section, and two guarded refinement steps were added to
+`eigen_direct_solver.cpp` to test it. They did not recover the run. Instrumenting the Newton loop
+afterwards showed why: through the whole failing run **the linear solver refused nothing**. Every
+increment that was abandoned had been abandoned with a perfectly good factorization behind it. Two
+refusals do appear, but only at the very end, after the run had already spent its cut-backs.
 
-So the failure is confined to one cell of that table. Below 1200 the pile has not finished
-mobilising and there is no plateau to read; at 1500 on the refined mesh the model sits close enough
-to the **soil's** own collapse — a limit load that falls with element size, as a displacement
-formulation's does — for the outcome to turn on rounding. The probe now runs at 1300, inside the
-region where the two backends agree exactly, and the coarse density is re-run at the same load so
-that the comparison is like-for-like and the plateau is witnessed rather than assumed.
+**It is not the collapse detection.** This section previously suspected "a discontinuity in the
+cut-back and mechanism-detection logic near the collapse load". There is no discontinuity, and the
+load is not near a collapse: the same file, on the same mesh, converges to full load on both
+backends once one setting is changed.
+
+### What it is
+
+The fixture's soil is Mohr-Coulomb with c′ = 1000 kPa — far above anything the run mobilises — and
+it is **weightless**, so every stress in the model comes from the head load. It also carries the
+tension cut-off, at σ_t = 0. A weightless body loaded at one point has tensile principal stresses
+over large regions, so the cut-off is active nearly everywhere the load reaches, and the material
+there is a *no-tension* one: zero stiffness in the capped direction. That is what the run is
+actually solving, and it is why it crawls. Measured on the coarse mesh, same file, one field
+changed:
+
+| tension cut-off | Newton iterations, phase 2 | per increment | wall clock |
+|---|---|---|---|
+| on (as shipped) | **561** | 28–50 | 5.94 s |
+| off | **57** | **2** | 0.61 s |
+
+Two iterations per increment is what a consistent tangent is supposed to give. Twenty-eight to
+fifty is a scheme fighting a degenerate stiffness: the Newton direction is periodically enormous —
+`|δ|` measured at ten to fifty times `|du|` — and the backtracking line search has to cut α to
+10⁻³ or 10⁻⁴ to find any descent at all, which is an iteration spent for almost no progress.
+
+On the refined mesh that crawl runs into the per-increment iteration limit, which was **80**:
+
+| composition | limit | outcome | max&#124;u&#124; | iterations | cut-backs | wall clock |
+|---|---|---|---|---|---|---|
+| MKL / PARDISO | 80 | converges | 0.1822857 m | — | 4 | 66.4 s |
+| MKL / PARDISO | 200 | converges | **0.1822167 m** | 1278 | 0 | **37.2 s** |
+| portable / Eigen | 80 | **"collapse at 10%"** | — | — | 6 | not timed (the run fails) |
+| portable / Eigen | 200 | converges | **0.1822167 m** | 1369 | 0 | 220 s |
+
+The increments on this mesh need up to **96** iterations, and their out-of-balance force falls
+monotonically the whole way — nothing about them is a mechanism. PARDISO's path needed 88 and
+survived a budget of 80 by cutting back four times; Eigen's path needed 96 and did not. That is the
+entire disagreement: **a patience setting decided it, and which side of the setting a run lands on
+turns on the linear solver's rounding.** With the budget raised, the two backends agree to seven
+significant figures on a quantity neither of them could produce before.
+
+Note the third column of the table as well. Raising the budget made the MKL run **1.8× faster**,
+because a truncated increment does not merely fail — it triggers a cut-back, and re-solving a
+halved increment from scratch costs more than the iterations the increment was denied.
+
+### What was changed
+
+The driver now derives the per-increment iteration limit from the material class, exactly as it
+already derived the load-step count and the tolerated error: **200** where the tangent is
+nonsymmetric — nonlinear soil, interfaces, embedded beams — and 80 otherwise, which is a limit no
+linear run approaches. A file's own `maxiter`, and the caller's numerical controls, still win over
+it.
+
+Raising it is free where a mechanism genuinely forms. A collapsing run does not exhaust its
+iteration budget; it ends when the tangent goes singular along the mechanism and the solver refuses
+to return a direction. Measured on the same fixture with the soil weakened to c′ = 5 kPa and given
+weight: **the same 41% limit load and the same 122 iterations at a limit of 80 and at 200.**
+
+And the phase now says which of the three things happened, because they are not interchangeable and
+one sentence used to be printed for all of them:
+
+- **no descent** at any step size, or **the linear solver refusing** on a singular tangent — a
+  mechanism. The equilibrated fraction is the incremental limit load, and the message says so.
+- **the iteration budget running out** while the residual was still falling — a setting. The
+  message names the limit that stopped the run and explicitly does *not* publish a limit load.
+
+`test_non_convergence_names_its_reason` (KV-STR-005) pins both directions on one fixture: past
+capacity it must publish the limit load; at half capacity with the limit set to 1 it must refuse to,
+because the same model carries that load when the budget is adequate.
+
+### What this leaves open
+
+The crawl itself. Fifty to ninety-six iterations per increment is the cost of a no-tension material
+under a point load, and it is a cost this scheme pays rather than an answer it gets wrong — the
+converged states satisfy equilibrium to the same 10⁻⁶ as everything else here, and the two backends
+now reach the same one. But it is worth stating plainly that on this class of problem the solver is
+not converging at the rate a consistent tangent promises, and that the reason is a stiffness the
+tension cut-off makes degenerate rather than anything about the mesh or the arithmetic.
+
+Two smaller things were measured on the way and are recorded here rather than fixed silently: a
+line search that finds no descent in twelve halvings still applies its last, smallest step, which
+was measured turning a residual of 2.57 into 534 on one iteration; and the relative residual in the
+linear solver's refusal message is formatted with `std::to_string`, which prints six decimals, so a
+refusal at 3·10⁻⁶ reads "0.000003" and one at 3·10⁻⁹ reads "0.000000".
 
 **What this costs the project's claims, stated plainly.** The README and the project website say
 that the `portable` preset reproduces every published number with the vendored Eigen solver alone.
-That is true of every number this record publishes, and it was *not* true of the 1500 kN/m
+That was true of every number this record publishes, and it was *not* true of the 1500 kN/m
 refined-mesh run — which was never a published number, but was asserted by a test, which is the
-same promise in a different place. The claim as written stands; the margin behind it is thinner
-than it looked.
-
-**What was tried and did not work.** PARDISO performs iterative refinement on its solutions by
-default and the Eigen backend did not, which is the obvious candidate for a difference of this
-shape. Adding two guarded refinement steps to `eigen_direct_solver.cpp` did not recover the run: it
-moved the reported equilibrated fraction from 10% to 0%. That result is itself informative — a
-perturbation at the level of the linear solve's own rounding changes where the driver decides a
-mechanism has formed, which says the load-stepping and collapse detection are the sensitive part,
-not the linear algebra. The change was reverted rather than shipped, because a modification to the
-solver that every result passes through has no business being in the tree on a hypothesis that the
-measurement refused.
-
-**Open, and not closed by moving the probe.** Why the driver reports a collapse mechanism at 10%
-of a load it carries fully at 1400, and why that verdict depends on the linear solver, is not
-explained. The honest reading is that the cut-back and mechanism-detection logic has a
-discontinuity near the collapse load rather than a smooth approach to it. Until that is understood,
-a number computed within a few percent of a model's own limit load should be treated as
-backend-dependent, and any case that must sit there needs to be measured on both compositions
-before it is asserted.
+same promise in a different place. It is true of that run now, on the default settings, on both
+compositions.

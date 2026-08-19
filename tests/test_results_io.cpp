@@ -39,6 +39,11 @@ std::vector<katai::app::SolveResult> build_phases() {
         R.load_factor = 1.0;
         R.fos = k == 1 ? 1.43 : -1.0;
         R.message = k == 0 ? "initial \"phase\"" : "excavate";
+        // v6: the reason a solve stopped short. A load factor without it cannot be read -- the
+        // same 62% is a capacity when a mechanism formed and a setting when the iteration budget
+        // ran out -- so it has to survive the round trip like every other qualification.
+        R.stopped_by = k == 1 ? katai::core::NewtonResult::Abandonment::IterationBudget
+                              : katai::core::NewtonResult::Abandonment::None;
         R.disp = Eigen::VectorXd::LinSpaced(12, -0.5 + k, 0.75);
         R.stress.stress.resize(6);
         for (int n = 0; n < 6; ++n)
@@ -68,6 +73,7 @@ std::vector<katai::app::SolveResult> build_phases() {
 bool same(const katai::app::SolveResult& a, const katai::app::SolveResult& b) {
     if (a.ok != b.ok || a.nil_step != b.nil_step || a.message != b.message) return false;
     if (a.max_disp != b.max_disp || a.load_factor != b.load_factor || a.fos != b.fos) return false;
+    if (a.stopped_by != b.stopped_by) return false;
     if (a.disp.size() != b.disp.size() || (a.disp - b.disp).cwiseAbs().maxCoeff() != 0.0) return false;
     if (a.stress.stress.size() != b.stress.stress.size()) return false;
     for (size_t i = 0; i < a.stress.stress.size(); ++i)

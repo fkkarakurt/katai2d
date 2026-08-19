@@ -188,6 +188,13 @@ struct SolveResult {
     // ends print this list; they do not interpret it. NEW FIELDS GO AT THE END (results_io
     // writes positionally) -- diagnostics belong to the run, so they are not persisted.
     std::vector<Diagnostic> diagnostics;
+    // WHY a static-family solve stopped short of the full load, from the solver's own record.
+    // `load_factor` alone cannot be read without it: the same fraction means "this is the
+    // capacity" when a mechanism formed and "this is where the iteration budget ran out" when
+    // one did not, and a front end that guesses will publish the second as the first (measured
+    // on KV-STR-004, and the Studio's collapse panel was doing exactly that). None on a solve
+    // that reached full load, and on phase families that do not load-step.
+    NewtonResult::Abandonment stopped_by = NewtonResult::Abandonment::None;
 };
 
 // The one spelling of "say this out loud", shared by the driver and the phase strategies so a

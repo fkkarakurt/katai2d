@@ -109,8 +109,15 @@ def _one(r, name, fields, structures, diagnostics):
         L.append(f"  reason        {r.message}")
     L.append(f"  max |u|       {r.max_disp:.6e} m")
     if r.load_factor != 1.0:
+        # The fraction alone does not say what it is. It is the incremental limit load when a
+        # mechanism formed, and merely where the iteration budget ran out otherwise -- the same
+        # model reaches full load when max_iterations is adequate (KV-STR-004). The engine
+        # records which, so the line says it instead of leaving the reader to assume.
+        why = {"mechanism": "   <- the incremental limit (collapse) load",
+               "singular tangent": "   <- the incremental limit (collapse) load",
+               "iteration budget": "   <- where the ITERATION BUDGET ran out, NOT a capacity"}
         L.append(f"  load factor   {r.load_factor:.4f}"
-                 "   <- the fraction that reached equilibrium")
+                 + why.get(r.stopped_by, "   <- the fraction that reached equilibrium"))
     if r.fos >= 0.0:
         L.append(f"  factor of safety {'>' if r.fos_is_lower_bound else '='} {r.fos:.4f}")
 

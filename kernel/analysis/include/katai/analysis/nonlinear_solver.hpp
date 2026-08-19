@@ -219,13 +219,35 @@ struct NewtonResult {
     // for perfect plasticity approaches the collapse (limit) load from below ->
     // the basis of incremental limit analysis (e.g. Prandtl bearing capacity).
     double load_factor = 0.0;
-    // Increments abandoned because the linear solver refused to answer: the tangent
-    // was singular along a collapse mechanism, so no Newton direction exists. Normal
-    // at the limit load and recovered from by cutting the increment back, but counted
-    // rather than swallowed -- a solve that could not be performed is information
-    // about the model, and an analysis that reports a load factor after several of
-    // them is reporting a collapse it should be able to name.
+    // WHY the increments that did not converge ended, counted separately, because a
+    // load factor below 1 is a claim about the model and these decide which claim it
+    // can support. Measured on KV-STR-004: a run reported "a collapse mechanism formed
+    // after 10% of the load" when every abandoned increment was still reducing its
+    // out-of-balance force and simply ran out of iterations -- a patience setting
+    // presented as a capacity. The three reasons are not interchangeable:
+    //
+    //   no_descent        no step along the Newton direction reduces the residual,
+    //                     repeatedly. THIS is the mechanism signal: the limit load.
+    //   budget_exhausted  the residual was still falling when max_iterations ran out.
+    //                     Says nothing about capacity; raising the limit changes it.
+    //   refused_solves    the linear solver would not answer: the tangent was singular
+    //                     along a mechanism, or too ill-conditioned for the backend to
+    //                     solve to the interface's residual tolerance. Normal at a limit
+    //                     load, recovered from by cutting the increment back -- but a
+    //                     solve that could not be performed is information about the
+    //                     model, not something to swallow.
     int refused_solves = 0;
+    int budget_exhausted = 0;
+    int no_descent = 0;
+    // The reason the last abandoned increment ended. When the solve did not converge
+    // this is the increment that reached the minimum size and stopped it; on a solve
+    // that did converge it names an increment that was abandoned and then recovered by
+    // cutting back. None = no increment was ever abandoned.
+    enum class Abandonment { None = 0, NoDescent, IterationBudget, SolveRefused };
+    Abandonment last_abandonment = Abandonment::None;
+    // The per-increment iteration limit this solve ran under, so a message can name the
+    // setting the user would change rather than describing it.
+    int iteration_limit = 0;
     // Wall-clock breakdown of the computation (seconds) + call counters. The counterpart of
     // PLAXIS's calculation-time report; the base measurement for performance studies.
     // Instrumentation is at iteration granularity (one chrono call per iteration) → the cost

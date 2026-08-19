@@ -6,12 +6,54 @@ MAJOR.MINOR.PATCH.
 
 ## [0.8.1] - 2026-08-19
 
-A correctness fix in what the results panel and the calculation report SHOW, a
-typesetting pass over the notation they show it in, and the maintainer's rule
-about naming other programs turned into a test.
+A solver verdict that was a setting rather than a capacity, and with it the one
+open disagreement between the two linear-solver backends; a correctness fix in
+what the results panel and the calculation report SHOW; a typesetting pass over
+the notation they show it in; and the maintainer's rule about naming other
+programs turned into a test.
 
 ### Fixed
 
+- **A patience setting was published as a soil capacity, and it decided which
+  answer the two solver backends gave.** KV-STR-004's refined-mesh run reported
+  "a collapse mechanism after 10% of the load" on the vendored Eigen solver and
+  full convergence on MKL — the disagreement recorded as open in
+  `docs/validation/numerical-uncertainty.md` §10. Instrumenting the Newton loop
+  refuted both explanations that section had offered: the linear solver refused
+  nothing through the failing run, and there is no discontinuity in the collapse
+  detection. What the run actually hits is the per-increment **iteration limit**.
+  The fixture is weightless with the tension cut-off on, so a point load makes
+  most of the model a no-tension material — measured on the coarse mesh, same
+  file, one field changed: 561 Newton iterations with the cut-off, **57 without**
+  (2 per increment). On the refined mesh the increments need up to 96 while their
+  out-of-balance force falls monotonically, and the limit was 80: PARDISO's path
+  needed 88 and survived by cutting back, Eigen's needed 96 and did not. The
+  driver now derives the iteration limit from the material class, as it already
+  derived the load-step count and the tolerated error — 200 where the tangent is
+  nonsymmetric, 80 otherwise. **Both backends now converge to max|u| =
+  0.1822167 m, seven figures apart, and the MKL run is 1.8× faster** (37 s
+  against 66 s), because a truncated increment triggers a cut-back that costs
+  more than the iterations it was denied. Raising it is free where a mechanism
+  genuinely forms: a collapsing run ends when the tangent goes singular and the
+  solver refuses a direction — measured at the same limit load and the same 122
+  iterations under both limits.
+- **One sentence was printed for all three ways an increment is abandoned.** "A
+  collapse mechanism formed … this equilibrated fraction is the incremental
+  limit load" is true when no descent direction exists and when the tangent goes
+  singular; it is false when the iteration budget simply ran out, which is what
+  KV-STR-004 was doing. The solver now records which of the three ended each
+  abandoned increment, the phase message names it, and the budget case
+  explicitly withdraws the limit-load claim and names the setting to raise.
+  `SolveResult` carries the reason, and the `.res` file stores it (version 6), so
+  neither a front end nor a reopened result can re-derive it wrongly — the
+  Studio was doing exactly that in four places, one of them the report that goes
+  to a client.
+- **Two comments were in Turkish, in a subtree the source-language gate reports
+  as clean.** They had been written double-encoded, which is what hid them: the
+  gate looks for Turkish letters, and re-encoding a UTF-8 line from a legacy
+  codepage reading of its own bytes leaves none. `check_language.py` gained a
+  third detector that recognises the corruption and reports the line recovered;
+  it found exactly these two across 808 tracked files, with no false positives.
 - **A field nothing had computed was drawn, tabulated and printed as a result.**
   S, the degree of saturation, is produced by the unsaturated flow — a transient
   or a fully coupled phase — and by nothing else. Every other run leaves the
@@ -58,6 +100,15 @@ about naming other programs turned into a test.
   against a fixture that must fail it.
 - Four checks pinning the saturation rule from both sides, and one that
   measures the report's column alignment in characters.
+- `SolveResult.stopped_by` on the Python surface, and `katai.summary` now says
+  what a load factor below 1 *is* rather than only what it equals: the
+  incremental limit load when a mechanism formed, and “where the iteration
+  budget ran out, NOT a capacity” when one did not.
+- `test_non_convergence_names_its_reason` (KV-NUM-012): the same pile fixture
+  solved twice, past its capacity and at half of it with an iteration limit of
+  one. The first must publish a limit load; the second must refuse to, because
+  the same model carries that load when the budget is adequate. This is the
+  check KV-STR-004 needed and did not have.
 
 ## [0.8.0] - 2026-08-17
 

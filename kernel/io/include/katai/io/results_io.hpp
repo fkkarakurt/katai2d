@@ -47,9 +47,12 @@ using katai::core::InterfaceStation;
 // (the stations hold the TOTAL design action = parent static state + dynamic increment) and the
 // interface Coulomb demand/capacity (utilisation / max_utilisation / over_fraction); v5 adds
 // InterfaceResult::slip_checked (the envelope came from the NONLINEAR Coulomb branch, so
-// [SLIPPING]/[bonded] are real findings -- false = linear elastic envelope, no slip check exists).
-// Older files predate each feature, so reading the fields back as false/0 is correct for them.
-inline constexpr std::uint32_t kResultsFileVersion = 5;
+// [SLIPPING]/[bonded] are real findings -- false = linear elastic envelope, no slip check exists);
+// v6 adds SolveResult::stopped_by (WHY a solve stopped short of full load -- a mechanism, a refused
+// linear solve, or the iteration budget; without it a reopened result cannot say whether its load
+// factor is a capacity, which is the KV-STR-004 defect on the reload path).
+// Older files predate each feature, so reading the fields back as false/0/None is correct for them.
+inline constexpr std::uint32_t kResultsFileVersion = 6;
 
 inline std::uint64_t fnv1a64(const std::string& s) {
     std::uint64_t h = 1469598103934665603ull;
@@ -186,6 +189,11 @@ inline bool save_results(const std::string& path, std::uint64_t model_hash,
                 w.put<double>(st.utilisation);          // v4
             }
         }
+        // v6: WHY a solve stopped short of the full load. `load_factor` is a capacity only when a
+        // mechanism formed; when the per-increment iteration budget ran out it is a limit of that
+        // setting (KV-STR-004). Without this the reader would hand a re-opened result back with the
+        // reason erased, and the front end would present the second case as the first.
+        w.put<std::int32_t>((std::int32_t)R.stopped_by);
     }
     std::ofstream f(path, std::ios::binary);
     if (!f) { if (err) *err = "cannot open file for writing: " + path; return false; }
@@ -286,6 +294,15 @@ inline bool load_results(const std::string& path, std::uint64_t model_hash,
                 }
                 R.interface_forces.push_back(std::move(ir));
             }
+        }
+        if (ver >= 6) {   // absent in v5: the reason a short solve stopped
+            const auto why = r.get<std::int32_t>();
+            // An unknown value from a forward file is left at None rather than cast blindly: the
+            // reader's rule everywhere else is that an enum it does not know becomes the neutral
+            // one, so a reopened result understates rather than invents.
+            if (why >= (std::int32_t)katai::core::NewtonResult::Abandonment::None &&
+                why <= (std::int32_t)katai::core::NewtonResult::Abandonment::SolveRefused)
+                R.stopped_by = (katai::core::NewtonResult::Abandonment)why;
         }
         // Per-phase sanity: nodal arrays must match the stored mesh.
         if (R.disp.size() != (Eigen::Index)mesh.node_count * 2 ||

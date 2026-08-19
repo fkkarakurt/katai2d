@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **14** · Current `.res` version: **5**
+Current `.k2d` version: **14** · Current `.res` version: **6**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -375,7 +375,9 @@ u32 phase count · per phase: flags + scalars + message + displacements/stresses
 - Version history (a reader accepts 1..current; absent fields read as `false`/`0`, which is correct
   for files that predate the feature): **v2** interface results (τ/σ_n/slip) · **v3** seismic
   envelope flags · **v4** superposed design action + Coulomb utilisation · **v5**
-  `slip_checked` (the envelope came from the nonlinear Coulomb branch).
+  `slip_checked` (the envelope came from the nonlinear Coulomb branch) · **v6** `stopped_by`,
+  the reason a solve stopped short of full load, without which a reopened result cannot say whether
+  its load factor is a capacity or the point where the iteration budget ran out.
 - Committed Gauss states are NOT stored: restored results are for viewing and post-processing;
   continuing a staged run re-calculates. This is honest and keeps the file an order of magnitude
   smaller.

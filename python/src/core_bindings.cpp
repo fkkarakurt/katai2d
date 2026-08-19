@@ -578,6 +578,19 @@ NB_MODULE(_core, m) {
         .def_ro("fos", &api::SolveResult::fos, "-1 when not a Safety run")
         .def_ro("fos_is_lower_bound", &api::SolveResult::fos_lower_bound,
                 "True: no mechanism up to the cap; fos is a LOWER BOUND, report '>' not '='")
+        .def_prop_ro("stopped_by", [](const api::SolveResult& r) {
+            using A = katai::core::NewtonResult::Abandonment;
+            switch (r.stopped_by) {
+                case A::NoDescent:       return "mechanism";
+                case A::SolveRefused:    return "singular tangent";
+                case A::IterationBudget: return "iteration budget";
+                case A::None:            break;
+            }
+            return "";
+        }, "Why a solve stopped short of full load, machine-readable so a script does not have to "
+           "read the message: '' (reached full load), 'mechanism' or 'singular tangent' (load_factor "
+           "IS the incremental limit load), 'iteration budget' (it is NOT a capacity -- the same "
+           "model carries the load when the phase's max_iterations is adequate)")
         .def_prop_ro("displacement", [](const api::SolveResult& r) { return r.disp; },
                      "full DOF vector (2*node_count), [m] -- copied to numpy")
         .def_prop_ro("pore", [](const api::SolveResult& r) { return r.pore; },
