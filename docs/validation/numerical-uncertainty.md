@@ -584,14 +584,70 @@ one sentence used to be printed for all of them:
 capacity it must publish the limit load; at half capacity with the limit set to 1 it must refuse to,
 because the same model carries that load when the budget is adequate.
 
-### What this leaves open
+### The crawl itself: measured, understood, and deliberately not traded away
 
-The crawl itself. Fifty to ninety-six iterations per increment is the cost of a no-tension material
-under a point load, and it is a cost this scheme pays rather than an answer it gets wrong — the
-converged states satisfy equilibrium to the same 10⁻⁶ as everything else here, and the two backends
-now reach the same one. But it is worth stating plainly that on this class of problem the solver is
-not converging at the rate a consistent tangent promises, and that the reason is a stiffness the
-tension cut-off makes degenerate rather than anything about the mesh or the arithmetic.
+Raising the budget stopped a setting from deciding the answer, but it did not explain why the
+increments wanted 50 to 96 iterations for a problem whose soil is elastic apart from a cap. That was
+measured next, and the measurement named it exactly:
+
+| line-search step accepted | measured |
+|---|---|
+| full step, `α = 1` | 172 of 541 iterations |
+| halved once or twice | 349 of 541 |
+| worst increment | 50 iterations |
+| the same fixture at 8.4 residual assemblies per iteration | KV-FND-010, where `α` is typically 0.0005 |
+
+The full Newton step is rejected in about two thirds of the iterations and the search halves it, so
+the run advances at roughly half a Newton step at a time. The step is not wrong; the **test** is. A
+strictly decreasing Armijo condition demands that the residual norm fall at every iteration, and on
+a non-smooth problem it does not: each step moves a few stress points across the yield surface — a
+tension cut-off is the extreme case, since the material has no stiffness across the cap and gets all
+of it back the moment the point unloads — so the norm can rise for one iteration while the iterate
+is on its way to equilibrium.
+
+Two remedies were implemented and measured on this tree. Neither is in the program, and the second
+is the more interesting refusal.
+
+**Levenberg-Marquardt damping — refuted by measurement.** The obvious reading of a degenerate tangent
+is to damp it: solve (K + μ·diag|K|)δ = r, raise μ when a step is rejected, relax it when one is
+taken. It made every case worse, and the pile fixture stopped converging at all. The trace says why:
+μ climbed to its ceiling within a few iterations, the step shrank to 1.2·10⁻⁶ against a displacement
+of 3.6·10⁻³, and the iterate froze. Damping shortens a step that is too long; it cannot help a step
+that is the right length and is being judged by the wrong yardstick.
+
+**A non-monotone line search — it works, and it is not shipped.** Judging a trial step against the
+worse of the last two residuals rather than only the last (Grippo, Lampariello and Lucidi 1986) does
+exactly what the diagnosis predicts: the full step is then taken in **319 of 482 iterations**, the
+worst increment closes in **37** instead of 50, the fixture set runs **8–27% faster**, and four of
+the five cases print the same numbers to every figure they print.
+
+What it costs is measurable in precisely the place this record exists to measure. The Hardening Soil
+family's default stopping rule is 1%, so its answers depend on the path the iterates take, and a
+looser line search takes a different one:
+
+| | as shipped | with the window |
+|---|---|---|
+| KV-NUM-007, oedometer, 1e-4 against 1e-6 | 0.05% | 0.05% at a window of two, **0.36%** at five |
+| KV-NUM-007, oedometer, 1e-2 against 1e-6 | 0.72% | 0.72% at two, **1.12%** at five (the case publishes better than 1%) |
+| KV-NUM-009, observed orders of the load-step sweep | 2.204 / 0.469 / 1.132 | 2.751 / **−0.600** / 1.655 |
+| KV-NUM-009, residual over 50-100, 100-200, 200-400 kPa | −0.2425% / **+0.6419%** / **+1.0952%** | −0.2425% / **+1.1839%** / **+1.0665%** |
+
+(The 16× spread of that sweep is 2.915% either way; it is the shape of the sequence that moves, not
+its extent.)
+
+The last row is the one that settles it. That case identifies the ~0.5% left after an exact mesh and
+a converged tolerance as a **model** deviation rather than a numerical one, and the evidence is its
+signature: near zero at the reference pressure and growing away from it. With the window the growth
+is no longer monotone, so the signature the conclusion rests on is no longer what the run shows.
+
+None of these are wrong answers. They are the same equilibria reached along a different path, each
+inside the tolerance its phase declares. But they are the numbers this record publishes, and moving
+them is a decision about the record — not a side effect to be taken along with a speed-up. So the
+crawl stays: it is a cost the program pays on non-smooth problems, its cause is understood, and the
+price of removing it is a re-measurement of the Hardening Soil numerics register with its
+conclusions re-derived from the new data.
+
+### What this still leaves open
 
 Two smaller things were measured on the way and are recorded here rather than fixed silently: a
 line search that finds no descent in twelve halvings still applies its last, smallest step, which

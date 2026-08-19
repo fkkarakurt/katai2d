@@ -6,109 +6,160 @@ MAJOR.MINOR.PATCH.
 
 ## [0.8.1] - 2026-08-19
 
-A solver verdict that was a setting rather than a capacity, and with it the one
-open disagreement between the two linear-solver backends; a correctness fix in
-what the results panel and the calculation report SHOW; a typesetting pass over
-the notation they show it in; and the maintainer's rule about naming other
-programs turned into a test.
+Two things a result can be wrong about without looking wrong, and one of them had
+been deciding which of the two solver backends was right.
+
+The first is a **verdict**: a load-controlled analysis that stops short of full
+load was publishing the fraction it reached as the soil's capacity, whichever of
+the three ways it had stopped — including the one that is a statement about a
+setting rather than about the ground. The second is a **field**: the degree of
+saturation was drawn, tabulated and printed for runs that never computed it. Both
+reached the calculation report, which is the document that leaves the building.
+
+Alongside them the notation the interface and the reports write in was typeset, and
+the Newton loop's remaining cost on non-smooth problems was measured and written
+down rather than traded away — see *Known limits*.
+
+### Upgrading from 0.8.0
+
+- **Results files are now `.res` version 6** (projects are unaffected: `.k2d`
+  stays at 14). This build reads every older results file; 0.8.0 and earlier
+  **refuse** one written by this build, by the same forward-version guard that has
+  always protected them. Re-open a project and re-calculate, or keep the older
+  build for older result files.
+- **The per-increment iteration limit is now derived from the material class** —
+  200 where the tangent is nonsymmetric (nonlinear soil, interfaces, embedded
+  beams), the phase strategy's 80 otherwise — instead of always being 80. A run
+  that previously reported a collapse mechanism at a low load factor may now
+  converge. To reproduce a 0.8.0 run exactly, set that phase's `maxiter` to 80 in
+  the file, or "Max iterations" in the Numerical tab.
+- **`τmax` is now `τmax (in-plane)`** wherever a field is named, and **`S` is no
+  longer offered by runs that did not compute it** — a static analysis has no
+  saturation field, and the selector no longer pretends otherwise.
+- **New: `SolveResult.stopped_by`** in C++, in Python and in the `.res` file. A
+  load factor below 1 cannot be read without it; see *Fixed*, first entry.
 
 ### Fixed
 
-- **A patience setting was published as a soil capacity, and it decided which
-  answer the two solver backends gave.** KV-STR-004's refined-mesh run reported
+- **A patience setting was published as a soil capacity, and it decided which of
+  the two solver backends was right.** KV-STR-004's refined-mesh probe reported
   "a collapse mechanism after 10% of the load" on the vendored Eigen solver and
-  full convergence on MKL — the disagreement recorded as open in
-  `docs/validation/numerical-uncertainty.md` §10. Instrumenting the Newton loop
-  refuted both explanations that section had offered: the linear solver refused
-  nothing through the failing run, and there is no discontinuity in the collapse
-  detection. What the run actually hits is the per-increment **iteration limit**.
-  The fixture is weightless with the tension cut-off on, so a point load makes
-  most of the model a no-tension material — measured on the coarse mesh, same
-  file, one field changed: 561 Newton iterations with the cut-off, **57 without**
-  (2 per increment). On the refined mesh the increments need up to 96 while their
-  out-of-balance force falls monotonically, and the limit was 80: PARDISO's path
-  needed 88 and survived by cutting back, Eigen's needed 96 and did not. The
-  driver now derives the iteration limit from the material class, as it already
-  derived the load-step count and the tolerated error — 200 where the tangent is
-  nonsymmetric, 80 otherwise. **Both backends now converge to max|u| =
-  0.1822167 m, seven figures apart, and the MKL run is 1.8× faster** (37 s
-  against 66 s), because a truncated increment triggers a cut-back that costs
-  more than the iterations it was denied. Raising it is free where a mechanism
-  genuinely forms: a collapsing run ends when the tangent goes singular and the
-  solver refuses a direction — measured at the same limit load and the same 122
-  iterations under both limits.
+  full convergence on MKL — the disagreement this project recorded as open, with
+  two explanations, in `docs/validation/numerical-uncertainty.md` §10.
+  Instrumenting the Newton loop refuted both: through the whole failing run the
+  linear solver refused nothing, and there is no discontinuity in the collapse
+  detection near the limit load. What the run hits is the per-increment iteration
+  limit. The fixture is weightless with the tension cut-off on, so a point load
+  makes most of the model a no-tension material — measured on the coarse mesh,
+  same file, one field changed: **561 Newton iterations with the cut-off, 57
+  without** (two per increment). On the refined mesh the increments need up to 96
+  while their out-of-balance force falls monotonically the whole way, and the
+  limit was 80: PARDISO's path needed 88 and survived by cutting back four times,
+  Eigen's needed 96 and did not. With the limit derived rather than fixed, **both
+  backends converge to max|u| = 0.1822167 m — seven significant figures — and the
+  MKL run is 1.8× faster than it was** (37 s against 66 s), because the cut-backs
+  a truncated increment triggers cost more than the iterations it was denied.
+  Raising the limit is free where a mechanism genuinely forms: a collapsing run
+  ends when the tangent goes singular and the solver refuses a direction, measured
+  at the same limit load and the same 122 iterations under both limits.
 - **One sentence was printed for all three ways an increment is abandoned.** "A
-  collapse mechanism formed … this equilibrated fraction is the incremental
-  limit load" is true when no descent direction exists and when the tangent goes
+  collapse mechanism formed … this equilibrated fraction is the incremental limit
+  load" is true when no descent direction exists, and true when the tangent goes
   singular; it is false when the iteration budget simply ran out, which is what
   KV-STR-004 was doing. The solver now records which of the three ended each
-  abandoned increment, the phase message names it, and the budget case
-  explicitly withdraws the limit-load claim and names the setting to raise.
-  `SolveResult` carries the reason, and the `.res` file stores it (version 6), so
-  neither a front end nor a reopened result can re-derive it wrongly — the
-  Studio was doing exactly that in four places, one of them the report that goes
-  to a client.
-- **Two comments were in Turkish, in a subtree the source-language gate reports
-  as clean.** They had been written double-encoded, which is what hid them: the
-  gate looks for Turkish letters, and re-encoding a UTF-8 line from a legacy
-  codepage reading of its own bytes leaves none. `check_language.py` gained a
-  third detector that recognises the corruption and reports the line recovered;
-  it found exactly these two across 808 tracked files, with no false positives.
+  abandoned increment, the phase message names it, and the iteration-budget case
+  withdraws the limit-load claim and names the setting to raise. The reason
+  travels with the result — `SolveResult::stopped_by`, `.res` v6 — so no front end
+  has to re-derive it from the number, which is what the Studio was doing in four
+  places, one of them the calculation report.
 - **A field nothing had computed was drawn, tabulated and printed as a result.**
-  S, the degree of saturation, is produced by the unsaturated flow — a transient
-  or a fully coupled phase — and by nothing else. Every other run leaves the
-  array empty and the field reader answers 1.0 when asked anyway, and nothing
-  filtered the ask: an ordinary static analysis offered S in the field selector,
-  painted a uniformly saturated model, tabulated "min 1.000, max 1.000", and
-  printed a saturation row in both reports — in the document that goes to a
-  client, beside numbers the solver did produce. Above a phreatic surface that
-  is not merely uncomputed, it is the one answer that is certainly wrong. A
-  field is now offered only where the run produced it.
-- **`tau_max` said more than it computed.** It is the radius of the Mohr circle
-  of the IN-PLANE stresses; the out-of-plane sigma_zz is not carried in the
-  nodal field, so wherever it falls outside the in-plane pair — which
-  plasticity can do — the true maximum shear is larger than the number shown.
-  The field is now named `τmax (in-plane)`.
-- **The report's columns fanned out.** `printf` pads by bytes, and the typeset
+  S, the degree of saturation, is produced by unsaturated flow — a transient or a
+  fully coupled phase — and by nothing else. Every other run leaves the array
+  empty and the field reader answers 1.0 when asked anyway, and nothing filtered
+  the ask: an ordinary static analysis offered S in the field selector, painted a
+  uniformly saturated model, tabulated "min 1.000, max 1.000", and printed a
+  saturation row in both reports, beside numbers the solver did produce. Above a
+  phreatic surface that is not merely uncomputed; it is the one answer that is
+  certainly wrong. A field is now offered only where the run produced it.
+- **`tau_max` said more than it computed.** It is the radius of the Mohr circle of
+  the IN-PLANE stresses; the out-of-plane σ_zz is not carried in the nodal field,
+  so wherever it falls outside the in-plane pair — which plasticity can do — the
+  true maximum shear is larger than the number shown.
+- **The report's columns fanned out.** `printf` pads by bytes and the typeset
   names are not one byte per column; the extreme-value table is now padded by
   characters, which also fixes a Turkish material or load name having done the
   same thing since long before this release.
+- **Two comments were in Turkish, in a subtree the source-language gate reports as
+  clean.** They had been written double-encoded, which is what hid them: the gate
+  looks for Turkish letters, and re-encoding a UTF-8 line from a legacy-codepage
+  reading of its own bytes leaves none.
 
 ### Changed
 
-- **The notation is typeset.** The interface and the reports wrote symbols the
-  way a source file has to write them — `sigma'_yy`, `phi'`, `lambda*`,
-  `kN/m3`, `>=`, `[deg]`. They now read `σ′yy`, `φ′`, `λ*`, `kN/m³`, `≥`, `[°]`:
-  225 pieces of user-visible text across the Studio and both report languages.
-  The UI font loads Greek, the prime, super/subscripts and the mathematical
-  operators to make it possible, measured against the font before it was used.
-  Indices stay plain letters on purpose — Unicode has no subscript y and no
-  subscript w, and subscripting most of a set while three of it cannot be is
-  worse than subscripting none.
-- **No other FE program is named in anything a user reads.** Twenty-two
-  Studio tooltips and ten Python docstrings named one; every one of them was
-  making a point that stands without the brand, and every one of them still
-  makes it. Source comments and the validation record are deliberately out of
-  scope: where a default came from is worth recording, and a comparison is
-  worthless without naming what was compared against.
+- **The notation is typeset.** The interface and the reports wrote symbols the way
+  a source file has to write them — `sigma'_yy`, `phi'`, `lambda*`, `kN/m3`, `>=`,
+  `[deg]`. They now read `σ′yy`, `φ′`, `λ*`, `kN/m³`, `≥`, `[°]`: 225 pieces of
+  user-visible text across the Studio and both report languages. The UI font loads
+  Greek, the prime, super/subscripts and the mathematical operators to make it
+  possible, measured against the font before it was used. Indices stay plain
+  letters on purpose — Unicode has no subscript y and no subscript w, and
+  subscripting most of a set while three of it cannot be is worse than
+  subscripting none.
+- **No other FE program is named in anything a user reads.** Twenty-two Studio
+  tooltips and ten Python docstrings named one; every one of them was making a
+  point that stands without the brand, and every one of them still makes it.
+  Source comments and the validation record are deliberately out of scope: where a
+  default came from is worth recording, and a comparison is worthless without
+  naming what was compared against.
 
 ### Added
 
-- `test_product_text` (and `test_studio_product_text`): one scanner over both
-  trees, reading string literals and docstrings only — it lexes past comments
-  rather than splitting lines on `//`, so it sees what a user sees. Checked
-  against a fixture that must fail it.
-- Four checks pinning the saturation rule from both sides, and one that
-  measures the report's column alignment in characters.
-- `SolveResult.stopped_by` on the Python surface, and `katai.summary` now says
-  what a load factor below 1 *is* rather than only what it equals: the
-  incremental limit load when a mechanism formed, and “where the iteration
-  budget ran out, NOT a capacity” when one did not.
-- `test_non_convergence_names_its_reason` (KV-NUM-012): the same pile fixture
-  solved twice, past its capacity and at half of it with an iteration limit of
-  one. The first must publish a limit load; the second must refuse to, because
-  the same model carries that load when the budget is adequate. This is the
-  check KV-STR-004 needed and did not have.
+- **`SolveResult.stopped_by`** on all three surfaces, and `katai.summary` now says
+  what a load factor below 1 *is* rather than only what it equals: the incremental
+  limit load when a mechanism formed, and "where the iteration budget ran out, NOT
+  a capacity" when one did not.
+- **KV-NUM-012** (`test_non_convergence_names_its_reason`): one pile fixture
+  solved past its capacity and at half of it with an iteration limit of one. The
+  first must publish a limit load; the second must refuse to, because the same
+  model carries that load when the budget is adequate. This is the check
+  KV-STR-004 needed and did not have.
+- `test_product_text` and `test_studio_product_text`: one scanner over both trees,
+  reading string literals and docstrings only — it lexes past comments rather than
+  splitting lines on `//`, so it sees what a user sees. Checked against a fixture
+  that must fail it.
+- A third detector in `check_language.py` for double-encoded UTF-8, reporting the
+  line recovered rather than as stored. It found exactly the two comments above
+  across 808 tracked files, with no false positives.
+- Four checks pinning the saturation rule from both sides, one that measures the
+  report's column alignment in characters, and a `.res` round trip for the new
+  field.
+
+### Verification
+
+- **153/153** on the MKL composition and **151/151** on `portable` (the vendored
+  Eigen solver, no proprietary component) — the first time the whole suite has
+  been run on that composition rather than the subset CI builds.
+- **58 declared verification cases** over 26 benchmark `.k2d` files, each with its
+  oracle, locator, expected value and band stated in the test.
+- The Studio's own suite (report, DXF import, product text) passes 3/3.
+
+### Known limits
+
+- Fifty to ninety-six Newton iterations per increment remains the cost of a
+  no-tension material under a point load, and its cause is now measured: the full
+  Newton step is rejected in two thirds of the iterations by a line search that
+  requires the residual to fall at every single one, which a non-smooth problem
+  does not do. Two remedies were implemented and measured, and **neither is in
+  this release**. Levenberg-Marquardt damping of the tangent was refuted outright.
+  A non-monotone line search works — 8–27% faster, the worst increment down from
+  50 iterations to 37 — and was withdrawn because it moves the Hardening Soil
+  numerics register: at the window that keeps KV-NUM-007 inside its published 1%,
+  KV-NUM-009's residual-by-stress-range signature stops growing monotonically, and
+  that signature is the evidence for its conclusion. Both measurements, and what
+  adopting the change would cost, are in §10.
+- A line search that finds no descent in twelve halvings still applies its last,
+  smallest step — measured turning a residual of 2.57 into 534 on one iteration.
+  It is recorded in §10 rather than fixed silently.
 
 ## [0.8.0] - 2026-08-17
 
