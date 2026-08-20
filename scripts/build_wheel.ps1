@@ -198,4 +198,20 @@ if (-not $SkipVerify) {
     Write-Host "verified: fresh venv, scrubbed environment -- console script exit codes 0/0/0/5, the corpus-band guard and the structural surface all hold" -ForegroundColor Green
 }
 
-Write-Host "OK -> $($wheel.FullName) ($mb MB, tag $tag$(if ($stable) { '-abi3' }))" -ForegroundColor Green
+# --------------------------------------------------------------------- ship --
+# Where a release actually reads from. `python -m build` writes into a work
+# directory, but every step after this one -- the checksum that goes into the
+# release notes, and the `gh release create` line -- expects the wheel next to
+# the CLI zip in dist\, and for both 0.8.0 and 0.8.1 that copy was made by hand.
+# A release step nobody wrote down is one that eventually gets skipped, and the
+# thing it would skip is the artifact people install. package_cli.ps1 ends this
+# way; so does this.
+$dist = Join-Path $repo "dist"
+New-Item -ItemType Directory -Force $dist | Out-Null
+$shipped = Join-Path $dist $wheel.Name
+Copy-Item $wheel.FullName $shipped -Force
+$sha = (Get-FileHash $shipped -Algorithm SHA256).Hash.ToLower()
+$sha + "  $($wheel.Name)" | Out-File -FilePath "$shipped.sha256" -Encoding ascii
+
+Write-Host "packaged: $shipped ($mb MB, tag $tag$(if ($stable) { '-abi3' }))" -ForegroundColor Green
+Write-Host "sha256:   $sha" -ForegroundColor Green
