@@ -149,6 +149,10 @@ struct NumericalControls {
     double tolerance = 0.0;   // tolerated relative force residual; 0 = by material class
     int steps = 0;            // load increments; 0 = by material class
     int max_iterations = 0;   // Newton iterations per increment; 0 = the phase strategy's own
+    // Line-search memory; 0 = the engine's default. A measurement seam like the three above:
+    // it decides whether a trial step is judged against the latest residual or the worst of
+    // the last W, which on a non-smooth problem decides whether the increment survives.
+    int line_search_window = 0;
 };
 
 struct PhaseIO {

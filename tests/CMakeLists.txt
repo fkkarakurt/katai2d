@@ -189,6 +189,14 @@ if(TARGET test_phase_numerics)
   target_compile_definitions(test_phase_numerics PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
+# Hardening Soil stress-point integration: the instrument KV-NUM-009 was re-measured with
+# (EXCLUDE_FROM_ALL, like the other studies; deliberately not add_test'd).
+if(TARGET katai::jobs AND TARGET katai::io)
+  add_executable(study_hs_integration EXCLUDE_FROM_ALL study_hs_integration.cpp)
+  target_link_libraries(study_hs_integration PRIVATE katai::jobs katai::mesh katai::analysis katai::model katai::io katai::linsolve)
+  target_compile_definitions(study_hs_integration PRIVATE KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
+
 katai_add_test(test_slope_fos_convergence katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-SLP-003: the strength-reduction factor of safety of the Griffiths-Lane benchmark under systematic nested refinement -- does it converge, or does it follow the shear band down the mesh?
 if(TARGET test_slope_fos_convergence)
   target_compile_definitions(test_slope_fos_convergence PRIVATE

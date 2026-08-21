@@ -253,37 +253,63 @@ and the load stepping.
 
 | Tolerated residual | Settlement of the loading step | vs the closed form |
 |---|---|---|
-| **1e-2** (the driver's default) | 0.018934 m | **+0.413%** |
-| 1e-4 | 0.019045 m | +1.002% |
-| 1e-6 | 0.019044 m | +0.998% |
+| **1e-2** (the driver's default) | 0.018680 m | **−0.932%** |
+| 1e-4 | 0.018639 m | −1.152% |
+| 1e-6 | 0.018647 m | −1.109% |
 
-Three things to read off it. The default costs **0.59%** on this quantity — bounded, and no
-longer unknown. **1e-4 is already converged** *at this step count*: two more orders change the
-answer by 0.005%. And the default's *smaller* deviation from the closed form is **cancellation,
-not accuracy**: the tolerance-converged answer is +1.0% at these 40 increments, and the looser
-run happens to sit nearer the analytic value on the way there. Reporting it as "more accurate"
-would be exactly the kind of luck this document exists to strip out.
+Three things to read off it. The default costs **0.179%** on this quantity — bounded, and no
+longer unknown. **1e-4 is converged** *at this step count*: two more orders change the answer by
+0.043%. And the default's *smaller* deviation from the closed form is **cancellation, not
+accuracy**: the tolerance-converged answer is −1.1% at these 40 increments, and the looser run
+happens to sit nearer the analytic value on the way there. Reporting it as "more accurate" would
+be exactly the kind of luck this document exists to strip out.
 
-⚠️ **That +1.0% was left unaccounted for here, and §7 now accounts for it.** It is not one error
-but three, and only one of them is a discretisation: the mesh contributes nothing at all on this
-case, the load path is worth about 0.46% of it at 40 increments, and the ~0.54% remainder is a
-model deviation rather than a numerical one. The row above is therefore a tolerance sweep at a
-fixed step count, not a statement that the case is converged.
+⚠️ **These numbers were re-measured on 2026-08-20 and they moved** (the row read +0.413% / +1.002%
+/ +0.998% before). The reason is in §7: the stress-point integrator was holding the
+stress-dependent moduli fixed at the state each *increment* began from, which is a first-order
+error in the increment size. It is fixed, and the whole of §7 is rewritten around what is left.
+One consequence belongs here rather than there: below about 1e-4 it is **no longer the stopping
+rule that sets the floor** — the constitutive integration tolerance does, which is why the two
+tight runs agree to 0.043% instead of to six figures.
+
+⚠️ **That −1.1% is not one error but two**, and §7 separates them: the mesh and the load path
+contribute essentially nothing on this case, and what remains is the model's own distance from the
+idealised power law — measured there without any finite element method at all.
 
 ## 7. The nonlinear family: where the error actually lives, and why this case gets no band
 
 Everything above bands a MESH. For a path-dependent model that is the wrong axis to start on,
-and KV-CST-002 is where it shows. Its converged deviation from the closed form was recorded in
-§6 as "+1.0%" with no account of what the 1% was made of. **KV-NUM-009** takes the same case
-apart on three axes independently, and the answer is that only one of them is a discretisation
-at all.
+and KV-CST-002 is where it shows. **KV-NUM-009** takes the same case apart on the axes that are
+actually there, and the answer is that none of the discretisations is what is left over.
+
+> ### ⚠️ What this section used to say, and why it was wrong
+>
+> Until 2026-08-20 this section reported the load path as worth **2.9 percentage points** over a
+> 16× refinement, and concluded that the residual after it — about 0.5% — was a **model** deviation
+> identified by its *signature*: it grew with the stress level and changed sign near `p_ref`,
+> which is where the cap is calibrated.
+>
+> The signature was real and the conclusion drawn from it was not. Both were produced by a defect
+> in the stress-point integrator: `E_ur`, `E_i`, `q_a` and `q_f` are functions of the current minor
+> principal stress, and they were being evaluated **once, at the state each increment started
+> from**, then held for every substep of that increment. That is a first-order error in the load
+> step, and no substep tolerance can see it — an error-controlled integrator reported "converged"
+> while the answer still moved with the increment count. Measured at the stress point, on one
+> oedometer path at a fixed integration tolerance of 1e-6, the final σ₁ over a 32× refinement of
+> the outer step ran 773.27 → 791.47 → 800.46 → 805.02 → 807.27 → 808.48 kPa: every halving halved
+> what was left, extrapolating to ≈809.7. **The "converged" answer was 4.5% low at 20 steps and
+> still 0.6% low at 160.** Reading the moduli at each substep instead puts the whole sweep inside
+> **6e-5 relative**, on the number the old sequence extrapolates to.
+>
+> An argument from a shape is only as good as the shape. This section no longer makes one.
 
 | axis swept | range swept | what it is worth |
 |---|---|---|
-| **mesh** | 0.5 → 0.125 m, **85 → 1105 nodes** | **5e-15 relative** — round-off |
-| **iteration tolerance** | 1e-2 → 1e-8 | 1e-6 and 1e-8 agree to six figures; the HS default of **1e-2 is not converged** and makes a step sweep non-monotone |
-| **load increments** | 10 → 160, tolerance converged | **+3.47% → +0.54%**, i.e. 2.9 percentage points |
-| what is left | — | **≈ +0.54%**, and it is not numerical |
+| **mesh** | 0.5 → 0.125 m, **85 → 1105 nodes** | **5.6e-16 relative** — round-off |
+| **iteration tolerance** | 1e-2 → 1e-6 | 0.222% in total; 1e-4 and 1e-6 agree to **0.043%** |
+| **load increments** | 10 → 160, tolerance converged | **0.020%** (it was 2.9 percentage points before the integrator was fixed) |
+| **constitutive integration tolerance** | STOL 1e-3 → 1e-6 | −1.536% → −0.982%; the default is **1e-5** |
+| what is left | — | **≈ −1.0%**, and §7a shows it belongs to the model |
 
 **The mesh contributes nothing, and that is a fact about the case rather than a limitation of
 the sweep.** The column is weightless, so σ₁ is the surcharge and the strain field is uniform; a
@@ -291,39 +317,79 @@ uniform field lies exactly in the element space, so refinement has nothing to im
 the estimator's `Exact` branch meeting a real problem. A mesh band published for this case would
 have been a fiction dressed as rigour.
 
-**The load path dominates — and it is not a Richardson parameter.** The estimator needs
-`φ(d) = φ_exact + C·d^p`. A path-dependent integration with its own adaptive substepping does not
-supply one, and the sweep says so in its own numbers: the observed order computed from the three
-overlapping triplets of a **single monotone-looking sweep** comes out **2.204, 0.469 and 1.132** —
-a factor of 4.7 apart. Triplets that disagree with themselves by that much are not in an
-asymptotic range, and 1/(r^p − 1) turns a small wobble at p = 0.47 into a large and
-confident-looking correction. Refined further the sweep stops improving at all: past about 160
-increments it settles onto a **±0.02% noise floor** and starts to oscillate. So this case reports
-its measured **spread** and refuses a GCI. That refusal is the result, not a gap in it.
+**The load path still gets no GCI, on a better reason than before.** The estimator needs
+`φ(d) = φ_exact + C·d^p`, and a sequence has to converge before an order can be read off it. This
+one no longer does: over 10 → 160 increments the five settlements move by 0.020% in total, and of
+the three overlapping triplets one reverses sign, so the axis now sits **inside its own noise**. There is nothing
+to extrapolate, and quoting a Richardson correction built on noise would invent a number. The
+measured spread is reported instead — and it is now roughly a fiftieth of the deviation that
+remains, which is what makes that deviation attributable to something else.
 
-**What survives is a model deviation, and its signature identifies it.** After an exact mesh, a
-converged tolerance and a 16× refined path, ~0.5% remains. A pure offset in the fitted stiffness
-would show the same relative deviation on every stress range; this one does not:
+**A fourth axis is now declared, because it exists.** The constitutive integration carries its own
+tolerance (`STOL`), and it is a numerical control like the tolerated error and the step count, not
+a property of the soil. The default is **1e-5**, chosen by measurement rather than taste: a looser
+integration is not cheaper, because once the integration noise rises above the residual the phase
+is asking for, the equilibrium iteration grinds against it.
 
-| stress range | deviation from the closed form |
-|---|---|
-| 50 → 100 kPa | **−0.2425%** |
-| 100 → 200 kPa | **+0.6419%** |
-| 200 → 400 kPa | **+1.0952%** |
+| STOL | deviation | Newton iterations (seating / staged) | wall clock |
+|---|---|---|---|
+| 1e-3 | −1.536% | 1887 / 4883 | 91 s |
+| 1e-4 | −1.310% | 1907 / 1427 | 76 s |
+| **1e-5** | **−0.986%** | **432 / 1186** | **31 s** |
+| 1e-6 | −0.982% | 387 / 3379 | 117 s |
 
-Near zero at the reference pressure and growing away from it **with a sign change** — the mark of
-a cap whose α and β were calibrated at p_ref (`hs_calibrate_cap`, as PLAXIS derives them by
-simulating an oedometer). It is a difference between the model and the closed form, not between
-the computation and the model. Reporting it as numerical uncertainty would be wrong in both
-directions: it would inflate the number and blame the wrong thing.
+### 7a. What is left, measured without the finite element method
 
-**And there is a ceiling on path refinement, declared because a study that cannot be repeated is
-not a study.** The tolerated error is an ABSOLUTE force residual, so shrinking the increment does
+The remaining ≈1% is claimed as a model deviation, and the claim is made by taking the finite
+element method out of the measurement rather than by reading a shape.
+
+The same material — built through the same registry entry the driver builds it with, so its
+calibrated cap parameters α and β are the run's own — is walked as a one-dimensional oedometer at
+a single **stress point**: no mesh, no load path, no equilibrium iteration, no linear solver. If
+the boundary-value run and the constitutive routine land in the same place, then whatever separates
+both of them from the closed form is the model's distance from the idealised power law.
+
+| stress range | boundary-value run | stress point, no FE | apart by |
+|---|---|---|---|
+| 50 → 100 kPa | **−1.3328%** | −1.3490% | 0.016 pp |
+| 100 → 200 kPa | **−0.9861%** | −0.9518% | 0.034 pp |
+| 200 → 400 kPa | **−0.6081%** | −0.9130% | 0.305 pp |
+
+So **at most about a third of a percentage point** of the deviation can be the finite element
+method, and the rest is the model. Integrated more tightly (STOL 1e-6) the stress point reads
+−1.398% / −1.003% / −0.781% / −0.605% over 50→100, 100→200, 200→400 and 400→800 kPa: **one-signed,
+largest just below `p_ref`, and closing as the stress rises**. The model is stiffer than
+`E_oed^ref (σ/p_ref)^m` everywhere, by about one and a half per cent near the reference pressure
+and by half a per cent an octave above it. That is a different statement from the one this section
+used to make, it is smaller than the old sweep's own uncertainty, and it does not need a finite
+element run to reproduce.
+
+### 7b′. The backends now agree
+
+The case's 100 → 200 kPa run was the one that split between the two linear-solver backends —
+**+0.641936%** on PARDISO against **+0.458298%** on Eigen, a 0.18 pp disagreement that this record
+published as evidence. Re-measured with the integration under a declared tolerance:
+
+| stress range | PARDISO (MKL) | Eigen (portable) |
+|---|---|---|
+| 50 → 100 kPa | 7.706387545820947e-03 m | 7.706387545820932e-03 m |
+| 100 → 200 kPa | 1.093676800855408e-02 m | 1.093676800855408e-02 m |
+| 200 → 400 kPa | 1.552598037192273e-02 m | 1.552598037192282e-02 m |
+
+Fifteen significant figures on two of them and bit-for-bit on the third. A disagreement that
+survived four orders of tolerance was not in the linear algebra and was not in the equilibrium
+iteration; it was in what each iterate's stress path did to a subdivision that had no tolerance of
+its own.
+
+**And there is still a ceiling on path refinement, declared because a study that cannot be repeated
+is not a study.** The tolerated error is an ABSOLUTE force residual, so shrinking the increment does
 not shrink what each increment has to achieve. Refining the SEATING phase of this weightless
 column — whose confining stress starts near zero, where the HS stiffness is smallest — to 160
-increments at 1e-6 does not converge at all rather than converging better. The sweep above
-therefore pins the seating phase at 40 and moves only the staged phase, and KV-NUM-009 pins the
-failure itself, so that the day it stops failing the sentence gets rewritten.
+increments at 1e-6 still does not converge rather than converging better. The sweep above therefore
+pins the seating phase at 40 and moves only the staged phase, and KV-NUM-009 pins the failure
+itself, so that the day it stops failing the sentence gets rewritten. (It did stop failing, briefly,
+at an integration tolerance of 1e-4, and started again at the shipped 1e-5 — which is itself a
+measurement of what the ceiling is made of.)
 
 ### 7b. The other half of the same argument: KV-NUM-010, where the axis *is* clean
 
@@ -441,7 +507,7 @@ will quantify for any mesh triplet the user cares to produce.
 The register is deliberately explicit about its own gaps, since an absent row must never read as
 a passed one:
 
-- **Most of the corpus has no sweep yet.** The corpus is now **26 files** behind **57 declared
+- **Most of the corpus has no sweep yet.** The corpus is now **26 files** behind **58 declared
   cases**; six carry a band (KV-FND-008 via KV-NUM-005, KV-SLP-002, the Giroud rigid footing,
   KV-STR-003 as of 2026-08-14, KV-CON-002 via KV-NUM-010 and KV-DYN-002 via KV-NUM-011, the last
   two on their TIME axes), and one has been swept and **deliberately given none** (KV-CST-002 via
@@ -471,9 +537,11 @@ a passed one:
   unsatisfiable (the ceiling measured in §7). Both are engine changes, not reporting changes.
 - **Tolerance independence is measured for two families, not all.** KV-NUM-007 covers the slope
   factor of safety (strength-reduction trials at 1e-3, spread 0.0000% below it and unsafe-sided
-  above) and the Hardening Soil oedometer KV-CST-002, whose tolerance §7 now carries out to 1e-8:
-  1e-6 and 1e-8 agree to six figures, so that family's converged tolerance is known and the
-  shipped default of 1e-2 is measured to be short of it. The soft-soil family, the consolidation
+  above) and the Hardening Soil oedometer KV-CST-002, whose tolerance §6 carries out to 1e-6:
+  1e-4 and 1e-6 agree to 0.043%, so that family's converged tolerance is known and the shipped
+  default of 1e-2 is measured to cost 0.179% on this quantity. Below about 1e-4 it is the
+  CONSTITUTIVE integration tolerance rather than the equilibrium one that limits the answer (§7),
+  which is why those two runs agree to a twentieth of a per cent instead of to six figures. The soft-soil family, the consolidation
   and the dynamic paths have not been swept. The controls are now per phase in
   the `.k2d` (v7: `tol`, `loadsteps`, `maxiter`) and reach the solver by the same route as the
   driver seam, which **KV-NUM-008** pins as an identity — a control that is read, validated and
@@ -646,6 +714,22 @@ them is a decision about the record — not a side effect to be taken along with
 crawl stays: it is a cost the program pays on non-smooth problems, its cause is understood, and the
 price of removing it is a re-measurement of the Hardening Soil numerics register with its
 conclusions re-derived from the new data.
+
+⚠️ **Re-read this section against 2026-08-20.** Every number in the table above was measured with
+the stress-point integrator that §7 has since retracted — the one holding the stress-dependent
+moduli fixed across an increment. Two consequences, and neither of them reverses the decision by
+itself:
+
+* **The last row's argument is gone.** It turned on the window destroying a *signature* (growth with
+  stress level, sign change at `p_ref`) that the conclusion rested on. That signature was the
+  defect, not the model, so a line search can no longer be charged with destroying it.
+* **The rest of the table is not evidence any more either.** The load-step sweep it compares
+  against is now flat to 0.020% and its "observed orders" are noise; the tolerance rows were
+  measured where the equilibrium tolerance still set the floor, and it no longer does below 1e-4.
+
+The line search therefore returns to the queue as an **open question with no current measurement**,
+not as a decided trade. What it costs has to be measured again against the integrator that ships
+now, on a record whose conclusions no longer depend on the shape of that particular sweep.
 
 ### What this still leaves open
 

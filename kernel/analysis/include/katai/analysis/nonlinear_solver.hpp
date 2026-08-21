@@ -47,6 +47,14 @@ struct NewtonOptions {
     // advances together with SumMstage). 0 = timeless phase (no creep accumulates; all old
     // callers bit-for-bit).
     double time_interval = 0.0;
+    // Line-search memory. 1 = a trial step must beat the CURRENT residual (Armijo, monotone).
+    // W > 1 judges it against the WORST of the last W residual norms (Grippo, Lampariello and
+    // Lucidi 1986), which is what a non-smooth problem needs: each Newton step moves a few
+    // stress points across a yield surface -- a tension cut-off is the extreme case -- so the
+    // norm can rise for one iteration while the iterate is on its way to equilibrium. A
+    // monotone test reads that as failure and halves the step, and four such halvings in a row
+    // abandon the increment, which is how the LOAD PATH stops being the one the file asked for.
+    int line_search_window = 1;
 };
 
 // Plate (structural wall/beam) embedded in soil — 3-node Timoshenko beam (see

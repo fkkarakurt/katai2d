@@ -23,16 +23,16 @@
 //   source:   the same numerical control applied through two independent routes -- the .k2d file (model::Phase::tolerance / load_steps / max_iterations, io v7) and the jobs-layer seam (app::NumericalControls, the route KV-NUM-007 measures with) -- must reach the same solver and produce the same run; the controls themselves are the phase-level numerical control parameters of PLAXIS 2D 2025.1 Reference Manual (Tolerated error, Max iterations), whose per-phase presence in the input is what makes a calculation reproducible by a third party
 //   locator:  tests/corpus/kv-cst-002-hs-oedometer.k2d (Hardening Soil, whose answer is known from KV-NUM-007 to move with the tolerance) solved four ways per control: default, control set in the FILE, the same control passed through the seam, and both set at once with different values
 //   quantity: settlement of the oedometer top [m] and the file round trip of the three control fields
-//   expected: file == seam bit-for-bit; file != default (the control is read); seam wins when both are set (documented precedence); and the three fields survive a write/read round trip
-//   band:     exact -- these are identity checks, not approximations. Measured on this tree: default 0.018934049 m; tolerance 1e-6 from the file 0.019044410 m, identical to the seam to 0.0e+00 and 0.58% away from the default, so the control is unmistakably read; on the staged phase alone 0.019026773 m, which differs again and is what "per phase" means; 4 load increments 0.019461550 m; an iteration limit of 8 0.018934204 m (the solver cuts back and arrives by another path)
+//   expected: file == seam bit-for-bit on every control; the control demonstrably reaches the solver; seam wins when both are set (documented precedence); and the three fields survive a write/read round trip
+//   band:     exact -- these are identity checks, not approximations. Measured on this tree (2026-08-20, with the constitutive integration under an error tolerance): default 0.018680445 m; tolerance 1e-6 from the file 0.018647012 m, identical to the seam to 0.0e+00; on the staged phase alone 0.018585259 m, which differs again and is what "per phase" means; 4 load increments 0.018648926 m against 40's 0.018680445 m. The ITERATION LIMIT is now read at its threshold rather than by moving the answer: at 2 the run refuses through both routes and names the budget as the reason (the KV-NUM-012 contract), at 3 it converges to the default answer bit for bit -- every increment of this case needs three iterations, so 8, 12 and no limit at all agree exactly. The earlier form of this check asserted that a limit of 8 changed the answer; it did, because the integrator was carrying a first-order error (KV-NUM-009), and a guard that proves a control is read by pointing at a difference stops proving anything when the difference is the defect
 
 // verify: KV-NUM-009
 //   oracle:   closed_form
 //   source:   the Hardening Soil oedometric stiffness law as published in the PLAXIS 2D Material Models Manual, E_oed = E_oed^ref ((c cos(phi) + sigma_1 sin(phi))/(c cos(phi) + p_ref sin(phi)))^m, integrated over one-dimensional primary loading -- the same closed form KV-CST-002 is measured against; the error-decomposition procedure is the solution-verification one this program already applies to meshes (Roache 1994; Celik et al. 2008, ASME J. Fluids Eng. 130(7):078001), here applied on the axis a path-dependent model actually discretises
-//   locator:  tests/corpus/kv-cst-002-hs-oedometer.k2d, swept on three axes independently -- mesh density 0.5/0.25/0.125 m, load increments 10/20/40/80/160 at a converged tolerance with the seating phase pinned, and the stress range walked over 50-100, 100-200 and 200-400 kPa
-//   quantity: settlement of the oedometer top [m] on each sweep, and the observed order of convergence of the load-step sweep [-]
-//   expected: the mesh contributes nothing (a weightless column has a uniform strain field, which is exact in the element space); the load path dominates; its observed order is NOT stable across triplets of one sweep, so no GCI band may be quoted from it; and the residual left over is a model deviation, identified by growing with stress level and changing sign near p_ref rather than staying a constant fraction
-//   band:     no band is published for this case, deliberately, and the measurements are why. Mesh: 85 -> 1105 nodes changes the answer by 5e-15 relative, which is round-off. Load path: 10 -> 160 increments moves it +3.47% -> +0.54% (a 16x refinement worth 2.9 percentage points against the mesh's zero), and the observed order from the three overlapping triplets of that one sweep is 2.204, 0.469, 1.132 -- a factor of 4.7 apart, so the triplets are not in an asymptotic range and a Richardson extrapolation built on any of them would be an invented number. Tolerance: 1e-6 and 1e-8 agree to six figures, so the sweep above is tolerance-converged, while the Hardening Soil default of 1e-2 is not and makes the same sweep non-monotone. Residual: -0.2425% over 50-100 kPa, +0.6419% over 100-200, +1.0952% over 200-400 -- near zero at the reference pressure and growing away from it with a sign change, the signature of a cap calibrated at p_ref, not of a discretisation. Ceiling: refining the seating phase to 160 increments at 1e-6 does not converge at all, because the tolerated error is an absolute residual and the increment it must satisfy keeps shrinking
+//   locator:  tests/corpus/kv-cst-002-hs-oedometer.k2d, swept on three axes independently -- mesh density 0.5/0.25/0.125 m, load increments 10/20/40/80/160 at a converged tolerance with the seating phase pinned, and the stress range walked over 50-100, 100-200 and 200-400 kPa -- and then the SAME calibrated material walked as a one-dimensional oedometer at the stress point (katai::core::hs_integrate, built through the registry entry the driver uses), where none of those axes exist
+//   quantity: settlement of the oedometer top [m] on each sweep, and the same settlement computed at the stress point [m]
+//   expected: the mesh contributes nothing (a weightless column has a uniform strain field, which is exact in the element space); the load path is now below its own noise, so no order can be computed from it and no GCI quoted; the deviation from the closed form is ONE-SIGNED and closes as the stress rises; and the boundary-value run reproduces the constitutive routine, which is what makes the remainder a model deviation rather than an FE error
+//   band:     no band is published for this case, deliberately, and the measurements are why. Mesh: 85 -> 1105 nodes changes the answer by 5.6e-16 relative, which is round-off. Load path: 10 -> 160 increments moves it by 0.020% -- until 2026-08-20 this axis was worth 2.9 percentage points, and it was not the load path: the stress-point integrator held the stress-dependent moduli fixed at the state each INCREMENT started from, a first-order error in the increment that no substep tolerance can see (0.9.0 N-1; the same fixture's material point moved 4.5% over a 32x outer refinement at a fixed integration tolerance of 1e-6 before the fix, and 6e-5 after). What is left is not a convergent sequence, so no order may be computed from it. Tolerance: 1e-4 and 1e-6 agree to 0.043%. Deviation: -1.3328% over 50-100 kPa, -0.9861% over 100-200, -0.6081% over 200-400 -- one-signed, largest just below p_ref, closing as the stress rises. The same three ranges at the STRESS POINT, no FE at all: -1.3490%, -0.9518%, -0.9130%, the worst of the three 0.305 pp from its FE counterpart, so at most a third of a percentage point of the deviation can be the finite element method and the rest is the model's distance from the idealised power law. Backends: the case that used to split between PARDISO and Eigen (+0.6419% against +0.4583% over 100-200) now agrees to 15 significant figures on all three ranges. Ceiling: refining the seating phase to 160 increments at 1e-6 still does not converge, because the tolerated error is an absolute residual and the increment it must satisfy keeps shrinking
 
 // verify: KV-NUM-010
 //   oracle:   closed_form
@@ -40,7 +40,7 @@
 //   locator:  tests/corpus/kv-con-002-terzaghi-column.k2d with the phase ended at Tv = 0.5, swept over 30/60/120/240 time steps at the file's own 0.4 m tri6 mesh, and over 0.8/0.4/0.2 m at a pinned 240 steps
 //   quantity: degree of consolidation U at Tv = 0.5 [-]; the observed order of the time refinement [-]; and the GCI band on the file's own 120 steps [%]
 //   expected: the observed order is 1, because backward Euler is first order and that is decided before the run; it is STABLE across overlapping triplets, unlike the load path of KV-NUM-009; Richardson extrapolation of three time steps recovers Terzaghi's closed form; and the band contains the true error, which can be checked here rather than trusted because the exact answer is known
-//   band:     +/- 0.2480% on the file's own 120 steps (GCI at the observed order, Fs = 1.25), and the actual error there is 0.1965%, so the band contains it. Observed order 0.9850 from 120/60/30 and 0.9924 from 240/120/60 -- the two agree to 0.007, which is what an asymptotic range looks like and is exactly what KV-NUM-009's load path could not produce (2.204 / 0.469 / 1.132). Richardson U(dt->0) = 0.763961996 against the series' 0.763950331, +0.00153%. The mesh, again, is not the axis: 169 -> 1884 nodes moves U by 1.7e-8
+//   band:     +/- 0.2480% on the file's own 120 steps (GCI at the observed order, Fs = 1.25), and the actual error there is 0.1965%, so the band contains it. Observed order 0.9850 from 120/60/30 and 0.9924 from 240/120/60 -- the two agree to 0.007, which is what an asymptotic range looks like and is exactly what KV-NUM-009's load path cannot produce -- that axis is now below its own noise floor and has no order to quote at all. Richardson U(dt->0) = 0.763961996 against the series' 0.763950331, +0.00153%. The mesh, again, is not the axis: 169 -> 1884 nodes moves U by 1.7e-8
 
 // verify: KV-NUM-011
 //   oracle:   closed_form
@@ -52,6 +52,8 @@
 
 #include <katai/io/project_io.hpp>
 #include <katai/io/validate.hpp>
+#include <katai/materials/hardening_soil_plastic.hpp>
+#include <katai/materials/registry.hpp>
 #include <katai/math/grid_convergence.hpp>
 #include <katai/jobs/driver.hpp>
 #include <katai/jobs/mesh_builder.hpp>
@@ -177,21 +179,40 @@ int main() {
     check(u_steps_file != u_default, "and 4 increments is not 40, so the count is read");
 
     // --- 3. The iteration limit -------------------------------------------------------------
-    // Eight iterations per increment is less than this model wants, so the solver cuts the
-    // increment back and works its way through anyway. The answer that comes out is therefore
-    // reached by a different path -- an honest way to see the limit take effect without asking
-    // for a run that fails. (Two would not solve at all: the initial phase needs more than that,
-    // which is itself worth knowing before setting the limit in a real project.)
-    const m::Project iter_file = all_phases(base, 0.0, 0, 8);
+    // This control is read where it BITES, and a converged run is one it stops biting on. Until
+    // 2026-08-20 the proof here was that a limit of 8 changed the answer; with the constitutive
+    // integration under an error tolerance (0.9.0 N-1) it no longer does -- every increment of
+    // this case now converges in three iterations, so 8, 12 and no limit at all agree bit for
+    // bit. A guard that proves a control is read BY POINTING AT A DIFFERENCE stops proving
+    // anything the moment the difference is the defect being fixed.
+    //
+    // So the pair is measured at the threshold instead, which proves more than the old check did:
+    // at 2 the run REFUSES and names the budget as the reason (the KV-NUM-012 contract -- a
+    // fraction of the load that is an iteration limit must not be reported as a capacity), and
+    // at 3 it converges to the default answer bit for bit. One number apart, two different
+    // outcomes: the control reaches the solver, and above the threshold it does not move the
+    // answer, which is what a converged run should do.
+    const m::Project iter_starved = all_phases(base, 0.0, 0, 2);
+    settlement(iter_starved, M.mesh, {}, &ok);
+    check(!ok, "an iteration limit of 2 in the FILE makes the run refuse rather than drift");
+    katai::app::NumericalControls starved_seam;
+    starved_seam.max_iterations = 2;
+    settlement(base, M.mesh, starved_seam, &ok);
+    check(!ok, "and the same limit through the seam refuses too: both routes reach the solver");
+
+    const m::Project iter_file = all_phases(base, 0.0, 0, 3);
     const double u_iter_file = settlement(iter_file, M.mesh, {}, &ok);
-    check(ok, "the case with an iteration limit of 8 in the FILE solves");
+    check(ok, "the case with an iteration limit of 3 in the FILE solves");
     katai::app::NumericalControls iter_seam;
-    iter_seam.max_iterations = 8;
+    iter_seam.max_iterations = 3;
     const double u_iter_seam = settlement(base, M.mesh, iter_seam, &ok);
     check(ok, "the same limit through the seam solves");
-    std::printf("  max 8 iterations:  file %.9f m, seam %.9f m\n", u_iter_file, u_iter_seam);
+    std::printf("  max 3 iterations:  file %.9f m, seam %.9f m (default %.9f m)\n",
+                u_iter_file, u_iter_seam, u_default);
     check(u_iter_file == u_iter_seam, "iteration limit: file == seam, bit for bit");
-    check(u_iter_file != u_default, "and the limit changes the path, so it is read");
+    check(u_iter_file == u_default,
+          "and three iterations is all this case needs: above the threshold the limit does not "
+          "move the answer");
 
     // --- 4. Precedence, stated and tested ---------------------------------------------------
     // When both are set the SEAM wins. The seam exists so that a given file can be re-run at
@@ -269,13 +290,19 @@ int main() {
               "the mesh contributes nothing: a uniform field is already exact in the element space");
     }
 
-    // (b) THE LOAD PATH IS THE DOMINANT DISCRETISATION -- AND IT IS NOT A RICHARDSON PARAMETER.
-    //     Refining the increments moves this answer far more than any mesh does. But the
-    //     estimator needs phi(d) = phi_exact + C d^p, and a path-dependent integration with its
-    //     own adaptive substepping does not supply one: the observed order computed from
-    //     successive triplets of the SAME sweep disagrees with itself by a factor of several.
-    //     Quoting a GCI from it would dress that disagreement up as a confidence interval, so
-    //     this case reports the measured SPREAD instead and says why.
+    // (b) THE LOAD PATH WAS THE DOMINANT DISCRETISATION, AND IS NOT ANY MORE. Until 2026-08-20
+    //     a 16x refinement of the increments moved this answer by 2.9 percentage points, and this
+    //     block asserted that it did -- the axis had to be real for the rest of the section to
+    //     mean anything. It was real, and it was not the load path: the stress-point integrator
+    //     held the stress-dependent moduli (E_ur, E_i, q_a, q_f) fixed at the state each
+    //     INCREMENT started from, which is a first-order error in the increment size that no
+    //     substep tolerance can see. Reading them at each substep instead (0.9.0 N-1) collapses
+    //     the same sweep to 0.020%, a factor of 145.
+    //     What that leaves is an axis below its own noise: the five settlements no longer form a
+    //     convergent sequence at all, so no order can be computed from them and no GCI may be
+    //     quoted -- the same refusal as before, on a better reason. The measured spread is
+    //     reported, and it is now two orders of magnitude smaller than the model deviation (c)
+    //     measures, which is what makes that deviation attributable.
     //     The seating phase is pinned throughout: refining IT is a separate effect, see (d).
     const int path_steps[5] = {10, 20, 40, 80, 160};
     double u_path[5] = {0, 0, 0, 0, 0};
@@ -297,40 +324,41 @@ int main() {
         const double spread = std::fabs(u_path[0] - u_path[4]) / u_path[4];
         std::printf("  spread over a 16x refinement: %.3f%% (the mesh gave %.1e)\n",
                     100.0 * spread, mesh_ok ? std::fabs(u_mesh[2] - u_mesh[0]) / u_mesh[0] : 0.0);
-        check(spread > 5e-3, "the load path moves the answer by more than half a percent");
+        check(spread < 1e-3,
+              "the load path is no longer a percentage-point axis: a 16x refinement moves it "
+              "less than 0.1%");
 
-        // Three overlapping triplets of one monotone-looking sweep, three different orders.
-        double p_obs[3] = {0, 0, 0};
-        bool orders_ok = true;
+        // Is what is left a convergent sequence, or noise? The estimator needs
+        // phi(d) = phi_exact + C d^p, which requires successive differences of one sign and a
+        // stable ratio. Count how many of the three overlapping triplets even keep their sign.
+        int monotone = 0;
         for (int i = 0; i < 3; ++i) {
-            const double f = u_path[i + 2], mid = u_path[i + 1], c = u_path[i];
-            const double e21 = mid - f, e32 = c - mid;
-            if (e21 == 0.0 || e32 / e21 <= 0.0) { orders_ok = false; break; }
-            p_obs[i] = std::log(std::fabs(e32 / e21)) / std::log(2.0);
+            const double e21 = u_path[i + 1] - u_path[i + 2], e32 = u_path[i] - u_path[i + 1];
+            if (e21 != 0.0 && e32 / e21 > 0.0) ++monotone;
         }
-        check(orders_ok, "each triplet is at least monotone, so an order can be computed at all");
-        if (orders_ok) {
-            std::printf("  observed order from triplets %d/%d/%d, %d/%d/%d, %d/%d/%d: "
-                        "%.3f, %.3f, %.3f\n",
-                        path_steps[2], path_steps[1], path_steps[0], path_steps[3], path_steps[2],
-                        path_steps[1], path_steps[4], path_steps[3], path_steps[2], p_obs[0],
-                        p_obs[1], p_obs[2]);
-            double lo = p_obs[0], hi = p_obs[0];
-            for (int i = 1; i < 3; ++i) { lo = std::fmin(lo, p_obs[i]); hi = std::fmax(hi, p_obs[i]); }
-            std::printf("  they span a factor of %.1f -- NOT an asymptotic range\n", hi / lo);
-            check(hi / lo > 2.0,
-                  "the observed order is not stable, so no GCI band may be quoted from the path");
-        }
+        std::printf("  of the three overlapping triplets, %d keep a consistent sign\n", monotone);
+        check(monotone < 3,
+              "the sequence is inside its own noise, so no order may be computed and no GCI "
+              "quoted from the load path");
     }
 
-    // (c) WHAT SURVIVES ALL OF IT IS NOT NUMERICAL. The residual left after an exact mesh, a
-    //     converged tolerance and a 16x refined path is still ~0.5% -- and its SIGNATURE says
-    //     what it is. A pure offset in the fitted stiffness would show the same relative
-    //     deviation on every stress range. This one is near zero close to p_ref = 100 kPa and
-    //     grows away from it, changing sign: the mark of a cap whose alpha/beta were calibrated
-    //     at the reference pressure (hs_calibrate_cap, as PLAXIS derives them by simulating an
-    //     oedometer). It is a MODEL deviation from the closed form, not a mesh or step artefact,
-    //     and reporting it as numerical uncertainty would be wrong in both directions.
+    // (c) WHAT SURVIVES IS THE MODEL, AND IT IS SHOWN BY LEAVING THE FE OUT. The residual left
+    //     after an exact mesh, a converged tolerance and a 16x refined path is about one per
+    //     cent, one-signed, and largest just below p_ref.
+    //
+    //     Until 2026-08-20 this block argued from a SIGNATURE -- the deviation grew with stress
+    //     level and changed sign near p_ref, therefore it was a cap calibrated at p_ref. That
+    //     signature is gone, because it was the frozen-modulus error described in (b) rather than
+    //     the model: the deviation does not change sign, and its magnitude FALLS as the stress
+    //     rises above p_ref. An argument from a shape is only as good as the shape.
+    //
+    //     So the claim is made the other way now, by measuring the same law where none of the
+    //     numerics under discussion exist. The SAME calibrated material -- built through the same
+    //     registry entry the driver uses, so alpha and beta are the run's own -- is walked as a
+    //     one-dimensional oedometer at the STRESS POINT: no mesh, no load path, no equilibrium
+    //     iteration, no linear solver. If the boundary-value run and the constitutive routine
+    //     land in the same place, then whatever separates BOTH of them from the closed form is
+    //     the model's distance from the idealised power law, and the FE is not on trial for it.
     const double ranges[3][2] = {{50.0, 100.0}, {100.0, 200.0}, {200.0, 400.0}};
     double dev[3] = {0, 0, 0};
     bool range_ok = true;
@@ -353,11 +381,65 @@ int main() {
                     ranges[i][0], ranges[i][1], got, want, 100.0 * dev[i]);
     }
     check(range_ok, "the case solves over each stress range");
-    if (range_ok) {
+
+    // The same law at the stress point. hs_integrate is the routine the FE calls at every Gauss
+    // point; here it is called directly, on the material the driver would build from this file.
+    const katai::core::ModelEntry* hs_entry = katai::core::find_model("HardeningSoil");
+    check(hs_entry != nullptr && !base.materials.empty(),
+          "the case's material resolves through the constitutive registry");
+    double dev_pt[3] = {0, 0, 0};
+    bool point_ok = hs_entry != nullptr && !base.materials.empty();
+    if (point_ok) {
+        const katai::core::MaterialModel mm =
+            hs_entry->build(katai::app::to_material_params(base.materials[0]));
+        const double kH = 4.0, kEoed = 30000.0, kPref = 100.0, kM = 0.5;
+        const double de = 2.0e-5;
+        for (int i = 0; i < 3 && point_ok; ++i) {
+            const double sa = ranges[i][0], sb = ranges[i][1];
+            Eigen::Vector3d sig(0.5, 0.5, 0.5);          // primary loading from near zero, as the
+            double gp = 0.0, pp = 0.5, eps = 0.0;        // column itself is loaded from rest
+            double eps_a = 0.0, eps_b = 0.0;
+            bool got_a = false, got_b = false;
+            for (int k = 0; k < 400000 && !got_b; ++k) {
+                const katai::core::HsIntegrated r =
+                    katai::core::hs_integrate(mm.hs, sig, gp, pp, Eigen::Vector3d(de, 0.0, 0.0));
+                if (!r.stress.allFinite()) break;
+                const double s0 = sig(0), s1 = r.stress(0);
+                if (s1 > s0) {   // linear in strain between samples, so the mark is not a step artefact
+                    if (!got_a && s1 >= sa) { eps_a = eps + de * (sa - s0) / (s1 - s0); got_a = true; }
+                    if (got_a && !got_b && s1 >= sb) {
+                        eps_b = eps + de * (sb - s0) / (s1 - s0); got_b = true;
+                    }
+                }
+                sig = r.stress; gp = r.gamma_p; pp = r.pp; eps += de;
+            }
+            if (!got_b) { point_ok = false; break; }
+            const double got = kH * (eps_b - eps_a);
+            const double want = std::pow(kPref, kM) / kEoed *
+                                (std::pow(sb, 1.0 - kM) - std::pow(sa, 1.0 - kM)) / (1.0 - kM) * kH;
+            dev_pt[i] = (got - want) / want;
+            std::printf("  %3.0f -> %3.0f kPa  STRESS POINT %.9f  %+.4f%%   (FE %+.4f%%, "
+                        "apart by %.3f pp)\n",
+                        sa, sb, got, 100.0 * dev_pt[i], 100.0 * dev[i],
+                        100.0 * std::fabs(dev[i] - dev_pt[i]));
+        }
+    }
+    check(point_ok, "the same law integrates at the stress point over each range");
+
+    if (range_ok && point_ok) {
+        check(dev[0] < 0.0 && dev[1] < 0.0 && dev[2] < 0.0 &&
+              dev_pt[0] < 0.0 && dev_pt[1] < 0.0 && dev_pt[2] < 0.0,
+              "the deviation is ONE-SIGNED on both routes: the model is stiffer than the "
+              "idealised law at every stress level, and does not cross at p_ref");
         check(dev[0] < dev[1] && dev[1] < dev[2],
-              "the residual grows with the stress level: it is not a constant offset");
-        check(dev[0] < 0.0 && dev[2] > 0.0,
-              "and it changes sign near p_ref, which is where the cap was calibrated");
+              "and the gap CLOSES as the stress rises above p_ref, rather than growing");
+        double worst = 0.0;
+        for (int i = 0; i < 3; ++i) worst = std::fmax(worst, std::fabs(dev[i] - dev_pt[i]));
+        std::printf("  FE against the stress point, worst of the three ranges: %.3f pp\n",
+                    100.0 * worst);
+        check(worst < 5e-3,
+              "the boundary-value run reproduces the constitutive routine to within half a "
+              "percentage point, so at most that much of the deviation can be the FE");
     }
 
     // (d) A DECLARED CEILING ON PATH REFINEMENT, because a study that cannot be repeated is not

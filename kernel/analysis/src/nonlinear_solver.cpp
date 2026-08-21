@@ -119,10 +119,10 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     // more expensive in the easy regime). Active only when an HS material is present →
     // the LE/MC path is the old behaviour EXACTLY (TangentMode does not affect them, the
     // retry branch never opens).
-    bool hs_consistent_mode = false;
     bool has_hs = false;
     for (const auto& mm : materials)
         if (mm.type == MaterialType::HardeningSoil) { has_hs = true; break; }
+    bool hs_consistent_mode = false;
 
     using Clock = std::chrono::steady_clock;
     const auto t_start = Clock::now();
@@ -207,6 +207,11 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         cur_target = target_lambda;
 
         Eigen::VectorXd du_free = Eigen::VectorXd::Zero(neq);
+        // The last W residual norms of THIS increment, most recent last: the line search's
+        // yardstick when the window is open. It starts empty at every increment (including a
+        // retried one), so the memory never crosses a load step.
+        std::vector<double> recent;
+        const int ls_window = std::max(1, options.line_search_window);
         bool step_converged = false;
         // How this increment ended, if it did not converge. Set at each exit from the
         // iteration loop so the abandonment is named where it happens rather than
@@ -218,6 +223,11 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             const Eigen::VectorXd f_int = assemble(du_free, true, &builder);
             const Eigen::VectorXd residual = target - f_int;
             const double rnorm = residual.norm();
+            recent.push_back(rnorm);
+            if ((int)recent.size() > ls_window) recent.erase(recent.begin());
+            // What the trial step has to beat. With a window of 1 this is rnorm and the test
+            // below is the strict Armijo condition, unchanged.
+            const double gate = *std::max_element(recent.begin(), recent.end());
             if (debug)
                 std::fprintf(stderr, "  lambda %.4f iter %d  rnorm=%.4e  rel=%.4e\n",
                              target_lambda, iter, rnorm, rnorm / ref);
@@ -279,7 +289,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             for (int ls = 0; ls < 12; ++ls) {
                 const Eigen::VectorXd fi = assemble(du_free + alpha * delta,
                                                     false, nullptr);
-                if ((target - fi).norm() < (1.0 - 1.0e-4 * alpha) * rnorm) {
+                if ((target - fi).norm() < (1.0 - 1.0e-4 * alpha) * gate) {
                     improved = true;
                     break;
                 }

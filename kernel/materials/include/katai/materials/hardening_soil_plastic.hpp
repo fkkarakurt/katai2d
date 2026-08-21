@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -550,33 +551,154 @@ struct HsIntegrated {
     double pp;
     Eigen::Matrix3d tangent;  // continuum elastoplastic (last active set)
     bool plastic;
-    int nsub;                 // substep count used (FD tangent perturbations run with the
-                              // same nsub — see nsub_fixed)
+    int nsub;                 // substeps the error control asked for
+    int saturated = 0;        // 1 when the guard ceiling clipped the subdivision, i.e. the
+                              // integration did NOT meet its tolerance on this call
 };
 
-// nsub_fixed > 0: do NOT pick the substep count automatically, use the given value. The
-// numerical consistent tangent (Pérez-Foguet & Rodríguez-Ferran & Huerta) pins the
-// perturbed runs to the base run's nsub: otherwise the ceil(...) jumps n→n±1 under
-// perturbation and the integration-error difference breaks the FD column (larger than the
-// ~E·h signal).
+// The subdivision one integration used. A perturbed run (the numerical consistent tangent's
+// three forward differences) is REPLAYED along exactly this subdivision: with automatic
+// substepping the perturbation would otherwise change the subdivision itself, and that
+// difference is larger than the ~E*h signal the difference quotient is trying to read. This is
+// the automatic-substepping replacement for the fixed substep count the previous rule pinned.
+// The subdivision is UNIFORM (one size, chosen once, with a partial last step), so recording it
+// takes two numbers rather than a list -- and the replay can never overflow a buffer.
+struct HsSubstepPlan {
+    double dT = 0.0;   // pseudo-time size of every substep but the remainder; 0 = nothing recorded
+    int n = 0;         // substeps taken
+    void clear() { dT = 0.0; n = 0; }
+};
+
+// Integrate the Hardening Soil model over `dstrain` from the committed state, with the local
+// integration error held under `stol`.
+//
+// Scheme: explicit substepping with AUTOMATIC ERROR CONTROL (Sloan 1987; Sloan, Abbo & Sheng
+// 2001, Engineering Computations 18(1):121-194). Each substep is evaluated twice -- forward
+// Euler from the start of the substep, and again from its Euler end point -- and the two are
+// averaged (modified Euler, second order). Their difference IS the local truncation error, and
+// it is what sizes the subdivision: the size is measured before the walk and then held (see
+// "HOW MANY SUBSTEPS" below for why this scheme does not accept/reject as the paper does). A
+// drift correction pulls each state back onto the surfaces it was yielding on.
+//
+// What this replaces, and why. Until 2026-08-20 the substep count was
+// `ceil(||De.deps|| / (0.01 (max|sigma| + p_ref)))` -- a fixed fraction of a reference stress,
+// with no error estimate, no tolerance and no rejection. The code cited the paper above
+// without implementing its contribution. Measured on the corpus oedometer (KV-CST-002),
+// refining that fraction from 1% to 0.03% moved the answer by TWO PERCENTAGE POINTS and did
+// not converge -- an error axis larger than the model deviation the numerics record attributes
+// to the cap calibration, and one no sweep in this project had ever touched. It also made the
+// answer depend on the iteration path: a different line search, or a different linear-solver
+// backend, lands on a different subdivision, which is how two backends came to disagree on a
+// published number (docs/validation/numerical-uncertainty.md, and the 0.9.0 audit).
+//
+// `stol` is a NUMERICAL CONTROL, not a material property: it belongs to the phase, like the
+// tolerated error and the load-step count. 0 means "the default below".
+// TEMPORARY (0.9.0 N-1, second half): the tolerance's permanent home is the phase's numerical
+// controls, next to the tolerated error and the load-step count, so that a published run carries
+// the integration accuracy it was computed with. Until that plumbing lands it is a build-time
+// default with an environment override, so the tolerance can be SWEPT -- which is the whole
+// point of having one.
+// The guard ceiling on one increment's subdivision, and the measurement that set it. On the
+// corpus oedometer (KV-CST-002, range 100->200 kPa, STOL 1e-5) the ceiling costs and buys:
+//     100 -> -0.9539%, 24 s | 200 -> -0.9861%, 32 s | 500 -> -1.0689%, 67 s | 2000 -> -1.0554%, 67 s
+// Nearly all of the extra work goes into TRIAL iterates far from equilibrium, whose stresses are
+// discarded; the answer moves by about a tenth of a percentage point across a twentyfold ceiling,
+// which is this fixture's path indeterminacy, not integration error. 200 is the cheapest setting
+// on that plateau. Saturation is reported (`HsIntegrated::saturated`) so a run that hit it
+// is never mistaken for one that met its tolerance.
+// TEMPORARY measurement seam (scaffold): the environment override, so the ceiling stays swept.
+inline int hs_max_substeps() {
+    static const int v = [] {
+        const char* e = std::getenv("KATAI_HS_MAXSUB");
+        const int d = e ? std::atoi(e) : 200;
+        return d > 0 ? d : 200;
+    }();
+    return v;
+}
+
+// MEASURED AND NOT TAKEN (2026-08-20): KATAI_HS_MCPROJ=1 returns the MC failure bound along the
+// CONSISTENT direction De.n_s instead of clamping sigma1. See the bound itself, below, for what
+// each does and what each costs.
+inline bool hs_consistent_mc_bound() {
+    static const bool v = [] {
+        const char* e = std::getenv("KATAI_HS_MCPROJ");
+        return e && *e == '1';
+    }();
+    return v;
+}
+
+// The default integration tolerance, and the measurement that set it. KV-CST-002 (100->200 kPa,
+// 40+160 increments, equilibrium tolerance 1e-6); the same material walked at the STRESS POINT
+// says -1.003%, so that column is the target:
+//     STOL    deviation   Newton iterations (seating/staged)   wall clock
+//     1e-3    -1.536%     1887 / 4883                          91 s
+//     1e-4    -1.310%     1907 / 1427                          76 s
+//     1e-5    -0.986%      432 / 1186                          31 s
+//     1e-6    -0.982%      387 / 3379                         117 s
+// A LOOSER integration is not cheaper. Below about 1e-5 the integration noise sits above the
+// residual the phase is asking for, and the equilibrium iteration grinds against it -- four times
+// the seating iterations at 1e-3, for an answer half a percentage point further from the model's
+// own. 1e-5 is the fastest setting AND the first one that reproduces the constitutive routine to
+// the digits this case is published in.
+inline double hs_default_substep_tol() {
+    static const double v = [] {
+        const char* e = std::getenv("KATAI_HS_STOL");
+        const double d = e ? std::atof(e) : 1.0e-5;
+        return d > 0.0 ? d : 1.0e-5;
+    }();
+    return v;
+}
+
 inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
                                  const Eigen::Vector3d& sigma_n, double gamma_p_n,
                                  double pp_n, const Eigen::Vector3d& dstrain,
-                                 int nsub_fixed = 0) {
+                                 double stol = 0.0,
+                                 HsSubstepPlan* plan_out = nullptr,
+                                 const HsSubstepPlan* plan_in = nullptr) {
     const double pr = p.p_ref, plim = 0.1 * pr;  // p_limit (the Eq 15.3 safeguard)
-    const double s3_stiff = std::max(sigma_n(2), plim);
-    const double Eur = p.Eur(s3_stiff), nu = p.nu_ur;
-    const double Ei = p.Ei(s3_stiff), qa = p.q_asymptote(s3_stiff), qf = p.q_failure(s3_stiff);
-    const Eigen::Matrix3d De = detail::hs_elastic(Eur, nu);
+    const double nu = p.nu_ur;
     const detail::HsDilatancy dil = detail::hs_dilatancy(p);
     const double alpha = p.cap_alpha;
-    // The cap deviatoric measure: symmetric von Mises q (q²=3J2). This is EQUIVALENT to
-    // the reduced form of PLAXIS's asymmetric q̃ measure (MMM Eq 6-26) on the OEDOMETER
-    // (axisymmetric, σ2=σ3) path: the σ2,σ3 components of the q̃ flow average out under
-    // axisymmetry → exactly von Mises flow. (Applying q̃ raw to a de2=de3=0 probe produces
-    // the σ2≠σ3 absurdity; see hardening-soil-formulation.md §4f, the study_hs_calibration
-    // experiment.) f_c=3J2/α²+p²−pc², with 3J2 and p² quadratic ⇒ n_c=H_c·σ LINEAR
-    // (closed-form return). H_c=(3/α²)(I−⅓11ᵀ)+(2/9)11ᵀ.
+
+    // --- WHAT THE CURRENT STRESS DECIDES -----------------------------------------------------
+    // E_ur, E_i, q_a and q_f are all functions of the minor principal stress, and in THIS model
+    // that is not a detail -- stress-dependent stiffness is what makes it the Hardening Soil
+    // model rather than Mohr-Coulomb with a cap. So they are read at the state each substep
+    // starts from, which is what makes the substepping worth its cost.
+    //
+    // Until 2026-08-20 they were evaluated ONCE, at the state the whole increment started from,
+    // and held fixed across every substep: the plastic flow was refined while the stiffness it
+    // flowed against stayed at the beginning of the step. That error is FIRST ORDER in the OUTER
+    // increment and no substep tolerance can see it, so an error-controlled integrator would have
+    // reported "converged" while the answer still moved with the load-step count. Measured on the
+    // oedometer walk (2% vertical strain, restrained lateral, tolerance 1e-6) the final sigma1 was
+    //     20 steps 773.27 | 40 791.47 | 80 800.46 | 160 805.02 | 320 807.27 | 640 808.48 kPa
+    // -- halving the outer step halved what was left, exactly first order, extrapolating to
+    // ~809.7: the "converged" answer was 4.5% low at 20 steps and still 0.6% low at 160. Read per
+    // substep the same sweep sits inside 6e-5 relative, on the number that sequence extrapolates
+    // to (tests/study_hs_integration.cpp `point`, which is how both columns were measured).
+    struct Stiff {
+        double s3, Eur, Ei, qa, qf;
+        Eigen::Matrix3d De;
+    };
+    auto stiff_at = [&](const Eigen::Vector3d& s) {
+        Stiff k;
+        k.s3 = std::max(s(2), plim);
+        k.Eur = p.Eur(k.s3);
+        k.Ei = p.Ei(k.s3);
+        k.qa = p.q_asymptote(k.s3);
+        k.qf = p.q_failure(k.s3);
+        k.De = detail::hs_elastic(k.Eur, nu);
+        return k;
+    };
+    const Stiff k_n = stiff_at(sigma_n);   // the committed state, for the elastic default
+    // The cap deviatoric measure: symmetric von Mises q (q^2=3J2). This is EQUIVALENT to
+    // the reduced form of PLAXIS's asymmetric q-tilde measure (MMM Eq 6-26) on the OEDOMETER
+    // (axisymmetric, s2=s3) path: the s2,s3 components of the q-tilde flow average out under
+    // axisymmetry -> exactly von Mises flow. (Applying q-tilde raw to a de2=de3=0 probe
+    // produces the s2!=s3 absurdity; see hardening-soil-formulation.md section 4f.)
+    // f_c=3J2/alpha^2+p^2-pc^2, with 3J2 and p^2 quadratic => n_c=H_c.sigma LINEAR
+    // (closed-form return). H_c=(3/alpha^2)(I-(1/3)11^T)+(2/9)11^T.
     const Eigen::Matrix3d dev = Eigen::Matrix3d::Identity() -
                                 (1.0 / 3.0) * Eigen::Matrix3d::Ones();
     const Eigen::Matrix3d Hc = (3.0 / (alpha * alpha)) * dev +
@@ -585,71 +707,77 @@ inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
     const double ev_n = cap_on ? p.cap_ev_from_pc(pp_n) : 0.0;
 
     auto mean = [](const Eigen::Vector3d& s) { return (s(0) + s(1) + s(2)) / 3.0; };
-    auto fbar = [&](double q) { return (2.0 / Ei) * q / (1.0 - q / qa) - 2.0 * q / Eur; };
-    auto fbar_p = [&](double q) {
-        const double r = 1.0 - q / qa; return (2.0 / Ei) / (r * r) - 2.0 / Eur;
+    auto fbar = [&](double q, const Stiff& k) {
+        return (2.0 / k.Ei) * q / (1.0 - q / k.qa) - 2.0 * q / k.Eur;
+    };
+    auto fbar_p = [&](double q, const Stiff& k) {
+        const double r = 1.0 - q / k.qa; return (2.0 / k.Ei) / (r * r) - 2.0 / k.Eur;
     };
     auto fcap = [&](const Eigen::Vector3d& s, double ppv) {
         const double pm = mean(s);
         const double j3 = 0.5 * ((s(0) - s(1)) * (s(0) - s(1)) +
                                  (s(1) - s(2)) * (s(1) - s(2)) +
-                                 (s(2) - s(0)) * (s(2) - s(0)));  // 3·J2 (von Mises q²)
+                                 (s(2) - s(0)) * (s(2) - s(0)));  // 3*J2 (von Mises q^2)
         return j3 / (alpha * alpha) + pm * pm - ppv * ppv;
     };
-    auto spm_of = [&](double q) { return dil.from_q(q, s3_stiff); };
+    auto spm_of = [&](double q, const Stiff& k) { return dil.from_q(q, k.s3); };
+    auto pc_of = [&](double evv) { return cap_on ? p.cap_pc_from_ev(evv) : pp_n; };
 
-    // Substep count: split the elastic stress change into ~1%·(|σ|+pref) pieces (robust, cheap).
-    const Eigen::Vector3d dsig_e = De * dstrain;
-    const double ref_stress = sigma_n.cwiseAbs().maxCoeff() + pr;
-    int nsub = static_cast<int>(std::ceil(dsig_e.norm() / (0.01 * ref_stress)));
-    nsub = std::min(std::max(nsub, 1), 2000);
-    if (nsub_fixed > 0) nsub = std::min(nsub_fixed, 2000);  // FD perturbation: same as the base run
-    const Eigen::Vector3d de = dstrain / nsub;
-
-    Eigen::Vector3d sig = sigma_n;
-    double gp = gamma_p_n, ev = ev_n;
-    auto pp_of = [&]() { return cap_on ? p.cap_pc_from_ev(ev) : pp_n; };
-    bool any_plastic = false;
-    Eigen::Matrix3d tangent = De;  // the last substep's continuum tangent
-
-    for (int sub = 0; sub < nsub; ++sub) {
-        const Eigen::Vector3d sig_tr = sig + De * de;
-        const double pp = pp_of();
+    // --- ONE EXPLICIT INCREMENT from an arbitrary state: the modified-Euler building block ---
+    // Evaluated twice per substep (at its start and at its Euler end point). It reads a state
+    // and returns increments, so the pair differ only by where they were evaluated -- which is
+    // exactly what makes their difference an error estimate.
+    struct Inc {
+        Eigen::Vector3d dsig = Eigen::Vector3d::Zero();
+        double dgp = 0.0;
+        double dev = 0.0;
+        Eigen::Matrix3d tangent = Eigen::Matrix3d::Zero();
+        bool plastic = false;
+        bool as = false;       // shear surface active (after Koiter drops)
+        bool ac = false;       // cap active
+        bool at_fail = false;  // on the perfectly-plastic MC plateau
+    };
+    auto increment = [&](const Eigen::Vector3d& s_in, double gp_in, double ev_in,
+                         const Eigen::Vector3d& de_in) -> Inc {
+        Inc r;
+        const Stiff k = stiff_at(s_in);   // the stiffness and strength THIS substep starts from
+        const Eigen::Matrix3d& De = k.De;
+        const double qf = k.qf;
+        r.dsig = De * de_in;
+        r.tangent = De;
+        const double pp = pc_of(ev_in);
+        const Eigen::Vector3d sig_tr = s_in + De * de_in;
         const double q_tr = sig_tr(0) - sig_tr(2);
-        bool as = fbar(q_tr) - gp > 1e-12 * (1.0 + std::fabs(gp));
+        bool as = fbar(q_tr, k) - gp_in > 1e-12 * (1.0 + std::fabs(gp_in));
         bool ac = cap_on && fcap(sig_tr, pp) > 1e-10 * (1.0 + pp * pp);
-        if (!as && !ac) { sig = sig_tr; tangent = De; continue; }
-        any_plastic = true;
+        if (!as && !ac) return r;
+        r.plastic = true;
 
-        // Gradients/flow/hardening of the active surfaces (at the current σ).
-        const double q = sig(0) - sig(2);
-        // Flow direction m_g=(1,R,R), R=ε3^p/ε1^p. Rowe dilatancy: ε_v^p/ε_q^p=−sinψ_m
-        // (DILATION, comp-pos ⇒ ε_v^p<0). R=−(1+sinψ_m)/(2−sinψ_m) gives it (−½ at ψ_m=0 =
-        // volumetrically neutral). [The earlier −(1−sinψ_m)/(2+sinψ_m) gave
-        // ε_v^p/ε_q^p=+sinψ_m = CONTRACTION — a sign error; never caught because the
-        // volumetric response was never verified, see test_hs_berlin Fig 15.4.]
-        const double spm = spm_of(q), R = -(1.0 + spm) / (2.0 - spm);
-        // Hardening modulus h_s = 1−2R = (4+sinψ_m)/(2−sinψ_m) (Eq 6-10: γ^p=−(2ε1^p−ε_v^p)); 2 at ψ_m=0.
+        // Gradients/flow/hardening of the active surfaces, at the state passed in.
+        const double q = s_in(0) - s_in(2);
+        // Flow direction m_g=(1,R,R), R=e3^p/e1^p. Rowe dilatancy: ev^p/eq^p=-sin(psi_m)
+        // (DILATION, comp-pos => ev^p<0). R=-(1+sin psi_m)/(2-sin psi_m) gives it (-1/2 at
+        // psi_m=0 = volumetrically neutral).
+        const double spm = spm_of(q, k), R = -(1.0 + spm) / (2.0 - spm);
+        // Hardening modulus h_s = 1-2R = (4+sin psi_m)/(2-sin psi_m) (Eq 6-10); 2 at psi_m=0.
         const double h_s = (4.0 + spm) / (2.0 - spm);
         const Eigen::Vector3d n_s(1.0, R, R);  // flow direction (dilatant)
-        // Failure plateau: at q≥qf the shear becomes PERFECTLY-PLASTIC MC (yield f=q−qf,
-        // grad (1,0,−1), hardening 0); the flow (1,R,R) stays dilatant → dilation continues
-        // along the plateau (Fig 15.4). Otherwise the hardening surface cannot cross qf,
-        // stays dormant, and the cap contraction dominates.
-        // (PLAXIS: hardening shear → perfectly-plastic MC at failure.)
+        // Failure plateau: at q>=qf the shear becomes PERFECTLY-PLASTIC MC (yield f=q-qf,
+        // grad (1,0,-1), hardening 0); the flow (1,R,R) stays dilatant -> dilation continues
+        // along the plateau (Fig 15.4).
         const bool at_fail = q >= qf - 1e-9 * (1.0 + qf);
         const Eigen::Vector3d m_s = at_fail ? Eigen::Vector3d(1.0, 0.0, -1.0)
-                                            : (fbar_p(q) * Eigen::Vector3d(1.0, 0.0, -1.0));
+                                            : (fbar_p(q, k) * Eigen::Vector3d(1.0, 0.0, -1.0));
         const double Hh_s = at_fail ? 0.0 : h_s;
-        const Eigen::Vector3d n_c = Hc * sig, m_c = n_c;  // cap associated
-        const double pmean = mean(sig);
+        const Eigen::Vector3d n_c = Hc * s_in, m_c = n_c;  // cap associated
+        const double pmean = mean(s_in);
         const double Hcap = cap_on ? p.cap_hardening_modulus(pp) : 0.0;
+        r.at_fail = at_fail;
 
-        // Active-set Koiter solve (negative multiplier → drop the surface, solve again).
-        Eigen::Vector3d dsig;
+        // Active-set Koiter solve (negative multiplier -> drop the surface, solve again).
         for (int pass = 0; pass < 3; ++pass) {
             const int na = (as ? 1 : 0) + (ac ? 1 : 0);
-            if (na == 0) { dsig = De * de; break; }
+            if (na == 0) { r.dsig = De * de_in; r.tangent = De; break; }
             Eigen::MatrixXd A(na, na); Eigen::VectorXd b(na);
             std::vector<Eigen::Vector3d> ns, ms;
             std::vector<double> Hh;
@@ -657,7 +785,7 @@ inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
             if (ac) { ns.push_back(n_c); ms.push_back(m_c);
                       Hh.push_back(4.0 * pp * pmean * Hcap); }
             for (int i = 0; i < na; ++i) {
-                b(i) = ms[i].dot(De * de);
+                b(i) = ms[i].dot(De * de_in);
                 for (int j = 0; j < na; ++j)
                     A(i, j) = ms[i].dot(De * ns[j]) + (i == j ? Hh[i] : 0.0);
             }
@@ -671,65 +799,206 @@ inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
             Eigen::Vector3d plastic_strain = Eigen::Vector3d::Zero();
             if (as) plastic_strain += dl_s * n_s;
             if (ac) plastic_strain += dl_c * n_c;
-            dsig = De * (de - plastic_strain);
-            if (as && !at_fail) gp += h_s * dl_s;  // plateau: hardening freezes (perfectly plastic)
-            if (ac) ev += dl_c * 2.0 * pmean;
-            // continuum tangent (last substep, active set)
-            Eigen::Matrix3d Dep = De;
-            {
+            r.dsig = De * (de_in - plastic_strain);
+            if (as && !at_fail) r.dgp = h_s * dl_s;  // plateau: hardening freezes
+            if (ac) r.dev = dl_c * 2.0 * pmean;
+            {   // continuum tangent for this active set
                 const int m = na;
                 Eigen::MatrixXd N(3, m), M(3, m);
                 int c = 0;
                 if (as) { N.col(c) = n_s; M.col(c) = m_s; ++c; }
                 if (ac) { N.col(c) = n_c; M.col(c) = m_c; ++c; }
-                Dep = De - De * N * A.fullPivLu().solve(M.transpose() * De);
+                r.tangent = De - De * N * A.fullPivLu().solve(M.transpose() * De);
             }
-            tangent = Dep;
             break;
         }
-        sig += dsig;
+        r.as = as;
+        r.ac = ac;
+        return r;
+    };
 
-        // Drift correction: pull the stress back onto the active surfaces. SHEAR: a stress
-        // violating the surface is pulled along the CONSISTENT (Potts & Gens 1985)
-        // elastoplastic direction De·n_s — δσ=−(f/(aᵀDe·n_s+h_s))·De·n_s, a=∂f/∂σ. De·n_s is
-        // SYMMETRIC in σ2,σ3 (n_s=(1,R,R)) ⇒ **σ2=σ3 IS PRESERVED** (the axisymmetric/
-        // oedometer edge). The bare yield gradient (1,0,−1) pushes only σ1,σ3 and leaves σ2
-        // → a σ_r≠σ_θ drift in triaxial (the axisym K0 error). The CAP is associated
-        // (n_c=Hc·σ symmetric) → the gradient projection never disturbs σ2,σ3 anyway.
+    // --- DRIFT CORRECTION, applied to an ACCEPTED substep ------------------------------------
+    // SHEAR: a stress violating the surface is pulled along the CONSISTENT (Potts & Gens 1985)
+    // elastoplastic direction De.n_s -- dsig=-(f/(a^T De.n_s + h_s)) De.n_s, a=df/dsigma.
+    // De.n_s is SYMMETRIC in s2,s3 (n_s=(1,R,R)) => s2=s3 IS PRESERVED (the axisymmetric /
+    // oedometer edge). The bare yield gradient (1,0,-1) pushes only s1,s3 and leaves s2 -> a
+    // s_r != s_theta drift in triaxial. The CAP is associated (n_c=Hc.sigma symmetric) => the
+    // gradient projection never disturbs s2,s3 anyway. The surfaces corrected are the ones the
+    // substep was yielding on (the union of its two evaluations).
+    auto correct_drift = [&](Eigen::Vector3d& s, double& gp_io, double ev_io,
+                             bool as_act, bool ac_act, bool at_fail) {
         for (int it = 0; it < 5; ++it) {
-            const double ppc = pp_of();
-            const double qd = sig(0) - sig(2);
-            double fs = at_fail ? (qd - qf) : (fbar(qd) - gp);
-            double fcp = cap_on ? fcap(sig, ppc) : -1.0;
+            const Stiff k = stiff_at(s);   // the correction moves sigma3, so it moves these too
+            const double qf = k.qf;
+            const double ppc = pc_of(ev_io);
+            const double qd = s(0) - s(2);
+            const double fs = at_fail ? (qd - qf) : (fbar(qd, k) - gp_io);
+            const double fcp = cap_on ? fcap(s, ppc) : -1.0;
             bool corr = false;
-            if (as && fs > 1e-9 * (1.0 + std::fabs(gp) + qf)) {
-                const Eigen::Vector3d a = (at_fail ? 1.0 : fbar_p(qd)) *
-                                          Eigen::Vector3d(1.0, 0.0, -1.0);  // ∂f/∂σ
-                const Eigen::Vector3d Den = De * n_s;                       // flow direction
+            if (as_act && fs > 1e-9 * (1.0 + std::fabs(gp_io) + qf)) {
+                const double spm = spm_of(qd, k), R = -(1.0 + spm) / (2.0 - spm);
+                const double h_s = (4.0 + spm) / (2.0 - spm);
+                const Eigen::Vector3d n_s(1.0, R, R);
+                const Eigen::Vector3d a = (at_fail ? 1.0 : fbar_p(qd, k)) *
+                                          Eigen::Vector3d(1.0, 0.0, -1.0);  // df/dsigma
+                const Eigen::Vector3d Den = k.De * n_s;                     // flow direction
                 const double denom = a.dot(Den) + (at_fail ? 0.0 : h_s);
                 const double dlam_d = fs / denom;
-                sig -= dlam_d * Den;
-                if (!at_fail) gp += h_s * dlam_d;  // hardening tracks the drift step
+                s -= dlam_d * Den;
+                if (!at_fail) gp_io += h_s * dlam_d;  // hardening tracks the drift step
                 corr = true;
             }
-            if (ac && std::fabs(fcp) > 1e-8 * (1.0 + ppc * ppc)) {
-                const Eigen::Vector3d g = Hc * sig;
-                sig -= (fcp / g.squaredNorm()) * g; corr = true;
+            if (ac_act && std::fabs(fcp) > 1e-8 * (1.0 + ppc * ppc)) {
+                const Eigen::Vector3d g = Hc * s;
+                s -= (fcp / g.squaredNorm()) * g; corr = true;
             }
             if (!corr) break;
         }
-        // MC failure bound (shear): q ≤ qf.
-        const double qd = sig(0) - sig(2);
-        if (qd > qf) sig(0) -= (qd - qf);
+        // MC failure bound (shear): q <= q_f. This is the last line -- the drift loop above only
+        // pulls back onto the surface the substep was YIELDING on, and a substep that crossed into
+        // failure can leave the state outside the failure surface with the hardening surface
+        // satisfied.
+        //
+        // It is a bare clamp on sigma1, which leaves sigma3 alone. That is one-sided, and once
+        // q_f follows the substep (rather than being frozen for the whole increment) it is a
+        // RATCHET: the clamp only ever lowers sigma1, so every excursion of sigma3 below its
+        // end-of-step value permanently caps q at the smallest q_f the path passed through.
+        // MEASURED, Berlin Sand III drained triaxial (test_hs_berlin, sigma3 = 200, q_f = 644.85):
+        // the deviator stalls at 643.32 (99.76% of q_f) at 5% axial strain and is still there at
+        // 20% -- the plateau is approached but never reached.
+        //
+        // The principled replacement is the same CONSISTENT projection the drift loop uses, along
+        // De.n_s, iterated because q_f moves with sigma3. It works: 644.36 (99.93%). It also
+        // costs a case that passes today -- the shear-dominated, low-confinement strip footing
+        // (test_hs_footing) stops converging at the full service load, 1.000 -> 0.922 (portable)
+        // and 0.824 (MKL), with twice the iterations. A bound that fixes a 0.24% shortfall on a
+        // material-point plateau and loses a boundary-value problem is not a trade to take
+        // silently, so it is not taken: `KATAI_HS_MCPROJ=1` selects it, the clamp ships, and the
+        // reason the footing dislikes it is not yet understood. (The clamp's ratchet is
+        // conservative -- it under-predicts strength -- which is why this is affordable.)
+        for (int it = 0; it < 5; ++it) {
+            const Stiff k = stiff_at(s);
+            const double qd = s(0) - s(2);
+            const double over = qd - k.qf;
+            if (over <= 1e-12 * (1.0 + k.qf)) break;
+            if (!hs_consistent_mc_bound()) { s(0) -= over; break; }   // TEMPORARY seam
+            const double spm = spm_of(qd, k), R = -(1.0 + spm) / (2.0 - spm);
+            const Eigen::Vector3d n_s(1.0, R, R);
+            const Eigen::Vector3d Den = k.De * n_s;
+            const Eigen::Vector3d a(1.0, 0.0, -1.0);          // df/dsigma of f = q - q_f
+            s -= (over / a.dot(Den)) * Den;
+        }
+    };
+
+    Eigen::Vector3d sig = sigma_n;
+    double gp = gamma_p_n, ev = ev_n;
+    bool any_plastic = false;
+    // The committed state's elastic matrix, until a plastic substep replaces it with its own
+    // continuum tangent (an elastic increment returns this one).
+    Eigen::Matrix3d tangent = k_n.De;
+
+    const double tol = stol > 0.0 ? stol : hs_default_substep_tol();
+    // Ceiling on the measured subdivision. It is a GUARD, not a policy: an increment that asks
+    // for more than this is an increment the load stepping should have cut, and the counter below
+    // records every time it fires so a saturated integration is never silently reported as one
+    // that met its tolerance.
+    const int kMaxSubsteps = hs_max_substeps();
+    if (plan_out) plan_out->clear();
+
+    const bool replaying = plan_in && plan_in->n > 0 && plan_in->dT > 0.0;
+
+    // --- HOW MANY SUBSTEPS: measured from the error, and CONTINUOUS in the strain increment ---
+    //
+    // Two decisions, both forced by measurement rather than taste.
+    //
+    // (1) The subdivision is chosen ONCE for the increment, from a real error estimate, and then
+    //     used as-is. The textbook accept/reject form of Sloan, Abbo & Sheng (2001) re-subdivides
+    //     as it goes, which makes the subdivision a discontinuous function of the strain
+    //     increment: two neighbouring Newton iterates integrate along different subdivisions, the
+    //     internal force stops being a smooth function of the displacement, and the global
+    //     iteration cannot converge below the integration noise. MEASURED on the corpus
+    //     oedometer, 2026-08-20: with accept/reject the residual fell to a relative 1.2e-3 and
+    //     then wandered, the line search halving to 2.4e-4 without finding descent.
+    //
+    // (2) The count is a REAL number, not an integer. With ceil() the map still jumps -- the same
+    //     measurement, one step further: the residual reached 5.7e-6 and stalled there, because
+    //     an iterate that changes n from 4 to 5 changes the answer by the difference between two
+    //     subdivisions. Taking n substeps of 1/n_real with a partial last one makes the answer a
+    //     CONTINUOUS function of the strain increment, which is what a Newton iteration needs to
+    //     converge to the tolerance a phase asks for.
+    //
+    // The estimate itself: a modified-Euler pair over a trial substep measures the local error of
+    // that substep. The scheme is second order, so the local error of a substep of pseudo-time dT
+    // is ~C.dT^3 and the error accumulated over the 1/dT of them is ~C.dT^2; the largest dT
+    // meeting the tolerance is sqrt(STOL.dT^3/e). Read at dT=1 that is the familiar
+    // sqrt(err_full/STOL) -- but a whole increment is often far outside the asymptotic regime
+    // that law assumes, so the estimate is taken TWICE: once over the full increment, then again
+    // over the substep the first pass proposed, where the law does hold. Both passes are
+    // continuous functions of the strain increment; no branch chooses between them.
+    double nreal = 1.0;
+    if (replaying) {
+        // Replay: the subdivision is uniform, so its one step size reproduces it exactly.
+        nreal = 1.0 / plan_in->dT;
+    } else if (dstrain.squaredNorm() > 0.0) {
+        for (int pass = 0; pass < 2; ++pass) {
+            const double dT = 1.0 / nreal;
+            const Eigen::Vector3d de = dT * dstrain;
+            const Inc f1 = increment(sigma_n, gamma_p_n, ev_n, de);
+            const Inc f2 = increment(sigma_n + f1.dsig, gamma_p_n + f1.dgp, ev_n + f1.dev, de);
+            // No plasticity gate on the estimate. An elastic step is not error-free here: E_ur
+            // moves with sigma3, so the elastic response is nonlinear and its own error is what
+            // the pair measures. Where the stiffness really is constant the two evaluations
+            // agree, the estimate is zero, and the step is taken whole -- a gate would only hide
+            // the case where it is not.
+            const Eigen::Vector3d s_end = sigma_n + 0.5 * (f1.dsig + f2.dsig);
+            // The denominator needs a FLOOR, and the reference code says which one. A purely
+            // relative measure against ||sigma|| is degenerate where a run starts from (near)
+            // zero stress -- a weightless column, a surface layer, the first increment of any
+            // seating phase. PLAXIS meets the same problem in its local error checks and floors
+            // the denominator at p_ref/200 (Scientific Manual Eq. 9-7, the check written for
+            // stress-dependent elastic stiffness); this is the same floor, for the same reason.
+            const double dn = std::max(s_end.norm(), pr / 200.0);
+            const double e_step = 0.5 * (f2.dsig - f1.dsig).norm() / dn;
+            if (!(e_step > 0.0)) break;             // exact on this step: nothing to subdivide
+            const double dT_ok = std::sqrt(tol * dT * dT * dT / e_step);
+            nreal = std::min(std::max(1.0, 1.0 / dT_ok), (double)kMaxSubsteps);
+            if (nreal <= 1.0) break;
+        }
     }
+
+    const double dT_full = 1.0 / nreal;
+    int taken = 0;
+    if (plan_out) { plan_out->clear(); plan_out->dT = dT_full; }
+    for (double T = 0.0; T < 1.0 - 1e-12 && taken < kMaxSubsteps + 2; ++taken) {
+        const double dT = std::min(dT_full, 1.0 - T);
+        const Eigen::Vector3d de = dT * dstrain;
+        const Inc k1 = increment(sig, gp, ev, de);
+        const Inc k2 = increment(sig + k1.dsig, gp + k1.dgp, ev + k1.dev, de);
+        sig += 0.5 * (k1.dsig + k2.dsig);
+        gp += 0.5 * (k1.dgp + k2.dgp);
+        ev += 0.5 * (k1.dev + k2.dev);
+        if (k1.plastic || k2.plastic) {
+            any_plastic = true;
+            tangent = k2.plastic ? k2.tangent : k1.tangent;
+            correct_drift(sig, gp, ev, k1.as || k2.as, k1.ac || k2.ac,
+                          k1.at_fail || k2.at_fail);
+        }
+        if (plan_out) ++plan_out->n;
+        T += dT;
+    }
+    // Saturation is REPORTED, never absorbed: if the ceiling clipped the subdivision the
+    // integration did not meet its tolerance, and the caller is told so rather than handed a
+    // number that looks like every other one.
+    const int accepted = taken, clipped = (nreal >= (double)kMaxSubsteps) ? 1 : 0;
 
     HsIntegrated out;
     out.stress = sig;
     out.gamma_p = gp;
-    out.pp = pp_of();
+    out.pp = cap_on ? p.cap_pc_from_ev(ev) : pp_n;
     out.tangent = tangent;
     out.plastic = any_plastic;
-    out.nsub = nsub;
+    out.nsub = accepted;
+    out.saturated = clipped;
     return out;
 }
 
@@ -765,15 +1034,33 @@ inline double hs_initial_gamma_p(const HardeningSoilParams& p,
 // --- Oedometer probe + cap calibration (on the robust hs_integrate) ------------------
 // Oedometer (ε_h=0) NC primary loading (with hs_integrate, robust); returns the tangent
 // Eoed at σ1=p_ref and the lateral ratio K0. (α,β) → (K0,Eoed).
+// The tolerance the CALIBRATION integrates at. Deliberately independent of, and tighter than,
+// whatever a run uses: alpha and beta are properties of the MATERIAL (they are what makes the
+// model reproduce Eoed_ref and K0_NC), so they must not move when a phase asks for a looser or
+// tighter integration. Before 2026-08-20 the probe inherited the integrator's fixed 1% substep
+// rule, which tied every calibrated cap -- and therefore every Hardening Soil answer this
+// program has ever produced -- to a numerical constant, in a second and completely invisible
+// way. This is the fix for that half of it.
+inline constexpr double kHsCalibrationTol = 1.0e-6;
+
 inline void hs_oedometer_probe(const HardeningSoilParams& p, double& Eoed_pref,
                                double& K0) {
     const double pr = p.p_ref, p0 = 0.02 * pr;
     Eigen::Vector3d sig(p0, p0, p0);
     double gp = 0.0, pp = p0, s1b = p0;
-    const double de1 = 2.0e-4;
+    // Two step sizes, and the reason is the whole point of an error-controlled integrator: the
+    // OUTER step no longer decides accuracy, the tolerance does, so the walk up to the reference
+    // pressure can be taken in few, large steps (each subdivided internally as much as it needs)
+    // and only the reading itself needs a small step -- Eoed is read as a SECANT over one step,
+    // so that one must stay short to approximate the tangent. Measured: the coarse approach
+    // costs about a tenth of the uniform fine walk and moves neither Eoed nor K0 in the figures
+    // the calibration bisects on.
+    const double de_coarse = 2.0e-3, de_fine = 2.0e-4;
     Eoed_pref = 0.0; K0 = 0.0;
     for (int i = 0; i < 3000; ++i) {
-        const HsIntegrated r = hs_integrate(p, sig, gp, pp, Eigen::Vector3d(de1, 0, 0));
+        const double de1 = (sig(0) < 0.9 * pr) ? de_coarse : de_fine;
+        const HsIntegrated r = hs_integrate(p, sig, gp, pp, Eigen::Vector3d(de1, 0, 0),
+                                            kHsCalibrationTol);
         if (s1b < pr && r.stress(0) >= pr) {
             Eoed_pref = (r.stress(0) - s1b) / de1;
             K0 = r.stress(2) / r.stress(0);

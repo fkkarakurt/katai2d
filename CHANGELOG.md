@@ -4,6 +4,59 @@ All notable changes to KATAI 2D. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 MAJOR.MINOR.PATCH.
 
+## [Unreleased]
+
+### The Hardening Soil answer no longer depends on how many load steps it was asked for
+
+The stress-point integrator held the model's stress-dependent moduli — `E_ur`, `E_i`, `q_a`,
+`q_f`, every one of them a function of the current confining stress — fixed at the state each
+load increment began from, and used them for the whole increment. That is a first-order error in
+the increment size, and no substep tolerance can see it: the integrator reported that it had met
+its accuracy target while the answer was still moving with the step count. Measured on one
+oedometer path at a fixed integration tolerance, halving the step halved what was left, all the
+way down: the "converged" answer was **4.5% low at 20 steps and still 0.6% low at 160**.
+
+The moduli are now read at the state each substep begins from, which is what the model says they
+are. The substepping itself is now error-controlled as its citation always claimed — a
+modified-Euler pair measures the local error, and the subdivision is sized from it against a
+declared tolerance (default 1e-5) rather than a fixed fraction of a reference stress.
+
+What that changes, on the case the verification record publishes (a laterally confined Hardening
+Soil column, `KV-CST-002`):
+
+- **The load path stops being an error axis.** A 16× refinement of the increments moved the answer
+  by 2.9 percentage points; it now moves it by **0.020%**.
+- **The two linear-solver backends agree.** The same run split between PARDISO and Eigen by
+  0.18 percentage points; the three stress ranges now agree to **15 significant figures**.
+- **The remaining ~1% is the model's, and it can be shown without a finite element run.** The same
+  calibrated material, integrated at a single stress point with no mesh, no load path and no
+  equilibrium iteration, lands within 0.3 percentage points of the boundary-value answer.
+- **The cap calibration is more accurate**, because it runs through this same integrator: it now
+  reproduces its own `Eoed_ref` and `K0_NC` targets to better than 0.1%.
+
+**Hardening Soil results will differ from 0.8.1 and earlier.** They differ because the earlier
+ones carried an error that was invisible to every control the program offered. Two published
+numbers moved in the process, and the record says so rather than quietly restating them: the
+conclusion that `KV-CST-002`'s residual deviation was a cap calibrated at `p_ref` — argued from a
+signature that grew with stress level and changed sign — is **retracted**, because that signature
+was the frozen-modulus error. `docs/validation/numerical-uncertainty.md` §6 and §7 are rewritten
+around what is measured now.
+
+### Known limits
+
+- The integration tolerance is a build-time default with an environment override
+  (`KATAI_HS_STOL`); its home is the phase's numerical controls, next to the tolerated error and
+  the load-step count, so that a published run carries the accuracy it was computed with.
+- One increment's subdivision is capped at 200 substeps. Saturation is counted and reported, never
+  absorbed; it is reached almost only on trial iterates whose stresses are discarded.
+- Soft Soil, Soft Soil Creep and Mohr-Coulomb keep their own substepping rules. They do **not**
+  carry this defect — both soft-soil integrators take their bulk and shear moduli from each
+  substep's own trial pressure, and Mohr-Coulomb has no stress-dependent modulus to freeze.
+- The Mohr-Coulomb failure bound is still a one-sided clamp on the major principal stress, which
+  ratchets slightly when the failure deviator moves inside an increment (measured: a drained
+  triaxial stalls 0.24% below its plateau). The consistent projection that fixes it costs a
+  boundary-value problem that passes today, so it is measured, recorded and not taken.
+
 ## [0.8.1] - 2026-08-19
 
 Two things a result can be wrong about without looking wrong, and one of them had

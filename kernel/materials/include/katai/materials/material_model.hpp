@@ -295,13 +295,16 @@ inline double tension_cap_of(const MaterialModel& m) {
     return m.tension_cutoff ? m.tensile_strength : kNoTensionCap;
 }
 
-// nsub_fixed: >0 pins the hs_integrate substep count (so the numerical consistent
-// tangent's perturbed runs follow the SAME substep sequence as the base run).
+// plan_in: replay a previous run's accepted substep subdivision, so the numerical consistent
+// tangent's perturbed runs walk EXACTLY the base run's substeps (see HsSubstepPlan). plan_out:
+// record this run's subdivision for that purpose.
 inline HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
                                    const Eigen::Vector3d& comm_in_plane, double comm_zz,
                                    const Eigen::Vector3d& trial_in_plane, double trial_zz,
-                                   double gamma_p_n, double pp_n, int nsub_fixed = 0,
-                                   double sigma_t_cap = kNoTensionCap) {
+                                   double gamma_p_n, double pp_n,
+                                   const HsSubstepPlan* plan_in = nullptr,
+                                   double sigma_t_cap = kNoTensionCap,
+                                   HsSubstepPlan* plan_out = nullptr) {
     const double cxx = comm_in_plane(0), cyy = comm_in_plane(1), cxy = comm_in_plane(2);
     const double cmean = 0.5 * (cxx + cyy);
     const double cR = std::sqrt(0.25 * (cxx - cyy) * (cxx - cyy) + cxy * cxy);
@@ -316,12 +319,17 @@ inline HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
     PV pv[3] = {{mean + radius, 0}, {mean - radius, 1}, {trial_zz, 2}};
     std::sort(pv, pv + 3, [](const PV& a, const PV& b) { return a.v > b.v; });
 
-    // Robust strain-driven substepping return (hs_integrate). Feed the committed principal
-    // stress + the principal elastic strain increment that reproduces the trial under the same
-    // frozen Eur (deps_p = C_e (sigma_tr - sigma_n)) -> substep 1 reconstructs the trial exactly
-    // (elastic steps byte-identical), then substepping traces the loading path (unconditionally
-    // stable). The earlier nested-Newton projection diverged on shear-dominated, low-confinement
-    // BVPs (strip footings, free surfaces).
+    // Robust strain-driven substepping return (hs_integrate). What is handed over is a STRAIN
+    // increment: C_e (sigma_tr - sigma_n) inverts the elastic predictor the FE just formed with
+    // this same Eur, so it recovers exactly the strain increment the element applied -- that is
+    // the physical input, and it is exact whatever the integrator does with it afterwards. The
+    // earlier nested-Newton projection diverged on shear-dominated, low-confinement BVPs (strip
+    // footings, free surfaces).
+    // (Before 2026-08-20 the integrator held E_ur fixed at this same value, so a step that
+    // turned out elastic reproduced the predictor bit for bit. It no longer does: E_ur follows
+    // sigma3 through the substeps, which makes the unloading-reloading response nonlinear, which
+    // is what the model says it is. The Jacobian chain below is unaffected -- deps/dsigma_tr is
+    // C_e exactly, by construction of the predictor.)
     const Eigen::Vector3d sigHS(-pv[2].v, -pv[1].v, -pv[0].v);   // trial, comp-pos desc
     double cp[3] = {cmean + cR, cmean - cR, comm_zz};            // committed, tension-pos
     std::sort(cp, cp + 3, [](double a, double b) { return a > b; });
@@ -331,7 +339,8 @@ inline HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
     Ce << 1.0, -nu, -nu, -nu, 1.0, -nu, -nu, -nu, 1.0;
     Ce /= Eur;
     const Eigen::Vector3d deps_p = Ce * (sigHS - sig_n_cp);
-    const HsIntegrated ret = hs_integrate(pe, sig_n_cp, gamma_p_n, pp_n, deps_p, nsub_fixed);
+    const HsIntegrated ret = hs_integrate(pe, sig_n_cp, gamma_p_n, pp_n, deps_p, 0.0,
+                                         plan_out, plan_in);
     double r[3] = {-ret.stress(2), -ret.stress(1), -ret.stress(0)};  // tension, desc
     // Tension cut-off (MMM Eq. 3-11), applied to the principals the model's own return produced.
     // Off by default, and the branch is not taken when the largest principal is admissible, so
@@ -395,8 +404,9 @@ inline double effective_dilatancy(const MaterialModel& m, const GaussState& s) {
 
 inline void hs_forward(const MaterialModel& m, const GaussState& committed,
                        const Eigen::Vector3d& de, GaussState& trial,
-                       Eigen::Matrix3d* tangent_out = nullptr, int nsub_fixed = 0,
-                       bool* plastic_out = nullptr, int* nsub_out = nullptr) {
+                       Eigen::Matrix3d* tangent_out = nullptr,
+                       const HsSubstepPlan* plan_in = nullptr,
+                       bool* plastic_out = nullptr, HsSubstepPlan* plan_out = nullptr) {
     HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
     // Dilatancy cut-off: psi = 0 clamps the mobilised dilatancy sin(psi_m) to [0, 0] inside the
     // return core, which IS Eq. 5.16b -- the rule enters where the manual puts it, and nothing
@@ -414,7 +424,7 @@ inline void hs_forward(const MaterialModel& m, const GaussState& committed,
 
     const HsReturnCore c = hs_return_core(pe, Eur, committed.stress, committed.stress_zz,
                                           pred.in_plane, pred.zz, committed.gamma_p,
-                                          committed.pp, nsub_fixed, tension_cap_of(m));
+                                          committed.pp, plan_in, tension_cap_of(m), plan_out);
     trial.stress = c.in_plane;
     trial.stress_zz = c.zz;
     trial.gamma_p = c.gamma_p;
@@ -422,7 +432,6 @@ inline void hs_forward(const MaterialModel& m, const GaussState& committed,
     trial.eps_vol = committed.eps_vol;
     if (tangent_out) *tangent_out = c.tan.tangent;
     if (plastic_out) *plastic_out = c.plastic;
-    if (nsub_out) *nsub_out = c.nsub;
 
     // HSsmall: γ_hist += Δγ (monotone accumulation; Eq 7-5 γ=√(1.5 e:e), e=deviatoric; plane strain εzz=0).
     if (m.hs.G0_ref > 0.0) {
@@ -685,8 +694,8 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
         }
         case MaterialType::HardeningSoil: {
             bool plastic = false;
-            int nsub = 0;
-            hs_forward(m, committed, strain_increment, trial, &tangent, 0, &plastic, &nsub);
+            HsSubstepPlan plan;   // the base run's subdivision, replayed by the perturbed runs
+            hs_forward(m, committed, strain_increment, trial, &tangent, nullptr, &plastic, &plan);
             // kConsistent + plastic step → numerical consistent tangent (TangentMode
             // block): 3 perturbed forward runs, substep count pinned to the base run.
             if (mode == TangentMode::kConsistent && plastic) {
@@ -695,7 +704,7 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
                     Eigen::Vector3d dep = strain_increment;
                     const double h = hs_fd_step(strain_increment(j));
                     dep(j) += h;
-                    hs_forward(m, committed, dep, pert, nullptr, nsub);
+                    hs_forward(m, committed, dep, pert, nullptr, &plan);
                     tangent.col(j) = (pert.stress - trial.stress) / h;
                 }
             }
@@ -820,10 +829,11 @@ inline void integrate_point_axisym(const MaterialModel& m,
                 De_ur(3, 1) = f * nu;
             De_ur(2, 2) = f * (1.0 - 2.0 * nu) / 2.0;
             const Eigen::Vector4d s_tr_ur = s_n + De_ur * strain_increment;
+            HsSubstepPlan plan;   // as in the plane-strain block: the base run's subdivision
             const HsReturnCore c = hs_return_core(pe, Eur, committed.stress, committed.stress_zz,
                                                   s_tr_ur.head<3>(), s_tr_ur(3),
-                                                  committed.gamma_p, committed.pp, 0,
-                                                  tension_cap_of(m));
+                                                  committed.gamma_p, committed.pp, nullptr,
+                                                  tension_cap_of(m), &plan);
             trial.stress = c.in_plane;
             trial.stress_zz = c.zz;
             trial.gamma_p = c.gamma_p;
@@ -831,7 +841,7 @@ inline void integrate_point_axisym(const MaterialModel& m,
             trial.eps_vol = committed.eps_vol;
             tangent = c.tan.algo_jacobian * De_ur;  // continuum 4x4 (Psi * D_e)
             // kConsistent + plastic step → numerical consistent 4x4 tangent (same rationale
-            // as the plane-strain block; the perturbed runs are pinned to the base nsub).
+            // as the plane-strain block; the perturbed runs replay the base subdivision).
             if (mode == TangentMode::kConsistent && c.plastic) {
                 for (int j = 0; j < 4; ++j) {
                     Eigen::Vector4d dep = strain_increment;
@@ -841,7 +851,7 @@ inline void integrate_point_axisym(const MaterialModel& m,
                     const HsReturnCore cp = hs_return_core(
                         pe, Eur, committed.stress, committed.stress_zz,
                         s_tr_p.head<3>(), s_tr_p(3), committed.gamma_p, committed.pp,
-                        c.nsub, tension_cap_of(m));
+                        &plan, tension_cap_of(m));
                     tangent(0, j) = (cp.in_plane(0) - c.in_plane(0)) / h;
                     tangent(1, j) = (cp.in_plane(1) - c.in_plane(1)) / h;
                     tangent(2, j) = (cp.in_plane(2) - c.in_plane(2)) / h;
