@@ -153,6 +153,11 @@ struct NumericalControls {
     // it decides whether a trial step is judged against the latest residual or the worst of
     // the last W, which on a non-smooth problem decides whether the increment survives.
     int line_search_window = 0;
+    // Require the LOCAL convergence criteria as well as the global force residual (Scientific
+    // Manual §9.1.2; NewtonOptions::enforce_local_criteria). 0 = the engine's default, which
+    // is off. The fourth measurement seam, and it exists for the same reason as the third: so
+    // a study can ask what a published number owes to its stopping rule.
+    int enforce_local_criteria = 0;
 };
 
 struct PhaseIO {

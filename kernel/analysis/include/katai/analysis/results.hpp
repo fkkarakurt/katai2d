@@ -195,6 +195,12 @@ struct SolveResult {
     // on KV-STR-004, and the Studio's collapse panel was doing exactly that). None on a solve
     // that reached full load, and on phase families that do not load-step.
     NewtonResult::Abandonment stopped_by = NewtonResult::Abandonment::None;
+    // WHAT the solve actually satisfied, criterion by criterion (NewtonResult::Convergence).
+    // "Converged" on its own is a claim about ONE quantity; this says which of the family were
+    // met at the accepted iterate and how much room each of them had. A phase that meets the
+    // global force criterion while a tenth of its plastic points are inaccurate has converged
+    // in the only sense the old field could express, and not in the sense the reader wanted.
+    NewtonResult::Convergence convergence;
 };
 
 // The one spelling of "say this out loud", shared by the driver and the phase strategies so a

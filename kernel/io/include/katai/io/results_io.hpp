@@ -50,9 +50,14 @@ using katai::core::InterfaceStation;
 // [SLIPPING]/[bonded] are real findings -- false = linear elastic envelope, no slip check exists);
 // v6 adds SolveResult::stopped_by (WHY a solve stopped short of full load -- a mechanism, a refused
 // linear solve, or the iteration budget; without it a reopened result cannot say whether its load
-// factor is a capacity, which is the KV-STR-004 defect on the reload path).
+// factor is a capacity, which is the KV-STR-004 defect on the reload path); v7 adds
+// SolveResult::convergence -- WHICH of the convergence criteria the run satisfied (CSP, the
+// CSP-normalised force error, the moment residual, and the local error counts at the soil stress
+// points). It is written for the same reason `stopped_by` is: "converged" is a claim about the
+// accuracy of the numbers in the file, and a reopened result that cannot say which criteria were
+// met would report the claim without the evidence for it.
 // Older files predate each feature, so reading the fields back as false/0/None is correct for them.
-inline constexpr std::uint32_t kResultsFileVersion = 6;
+inline constexpr std::uint32_t kResultsFileVersion = 7;
 
 inline std::uint64_t fnv1a64(const std::string& s) {
     std::uint64_t h = 1469598103934665603ull;
@@ -194,6 +199,23 @@ inline bool save_results(const std::string& path, std::uint64_t model_hash,
         // setting (KV-STR-004). Without this the reader would hand a re-opened result back with the
         // reason erased, and the front end would present the second case as the first.
         w.put<std::int32_t>((std::int32_t)R.stopped_by);
+        // v7: WHICH criteria the accepted iterate satisfied. `measured` leads, so a reader can
+        // tell a run that never reached an accepted iterate from one whose family happens to be
+        // all zeros.
+        const auto& cv = R.convergence;
+        w.put<std::uint8_t>(cv.measured ? 1 : 0);
+        w.put<double>(cv.csp);
+        w.put<double>(cv.force_error);
+        w.put<double>(cv.moment_error);
+        w.put<std::uint8_t>(cv.has_moment ? 1 : 0);
+        w.put<double>(cv.tolerated);
+        w.put<std::int32_t>(cv.plastic_points);
+        w.put<std::int32_t>(cv.plastic_inaccurate);
+        w.put<std::int32_t>(cv.elastic_points);
+        w.put<std::int32_t>(cv.nl_elastic_points);
+        w.put<std::int32_t>(cv.nl_elastic_inaccurate);
+        w.put<double>(cv.worst_plastic_error);
+        w.put<double>(cv.worst_nl_elastic_error);
     }
     std::ofstream f(path, std::ios::binary);
     if (!f) { if (err) *err = "cannot open file for writing: " + path; return false; }
@@ -303,6 +325,22 @@ inline bool load_results(const std::string& path, std::uint64_t model_hash,
             if (why >= (std::int32_t)katai::core::NewtonResult::Abandonment::None &&
                 why <= (std::int32_t)katai::core::NewtonResult::Abandonment::SolveRefused)
                 R.stopped_by = (katai::core::NewtonResult::Abandonment)why;
+        }
+        if (ver >= 7) {   // absent in v6: which convergence criteria the run satisfied
+            auto& cv = R.convergence;
+            cv.measured = r.get<std::uint8_t>() != 0;
+            cv.csp = r.get<double>();
+            cv.force_error = r.get<double>();
+            cv.moment_error = r.get<double>();
+            cv.has_moment = r.get<std::uint8_t>() != 0;
+            cv.tolerated = r.get<double>();
+            cv.plastic_points = r.get<std::int32_t>();
+            cv.plastic_inaccurate = r.get<std::int32_t>();
+            cv.elastic_points = r.get<std::int32_t>();
+            cv.nl_elastic_points = r.get<std::int32_t>();
+            cv.nl_elastic_inaccurate = r.get<std::int32_t>();
+            cv.worst_plastic_error = r.get<double>();
+            cv.worst_nl_elastic_error = r.get<double>();
         }
         // Per-phase sanity: nodal arrays must match the stored mesh.
         if (R.disp.size() != (Eigen::Index)mesh.node_count * 2 ||

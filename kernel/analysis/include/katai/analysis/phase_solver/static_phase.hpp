@@ -113,6 +113,9 @@ struct StaticPhase {
     // Line-search memory handed to the Newton loop; 0 = the engine's default. See
     // NewtonOptions::line_search_window.
     int line_search_window = 0;
+    // NewtonOptions::enforce_local_criteria: require the LOCAL convergence criteria too.
+    // 0 = the engine's default (off).
+    int enforce_local_criteria = 0;
     double time_interval_day = 0.0;  // SSC creep time of a chained Plastic phase [days]
     // PLAXIS SumMstage target: the fraction of this phase's staged change to apply (1 = all of
     // it). The ramp itself is what gets scaled, so half a stage is half of exactly the same
@@ -155,6 +158,7 @@ inline bool solve_static_phase(
     nopt.kinematics = in.axisymmetric ? Kinematics::Axisymmetric
                                       : Kinematics::PlaneStrain;
     if (in.line_search_window > 0) nopt.line_search_window = in.line_search_window;
+    if (in.enforce_local_criteria > 0) nopt.enforce_local_criteria = true;
     // SSC TIME (Stage 3): a staged Plastic phase's Time interval [days] enters the constitutive
     // path -- the solver apportions it over the increments by the delta-lambda ratio (the Stage-2
     // contract, SumMstage parity). Only SoftSoilCreep reads it; every other model ignores it, so
@@ -178,6 +182,7 @@ inline bool solve_static_phase(
     R.timings = nr.timings;
     R.iterations = nr.total_iterations;
     R.stopped_by = nr.converged ? NewtonResult::Abandonment::None : nr.last_abandonment;
+    R.convergence = nr.convergence;
     if (!nr.converged) {
         R.message = non_convergence_message(nr);
         return false;

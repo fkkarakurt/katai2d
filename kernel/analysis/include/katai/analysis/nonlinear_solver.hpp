@@ -55,6 +55,13 @@ struct NewtonOptions {
     // monotone test reads that as failure and halves the step, and four such halvings in a row
     // abandon the increment, which is how the LOAD PATH stops being the one the file asked for.
     int line_search_window = 1;
+    // Require the LOCAL convergence criteria (NewtonResult::Convergence, Scientific Manual
+    // §9.1.2) as well as the global force residual before an increment is called converged.
+    // Off by default, and the default is a RECORD decision rather than an opinion about which
+    // rule is better: switching it on moves published numbers, so it is switched on by
+    // measurement (tests/study_convergence_family.cpp) and adopted, if at all, on purpose.
+    // The environment variable KATAI_CONV_LOCAL forces it on for a whole run.
+    bool enforce_local_criteria = false;
 };
 
 // Plate (structural wall/beam) embedded in soil — 3-node Timoshenko beam (see
@@ -256,6 +263,72 @@ struct NewtonResult {
     // The per-increment iteration limit this solve ran under, so a message can name the
     // setting the user would change rather than describing it.
     int iteration_limit = 0;
+
+    // THE CONVERGENCE CRITERIA FAMILY, measured at the last accepted iterate.
+    //
+    // Until this existed the tree checked exactly one thing -- a global force residual against
+    // a FIXED scale -- and reported "converged" as though that one thing were the whole
+    // question. It is not the whole question anywhere else: the reference codes each check at
+    // least two independent quantities, and the reason is that global equilibrium and local
+    // constitutive accuracy fail in different places. A run can balance every nodal force
+    // around stresses that its own material law would not return; the force residual cannot
+    // see that, by construction, because those stresses are what it assembled the forces from.
+    //
+    // Two structural differences from the old single check, both of them measurable:
+    //
+    //  * The normalisation is no longer fixed. Eq. 9-1 divides by ||f_int|| + CSP*||f_inact||,
+    //    and CSP falls towards zero as the body plastifies -- so the criterion TIGHTENS as a
+    //    mechanism forms, which is exactly where a load fraction is about to be published as a
+    //    capacity. Dividing by a constant does the opposite.
+    //  * There are local criteria at all. See LocalErrorProbe in internal_forces.hpp for the
+    //    two stresses a point carries and why their difference is the thing to measure.
+    //
+    // These are MEASURED and REPORTED. Which of them may refuse to call a step converged is a
+    // decision that moves published numbers, and this project makes that kind of decision on
+    // purpose, with the measurement in hand, rather than as the side effect of adding a check.
+    struct Convergence {
+        // Current Stiffness Parameter, Reference Manual Eq. 7-22: the work this increment did
+        // against the stress increment, over the work the same strain would have done had the
+        // response stayed elastic. Unity while elastic, towards zero at failure.
+        //
+        // NOTE, and it matters: Scientific Manual Eq. 9-2 prints this ratio the OTHER WAY UP
+        // (elastic over total). The two official manuals of the same release disagree, and
+        // only the Reference Manual's orientation is consistent with the behaviour both of
+        // them describe -- "when the solution is fully elastic the Stiffness is equal to
+        // unity, whereas at failure the Stiffness approaches zero" -- and with the uses built
+        // on it there (arc-length engages below 0.5, collapse is reported below 0.015). The
+        // inverted form is >= 1 and grows without bound as a mechanism forms, which would make
+        // Eq. 9-1 LOOSEN towards failure. Implemented from Eq. 7-22, deliberately.
+        double csp = 1.0;
+        double force_error = 0.0;      // Eq. 9-1
+        double moment_error = 0.0;     // Eq. 9-3; meaningless unless has_moment
+        bool has_moment = false;       // something in the model carries a rotational DOF
+        double tolerated = 0.0;        // the tolerated error all of these are measured against
+        // Local criteria (Eq. 9-5, 9-7), counted over the active soil stress points.
+        int plastic_points = 0, plastic_inaccurate = 0;
+        int elastic_points = 0, nl_elastic_points = 0, nl_elastic_inaccurate = 0;
+        double worst_plastic_error = 0.0, worst_nl_elastic_error = 0.0;
+        bool measured = false;         // false = no accepted iterate was ever reached
+
+        // The tolerated fraction of inaccurate points, and the +3 that goes with it: a handful
+        // of points may lag without the solution being wrong, and on a small model a pure
+        // percentage would forbid even one.
+        static constexpr double kInaccurateFraction = 0.1;
+        static constexpr int kInaccurateAllowance = 3;
+
+        bool force_ok() const { return force_error <= tolerated; }
+        bool moment_ok() const { return !has_moment || moment_error <= tolerated; }
+        bool plastic_points_ok() const {
+            return plastic_inaccurate < kInaccurateFraction * plastic_points + kInaccurateAllowance;
+        }
+        bool nl_elastic_ok() const {
+            return nl_elastic_inaccurate <
+                   kInaccurateFraction * elastic_points + kInaccurateAllowance;
+        }
+        bool local_ok() const { return plastic_points_ok() && nl_elastic_ok(); }
+        bool all_ok() const { return force_ok() && moment_ok() && local_ok(); }
+    };
+    Convergence convergence;
     // Wall-clock breakdown of the computation (seconds) + call counters. The counterpart of
     // PLAXIS's calculation-time report; the base measurement for performance studies.
     // Instrumentation is at iteration granularity (one chrono call per iteration) → the cost

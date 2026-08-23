@@ -68,12 +68,31 @@ struct PlaneStrainKin {
         const auto g = E::strain_displacement(c, xi, eta);
         return {g.B, g.det_jacobian};
     }
+    using Report = PointReportT<Tangent>;
     static void integrate(const MaterialModel& m, const GaussState& comm,
                           const Strain& de, GaussState& tr, Tangent& t, TangentMode mode,
-                          double creep_dt) {
-        integrate_point(m, comm, de, tr, t, mode, creep_dt);
+                          double creep_dt, Report* rep = nullptr) {
+        integrate_point(m, comm, de, tr, t, mode, creep_dt, rep);
     }
     static Eigen::Matrix<double, 3, 1> stress(const GaussState& s) { return s.stress; }
+    // The stress with the OUT-OF-PLANE component put back: [xx, yy, xy, zz]. Plane strain
+    // carries sigma_zz outside the 3-vector the element assembles with, so a local error
+    // measured on the in-plane block alone would ignore a principal stress -- and under K0 it
+    // is regularly the extreme one.
+    static Eigen::Vector4d full_stress(const GaussState& s) {
+        Eigen::Vector4d v;
+        v << s.stress, s.stress_zz;
+        return v;
+    }
+    // D^e acting on a strain increment, in the same four components. The zz row of an
+    // ISOTROPIC elastic operator is lambda*(de_xx + de_yy), and lambda is the operator's own
+    // off-diagonal -- so the fourth component is read out of D^e rather than rebuilt from an
+    // (E, nu) pair the model may not even use.
+    static Eigen::Vector4d elastic_step(const Tangent& De, const Strain& de) {
+        Eigen::Vector4d v;
+        v << De * de, De(0, 1) * (de(0) + de(1));
+        return v;
+    }
     // Pore-pressure direction m: normal components only (shear unaffected).
     static Strain pore_vector() { return Strain(1.0, 1.0, 0.0); }
 };
@@ -89,22 +108,90 @@ struct AxisymKin {
         const auto g = axisym::strain_displacement<E>(c, xi, eta);
         return {g.B, g.det_jacobian * g.radius};  // r-weighted
     }
+    using Report = PointReportT<Tangent>;
     static void integrate(const MaterialModel& m, const GaussState& comm,
                           const Strain& de, GaussState& tr, Tangent& t, TangentMode mode,
-                          double creep_dt) {
-        integrate_point_axisym(m, comm, de, tr, t, mode, creep_dt);
+                          double creep_dt, Report* rep = nullptr) {
+        integrate_point_axisym(m, comm, de, tr, t, mode, creep_dt, rep);
     }
     static Eigen::Matrix<double, 4, 1> stress(const GaussState& s) {
         Eigen::Matrix<double, 4, 1> v;
         v << s.stress, s.stress_zz;
         return v;
     }
+    // Axisymmetry already carries all four components, hoop included.
+    static Eigen::Vector4d full_stress(const GaussState& s) { return stress(s); }
+    static Eigen::Vector4d elastic_step(const Tangent& De, const Strain& de) { return De * de; }
     // Pore-pressure direction m = [r, z, rz, theta]: the hoop is a real normal stress.
     static Strain pore_vector() {
         Strain m;
         m << 1.0, 1.0, 0.0, 1.0;
         return m;
     }
+};
+
+// LOCAL convergence measurement, gathered while the internal force is assembled because that
+// is the only place where both stresses of a point exist at the same instant.
+//
+// The concept (Scientific Manual §9.1.2, Fig. 9-1): a stress point carries TWO stresses per
+// iteration. The CONSTITUTIVE stress is what the material law returns for the strain the point
+// was given, sigma_c,j = sigma_0 + D^e (Delta-eps_j - Delta-eps_p,j). The EQUILIBRIUM stress is
+// what the finite-element linearisation says the point carries, sigma_eq,j = sigma_c,j-1 +
+// D^e delta-eps_j, built from the previous iterate with this iteration's displacement
+// correction. They coincide only at convergence. A run that satisfies global equilibrium while
+// those two disagree is a run whose nodal forces balance around stresses the material law
+// would not produce -- and nothing in a global force residual can see it.
+//
+// The two vectors below are the iteration's memory: the caller hands the same pair back on
+// every iterate and they are overwritten here with this iterate's values, so no other part of
+// the solver has to know where the iteration was.
+struct LocalErrorProbe {
+    std::vector<GaussState>* prev_sigma_c = nullptr;  // sigma_c,j-1 in, sigma_c,j out
+    std::vector<double>* prev_deps = nullptr;         // Delta-eps_{j-1}, kStrain per point
+    double tolerated = 0.01;                          // ToleratedError, the bar for a local error
+
+    // --- measured, over the ACTIVE soil stress points -----------------------------------
+    int plastic = 0;                 // points with a yield or cap surface active
+    int plastic_inaccurate = 0;      // ... of those, over the tolerated local error (Eq. 9-5)
+    int elastic_total = 0;           // points with no surface active
+    int nl_elastic = 0;              // ... of those, with a STRESS-DEPENDENT elastic stiffness
+    int nl_elastic_inaccurate = 0;   // ... of those, over the tolerated local error (Eq. 9-7)
+    double worst_plastic = 0.0;      // the largest local error of each kind, so that a count
+    double worst_nl_elastic = 0.0;   //   of zero can still say how much room it had
+
+    // CSP (Reference Manual Eq. 7-22) numerator and denominator, integrated over the active
+    // volume: the work actually done against the stress increment, over the work the same
+    // strain would have done had the response stayed elastic.
+    double energy_total = 0.0;       // integral of Delta-eps . Delta-sigma
+    double energy_elastic = 0.0;     // integral of Delta-eps . D^e Delta-eps
+
+    // Moment criterion (Eq. 9-3, 9-4). m_ref is summed HERE, element by element, because it is
+    // a sum of ABSOLUTE moment contributions: taken after assembly, the opposing contributions
+    // of two adjacent plate elements cancel and the reference collapses towards zero exactly
+    // where the structure is in equilibrium -- which is where the criterion has to work.
+    double m_ref = 0.0;
+    std::vector<int> moment_eq;      // equations carrying a rotational degree of freedom
+
+    // Clear what one iterate measured, keeping what carries the iteration across iterates
+    // (the two previous-iterate vectors and the tolerance).
+    void reset_counts() {
+        plastic = plastic_inaccurate = 0;
+        elastic_total = nl_elastic = nl_elastic_inaccurate = 0;
+        worst_plastic = worst_nl_elastic = 0.0;
+        energy_total = energy_elastic = 0.0;
+    }
+};
+
+// Per-element partial of the above. The assembly runs in parallel over elements, and a global
+// counter written from several threads is both a race and a source of run-to-run variation in
+// the floating-point sums -- this tree's results are deterministic and stay that way: each
+// element fills its own partial, and the reduction happens in the sequential scatter pass, in
+// element order.
+struct LocalErrorPartial {
+    int plastic = 0, plastic_inaccurate = 0;
+    int elastic_total = 0, nl_elastic = 0, nl_elastic_inaccurate = 0;
+    double worst_plastic = 0.0, worst_nl_elastic = 0.0;
+    double energy_total = 0.0, energy_elastic = 0.0;
 };
 
 // Internal-force/tangent assembler templated over element (tri6/tri15) × kinematics
@@ -132,6 +219,11 @@ public:
         // Plate M-N hinge state [ε_p,κ_p]×Gauss (plate::kPlasticStateSize(5) per element).
         const std::vector<double>* plate_c = nullptr;   std::vector<double>* plate_t = nullptr;
         const std::vector<double>* plate5_c = nullptr;  std::vector<double>* plate5_t = nullptr;
+        // Local convergence measurement. nullptr (the default) = not measured, and then not a
+        // single extra flop happens in the Gauss loop: the line search re-evaluates the
+        // residual several times per iteration and none of those iterates is the one whose
+        // local error means anything.
+        LocalErrorProbe* local = nullptr;
     };
 
     // Nonzero-Dirichlet (prescribed displacement ū) ramp — used ONLY by the static path.
@@ -234,6 +326,16 @@ public:
         // path = the result is deterministic, independent of the thread count.
         if (build_tangent && ke_buf_.size() != static_cast<size_t>(mesh.element_count))
             ke_buf_.resize(mesh.element_count);
+        LocalErrorProbe* const probe = st.local;
+        if (probe) {
+            probe_buf_.assign(mesh.element_count, LocalErrorPartial{});
+            probe->m_ref = 0.0;
+            probe->moment_eq.clear();
+            if (probe->prev_deps->size() !=
+                static_cast<size_t>(mesh.element_count) * n_gp * Kin::kStrain)
+                probe->prev_deps->assign(
+                    static_cast<size_t>(mesh.element_count) * n_gp * Kin::kStrain, 0.0);
+        }
         math::parallel_for(mesh.element_count, [&](int e_begin, int e_end) {
         for (int e = e_begin; e < e_end; ++e) {
             if (!active_element.empty() && !active_element[e]) continue;  // passive (excavated)
@@ -255,6 +357,11 @@ public:
 
             ElementVector fe = ElementVector::Zero();
             typename E::ElementMatrix ke = E::ElementMatrix::Zero();
+            // Hoisted out of the Gauss loop and reset only when it is going to be read: the
+            // report holds an elastic matrix, so constructing one per stress point per assembly
+            // would zero nine (or sixteen) doubles on the hottest loop in the program for the
+            // benefit of a measurement that is off.
+            typename Kin::Report rep;
             for (int g = 0; g < n_gp; ++g) {
                 const auto grad =
                     Kin::template gradients<E>(coords, gauss[g].xi, gauss[g].eta);
@@ -278,8 +385,58 @@ public:
                     mp = &mg;
                 }
                 const MaterialModel& matg = *mp;
-                Kin::integrate(matg, committed[gi], dstrain, trial[gi], dt, tm, dt_day);
+                if (probe) rep = typename Kin::Report{};
+                Kin::integrate(matg, committed[gi], dstrain, trial[gi], dt, tm, dt_day,
+                               probe ? &rep : nullptr);
                 typename Kin::Strain sigma = Kin::stress(trial[gi]);
+                if (probe) {
+                    LocalErrorPartial& acc = probe_buf_[e];
+                    const double w_loc = gauss[g].weight * grad.weight;
+                    // --- CSP (Eq. 7-22): the work this increment actually did, over the work
+                    // the same strain would have done had the response stayed elastic. Unity
+                    // while elastic, falling towards zero as the body plastifies.
+                    const typename Kin::Strain dsig = sigma - Kin::stress(committed[gi]);
+                    acc.energy_total += w_loc * dstrain.dot(dsig);
+                    acc.energy_elastic += w_loc * dstrain.dot(rep.elastic * dstrain);
+                    // --- the two stresses of Fig. 9-1.
+                    const size_t base = static_cast<size_t>(gi) * Kin::kStrain;
+                    typename Kin::Strain deps_prev;
+                    for (int k = 0; k < Kin::kStrain; ++k)
+                        deps_prev(k) = (*probe->prev_deps)[base + k];
+                    const typename Kin::Strain ddeps = dstrain - deps_prev;  // delta-eps_j
+                    const Eigen::Vector4d s_c = Kin::full_stress(trial[gi]);
+                    const Eigen::Vector4d s_eq =
+                        Kin::full_stress((*probe->prev_sigma_c)[gi]) +
+                        Kin::elastic_step(rep.elastic, ddeps);              // Eq. 9-6
+                    const double diff = (s_eq - s_c).norm();
+                    const double tmax = tau_max_of(s_c(0), s_c(1), s_c(2), s_c(3));
+                    const double coh = cohesion_of(matg);
+                    if (rep.plastic) {
+                        // Eq. 9-5. The 1 kPa floor is the manual's: it stops a point that
+                        // carries almost no stress at all from reporting an enormous relative
+                        // error on a difference that is numerically nothing.
+                        const double err = diff / std::max(std::max(tmax, coh), 1.0);
+                        ++acc.plastic;
+                        if (err > probe->tolerated) ++acc.plastic_inaccurate;
+                        acc.worst_plastic = std::max(acc.worst_plastic, err);
+                    } else {
+                        ++acc.elastic_total;
+                        if (rep.stress_dependent) {
+                            // Eq. 9-7. Same difference, a different floor: a point whose
+                            // ELASTIC stiffness moves with stress can be inaccurate while
+                            // carrying no plasticity at all, and p_ref/200 is the scale the
+                            // manual measures that against.
+                            const double err = diff / std::max(std::max(tmax, coh),
+                                                               p_ref_of(matg) / 200.0);
+                            ++acc.nl_elastic;
+                            if (err > probe->tolerated) ++acc.nl_elastic_inaccurate;
+                            acc.worst_nl_elastic = std::max(acc.worst_nl_elastic, err);
+                        }
+                    }
+                    (*probe->prev_sigma_c)[gi] = trial[gi];
+                    for (int k = 0; k < Kin::kStrain; ++k)
+                        (*probe->prev_deps)[base + k] = dstrain(k);
+                }
                 // Undrained (A): the constitutive model returns EFFECTIVE stress and its effective
                 // tangent; add the pore fluid's volumetric (bulk) contribution. Total = sigma' +
                 // (Kw/n) eps_v m and tangent += (Kw/n) m m^T = D_u. The excess pore pressure
@@ -315,6 +472,18 @@ public:
 
         for (int e = 0; e < mesh.element_count; ++e) {  // sequential scatter (deterministic)
             if (!active_element.empty() && !active_element[e]) continue;
+            if (probe) {  // reduction in element order -> the sums do not depend on the threads
+                const LocalErrorPartial& a = probe_buf_[e];
+                probe->plastic += a.plastic;
+                probe->plastic_inaccurate += a.plastic_inaccurate;
+                probe->elastic_total += a.elastic_total;
+                probe->nl_elastic += a.nl_elastic;
+                probe->nl_elastic_inaccurate += a.nl_elastic_inaccurate;
+                probe->worst_plastic = std::max(probe->worst_plastic, a.worst_plastic);
+                probe->worst_nl_elastic = std::max(probe->worst_nl_elastic, a.worst_nl_elastic);
+                probe->energy_total += a.energy_total;
+                probe->energy_elastic += a.energy_elastic;
+            }
             const std::array<int, E::kDofCount>& edofs = all_edofs_[e];
             const ElementVector& fe = fe_buf_[e];
             for (int a = 0; a < E::kDofCount; ++a) {
@@ -367,6 +536,11 @@ public:
                 fp = Kbuf * up;
                 Kp = &Kbuf;
             }
+            if (probe)
+                for (int k = 0; k < 3; ++k) {
+                    probe->m_ref += std::fabs(fp(3 * k + 2));
+                    if (geq[3 * k + 2] >= 0) probe->moment_eq.push_back(geq[3 * k + 2]);
+                }
             for (int a = 0; a < 9; ++a) {
                 if (geq[a] < 0) continue;
                 f_int(geq[a]) += fp(a);
@@ -406,6 +580,11 @@ public:
                 fp = Kbuf * up;
                 Kp = &Kbuf;
             }
+            if (probe)
+                for (int k = 0; k < 5; ++k) {
+                    probe->m_ref += std::fabs(fp(3 * k + 2));
+                    if (geq[3 * k + 2] >= 0) probe->moment_eq.push_back(geq[3 * k + 2]);
+                }
             for (int a = 0; a < 15; ++a) {
                 if (geq[a] < 0) continue;
                 f_int(geq[a]) += fp(a);
@@ -700,6 +879,7 @@ private:
     std::vector<std::array<int, E::kDofCount>> all_edofs_;
     std::vector<ElementVector> fe_buf_;
     std::vector<typename E::ElementMatrix> ke_buf_;
+    std::vector<LocalErrorPartial> probe_buf_;  // per-element partials, reduced sequentially
 };
 
 }  // namespace detail

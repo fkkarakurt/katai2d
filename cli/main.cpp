@@ -63,6 +63,36 @@ void print_diagnostics(const api::SolveResult& R) {
     }
 }
 
+// WHICH convergence criteria the phase met. "ok" on its own is a claim about one quantity --
+// the out-of-balance force -- and a run can satisfy that while individual stress points still
+// carry stresses their own material law would not return for the strains they were given. The
+// force residual cannot see that, because it is assembled FROM those stresses.
+//
+// Printed for every phase that measured it, so the accuracy the numbers were accepted under
+// travels with them; the second block appears only when there is something to act on.
+void print_convergence(const api::SolveResult& R) {
+    const auto& c = R.convergence;
+    if (!c.measured) return;
+    std::printf("  converged: force error %.3e of %.3e tolerated", c.force_error, c.tolerated);
+    if (c.plastic_points > 0 || c.nl_elastic_points > 0)
+        std::printf(", stiffness parameter %.3f", c.csp);
+    if (c.has_moment) std::printf(", moment error %.3e", c.moment_error);
+    std::printf("\n");
+    if (!c.plastic_points_ok())
+        std::printf("  note    %d of %d yielding stress points carry a LOCAL error above the "
+                    "same tolerance (worst %.2e).\n"
+                    "          The force balance is met; the stresses at those points are not "
+                    "yet the ones\n"
+                    "          the material law returns for their strains. Tighten the phase's "
+                    "tolerated error to close it.\n",
+                    c.plastic_inaccurate, c.plastic_points, c.worst_plastic_error);
+    if (!c.nl_elastic_ok())
+        std::printf("  note    %d of %d stress points whose stiffness varies with stress carry a "
+                    "LOCAL error above\n"
+                    "          the same tolerance (worst %.2e).\n",
+                    c.nl_elastic_inaccurate, c.nl_elastic_points, c.worst_nl_elastic_error);
+}
+
 bool any_error_note(const std::vector<api::Issue>& notes) {
     for (const api::Issue& i : notes)
         if (i.severity == api::Severity::Error) return true;
@@ -137,6 +167,7 @@ int cmd_solve(const std::string& path, const std::string& out) {
         if (R.fos >= 0.0)
             std::printf("  FoS %s %.3f", R.fos_lower_bound ? ">" : "=", R.fos);
         std::printf("\n");
+        print_convergence(R);
         print_diagnostics(R);
     }
     std::printf("solved %zu phase(s) in %.2f s\n", res.size(), total_s);

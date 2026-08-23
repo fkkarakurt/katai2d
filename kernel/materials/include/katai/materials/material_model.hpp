@@ -77,6 +77,55 @@ struct GaussState {
     double gamma_hist = 0.0;
 };
 
+// Isotropic elastic constitutive matrix from an (E, nu) PAIR, rather than from the pair a
+// material happens to keep in its youngs_modulus/poisson_ratio boxes. The Hardening Soil
+// family's elasticity is (Eur, nu_ur) and it never reads those boxes, so every place that
+// needs "the elastic operator of THIS point" has to be told which pair to use. Written once
+// here: the members below and the axisymmetric HS branch used to carry their own copy of the
+// same six lines, and a stiffness formula that exists in three copies is a formula that can
+// be right in two of them.
+inline Eigen::Matrix3d elastic_plane_strain_of(double e, double v) {
+    const double f = e / ((1.0 + v) * (1.0 - 2.0 * v));
+    Eigen::Matrix3d d = Eigen::Matrix3d::Zero();
+    d(0, 0) = f * (1.0 - v);
+    d(0, 1) = f * v;
+    d(1, 0) = f * v;
+    d(1, 1) = f * (1.0 - v);
+    d(2, 2) = f * (1.0 - 2.0 * v) / 2.0;
+    return d;
+}
+
+// Axisymmetric twin, strain/stress order [r, z, rz, theta].
+inline Eigen::Matrix4d elastic_axisym_of(double e, double v) {
+    const double f = e / ((1.0 + v) * (1.0 - 2.0 * v));
+    Eigen::Matrix4d d = Eigen::Matrix4d::Zero();
+    d(0, 0) = d(1, 1) = d(3, 3) = f * (1.0 - v);
+    d(0, 1) = d(1, 0) = d(0, 3) = d(3, 0) = d(1, 3) = d(3, 1) = f * v;
+    d(2, 2) = f * (1.0 - 2.0 * v) / 2.0;
+    return d;
+}
+
+// Isotropic elastic matrix from a bulk/shear PAIR (the soft-soil integrators report K and G
+// rather than E and nu, because their stiffness is the ln-law's and there is no constant E to
+// report). Same operator, entered through the other door.
+inline Eigen::Matrix3d elastic_plane_strain_kg(double K, double G) {
+    const double lam = K - 2.0 * G / 3.0;
+    Eigen::Matrix3d d = Eigen::Matrix3d::Zero();
+    d(0, 0) = d(1, 1) = lam + 2.0 * G;
+    d(0, 1) = d(1, 0) = lam;
+    d(2, 2) = G;
+    return d;
+}
+
+inline Eigen::Matrix4d elastic_axisym_kg(double K, double G) {
+    const double lam = K - 2.0 * G / 3.0;
+    Eigen::Matrix4d d = Eigen::Matrix4d::Zero();
+    d(0, 0) = d(1, 1) = d(3, 3) = lam + 2.0 * G;
+    d(0, 1) = d(1, 0) = d(0, 3) = d(3, 0) = d(1, 3) = d(3, 1) = lam;
+    d(2, 2) = G;
+    return d;
+}
+
 // Flat, tagged material descriptor (no vtable -> suitable for the hot loop).
 struct MaterialModel {
     MaterialType type = MaterialType::LinearElastic;
@@ -154,15 +203,7 @@ struct MaterialModel {
 
     // Plane-strain elastic constitutive matrix (3x3 SPD, v < 0.5).
     Eigen::Matrix3d elastic_plane_strain() const {
-        const double e = youngs_modulus, v = poisson_ratio;
-        const double f = e / ((1.0 + v) * (1.0 - 2.0 * v));
-        Eigen::Matrix3d d = Eigen::Matrix3d::Zero();
-        d(0, 0) = f * (1.0 - v);
-        d(0, 1) = f * v;
-        d(1, 0) = f * v;
-        d(1, 1) = f * (1.0 - v);
-        d(2, 2) = f * (1.0 - 2.0 * v) / 2.0;
-        return d;
+        return elastic_plane_strain_of(youngs_modulus, poisson_ratio);
     }
 
     // Undrained (A) pore-fluid bulk stiffness Kw/n from the EFFECTIVE parameters and
@@ -199,13 +240,7 @@ struct MaterialModel {
 
     // Axisymmetric elastic matrix (4x4), strain/stress order [r, z, rz, theta].
     Eigen::Matrix4d elastic_axisym() const {
-        const double e = youngs_modulus, v = poisson_ratio;
-        const double f = e / ((1.0 + v) * (1.0 - 2.0 * v));
-        Eigen::Matrix4d d = Eigen::Matrix4d::Zero();
-        d(0, 0) = d(1, 1) = d(3, 3) = f * (1.0 - v);
-        d(0, 1) = d(1, 0) = d(0, 3) = d(3, 0) = d(1, 3) = d(3, 1) = f * v;
-        d(2, 2) = f * (1.0 - 2.0 * v) / 2.0;
-        return d;
+        return elastic_axisym_of(youngs_modulus, poisson_ratio);
     }
 };
 
@@ -406,7 +441,8 @@ inline void hs_forward(const MaterialModel& m, const GaussState& committed,
                        const Eigen::Vector3d& de, GaussState& trial,
                        Eigen::Matrix3d* tangent_out = nullptr,
                        const HsSubstepPlan* plan_in = nullptr,
-                       bool* plastic_out = nullptr, HsSubstepPlan* plan_out = nullptr) {
+                       bool* plastic_out = nullptr, HsSubstepPlan* plan_out = nullptr,
+                       double* Eur_out = nullptr) {
     HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
     // Dilatancy cut-off: psi = 0 clamps the mobilised dilatancy sin(psi_m) to [0, 0] inside the
     // return core, which IS Eq. 5.16b -- the rule enters where the manual puts it, and nothing
@@ -432,6 +468,7 @@ inline void hs_forward(const MaterialModel& m, const GaussState& committed,
     trial.eps_vol = committed.eps_vol;
     if (tangent_out) *tangent_out = c.tan.tangent;
     if (plastic_out) *plastic_out = c.plastic;
+    if (Eur_out) *Eur_out = Eur;
 
     // HSsmall: γ_hist += Δγ (monotone accumulation; Eq 7-5 γ=√(1.5 e:e), e=deviatoric; plane strain εzz=0).
     if (m.hs.G0_ref > 0.0) {
@@ -649,7 +686,73 @@ inline double ss_fd_step(double comp) { return 1e-6 * (1.0 + std::fabs(comp)); }
 //                 277-296 + CMAME 190 (2001) 4627-4647; hardening-soil-formulation.md §9.
 // The solver uses a hybrid: an increment starts with continuum; if it fails to converge,
 // the same increment is retried with consistent (nonlinear_solver.cpp).
+// The cohesion this material's STRENGTH actually uses, whichever model carries it. The local
+// convergence criteria normalise a stress difference by max(tau_max, c, ...), and reading
+// MaterialModel::cohesion for every model would report zero for the two soft-soil models,
+// which keep theirs in their own parameter blocks. A normaliser that is quietly a factor too
+// small makes every point look accurate, which is the one failure mode a convergence check
+// must not have.
+inline double cohesion_of(const MaterialModel& m) {
+    switch (m.type) {
+        case MaterialType::HardeningSoil: return m.hs.cohesion;
+        case MaterialType::SoftSoil:      return m.ssoil.c;
+        case MaterialType::SoftSoilCreep: return m.ssc.c;
+        default:                          return m.cohesion;
+    }
+}
+
+// The reference pressure the stress-dependent stiffness is defined at. Only the models with a
+// stress-dependent elastic stiffness have one, and only those are counted by the non-linear
+// elastic criterion; for anything else the value is never read.
+inline double p_ref_of(const MaterialModel& m) {
+    switch (m.type) {
+        case MaterialType::HardeningSoil: return m.hs.p_ref;
+        case MaterialType::SoftSoil:
+        case MaterialType::SoftSoilCreep: return 100.0;  // the ln-law has no p_ref; 100 kPa
+        default:                          return 100.0;
+    }
+}
+
+// Maximum shear stress at a point: (sigma_1 - sigma_3)/2 over ALL THREE principals, not over
+// the in-plane pair. The out-of-plane component is a principal stress in both kinematics
+// (sigma_zz in plane strain, sigma_theta in axisymmetry) and under K0 conditions it is
+// routinely the largest or the smallest of the three -- taking the in-plane circle alone
+// would under-report tau_max exactly where the soil is closest to failure.
+inline double tau_max_of(double sxx, double syy, double sxy, double szz) {
+    const double mean = 0.5 * (sxx + syy);
+    const double r = std::sqrt(0.25 * (sxx - syy) * (sxx - syy) + sxy * sxy);
+    const double s1 = std::max(mean + r, szz);
+    const double s3 = std::min(mean - r, szz);
+    return 0.5 * (s1 - s3);
+}
+
 enum class TangentMode { kNone, kContinuum, kConsistent };
+
+// What the material law DID at one stress point, handed back to the caller. Two facts, both
+// of them already computed inside every branch below and, until now, thrown away at the
+// closing brace:
+//
+//   plastic          a yield or cap surface was active in this increment. The convergence
+//                    machinery needs it because the local error criteria are counted over
+//                    PLASTIC points -- an elastic point is accurate by construction.
+//   elastic          D^e at this point, in the solver's Voigt order. Not the tangent: the
+//                    ELASTIC operator, which is what an equilibrium stress is built with
+//                    (sigma_eq = sigma_c,prev + D^e * delta-eps). For the Hardening Soil
+//                    family this is (Eur, nu_ur) evaluated where the model evaluates it, not
+//                    the (E, nu) boxes those models never read.
+//   stress_dependent the elastic stiffness itself is a function of stress. Such a point is
+//                    counted separately: it can be inaccurate while carrying no plasticity
+//                    at all, which is the whole reason a second local count exists.
+//
+// Passing nullptr (the default) costs nothing and keeps every existing caller bit-for-bit.
+template <class MatT>
+struct PointReportT {
+    bool plastic = false;
+    bool stress_dependent = false;
+    MatT elastic = MatT::Zero();
+};
+using PointReport = PointReportT<Eigen::Matrix3d>;    // plane strain [xx, yy, xy]
+using PointReport4 = PointReportT<Eigen::Matrix4d>;   // axisymmetric [r, z, rz, theta]
 
 // Material-point integration. committed: converged state at the start of the
 // step; strain_increment: the step's total strain increment Delta-eps; trial:
@@ -660,7 +763,8 @@ enum class TangentMode { kNone, kContinuum, kConsistent };
 inline void integrate_point(const MaterialModel& m, const GaussState& committed,
                             const Eigen::Vector3d& strain_increment,
                             GaussState& trial, Eigen::Matrix3d& tangent,
-                            TangentMode mode = TangentMode::kConsistent, double dt_day = 0.0) {
+                            TangentMode mode = TangentMode::kConsistent, double dt_day = 0.0,
+                            PointReport* report = nullptr) {
     const LameConstants lame = lame_from(m.youngs_modulus, m.poisson_ratio);
     const PlaneStrainStress previous{committed.stress, committed.stress_zz};
     const PlaneStrainStress predictor =
@@ -671,6 +775,7 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
             trial.stress = predictor.in_plane;
             trial.stress_zz = predictor.zz;
             tangent = m.elastic_plane_strain();
+            if (report) report->elastic = tangent;
             break;
         }
         case MaterialType::MohrCoulomb: {
@@ -690,12 +795,23 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
             // (sigma_2 = sigma_3, ubiquitous under gravity) and breaks global
             // Newton convergence.
             tangent = base.plastic ? base.tangent : m.elastic_plane_strain();
+            if (report) {
+                report->plastic = base.plastic;
+                report->elastic = m.elastic_plane_strain();
+            }
             break;
         }
         case MaterialType::HardeningSoil: {
             bool plastic = false;
+            double Eur = 0.0;
             HsSubstepPlan plan;   // the base run's subdivision, replayed by the perturbed runs
-            hs_forward(m, committed, strain_increment, trial, &tangent, nullptr, &plastic, &plan);
+            hs_forward(m, committed, strain_increment, trial, &tangent, nullptr, &plastic, &plan,
+                       &Eur);
+            if (report) {
+                report->plastic = plastic;
+                report->stress_dependent = true;
+                report->elastic = elastic_plane_strain_of(Eur, m.hs.nu_ur);
+            }
             // kConsistent + plastic step → numerical consistent tangent (TangentMode
             // block): 3 perturbed forward runs, substep count pinned to the base run.
             if (mode == TangentMode::kConsistent && plastic) {
@@ -715,10 +831,12 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
             double K = 0.0, G = 0.0;
             int nsub = 0;
             ss_forward(m, committed, strain_increment, trial, &plastic, &K, &G, 0, &nsub);
-            const double lam = K - 2.0 * G / 3.0;
-            tangent << lam + 2.0 * G, lam, 0.0,
-                       lam, lam + 2.0 * G, 0.0,
-                       0.0, 0.0, G;
+            tangent = elastic_plane_strain_kg(K, G);
+            if (report) {
+                report->plastic = plastic;
+                report->stress_dependent = true;
+                report->elastic = tangent;
+            }
             // Plastic step + tangent wanted → NUMERICAL (forward-difference) tangent —
             // unlike HS, in BOTH modes (kContinuum/kConsistent): SS has no "cheap
             // continuum", the elastic operator is λ*/κ* times too stiff on the cap and
@@ -745,10 +863,12 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
             double K = 0.0, G = 0.0;
             int nsub = 0;
             ssc_forward(m, committed, strain_increment, dt_day, trial, &plastic, &K, &G, 0, &nsub);
-            const double lam = K - 2.0 * G / 3.0;
-            tangent << lam + 2.0 * G, lam, 0.0,
-                       lam, lam + 2.0 * G, 0.0,
-                       0.0, 0.0, G;
+            tangent = elastic_plane_strain_kg(K, G);
+            if (report) {
+                report->plastic = plastic;
+                report->stress_dependent = true;
+                report->elastic = tangent;
+            }
             if (plastic && mode != TangentMode::kNone) {
                 GaussState pert;
                 for (int j = 0; j < 3; ++j) {
@@ -775,7 +895,8 @@ inline void integrate_point_axisym(const MaterialModel& m,
                                    const Eigen::Vector4d& strain_increment,
                                    GaussState& trial, Eigen::Matrix4d& tangent,
                                    TangentMode mode = TangentMode::kConsistent,
-                                   double dt_day = 0.0) {
+                                   double dt_day = 0.0,
+                                   PointReport4* report = nullptr) {
     const Eigen::Matrix4d De = m.elastic_axisym();
     Eigen::Vector4d s_n;
     s_n << committed.stress, committed.stress_zz;       // [r, z, rz, theta]
@@ -786,6 +907,7 @@ inline void integrate_point_axisym(const MaterialModel& m,
             trial.stress = s_tr.head<3>();
             trial.stress_zz = s_tr(3);
             tangent = De;
+            if (report) report->elastic = De;
             break;
         }
         case MaterialType::MohrCoulomb: {
@@ -800,6 +922,7 @@ inline void integrate_point_axisym(const MaterialModel& m,
             trial.stress = base.stress.in_plane;
             trial.stress_zz = base.stress.zz;
             tangent = base.plastic ? (base.algo_jacobian * De) : De;
+            if (report) { report->plastic = base.plastic; report->elastic = De; }
             break;
         }
         case MaterialType::HardeningSoil: {
@@ -822,12 +945,7 @@ inline void integrate_point_axisym(const MaterialModel& m,
     if (dilatancy_cut(m, committed)) { pe.dilatancy = 0.0; pe.dilatancy_cut = true; }
             const double Eur = hs_frozen_Eur(pe, committed.stress, committed.stress_zz);
             const double nu = pe.nu_ur;
-            const double f = Eur / ((1.0 + nu) * (1.0 - 2.0 * nu));
-            Eigen::Matrix4d De_ur = Eigen::Matrix4d::Zero();
-            De_ur(0, 0) = De_ur(1, 1) = De_ur(3, 3) = f * (1.0 - nu);
-            De_ur(0, 1) = De_ur(1, 0) = De_ur(0, 3) = De_ur(3, 0) = De_ur(1, 3) =
-                De_ur(3, 1) = f * nu;
-            De_ur(2, 2) = f * (1.0 - 2.0 * nu) / 2.0;
+            const Eigen::Matrix4d De_ur = elastic_axisym_of(Eur, nu);
             const Eigen::Vector4d s_tr_ur = s_n + De_ur * strain_increment;
             HsSubstepPlan plan;   // as in the plane-strain block: the base run's subdivision
             const HsReturnCore c = hs_return_core(pe, Eur, committed.stress, committed.stress_zz,
@@ -840,6 +958,11 @@ inline void integrate_point_axisym(const MaterialModel& m,
             trial.pp = c.pp;
             trial.eps_vol = committed.eps_vol;
             tangent = c.tan.algo_jacobian * De_ur;  // continuum 4x4 (Psi * D_e)
+            if (report) {
+                report->plastic = c.plastic;
+                report->stress_dependent = true;
+                report->elastic = De_ur;
+            }
             // kConsistent + plastic step → numerical consistent 4x4 tangent (same rationale
             // as the plane-strain block; the perturbed runs replay the base subdivision).
             if (mode == TangentMode::kConsistent && c.plastic) {
@@ -886,12 +1009,12 @@ inline void integrate_point_axisym(const MaterialModel& m,
             trial.gamma_p = committed.gamma_p;
             trial.gamma_hist = committed.gamma_hist;
             trial.eps_vol = committed.eps_vol;
-            const double lam = c.K - 2.0 * c.G / 3.0;
-            tangent = Eigen::Matrix4d::Zero();
-            tangent(0, 0) = tangent(1, 1) = tangent(3, 3) = lam + 2.0 * c.G;
-            tangent(0, 1) = tangent(1, 0) = tangent(0, 3) = tangent(3, 0) = tangent(1, 3) =
-                tangent(3, 1) = lam;
-            tangent(2, 2) = c.G;
+            tangent = elastic_axisym_kg(c.K, c.G);
+            if (report) {
+                report->plastic = c.plastic;
+                report->stress_dependent = true;
+                report->elastic = tangent;
+            }
             if (c.plastic && mode != TangentMode::kNone) {
                 for (int j = 0; j < 4; ++j) {
                     Eigen::Vector4d dep = strain_increment;
@@ -921,12 +1044,12 @@ inline void integrate_point_axisym(const MaterialModel& m,
             trial.gamma_p = committed.gamma_p;
             trial.gamma_hist = committed.gamma_hist;
             trial.eps_vol = committed.eps_vol;
-            const double lam = c.K - 2.0 * c.G / 3.0;
-            tangent = Eigen::Matrix4d::Zero();
-            tangent(0, 0) = tangent(1, 1) = tangent(3, 3) = lam + 2.0 * c.G;
-            tangent(0, 1) = tangent(1, 0) = tangent(0, 3) = tangent(3, 0) = tangent(1, 3) =
-                tangent(3, 1) = lam;
-            tangent(2, 2) = c.G;
+            tangent = elastic_axisym_kg(c.K, c.G);
+            if (report) {
+                report->plastic = c.plastic;
+                report->stress_dependent = true;
+                report->elastic = tangent;
+            }
             if (c.plastic && mode != TangentMode::kNone) {
                 for (int j = 0; j < 4; ++j) {
                     Eigen::Vector4d dep = strain_increment;

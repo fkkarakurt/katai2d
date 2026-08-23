@@ -179,6 +179,11 @@ if(TARGET test_tolerance_independence)
   target_compile_definitions(test_tolerance_independence PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
+katai_add_test(test_convergence_criteria katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-NUM-013: the convergence criteria FAMILY (Sci. Man. sec 9.1) -- CSP, the CSP-normalised force error and the local error at every soil stress point; the elastic control that must report nothing, and what it costs to be bound by criteria this tree measured but did not obey
+if(TARGET test_convergence_criteria)
+  target_compile_definitions(test_convergence_criteria PRIVATE
+    KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
 katai_add_test(test_flow_barrier katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-FLW-004: a wall as a flow barrier (PLAXIS Ref Table 5-2 / Sci. Man. sec. 3.4) -- an impermeable screen passes exactly no water and holds the whole head difference, a semi-permeable one passes dh / (L/(k b) + R/b)
 katai_add_test(test_wells_drains katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-FLW-003: wells and drains (PLAXIS Ref sec. 5.9) against the Dupuit 1D closed forms -- the drawdown of a full-depth well, the discharge a drain removes, and a well limited by h_min becoming a drain at that level
 katai_add_test(test_undrained_c katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-007: Undrained (C), the total-stress analysis (MMM sec. 2.7) -- the same soil described two ways must agree, and the difference is the compressibility nu_u < 0.5 leaves behind
@@ -195,6 +200,13 @@ if(TARGET katai::jobs AND TARGET katai::io)
   add_executable(study_hs_integration EXCLUDE_FROM_ALL study_hs_integration.cpp)
   target_link_libraries(study_hs_integration PRIVATE katai::jobs katai::mesh katai::analysis katai::model katai::io katai::linsolve)
   target_compile_definitions(study_hs_integration PRIVATE KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+
+  # The convergence criteria family (N-2): prints every member for a set of cases, so the
+  # question "does a case exist that meets the global criterion and fails a local one?" is
+  # answered by a run rather than by an argument.
+  add_executable(study_convergence_family EXCLUDE_FROM_ALL study_convergence_family.cpp)
+  target_link_libraries(study_convergence_family PRIVATE katai::jobs katai::mesh katai::analysis katai::model katai::io katai::linsolve)
+  target_compile_definitions(study_convergence_family PRIVATE KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
 
 katai_add_test(test_slope_fos_convergence katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-SLP-003: the strength-reduction factor of safety of the Griffiths-Lane benchmark under systematic nested refinement -- does it converge, or does it follow the shear band down the mesh?

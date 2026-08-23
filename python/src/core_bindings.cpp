@@ -570,6 +570,51 @@ NB_MODULE(_core, m) {
                    " station(s)>";
         });
 
+    nb::class_<katai::core::NewtonResult::Convergence>(m, "Convergence")
+        .def_ro("measured", &katai::core::NewtonResult::Convergence::measured,
+                "False on a result reopened from a file written before this existed, and on a "
+                "phase family that does not iterate -- NOT the same as 'nothing was wrong'")
+        .def_ro("stiffness_parameter", &katai::core::NewtonResult::Convergence::csp,
+                "1 while the response is elastic, towards 0 as a mechanism forms. The force "
+                "criterion is normalised by it, so the check tightens as the soil plastifies")
+        .def_ro("force_error", &katai::core::NewtonResult::Convergence::force_error)
+        .def_ro("moment_error", &katai::core::NewtonResult::Convergence::moment_error,
+                "meaningless unless has_moment")
+        .def_ro("has_moment", &katai::core::NewtonResult::Convergence::has_moment,
+                "something in the model carries a rotational degree of freedom")
+        .def_ro("tolerated", &katai::core::NewtonResult::Convergence::tolerated,
+                "the tolerated error every criterion above is measured against")
+        .def_ro("plastic_points", &katai::core::NewtonResult::Convergence::plastic_points)
+        .def_ro("plastic_inaccurate",
+                &katai::core::NewtonResult::Convergence::plastic_inaccurate,
+                "yielding stress points whose LOCAL error exceeds the tolerated one: the "
+                "equilibrium stress the element carries and the stress the material law returns "
+                "for the same strain have not yet met")
+        .def_ro("elastic_points", &katai::core::NewtonResult::Convergence::elastic_points)
+        .def_ro("nl_elastic_points", &katai::core::NewtonResult::Convergence::nl_elastic_points,
+                "non-yielding points whose ELASTIC stiffness depends on stress")
+        .def_ro("nl_elastic_inaccurate",
+                &katai::core::NewtonResult::Convergence::nl_elastic_inaccurate)
+        .def_ro("worst_plastic_error",
+                &katai::core::NewtonResult::Convergence::worst_plastic_error)
+        .def_ro("worst_nl_elastic_error",
+                &katai::core::NewtonResult::Convergence::worst_nl_elastic_error)
+        .def("force_ok", &katai::core::NewtonResult::Convergence::force_ok)
+        .def("moment_ok", &katai::core::NewtonResult::Convergence::moment_ok)
+        .def("local_ok", &katai::core::NewtonResult::Convergence::local_ok,
+             "every local count within its allowance. FALSE on a run that reports ok=True is not "
+             "a contradiction: it says the force balance was reached before the stress points "
+             "settled, and the phase's tolerated error is what closes the gap")
+        .def("all_ok", &katai::core::NewtonResult::Convergence::all_ok)
+        .def("__repr__", [](const katai::core::NewtonResult::Convergence& c) {
+            if (!c.measured) return std::string("<Convergence not measured>");
+            return "<Convergence force " + std::to_string(c.force_error) + " of " +
+                   std::to_string(c.tolerated) + ", stiffness " + std::to_string(c.csp) +
+                   ", " + std::to_string(c.plastic_inaccurate) + "/" +
+                   std::to_string(c.plastic_points) + " yielding points inaccurate" +
+                   (c.local_ok() ? "" : " (LOCAL CRITERION NOT MET)") + ">";
+        });
+
     nb::class_<api::SolveResult>(m, "SolveResult")
         .def_ro("ok", &api::SolveResult::ok)
         .def_ro("message", &api::SolveResult::message)
@@ -591,6 +636,12 @@ NB_MODULE(_core, m) {
            "read the message: '' (reached full load), 'mechanism' or 'singular tangent' (load_factor "
            "IS the incremental limit load), 'iteration budget' (it is NOT a capacity -- the same "
            "model carries the load when the phase's max_iterations is adequate)")
+        .def_prop_ro("convergence", [](const api::SolveResult& r) { return r.convergence; },
+                     "WHICH convergence criteria the accepted iterate satisfied. `ok` is a claim "
+                     "about ONE quantity, the out-of-balance force; a run can meet it while "
+                     "individual stress points still carry stresses their own material law would "
+                     "not return for the strains they were given, and the force residual cannot "
+                     "see that because it is assembled from those stresses")
         .def_prop_ro("displacement", [](const api::SolveResult& r) { return r.disp; },
                      "full DOF vector (2*node_count), [m] -- copied to numpy")
         .def_prop_ro("pore", [](const api::SolveResult& r) { return r.pore; },

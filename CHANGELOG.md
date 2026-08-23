@@ -6,6 +6,56 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A run now says which convergence criteria it met, not just that it "converged"
+
+The solver checked one thing — a global force residual against a fixed scale — and reported the
+result as though that one thing were the whole question. It is not, and no code this program is
+measured against treats it as such: the criteria are a family, and the members disagree.
+
+A run now measures and reports all of these at the iterate it accepted, per phase:
+
+- **The Current Stiffness Parameter (CSP)**, the ratio of the work an increment actually did to
+  the work the same strain would have done had the response stayed elastic. It is 1 while the
+  model is elastic and falls towards 0 as a mechanism forms — measured on one strip footing at
+  1.00000, 0.437, 0.098, 0.00012 as the load rises past what the soil can carry.
+- **A CSP-normalised global force error.** Because CSP falls as the body plastifies, this
+  criterion *tightens* as a mechanism forms — which is exactly where a load fraction is about to
+  be read as a bearing capacity. The old fixed normalisation does the opposite.
+- **A moment residual**, wherever something in the model carries a rotational degree of freedom.
+- **The local error at every soil stress point**, plastic points and stress-dependent-elastic
+  points counted separately. A stress point carries two stresses during an iteration: what the
+  material law returns for the strain it was given, and what the finite-element linearisation says
+  it carries. They coincide only at the solution, and their difference is invisible to a global
+  force residual by construction — the residual is assembled *from* those stresses.
+
+**What the measurement found.** On a Mohr-Coulomb strip footing the global force error falls by
+five orders of magnitude across the iteration while the worst local error falls by a factor of
+three; at the accepted iterate the two differ by 63 000x. On the Hardening Soil oedometer at the
+tolerance this program ships for that model family, the global-only stopping rule stops **0.18%
+away from its own converged answer** — and requiring the local criteria at the *same* tolerance
+lands on the converged settlement in 194 iterations where tightening the global tolerance by four
+decades costs 399.
+
+**What is not changed.** These criteria are measured and reported; they do not yet decide whether
+a step has converged. Binding them moves published numbers, and this project moves published
+numbers deliberately, with the re-measurement budgeted, rather than as the side effect of adding a
+check. The switch that binds them (`enforce_local_criteria`, or `KATAI_CONV_LOCAL` for a whole
+run) exists so the rest of the verification matrix can be re-measured before that decision is
+taken. Every published number is unchanged by this release.
+
+**Results files carry it.** The `.res` format moves to version 7 so that a reopened result can
+still say which criteria its numbers were accepted under. Files written by earlier versions read
+back with the family marked "not measured", which is the honest answer for them; older builds
+refuse a v7 file rather than mis-read it.
+
+**A conflict between two official sources, resolved by measurement.** The two 2025.1 manuals of the
+program this criterion is taken from print CSP as reciprocals of each other — one as elastic energy
+over total, the other as total over elastic. Only the second is consistent with the behaviour both
+of them describe in words ("unity when fully elastic, approaching zero at failure") and with what
+is built on it there. The first form is at least 1 and grows without bound as a mechanism forms,
+which would make the global criterion loosen towards collapse. The second is implemented, and a
+test pins the direction so the other reading cannot return quietly.
+
 ### The Hardening Soil answer no longer depends on how many load steps it was asked for
 
 The stress-point integrator held the model's stress-dependent moduli — `E_ur`, `E_i`, `q_a`,

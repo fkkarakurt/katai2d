@@ -44,6 +44,22 @@ std::vector<katai::app::SolveResult> build_phases() {
         // ran out -- so it has to survive the round trip like every other qualification.
         R.stopped_by = k == 1 ? katai::core::NewtonResult::Abandonment::IterationBudget
                               : katai::core::NewtonResult::Abandonment::None;
+        // v7: WHICH convergence criteria the accepted iterate satisfied. Same argument as
+        // stopped_by one line up: "converged" is a claim about the accuracy of the numbers in
+        // this file, and a reopened result that drops the evidence keeps the claim.
+        R.convergence.measured = true;
+        R.convergence.csp = k == 1 ? 0.0976543 : 1.0;
+        R.convergence.force_error = 3.705e-7 * (k + 1);
+        R.convergence.moment_error = k == 1 ? 4.25e-4 : 0.0;
+        R.convergence.has_moment = k == 1;
+        R.convergence.tolerated = 1e-6;
+        R.convergence.plastic_points = 347 * k;
+        R.convergence.plastic_inaccurate = 337 * k;
+        R.convergence.elastic_points = 1471;
+        R.convergence.nl_elastic_points = 96 * k;
+        R.convergence.nl_elastic_inaccurate = 5 * k;
+        R.convergence.worst_plastic_error = 2.334e-2 * k;
+        R.convergence.worst_nl_elastic_error = 7.69e-5 * k;
         R.disp = Eigen::VectorXd::LinSpaced(12, -0.5 + k, 0.75);
         R.stress.stress.resize(6);
         for (int n = 0; n < 6; ++n)
@@ -74,6 +90,16 @@ bool same(const katai::app::SolveResult& a, const katai::app::SolveResult& b) {
     if (a.ok != b.ok || a.nil_step != b.nil_step || a.message != b.message) return false;
     if (a.max_disp != b.max_disp || a.load_factor != b.load_factor || a.fos != b.fos) return false;
     if (a.stopped_by != b.stopped_by) return false;
+    const auto& ca = a.convergence; const auto& cb = b.convergence;
+    if (ca.measured != cb.measured || ca.csp != cb.csp || ca.force_error != cb.force_error ||
+        ca.moment_error != cb.moment_error || ca.has_moment != cb.has_moment ||
+        ca.tolerated != cb.tolerated || ca.plastic_points != cb.plastic_points ||
+        ca.plastic_inaccurate != cb.plastic_inaccurate ||
+        ca.elastic_points != cb.elastic_points ||
+        ca.nl_elastic_points != cb.nl_elastic_points ||
+        ca.nl_elastic_inaccurate != cb.nl_elastic_inaccurate ||
+        ca.worst_plastic_error != cb.worst_plastic_error ||
+        ca.worst_nl_elastic_error != cb.worst_nl_elastic_error) return false;
     if (a.disp.size() != b.disp.size() || (a.disp - b.disp).cwiseAbs().maxCoeff() != 0.0) return false;
     if (a.stress.stress.size() != b.stress.stress.size()) return false;
     for (size_t i = 0; i < a.stress.stress.size(); ++i)

@@ -745,3 +745,153 @@ That was true of every number this record publishes, and it was *not* true of th
 refined-mesh run — which was never a published number, but was asserted by a test, which is the
 same promise in a different place. It is true of that run now, on the default settings, on both
 compositions.
+
+---
+
+## 11. The criterion that was never checked, and what it changes (KV-NUM-013)
+
+Every band in the sections above rests on the same sentence: *the run converged*. Until now that
+sentence meant one thing in this tree — a global force residual `||r|| <= rtol·max(||f_ext||, ||f_c||, 1)`
+— and it was reported as though it meant the whole question. It does not. The source these
+tolerances come from checks a **family** (Scientific Manual §9.1): a CSP-normalised global force
+error, a moment residual on rotational freedoms, and, separately, the local error at every soil
+stress point. Every reference code checks at least two independent things. One was the outlier.
+
+This section is the first measurement of the other members on this tree.
+
+### 11.1 The two stresses of a stress point
+
+The concept under the local criteria (Fig. 9-1, Eq. 9-6) is that a stress point carries **two**
+stresses during an iteration:
+
+* the **constitutive** stress, what the material law returns for the strain the point was given,
+  σ_c,j = σ_0 + D_e (Δε_j − Δε_p,j);
+* the **equilibrium** stress, what the finite-element linearisation says the point carries,
+  σ_eq,j = σ_c,j−1 + D_e δε_j, built from the previous iterate and this iteration's correction.
+
+Their difference, normalised by max(τ_max, c', 1 kPa) for a plastic point (Eq. 9-5) or by
+max(τ_max, c', p_ref/200) for a point whose *elastic* stiffness depends on stress (Eq. 9-7), is
+the local error. It is an error and not a measure of nonlinearity: at the exact solution δε = 0
+and the two stresses coincide identically. The linear-elastic control measures it at **0.0**, and
+the first iterate of every increment measures it at 2e-16.
+
+### 11.2 A conflict between two official manuals, and which way it was resolved
+
+CSP — the Current Stiffness Parameter — normalises the global force error, and it is printed
+**two different ways up** in the 2025.1 documentation set:
+
+| | printed as | value while elastic | value at failure |
+|---|---|---|---|
+| Scientific Manual Eq. 9-2 | elastic energy increment / total energy increment | 1 | **grows without bound** |
+| Reference Manual Eq. 7-22 | integral of Δε·Δσ over integral of Δε D_e Δε | 1 | **towards 0** |
+
+Only the Reference orientation is consistent with the behaviour that *both* manuals state in
+words — "when the solution is fully elastic the *Stiffness* is equal to unity, whereas at failure
+the *Stiffness* approaches zero" — and with the uses built on it there: arc-length control engages
+below CSP 0.5, and collapse is reported below CSP 0.015. Implementing the Scientific Manual's
+printed Eq. 9-2 would make the global force criterion **loosen** as a mechanism forms, which is
+precisely where a load fraction is about to be published as a bearing capacity.
+
+Eq. 7-22 is what is implemented, deliberately, and the measurement agrees with it. On one strip
+footing, load rising:
+
+| footing load [kPa] | CSP | load factor |
+|---|---|---|
+| linear elastic control | **1.0** (to round-off) | 1.000 |
+| 100 | 0.43743 | 1.000 |
+| 300 | 0.09765 | 1.000 |
+| 600 | 0.00012 | 0.656 |
+| 900 | 0.00009 | 0.434 |
+
+The parameter falls monotonically to below the source's own collapse value on the two loads the
+model cannot carry. `test_convergence_criteria` pins that direction, so the inverted reading cannot
+be reintroduced quietly.
+
+### 11.3 The separation: the global criterion improves by 1e5 while the local one improves by 3
+
+Mohr-Coulomb strip footing, q = 300 kPa, tolerated error 1e-6, iterate by iterate:
+
+| iterate | global force error | worst local error | inaccurate plastic points |
+|---|---|---|---|
+| 1 | 1.30e-2 | 6.54e-2 | 335 / 335 |
+| 2 | 1.29e-2 | 7.09e+0 | 344 / 344 |
+| 3 | 3.39e-3 | 7.83e+0 | 347 / 347 |
+| 4 | 8.63e-5 | 5.60e-1 | 347 / 347 |
+| **5 (accepted)** | **3.71e-7** | **2.33e-2** | **337 / 347** |
+
+The run is declared converged with its global error a factor of 2.7 *below* what was asked, while
+337 of its 347 plastic points carry a local error four decades above it. The separation is not a
+constant: it is 5x at the first iterate and **63 000x** at the last. Whatever the local criterion
+is measuring, the force residual cannot see it.
+
+Tightening the tolerance shows the local error is genuinely converging, not stalled — and where its
+floor is:
+
+| tolerated error | iterations | global force error | worst local error | settlement max abs u [m] |
+|---|---|---|---|---|
+| 1e-2 | 74 | 3.63e-3 | 8.10e+0 | 0.314188623 |
+| 1e-4 | 114 | 8.63e-5 | 5.60e-1 | 0.314678453 |
+| 1e-6 | 128 | 3.71e-7 | 2.33e-2 | 0.314684142 |
+| 1e-8 | 141 | 7.56e-12 | 7.69e-5 | 0.314684146 |
+| 1e-10 | 149 | 7.56e-12 | 7.69e-5 | 0.314684146 |
+
+The local error follows the global one down until the solve reaches its round-off floor, where it
+settles at 7.69e-5 — 0.008% of the local shear strength. **The displacement, on this case, is
+already converged to eight figures at 1e-6.** So on a Mohr-Coulomb footing the local criteria are
+strictly informative: they report a stress-point statement that the displacement answer does not
+depend on.
+
+### 11.4 Where it is not merely informative: the Hardening Soil oedometer at its shipped tolerance
+
+KV-CST-002, run three ways. 1e-2 is what this tree ships for the Hardening Soil family — inherited
+from the same source as the criteria. 1e-6 is four decades tighter and is what this record uses
+when it wants the answer rather than a run.
+
+| run | iterations | wall clock | settlement max abs u [m] | vs the tight answer |
+|---|---|---|---|---|
+| tolerance 1e-2, global criterion only (**what ships**) | 114 | 1.3 s | 0.018680445 | **+0.179%** |
+| tolerance 1e-2, local criteria binding | 194 | 3.3 s | 0.018647102 | +0.0005% |
+| tolerance 1e-6, global criterion only | 399 | 7.6 s | 0.018647012 | — |
+
+The shipped stopping rule stops **0.18% away** from its own converged answer, and the local
+criteria are what detect it. Binding them at the *same* tolerance lands on the converged settlement
+in **194 iterations instead of 399** — that is, the local criteria are a cheaper route to the right
+answer than tightening the global tolerance is. This was not the expected result: the prediction
+written down before the run was that enforcement would be expensive and might prevent convergence
+near a limit load. It did neither. On the two footing loads the model cannot carry, enforcement
+changed the outcome not at all (load factor 0.656 and 0.434 either way, 464 to 478 and 506 to 519
+iterations).
+
+### 11.5 What is measured, what is enforced, and why they differ
+
+Everything above is **measured and reported** — `NewtonResult::Convergence`, carried into
+`SolveResult::convergence` and written to the results file (`.res` v7, so a reopened result keeps
+the evidence for its own "converged"). Gathering it is free: measured against a build that skipped
+the probe entirely, the same five cases run in 1.1/2.4/4.3/6.8/0.8 s with it and 1.2/2.9/4.6/7.5/0.7 s
+without, with identical iteration counts and bit-identical answers. Nothing above **binds** the
+solver: `enforce_local_criteria` is off by
+default, in the engine, in the phase strategy and in the driver.
+
+That is a record decision, not an opinion about which stopping rule is better. Turning it on moves
+published numbers — by 0.18% on KV-CST-002, and by an unmeasured amount on every other Hardening
+Soil case in the matrix — and this project moves published numbers on purpose, with the
+re-measurement budgeted, rather than as the side effect of adding a check. The measurement above is
+what that decision now has to be taken against; the switch (`NumericalControls::enforce_local_criteria`,
+or `KATAI_CONV_LOCAL` for a whole run) is how the rest of the matrix gets re-measured before it is
+taken.
+
+### 11.6 What this section does not yet cover
+
+* **Interfaces (Eq. 9-8) and the embedded-beam foot force (Eq. 9-9)** are not measured. The soil
+  and global members of the family are; these two are the second half of the package and are named
+  here rather than left to be discovered missing.
+* **The moment residual (Eq. 9-3/9-4)** is computed and reported wherever a rotational freedom
+  exists, but no case in the matrix has yet been examined through it.
+* **The global force criterion still uses the old normalisation as its gate.** Eq. 9-1's
+  CSP-normalised form is computed and reported alongside, and the two differ most exactly where it
+  matters — a phase whose standing load dwarfs its own increment. Which one gates is the same kind
+  of decision as §11.5, and is not taken here.
+* **Non-linear elastic points (Eq. 9-7) were never the binding count** on any case run so far: on
+  the Hardening Soil oedometer every point is plastic once loading starts, and the Mohr-Coulomb
+  cases have no stress-dependent elastic stiffness at all. The criterion is implemented and
+  exercised by the control; it has not yet been exercised where it bites.
