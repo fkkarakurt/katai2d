@@ -57,11 +57,18 @@ struct NewtonOptions {
     int line_search_window = 1;
     // Require the LOCAL convergence criteria (NewtonResult::Convergence, Scientific Manual
     // §9.1.2) as well as the global force residual before an increment is called converged.
-    // Off by default, and the default is a RECORD decision rather than an opinion about which
-    // rule is better: switching it on moves published numbers, so it is switched on by
-    // measurement (tests/study_convergence_family.cpp) and adopted, if at all, on purpose.
-    // The environment variable KATAI_CONV_LOCAL forces it on for a whole run.
-    bool enforce_local_criteria = false;
+    //
+    // ON, since 2026-08-24, by measurement rather than by preference. The global criterion alone
+    // stops a Hardening Soil oedometer 0.179% away from its own converged answer at the tolerance
+    // this tree ships for that model family, and requiring the local criteria at the SAME
+    // tolerance lands on the converged settlement in 194 iterations where tightening the global
+    // tolerance by four decades costs 399. It is therefore not a stricter rule bought with
+    // iterations; it is a cheaper route to the same answer. Every published number that moved
+    // when it was switched on is re-measured in docs/validation/numerical-uncertainty.md §11.
+    //
+    // KATAI_CONV_NOLOCAL turns it off for a whole run, which is how the comparison above is
+    // reproduced; KATAI_CONV_LOCAL forces it on where a caller has switched it off.
+    bool enforce_local_criteria = true;
 };
 
 // Plate (structural wall/beam) embedded in soil — 3-node Timoshenko beam (see
@@ -308,6 +315,17 @@ struct NewtonResult {
         int plastic_points = 0, plastic_inaccurate = 0;
         int elastic_points = 0, nl_elastic_points = 0, nl_elastic_inaccurate = 0;
         double worst_plastic_error = 0.0, worst_nl_elastic_error = 0.0;
+        // Interfaces (Eq. 9-8). The embedded beam's SKIN coupling springs are counted here too,
+        // which is what the source does -- it draws no distinction between a soil-structure
+        // interface and the special interface a pile skin is.
+        int iface_points = 0, iface_inaccurate = 0;
+        double worst_iface_error = 0.0;
+        // Embedded-beam foot force (Eq. 9-9): one ratio over every foot in the model, not a
+        // per-point count, and tolerated at FIVE times the tolerated error -- the source's
+        // factor, kept rather than rounded to the same bar as everything else.
+        double foot_force_error = 0.0;
+        int feet = 0;
+        static constexpr double kFootToleranceFactor = 5.0;
         bool measured = false;         // false = no accepted iterate was ever reached
 
         // The tolerated fraction of inaccurate points, and the +3 that goes with it: a handful
@@ -325,7 +343,15 @@ struct NewtonResult {
             return nl_elastic_inaccurate <
                    kInaccurateFraction * elastic_points + kInaccurateAllowance;
         }
-        bool local_ok() const { return plastic_points_ok() && nl_elastic_ok(); }
+        bool iface_points_ok() const {
+            return iface_inaccurate < kInaccurateFraction * iface_points + kInaccurateAllowance;
+        }
+        bool foot_ok() const {
+            return feet == 0 || foot_force_error <= kFootToleranceFactor * tolerated;
+        }
+        bool local_ok() const {
+            return plastic_points_ok() && nl_elastic_ok() && iface_points_ok() && foot_ok();
+        }
         bool all_ok() const { return force_ok() && moment_ok() && local_ok(); }
     };
     Convergence convergence;

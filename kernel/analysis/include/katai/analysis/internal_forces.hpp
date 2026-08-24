@@ -130,6 +130,14 @@ struct AxisymKin {
     }
 };
 
+// One previous-iterate record for a STRUCTURAL stress point: what the law returned there, and
+// the relative displacement it was returned for. The soil keeps the same pair in two parallel
+// vectors because its stress is a tensor; a traction is one number, so it fits in a struct.
+struct PrevPoint {
+    double value = 0.0;   // tau (interface) or axial force (coupling spring / foot)
+    double du = 0.0;      // the relative displacement that produced it
+};
+
 // LOCAL convergence measurement, gathered while the internal force is assembled because that
 // is the only place where both stresses of a point exist at the same instant.
 //
@@ -148,6 +156,17 @@ struct AxisymKin {
 struct LocalErrorProbe {
     std::vector<GaussState>* prev_sigma_c = nullptr;  // sigma_c,j-1 in, sigma_c,j out
     std::vector<double>* prev_deps = nullptr;         // Delta-eps_{j-1}, kStrain per point
+    // The structural counterparts, one entry per stress point of each kind, sized like the
+    // committed-state vectors they shadow.
+    std::vector<PrevPoint>* prev_iface = nullptr;     // 3-node interfaces
+    std::vector<PrevPoint>* prev_iface5 = nullptr;    // 5-node interfaces
+    std::vector<PrevPoint>* prev_skin = nullptr;      // embedded-beam skin coupling springs
+    std::vector<PrevPoint>* prev_foot = nullptr;      // embedded-beam feet
+    // The first iterate of an increment has applied no correction, so there is no local error to
+    // measure there -- only a state to record. The soil gets this for free (its previous stress
+    // is the committed one and its previous strain increment is zero); a traction has no
+    // committed value stored anywhere, so it is recorded on the way past instead.
+    bool first_iterate = false;
     double tolerated = 0.01;                          // ToleratedError, the bar for a local error
 
     // --- measured, over the ACTIVE soil stress points -----------------------------------
@@ -172,15 +191,60 @@ struct LocalErrorProbe {
     double m_ref = 0.0;
     std::vector<int> moment_eq;      // equations carrying a rotational degree of freedom
 
+    // Interfaces (Eq. 9-8). The source counts the embedded beam's SKIN coupling springs in the
+    // same tally as the soil-structure interfaces ("no distinction between standard interfaces
+    // and special interfaces"), so they are counted here together and the record says so.
+    int iface_plastic = 0, iface_plastic_inaccurate = 0;
+    double worst_iface = 0.0;
+
+    // Embedded-beam foot force (Eq. 9-9). Three sums rather than a count, because the criterion
+    // is one ratio over all the feet in the model, not a per-point test.
+    int feet = 0;
+    double foot_num = 0.0;        // sum |F_foot,eq - F_foot,c|
+    double foot_den_c = 0.0;      // sum |F_foot,c|
+    double foot_den_max = 0.0;    // sum |F_foot,max|
+
     // Clear what one iterate measured, keeping what carries the iteration across iterates
-    // (the two previous-iterate vectors and the tolerance).
+    // (the previous-iterate vectors and the tolerance).
     void reset_counts() {
         plastic = plastic_inaccurate = 0;
         elastic_total = nl_elastic = nl_elastic_inaccurate = 0;
         worst_plastic = worst_nl_elastic = 0.0;
         energy_total = energy_elastic = 0.0;
+        iface_plastic = iface_plastic_inaccurate = 0;
+        worst_iface = 0.0;
+        feet = 0;
+        foot_num = foot_den_c = foot_den_max = 0.0;
     }
 };
+
+// One interface / coupling-spring stress point, measured the way Fig. 9-1 measures a soil one:
+// the EQUILIBRIUM traction is the previous iterate's constitutive traction carried forward
+// elastically through this iteration's slip increment, and the CONSTITUTIVE traction is what the
+// Coulomb return actually gave. Eq. 9-8 normalises their difference by the point's own shear
+// capacity, with the same 1 kPa floor as the soil so that a point carrying nothing cannot report
+// an enormous relative error on a difference that is numerically nothing.
+//
+// `prev` is read and then overwritten with this iterate's pair, which is what carries the
+// measurement to the next iteration.
+inline void measure_traction_point(LocalErrorProbe& probe, PrevPoint& prev, double tau_c,
+                                   double du, double k_elastic, bool plastic, double tau_max,
+                                   double cohesion) {
+    if (!probe.first_iterate) {
+        const double tau_eq = prev.value + k_elastic * (du - prev.du);
+        const double denom = std::max(std::max(tau_max, cohesion), 1.0);
+        const double err = std::fabs(tau_eq - tau_c) / denom;
+        if (plastic) {
+            ++probe.iface_plastic;
+            if (err > probe.tolerated) ++probe.iface_plastic_inaccurate;
+        }
+        probe.worst_iface = std::max(probe.worst_iface, err);
+    } else if (plastic) {
+        ++probe.iface_plastic;
+    }
+    prev.value = tau_c;
+    prev.du = du;
+}
 
 // Per-element partial of the above. The assembly runs in parallel over elements, and a global
 // counter written from several threads is both a race and a source of run-to-run variation in
@@ -335,6 +399,16 @@ public:
                 static_cast<size_t>(mesh.element_count) * n_gp * Kin::kStrain)
                 probe->prev_deps->assign(
                     static_cast<size_t>(mesh.element_count) * n_gp * Kin::kStrain, 0.0);
+            // The structural previous-iterate vectors shadow the committed-state vectors one for
+            // one, so they are sized FROM them rather than re-derived from the element counts --
+            // one place decides how many stress points a structure has.
+            const auto fit = [](std::vector<PrevPoint>* v, size_t n) {
+                if (v && v->size() != n) v->assign(n, PrevPoint{});
+            };
+            fit(probe->prev_iface, st.iface_c ? st.iface_c->size() : 0);
+            fit(probe->prev_iface5, st.iface5_c ? st.iface5_c->size() : 0);
+            fit(probe->prev_skin, st.eskin_c ? st.eskin_c->size() : 0);
+            fit(probe->prev_foot, st.efoot_c ? st.efoot_c->size() : 0);
         }
         math::parallel_for(mesh.element_count, [&](int e_begin, int e_end) {
         for (int e = e_begin; e < e_end; ++e) {
@@ -708,6 +782,12 @@ public:
                 const auto ret = iface::coulomb_return(ie.props, du_s, du_n, (*st.iface_c)[si],
                                                        ie.sigma_n0[q]);
                 (*st.iface_t)[si] = ret.slip_p_new;
+                if (probe && probe->prev_iface)
+                    measure_traction_point(*probe, (*probe->prev_iface)[si], ret.tau, du_s,
+                                           ie.props.ks, ret.Ds == 0.0,
+                                           std::max(0.0, ie.props.c_i -
+                                                             ret.sigma_n * std::tan(ie.props.phi_i)),
+                                           ie.props.c_i);
                 for (int i = 0; i < 4; ++i) {
                     if (idx[i] < 0) continue;
                     f_int(idx[i]) += wJ * (a[i] * ret.tau + b[i] * ret.sigma_n);
@@ -746,6 +826,12 @@ public:
                 const auto ret = iface::coulomb_return(ie.props, du_s, du_n, (*st.iface5_c)[si],
                                                        ie.sigma_n0[q]);
                 (*st.iface5_t)[si] = ret.slip_p_new;
+                if (probe && probe->prev_iface5)
+                    measure_traction_point(*probe, (*probe->prev_iface5)[si], ret.tau, du_s,
+                                           ie.props.ks, ret.Ds == 0.0,
+                                           std::max(0.0, ie.props.c_i -
+                                                             ret.sigma_n * std::tan(ie.props.phi_i)),
+                                           ie.props.c_i);
                 for (int i = 0; i < 4; ++i) {
                     if (idx[i] < 0) continue;
                     f_int(idx[i]) += wJ * (a[i] * ret.tau + b[i] * ret.sigma_n);
@@ -763,10 +849,16 @@ public:
         // skin splits each point with [N_b,−N_s]. Since E (the soil element) is known in this
         // assembler, N_s = E::shape_functions.
         // Shared helper: axial return mapping + scatter at one coupling point (eq,cx,cy lists).
+        // out_f / out_du hand back the axial force the law returned and the relative axial
+        // displacement it was returned for -- the pair the local criteria need (Eq. 9-8 for the
+        // skin springs, Eq. 9-9 for the foot). Both default to null, so the measurement costs
+        // nothing where it is not asked for.
         auto axial_couple = [&](const int* eqp, const int* gdp, const double* cxp,
                                 const double* cyp, int nc,
                                 const Eigen::Vector2d& tang, double k_a, double k_n, double cap,
-                                double wJ, double slip_c, double& slip_t) {
+                                double wJ, double slip_c, double& slip_t,
+                                double* out_f = nullptr, double* out_du = nullptr,
+                                bool* out_capped = nullptr) {
             const Eigen::Vector2d nrm(-tang(1), tang(0));
             Eigen::Vector2d dur(0.0, 0.0);
             for (int d = 0; d < nc; ++d)
@@ -775,6 +867,9 @@ public:
             double ta = k_a * (dua - slip_c), Da = k_a;
             if (cap > 0.0 && std::fabs(ta) > cap) { ta = std::copysign(cap, ta); slip_t = dua - ta / k_a; Da = 0.0; }
             else { slip_t = slip_c; }
+            if (out_f) *out_f = ta;
+            if (out_du) *out_du = dua;
+            if (out_capped) *out_capped = (Da == 0.0);
             const double tn = k_n * dun;
             const Eigen::Vector2d tr = ta * tang + tn * nrm;
             const Eigen::Matrix2d D = Da * (tang * tang.transpose()) + k_n * (nrm * nrm.transpose());
@@ -835,8 +930,17 @@ public:
                         cx[nc] = c == 0 ? -Ns(j) : 0.0; cy[nc] = c == 0 ? 0.0 : -Ns(j); ++nc;
                     }
                 }
+                double f_sp = 0.0, du_sp = 0.0; bool capped = false;
+                const bool want = probe && probe->prev_skin;
                 axial_couple(eq.data(), gdx.data(), cx.data(), cy.data(), nc, sp.tang, sp.k_a, sp.k_n, sp.t_max,
-                             sp.wJ, (*st.eskin_c)[skin_off + pi], (*st.eskin_t)[skin_off + pi]);
+                             sp.wJ, (*st.eskin_c)[skin_off + pi], (*st.eskin_t)[skin_off + pi],
+                             want ? &f_sp : nullptr, want ? &du_sp : nullptr,
+                             want ? &capped : nullptr);
+                // The source counts an embedded beam's skin springs with the interface plastic
+                // points rather than separately, so they land in the same tally (Eq. 9-8's note).
+                if (want)
+                    measure_traction_point(*probe, (*probe->prev_skin)[skin_off + pi], f_sp, du_sp,
+                                           sp.k_a, capped, sp.t_max, 0.0);
             }
             skin_off += eb.skin.size();
             if (eb.foot.D_foot > 0.0 && eb.foot.ok) {  // (3) foot (axial spring, cap F_max; wJ=1)
@@ -856,8 +960,28 @@ public:
                         cx[nc] = c == 0 ? -Ns(j) : 0.0; cy[nc] = c == 0 ? 0.0 : -Ns(j); ++nc;
                     }
                 }
+                double f_ft = 0.0, du_ft = 0.0;
+                const bool want_f = probe && probe->prev_foot;
                 axial_couple(eq.data(), gdx.data(), cx.data(), cy.data(), nc, eb.foot.tang, eb.foot.D_foot, 0.0,
-                             eb.foot.f_max, 1.0, (*st.efoot_c)[bi], (*st.efoot_t)[bi]);
+                             eb.foot.f_max, 1.0, (*st.efoot_c)[bi], (*st.efoot_t)[bi],
+                             want_f ? &f_ft : nullptr, want_f ? &du_ft : nullptr);
+                // Eq. 9-9. The foot is not counted as a point: its criterion is ONE ratio over
+                // every foot in the model, so what is gathered here are the three sums that ratio
+                // is formed from. The equilibrium force is the previous iterate's carried forward
+                // elastically -- the same construction as Fig. 9-1, which the source says applies
+                // "in the same fashion" to the pile tip.
+                if (want_f) {
+                    PrevPoint& pv = (*probe->prev_foot)[bi];
+                    if (!probe->first_iterate) {
+                        const double f_eq = pv.value + eb.foot.D_foot * (du_ft - pv.du);
+                        probe->foot_num += std::fabs(f_eq - f_ft);
+                    }
+                    probe->foot_den_c += std::fabs(f_ft);
+                    probe->foot_den_max += std::fabs(eb.foot.f_max > 0.0 ? eb.foot.f_max : 0.0);
+                    ++probe->feet;
+                    pv.value = f_ft;
+                    pv.du = du_ft;
+                }
             }
         }
         if (timings) {

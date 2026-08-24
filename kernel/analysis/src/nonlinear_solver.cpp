@@ -68,6 +68,19 @@ void measure_convergence(const detail::LocalErrorProbe& p, const Eigen::VectorXd
     cv.nl_elastic_inaccurate = p.nl_elastic_inaccurate;
     cv.worst_plastic_error = p.worst_plastic;
     cv.worst_nl_elastic_error = p.worst_nl_elastic;
+
+    cv.iface_points = p.iface_plastic;
+    cv.iface_inaccurate = p.iface_plastic_inaccurate;
+    cv.worst_iface_error = p.worst_iface;
+
+    // Eq. 9-9. The denominator is the source's, floor and all: the constitutive foot forces, or
+    // one per cent of the declared capacities, or 1.0 -- whichever is largest. The middle term is
+    // what stops a pile that carries almost nothing at its toe from reporting a huge relative
+    // error while the capacity it was given says the force is negligible either way.
+    cv.feet = p.feet;
+    cv.foot_force_error =
+        p.feet == 0 ? 0.0
+                    : p.foot_num / std::max({p.foot_den_c, 0.01 * p.foot_den_max, 1.0});
 }
 
 // Newton solver templated over element (tri6/tri15) and kinematics (plane strain/axisym);
@@ -219,15 +232,16 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     const double cf_norm = has_cf ? constant_force.norm() : 0.0;
     const double ref = std::max({f_ext_norm, cf_norm, 1.0});
     const bool debug = std::getenv("KATAI_NL_DEBUG") != nullptr;
-    // MEASUREMENT SEAM, off by default. With it on, an increment must satisfy the LOCAL
-    // criteria as well as the global force residual before it is called converged -- which is
-    // what the source of these criteria does, and what this tree does not. Off by default
-    // because turning it on moves published numbers, and that is a decision to take with the
-    // cost in hand: this switch is how the cost is measured (iterations, wall clock, and how
-    // far the answers actually move). The environment variable is the whole-run override a
-    // study uses; the option is what a test drives.
+    // An increment must satisfy the LOCAL criteria as well as the global force residual before
+    // it is called converged -- which is what the source of these criteria does. ON by default
+    // since 2026-08-24; see NewtonOptions::enforce_local_criteria for the measurement that
+    // decided it. The two environment variables are the whole-run overrides a study uses, and
+    // the option is what a test and the phase's numerical controls drive.
     const bool enforce_local =
-        options.enforce_local_criteria || std::getenv("KATAI_CONV_LOCAL") != nullptr;
+        std::getenv("KATAI_CONV_LOCAL") != nullptr
+            ? true
+            : (std::getenv("KATAI_CONV_NOLOCAL") != nullptr ? false
+                                                            : options.enforce_local_criteria);
 
     // Adaptive (automatic) load incrementation. The external load is advanced from
     // 0 to f_ext by increments d_lambda; an increment that fails to converge is
@@ -259,8 +273,13 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     detail::LocalErrorProbe probe;
     std::vector<GaussState> prev_sc;
     std::vector<double> prev_deps;
+    std::vector<detail::PrevPoint> prev_iface, prev_iface5, prev_skin, prev_foot;
     probe.prev_sigma_c = &prev_sc;
     probe.prev_deps = &prev_deps;
+    probe.prev_iface = &prev_iface;
+    probe.prev_iface5 = &prev_iface5;
+    probe.prev_skin = &prev_skin;
+    probe.prev_foot = &prev_foot;
     probe.tolerated = rtol;
     result.convergence.tolerated = rtol;
 
@@ -275,6 +294,10 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         Eigen::VectorXd du_free = Eigen::VectorXd::Zero(neq);
         prev_sc = committed;  // sigma_c,0 = sigma_0, where Fig. 9-1 starts
         std::fill(prev_deps.begin(), prev_deps.end(), 0.0);
+        // A traction has no committed value stored anywhere -- the structural elements are
+        // total-displacement formulations, so the state at the start of an increment is
+        // whatever the first assembly of that increment computes. It is recorded there.
+        bool first_iterate = true;
         // The last W residual norms of THIS increment, most recent last: the line search's
         // yardstick when the window is open. It starts empty at every increment (including a
         // retried one), so the memory never crosses a load step.
@@ -289,6 +312,8 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         for (int iter = 0; iter < options.max_iterations; ++iter) {
             builder.clear();
             probe.reset_counts();
+            probe.first_iterate = first_iterate;
+            first_iterate = false;
             // The family is gathered on every accepted iterate and NOT on the line search's
             // trial evaluations, which is both correct (only an accepted iterate's local error
             // means anything) and why it is free: measured against a build that skipped it

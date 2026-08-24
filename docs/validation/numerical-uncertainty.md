@@ -849,8 +849,8 @@ when it wants the answer rather than a run.
 
 | run | iterations | wall clock | settlement max abs u [m] | vs the tight answer |
 |---|---|---|---|---|
-| tolerance 1e-2, global criterion only (**what ships**) | 114 | 1.3 s | 0.018680445 | **+0.179%** |
-| tolerance 1e-2, local criteria binding | 194 | 3.3 s | 0.018647102 | +0.0005% |
+| tolerance 1e-2, global criterion only (**what shipped until 2026-08-24**) | 114 | 1.3 s | 0.018680445 | **+0.179%** |
+| tolerance 1e-2, local criteria binding (**what ships now**) | 194 | 3.3 s | 0.018647102 | +0.0005% |
 | tolerance 1e-6, global criterion only | 399 | 7.6 s | 0.018647012 | — |
 
 The shipped stopping rule stops **0.18% away** from its own converged answer, and the local
@@ -862,36 +862,106 @@ near a limit load. It did neither. On the two footing loads the model cannot car
 changed the outcome not at all (load factor 0.656 and 0.434 either way, 464 to 478 and 506 to 519
 iterations).
 
-### 11.5 What is measured, what is enforced, and why they differ
+### 11.5 The structural half: interfaces and the pile toe
 
-Everything above is **measured and reported** — `NewtonResult::Convergence`, carried into
-`SolveResult::convergence` and written to the results file (`.res` v7, so a reopened result keeps
-the evidence for its own "converged"). Gathering it is free: measured against a build that skipped
-the probe entirely, the same five cases run in 1.1/2.4/4.3/6.8/0.8 s with it and 1.2/2.9/4.6/7.5/0.7 s
-without, with identical iteration counts and bit-identical answers. Nothing above **binds** the
-solver: `enforce_local_criteria` is off by
-default, in the engine, in the phase strategy and in the driver.
+Two more members complete the family, and both are the same construction applied to a traction
+instead of a stress tensor. A slipping interface point carries an equilibrium shear
+tau_eq,j = tau_c,j-1 + k_s * delta-u_s,j and a constitutive shear tau_c,j from the Coulomb return;
+Eq. 9-8 normalises their difference by the point's own capacity. An embedded beam's SKIN coupling
+springs are counted in the SAME tally, which is what the source does — it draws no distinction
+between a soil-structure interface and the special interface a pile skin is. The foot is not a
+point at all: Eq. 9-9 forms ONE ratio over every foot in the model, tolerated at FIVE times the
+tolerated error.
 
-That is a record decision, not an opinion about which stopping rule is better. Turning it on moves
-published numbers — by 0.18% on KV-CST-002, and by an unmeasured amount on every other Hardening
-Soil case in the matrix — and this project moves published numbers on purpose, with the
-re-measurement budgeted, rather than as the side effect of adding a check. The measurement above is
-what that decision now has to be taken against; the switch (`NumericalControls::enforce_local_criteria`,
-or `KATAI_CONV_LOCAL` for a whole run) is how the rest of the matrix gets re-measured before it is
-taken.
+Measured on the two corpus cases that have the elements, with only the global criterion binding:
 
-### 11.6 What this section does not yet cover
+| case | global force error | what the structural criteria say |
+|---|---|---|
+| KV-STR-002 sliding block (1e-6) | 2.03e-7, met | **14 of 47 slipping interface points inaccurate**, worst 2.05e-6 |
+| KV-STR-004 axial pile (1e-6) | 1.29e-9, met | skin + interface 0 of 32; **foot force error 5.6e-9 of 5.0e-6 allowed** |
 
-* **Interfaces (Eq. 9-8) and the embedded-beam foot force (Eq. 9-9)** are not measured. The soil
-  and global members of the family are; these two are the second half of the package and are named
-  here rather than left to be discovered missing.
+The sliding block is the clean interface case: its soil is elastic, so nothing in the soil
+contributes a plastic point and the interface criterion is the only local one with anything to
+say. It fails while the global criterion is met by a factor of five. The pile's foot criterion is
+satisfied comfortably, which is worth stating as plainly as a failure: a criterion that only ever
+reports trouble is not measuring anything.
+
+### 11.6 The decision: the local criteria now bind, and what that moved
+
+Everything above was measured before anything was decided. The decision is taken: as of
+2026-08-24 `enforce_local_criteria` is **ON** by default, in the engine, the phase strategy and
+the driver. `KATAI_CONV_NOLOCAL` turns it off for a whole run, which is how every comparison in
+this section is reproduced.
+
+It was taken on the measurement rather than on the principle. The principle would have said
+"check what the source checks"; the measurement says something stronger — that this is not a
+stricter rule bought with iterations, but a **cheaper route to the same answer**. On KV-CST-002 it
+lands on the converged settlement in 194 iterations where tightening the global tolerance by four
+decades costs 399.
+
+**What moved, across the whole suite: three cases out of 154.** Every other published number is
+unchanged, which is itself the useful measurement — the criteria bind where the old rule was
+stopping early and nowhere else.
+
+**1. KV-NUM-007, the slope factor of safety: a whole class of unsafe-sided answer is gone.**
+
+| tolerated residual | factor of safety, before | after |
+|---|---|---|
+| 1e-1 | 2.069116 (**+45.6%**) | 1.429578 (**+0.6%**) |
+| 1e-2 | 1.449585 (+2.0%) | 1.421021 (+0.0%) |
+| 1e-3 (the search's own) | 1.421021 | 1.421021 |
+
+This was never really about the tolerance. A strength-reduction search asks "did this reduced
+strength still reach equilibrium?", and a run that stops on the global force residual alone can
+stop with its stress points nowhere near the strengths it has just reduced them to — which the
+search reads as a yes. That gap is exactly what the local criteria close. A slope reported 45%
+safer than it is was the kind of number this record exists to refuse, and the stopping rule can no
+longer produce it.
+
+**2. KV-CST-010, Soft Soil Creep: a published 3% band that was measured on an under-converged
+run.** Requiring the criteria moved every duration of this case AWAY from the idealised creep law,
+which looked at first like the criteria being wrong for a viscous point. Sweeping the tolerance
+with them OFF settled it — the model walks to its own answer and stays there:
+
+| duration | idealised law | shipped tolerance, global only | swept to 1e-8, global only | with the local criteria |
+|---|---|---|---|---|
+| 1 d | 2.772589e-3 | 2.715531e-3 (−2.06%) | **2.936937e-3 (+5.93%)** | 2.941283e-3 (+6.08%) |
+| 10 d | 9.591581e-3 | 9.747126e-3 (+1.62%) | **9.892608e-3 (+3.14%)** | 9.922439e-3 (+3.45%) |
+| 100 d | 1.8460e-2 | 1.8598e-2 (+0.74%) | **1.8763e-2 (+1.64%)** | 1.8794e-2 (+1.80%) |
+
+The old run was not accurate; it was **lucky**. It stopped short, and where it stopped happened to
+sit inside 3% of a law the model does not exactly obey. The converged deviation is +5.93% falling
+to +1.64%, and the local criteria find it at the shipped tolerance in 81 iterations against the
+sweep's 189. The case's band is now 7% across the sweep, and what carries the physics is no longer
+a flat band but the SHAPE: the deviation must FALL with duration, because the idealised law drops
+the elastic and consolidation parts and those matter most where there is least creep. A flat band
+cannot distinguish a model that obeys the law from one that happens to land near it once.
+
+**3. KV-STR-002, the sliding block: a plateau that is no longer bit-identical.** Doubling the
+imposed slip used to give the same failure force to the last bit; the two runs now stop one
+iterate apart and agree to 1.4e-9 relative — nine significant figures. The band moved from 1e-9 to
+1e-6, which still leaves six decades between "this is a plateau" and "this is a stiffness
+reading", the two hypotheses it exists to separate.
+
+**Two guard sentences decayed and were rewritten, both in KV-NUM-008.** One proved that the file's
+tolerated error is READ by showing that the answer moved when it changed; it moves by 0.0009% now,
+so the proof is taken where the control lands instead — the run reports the tolerance it ran under,
+it demonstrably MET it, and reaching it cost iterations. The other pinned the iteration limit this
+case needs at 3; the threshold is now FOUND by the test rather than written down, because that is
+the second time a number pinned there moved because the solver got better.
+
+### 11.7 What this section still does not cover
+
 * **The moment residual (Eq. 9-3/9-4)** is computed and reported wherever a rotational freedom
-  exists, but no case in the matrix has yet been examined through it.
+  exists, and it participates in the gate, but no case in the matrix has yet been examined
+  *through* it — no run in this suite has been observed failing it.
 * **The global force criterion still uses the old normalisation as its gate.** Eq. 9-1's
-  CSP-normalised form is computed and reported alongside, and the two differ most exactly where it
-  matters — a phase whose standing load dwarfs its own increment. Which one gates is the same kind
-  of decision as §11.5, and is not taken here.
-* **Non-linear elastic points (Eq. 9-7) were never the binding count** on any case run so far: on
-  the Hardening Soil oedometer every point is plastic once loading starts, and the Mohr-Coulomb
-  cases have no stress-dependent elastic stiffness at all. The criterion is implemented and
-  exercised by the control; it has not yet been exercised where it bites.
+  CSP-normalised form is computed and reported alongside it, and the two differ most exactly where
+  it matters — a phase whose standing load dwarfs its own increment. Which one gates is the same
+  kind of decision as §11.6 and has not been taken.
+* **Non-linear elastic points (Eq. 9-7) have never been the binding count** on any case run so
+  far: on the Hardening Soil oedometer every point is plastic once loading starts, and the
+  Mohr-Coulomb cases have no stress-dependent elastic stiffness at all. The criterion is
+  implemented and exercised by the elastic control; it has not yet been exercised where it bites.
+* **The `portable` composition has not been re-measured** with the criteria binding. Every number
+  in this section is from the MKL build.

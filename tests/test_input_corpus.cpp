@@ -151,7 +151,7 @@
 //   locator:  Section 3.3, sliding block for testing interfaces; the manual states the answer as failure force = width * c_w + weight * tan(phi_w) = 4 * 2.5 + 100 * 0.5 = 60 kN/m, and reports 60.4 kN/m for its own run. Block E = 30 GN/m2, nu = 0, gamma = 25 kN/m3 with K0 = 0; interface in a separate elastoplastic data set, E = 3 GN/m2, nu = 0.45, phi_w = 26.6 deg, c_w = 2.5 kN/m2; bottom fully fixed, u_x = 0.1 m prescribed on the left side with u_y free, everything else free. Width 4 m and a weight of 100 kN/m at gamma = 25 fix the block at 4 m x 1 m -- the manual prints the arithmetic rather than the height
 //   quantity: the horizontal failure force, as the sum of the reactions on the pushed edge, run from the checked-in tests/corpus/kv-str-002-plaxis-sliding-block.k2d [kN/m]
 //   expected: 60.076 -- the manual's own formula evaluated at the phi_w it specifies. Its printed 60 uses tan(phi_w) = 0.5, i.e. 26.565 deg, so the manual is 0.13% self-inconsistent and the closed form is quoted here at the INPUT it publishes; PLAXIS reports 60.4
-//   band:     2% vs the closed form and 2% vs PLAXIS, as asserted below -- measured -0.59% (59.7202) on the file's own 0.25 m tri6 mesh, converging monotonically with refinement (-1.31% / -0.59% / -0.27% at 0.5 / 0.25 / 0.125 m). Four further checks make the number more than a coincidence: the block translates rigidly rather than shearing; the force is bit-identical when the imposed slip is doubled, so it is a plateau and not a stiffness reading; adhesion and friction each move the answer by exactly the closed form's amount, so the two terms are reproduced separately; and deleting the interface changes the answer by five orders of magnitude. That last one is a regression sentry: until 2026-08-10 the interface lay along a fixed boundary whose two split sides share coordinates, the boundary conditions fixed both, and the joint was welded shut in silence
+//   band:     2% vs the closed form and 2% vs PLAXIS, as asserted below -- measured -0.59% (59.7202) on the file's own 0.25 m tri6 mesh, converging monotonically with refinement (-1.31% / -0.59% / -0.27% at 0.5 / 0.25 / 0.125 m). Four further checks make the number more than a coincidence: the block translates rigidly rather than shearing; the force agrees to nine significant figures when the imposed slip is doubled (apart by 1.4e-9 relative, against the ~100% a stiffness reading would move), so it is a plateau and not a stiffness reading; adhesion and friction each move the answer by exactly the closed form's amount, so the two terms are reproduced separately; and deleting the interface changes the answer by five orders of magnitude. That last one is a regression sentry: until 2026-08-10 the interface lay along a fixed boundary whose two split sides share coordinates, the boundary conditions fixed both, and the joint was welded shut in silence
 //
 // verify: KV-CST-009
 //   oracle:   closed_form
@@ -167,7 +167,7 @@
 //   locator:  on the normal-consolidation line p_eq = p_p, the rate reduces to mu*/tau independently of the stress level, and the differential law integrates exactly to e_v^c(t) = mu* ln(1 + t/tau) (derivation in docs/references/soft-soil-creep-formulation.md sec. 5.1, stated in full and evaluated in the test). Ground under its own weight, seeded normally consolidated by the K0 procedure, is left to sit for 100 days: NO load changes in the measured phase, only time passes, and the strain is uniform over the column even though the stress is not
 //   quantity: surface settlement after 100 days of creep under self-weight alone, run from the checked-in tests/corpus/kv-cst-010-soft-soil-creep-column.k2d [m]
 //   expected: mu* ln(1 + 100/1) H = 0.018460 m with mu* = 0.001, H = 4 m
-//   band:     3%, as asserted below -- measured +0.74% on the file's own 0.5 m tri6 mesh with 50 time steps. The fixture is what it is because the manual predicted two earlier attempts failing: a weightless column loaded from zero cannot be used, because the initial pre-consolidation stress sits at the model's minimum of one stress unit, the first load puts p_eq far above it, and with beta = 16 the rate (p_eq/p_p)^beta collapses the run -- sec. 11.11's warning about unrealistic initial creep rates at OCR = 1 arriving as an arithmetic fact; and a zero-duration phase is elastic, because this model has no instantaneous plastic component at all (all inelastic strain is time-dependent). Three further witnesses: the law is sampled across three decades of time (1 / 10 / 1000 days, -2.06% / +1.62% / +0.61%), which no linear-in-time creep law could match at once and which locates tau at one day; the settlement is linear in mu*; and the differential witness -- the SAME file with the same ground as plain Soft Soil, which has every feature of this model except the creep, moves EXACTLY 0.000e+00 m over the same hundred days, so what is measured is creep and not a slow numerical drift
+//   band:     3% at the file's own duration, measured +1.81% on its 0.5 m tri6 mesh with 50 time steps, and 7% across the three-decade sweep, measured +5.93% / +3.14% / +1.64% falling with duration. THE EARLIER BAND WAS MEASURED ON AN UNDER-CONVERGED RUN and read +0.74% / -2.06% / +1.62% / +0.61%: at the tolerance this tree ships for the soft-soil family the global force criterion alone stopped this case short, and where it stopped happened to sit inside 3% of the idealised law. Swept with the local convergence criteria off (0.9.0 N-2) the model walks to its own answer -- 100 d: 0.018598 -> 0.018763 -- and requiring those criteria lands within 0.3% of it at the shipped tolerance, in 81 iterations against the sweep's 189. What carries the physics now is the SHAPE rather than a flat band: the deviation must FALL with duration, because the idealised law drops the elastic and consolidation parts, which matter most where there is least creep. The fixture is what it is because the manual predicted two earlier attempts failing: a weightless column loaded from zero cannot be used, because the initial pre-consolidation stress sits at the model's minimum of one stress unit, the first load puts p_eq far above it, and with beta = 16 the rate (p_eq/p_p)^beta collapses the run -- sec. 11.11's warning about unrealistic initial creep rates at OCR = 1 arriving as an arithmetic fact; and a zero-duration phase is elastic, because this model has no instantaneous plastic component at all (all inelastic strain is time-dependent). Three further witnesses: the law is sampled across three decades of time (1 / 10 / 1000 days, +5.93% / +3.14% / +1.64%, monotonically falling), which no linear-in-time creep law could match at once and which locates tau at one day; the settlement is linear in mu*; and the differential witness -- the SAME file with the same ground as plain Soft Soil, which has every feature of this model except the creep, moves EXACTLY 0.000e+00 m over the same hundred days, so what is measured is creep and not a slow numerical drift
 //
 // verify: KV-CST-008
 //   oracle:   closed_form
@@ -1814,11 +1814,20 @@ void oracle_sliding_block(const m::Project& pr) {
     check(std::fabs(F - F_plaxis) < 0.02 * F_plaxis,
           "failure force within 2% of the published PLAXIS number");
 
-    // (c) It is a LIMIT load, not a stiffness reading: pushing twice as far must not push
-    // twice as hard. On a plateau the two runs agree to the last bit.
+    // (c) It is a LIMIT load, not a stiffness reading: pushing twice as far must not push twice
+    // as hard. The band is 1e-6 relative, and the width is chosen from what it has to separate,
+    // not from what happens to be achievable: a stiffness reading would move this force by about
+    // 100%, so 1e-6 keeps six decades between the two hypotheses.
+    //
+    // It was 1e-9 until 2026-08-24 and the two runs did agree to the last bit, because both
+    // stopped at the same iterate of the same plateau. With the local convergence criteria
+    // binding (0.9.0 N-2) they stop one iterate apart and agree to 1.4e-9 instead -- nine
+    // significant figures. Tightening a band until it pins the current arithmetic rather than
+    // the physical claim is how a check ends up failing for a reason nobody can read.
     const double F_far = sliding_force(build_sliding_block_at(kSbCw, kSbGamma, 2.0 * kSbPush));
-    std::printf("      pushed 2x as far: %.9f vs %.9f kN/m\n", F_far, F);
-    check(F_far > 0.0 && std::fabs(F_far - F) <= 1e-9 * F,
+    std::printf("      pushed 2x as far: %.9f vs %.9f kN/m (apart by %.2e relative)\n", F_far, F,
+                std::fabs(F_far - F) / F);
+    check(F_far > 0.0 && std::fabs(F_far - F) <= 1e-6 * F,
           "the force is a plateau: twice the imposed slip gives the same failure force");
 
     // (d) The two TERMS of the manual's formula, moved one at a time. Matching one number can
@@ -2685,12 +2694,33 @@ void oracle_ssc(const m::Project& pr) {
     // three decades do: a linear creep law fitted through any one of them would miss the others
     // by a factor of ten. The spread also locates tau -- at t = tau the settlement is mu* ln 2,
     // and it is the 24-hour oedometer stage that fixes tau at one day (Eq 11-13/14).
+    //
+    // THE BAND HERE WAS MEASURED ON AN UNDER-CONVERGED RUN, and it took the local convergence
+    // criteria (0.9.0 N-2) to find that out. At the tolerance this tree ships for the soft-soil
+    // family the global force criterion alone stopped this case short, and the answer it stopped
+    // at happened to sit inside 3% of the idealised law. It was luck. Swept with the criteria
+    // off, the model walks to its OWN answer -- 1 d: 2.7155e-3 -> 2.9369e-3, 10 d: 9.7471e-3 ->
+    // 9.8926e-3, 100 d: 0.018598 -> 0.018763 -- and that answer sits +5.93%, +3.14% and +1.64%
+    // from the law, not inside 3%. Requiring the local criteria lands within 0.3% of the swept
+    // answer at the shipped tolerance, in 81 iterations against the 189 the sweep costs.
+    //
+    // So the band is 7%, and what carries the physics is no longer a flat band but the SHAPE:
+    // the deviation must FALL with duration. The idealised law drops the elastic and the
+    // consolidation parts, which matter most when there is least creep, so a model that obeys it
+    // must approach it as creep comes to dominate -- and a run that drifted for a numerical
+    // reason would have no reason to do that monotonically over three decades.
+    double prev_dev = 1e9;
     for (double d : {1.0, 10.0, 1000.0}) {
         const double uu = ssc_run(build_ssc_at(kScMu, d, true));
         const double c = ssc_creep(kScMu, d);
+        const double dev = std::fabs(uu - c) / c;
         std::printf("      t = %6.0f d: run %.6e | closed form %.6e (%+.2f%%)\n", d, uu, c,
                     100.0 * (uu - c) / c);
-        check(uu > 0.0 && std::fabs(uu - c) < 0.03 * c, "the creep law holds across three decades of time");
+        check(uu > 0.0 && dev < 0.07, "the creep law holds across three decades of time");
+        check(dev < prev_dev,
+              "and the deviation FALLS as creep comes to dominate, which is what obeying an "
+              "idealised law that drops the elastic part looks like");
+        prev_dev = dev;
     }
 
     // (c) The settlement is linear in mu*, the one parameter this model adds.

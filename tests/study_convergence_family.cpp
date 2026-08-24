@@ -11,6 +11,7 @@
 // usage: study_convergence_family [case]
 //   oedo     KV-CST-002, the Hardening Soil oedometer, over a sweep of tolerances
 //   footing  a Mohr-Coulomb strip footing walked towards its limit load (CSP must fall)
+//   struct   the corpus interface and embedded-beam cases (Eq. 9-8 and Eq. 9-9)
 //   elastic  a linear-elastic block: every local count must be zero and CSP exactly 1
 //   all      all of the above (default)
 #include <katai/analysis/results.hpp>
@@ -112,6 +113,19 @@ void run(const char* label, m::Project pr, double tol) {
                 c.nl_elastic_inaccurate, c.nl_elastic_points, c.elastic_points,
                 c.worst_nl_elastic_error, c.nl_elastic_ok() ? "ok" : "FAIL",
                 r.ok ? "" : "  [phase did not converge]");
+    // The structural members of the family print only where the model has them, so a case
+    // without an interface or a pile does not carry a row of zeros pretending to be a check.
+    if (c.iface_points > 0)
+        std::printf("      interfaces + skin springs: %d/%d inaccurate, worst %8.2e  %s\n",
+                    c.iface_inaccurate, c.iface_points, c.worst_iface_error,
+                    c.iface_points_ok() ? "ok" : "FAIL");
+    if (c.feet > 0)
+        std::printf("      embedded-beam feet (%d): force error %8.2e of %8.2e tolerated  %s\n",
+                    c.feet, c.foot_force_error,
+                    c.kFootToleranceFactor * c.tolerated, c.foot_ok() ? "ok" : "FAIL");
+    if (c.has_moment)
+        std::printf("      moment residual: %8.2e of %8.2e tolerated  %s\n", c.moment_error,
+                    c.tolerated, c.moment_ok() ? "ok" : "FAIL");
     if (c.force_ok() && !c.local_ok())
         std::printf("    ^^ GLOBAL MET, LOCAL FAILED -- the case N-2 predicted exists.\n");
 }
@@ -162,6 +176,65 @@ int main(int argc, char** argv) {
             char lbl[64];
             std::snprintf(lbl, sizeof lbl, "MC footing tol=%.0e", t);
             run(lbl, mc_footing(300.0, m::SoilModel::MohrCoulomb), t);
+        }
+    }
+
+    // The two corpus cases that exercise the STRUCTURAL members of the family: an interface
+    // (Eq. 9-8) and an embedded beam with a foot (Eq. 9-9). Both are cases the record already
+    // publishes numbers for, so what the new criteria say about them can be read against a
+    // known answer rather than against nothing.
+    if (which == "struct" || which == "all") {
+        struct Case { const char* file; const char* label; };
+        const Case cases[] = {
+            {"kv-str-002-plaxis-sliding-block.k2d", "sliding block (interface)"},
+            {"kv-str-004-axial-pile-capacity.k2d", "axial pile (foot + skin)"},
+        };
+        for (const Case& cs : cases) {
+            m::Project pr;
+            std::string err;
+            if (!m::load_project(std::string(KATAI_CORPUS_DIR) + "/" + cs.file, pr, &err,
+                                 nullptr)) {
+                std::printf("FAIL load %s: %s\n", cs.file, err.c_str());
+                continue;
+            }
+            run(cs.label, pr, 0.0);
+        }
+    }
+
+    // The RATE-DEPENDENT case, and it is here because it is the one that refuted the argument
+    // for binding these criteria. On the Hardening Soil oedometer, requiring them at the shipped
+    // tolerance lands on the converged answer; on this Soft Soil Creep column every duration
+    // moved AWAY from the published creep law when they were required. Two readings are
+    // possible and they call for opposite actions -- the criteria are wrong for a viscous point,
+    // or the looser run was accidentally closer to a law the model does not exactly obey -- and
+    // only a tolerance sweep with the criteria OFF can say which. If the global-only answer
+    // walks to the same place as the bound one, the bound one is right and the case's band is
+    // what has to move.
+    if (which == "creep" || which == "all") {
+        m::Project pr;
+        std::string err;
+        if (m::load_project(std::string(KATAI_CORPUS_DIR) + "/kv-cst-010-soft-soil-creep-column.k2d",
+                            pr, &err, nullptr)) {
+            std::printf("\n-- Soft Soil Creep column: where does the answer go as the global "
+                        "tolerance tightens? --\n");
+            // mu* ln(1 + t/tau), tau = 1 day, over a 4 m column: the law the case is verified
+            // against, evaluated here so the walk can be read against it rather than against
+            // the previous run.
+            const double mu = 0.008, H = 4.0;
+            for (double days : {1.0, 10.0, 100.0}) {
+                m::Project at = pr;
+                for (auto& ph : at.phases)
+                    if (ph.duration > 0.0) ph.duration = days;
+                std::printf("   t = %6.0f d   closed form mu* ln(1 + t/tau) = %.9f m\n", days,
+                            mu * std::log(1.0 + days / 1.0) * H / 4.0);
+                for (double t : {1e-2, 1e-4, 1e-6, 1e-8}) {
+                    char lbl[64];
+                    std::snprintf(lbl, sizeof lbl, "  SSC %.0f d, tol=%.0e", days, t);
+                    run(lbl, at, t);
+                }
+            }
+        } else {
+            std::printf("FAIL load creep column: %s\n", err.c_str());
         }
     }
 

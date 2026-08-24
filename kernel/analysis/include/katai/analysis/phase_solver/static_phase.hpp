@@ -114,7 +114,7 @@ struct StaticPhase {
     // NewtonOptions::line_search_window.
     int line_search_window = 0;
     // NewtonOptions::enforce_local_criteria: require the LOCAL convergence criteria too.
-    // 0 = the engine's default (off).
+    // Tri-state: 0 = the engine's default (ON), +1 = force on, -1 = force off.
     int enforce_local_criteria = 0;
     double time_interval_day = 0.0;  // SSC creep time of a chained Plastic phase [days]
     // PLAXIS SumMstage target: the fraction of this phase's staged change to apply (1 = all of
@@ -158,7 +158,8 @@ inline bool solve_static_phase(
     nopt.kinematics = in.axisymmetric ? Kinematics::Axisymmetric
                                       : Kinematics::PlaneStrain;
     if (in.line_search_window > 0) nopt.line_search_window = in.line_search_window;
-    if (in.enforce_local_criteria > 0) nopt.enforce_local_criteria = true;
+    if (in.enforce_local_criteria != 0)
+        nopt.enforce_local_criteria = in.enforce_local_criteria > 0;
     // SSC TIME (Stage 3): a staged Plastic phase's Time interval [days] enters the constitutive
     // path -- the solver apportions it over the increments by the delta-lambda ratio (the Stage-2
     // contract, SumMstage parity). Only SoftSoilCreep reads it; every other model ignores it, so

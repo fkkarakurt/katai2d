@@ -36,17 +36,43 @@ away from its own converged answer** — and requiring the local criteria at the
 lands on the converged settlement in 194 iterations where tightening the global tolerance by four
 decades costs 399.
 
-**What is not changed.** These criteria are measured and reported; they do not yet decide whether
-a step has converged. Binding them moves published numbers, and this project moves published
-numbers deliberately, with the re-measurement budgeted, rather than as the side effect of adding a
-check. The switch that binds them (`enforce_local_criteria`, or `KATAI_CONV_LOCAL` for a whole
-run) exists so the rest of the verification matrix can be re-measured before that decision is
-taken. Every published number is unchanged by this release.
+**They now decide whether a step has converged.** A run must satisfy the local criteria as well as
+the force balance before an increment counts, which is what the codes this program is measured
+against do. The decision was taken on the measurement rather than on the principle: this is not a
+stricter rule bought with iterations, it is a cheaper route to the same answer — the Hardening Soil
+oedometer lands on its converged settlement in 194 iterations where tightening the global tolerance
+by four decades costs 399. `KATAI_CONV_NOLOCAL` turns it off for a run, which is how every
+comparison in the record is reproduced.
 
-**Results files carry it.** The `.res` format moves to version 7 so that a reopened result can
-still say which criteria its numbers were accepted under. Files written by earlier versions read
-back with the family marked "not measured", which is the honest answer for them; older builds
-refuse a v7 file rather than mis-read it.
+**Three published numbers moved, out of 154 checks, and the record re-measures all three.**
+
+- **A slope's factor of safety is no longer inflated by a loose stopping rule.** A
+  strength-reduction search asks whether a reduced strength still reached equilibrium, and a run
+  that stops on the force balance alone can stop with its stress points nowhere near the strengths
+  it has just reduced them to — which the search reads as a yes. At a hundredfold looser stopping
+  rule the reported factor of safety used to come back **45.6% too high**; it now comes back 0.6%
+  high. A slope reported 45% safer than it is was a number this program should never have been
+  able to produce.
+- **A creep case's published 3% agreement turns out to have been luck.** Requiring the local
+  criteria moved every duration of the Soft Soil Creep column away from the idealised creep law.
+  Sweeping the tolerance with the criteria switched off showed why: the model's own converged
+  answer is +5.93% / +3.14% / +1.64% from that law at 1, 10 and 100 days, and the previous run had
+  simply stopped short at a place that happened to sit inside 3%. The case now carries a 7% band
+  and, more usefully, asserts the SHAPE — the deviation must fall as creep comes to dominate,
+  which a run drifting for a numerical reason has no reason to do over three decades of time.
+- **A sliding block's failure force is a plateau to nine significant figures instead of to the
+  last bit.** Doubling the imposed slip moves it by 1.4e-9 relative, against the ~100% a stiffness
+  reading would move.
+
+**Two structural criteria complete the family.** A slipping interface point and an embedded beam's
+skin coupling springs are measured the same way and counted together; the pile toe carries its own
+out-of-balance ratio, tolerated at five times the tolerated error. On a sliding-block interface the
+global criterion is met by a factor of five while 14 of 47 slipping points are not yet settled.
+
+**Results files carry all of it.** The `.res` format moves to version 8 so that a reopened result
+can still say which criteria its numbers were accepted under. Files written by earlier versions
+read back with the family marked "not measured", which is the honest answer for them; older builds
+refuse a version 8 file rather than mis-read it.
 
 **A conflict between two official sources, resolved by measurement.** The two 2025.1 manuals of the
 program this criterion is taken from print CSP as reciprocals of each other — one as elastic energy

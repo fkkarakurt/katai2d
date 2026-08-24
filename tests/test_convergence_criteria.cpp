@@ -81,6 +81,8 @@ struct Run {
     double load_factor = 0.0;
 };
 
+// enforce_local: the tri-state of NumericalControls -- +1 forces the local criteria on, -1
+// forces them OFF, which is what the comparisons below need now that ON is the default.
 Run solve(m::Project pr, double tol, bool enforce_local) {
     if (tol > 0.0) {
         pr.initial.tolerance = tol;
@@ -90,7 +92,7 @@ Run solve(m::Project pr, double tol, bool enforce_local) {
     Run out;
     if (!M.ok) return out;
     katai::app::NumericalControls nc;
-    nc.enforce_local_criteria = enforce_local ? 1 : 0;
+    nc.enforce_local_criteria = enforce_local ? 1 : -1;
     const auto res = katai::app::solve_phases(
         pr, M.mesh, katai::app::initial_phase_from(pr.initial_procedure), nullptr, nullptr, nc);
     if (res.empty()) return out;
@@ -211,10 +213,61 @@ void test_local_criteria_cost() {
           "the correction is paid for in iterations (it is not free)");
 }
 
+// The STRUCTURAL half of the family (Eq. 9-8, Eq. 9-9), on the two corpus cases that have the
+// elements to exercise it. Both already publish a number in the verification matrix, so what the
+// new criteria say about them can be read against a known answer.
+void test_structural_criteria() {
+    m::Project block, pile;
+    std::string err;
+    const std::string dir = std::string(KATAI_CORPUS_DIR) + "/";
+    if (!m::load_project(dir + "kv-str-002-plaxis-sliding-block.k2d", block, &err, nullptr) ||
+        !m::load_project(dir + "kv-str-004-axial-pile-capacity.k2d", pile, &err, nullptr)) {
+        check(false, "load the interface and pile corpus files: " + err);
+        return;
+    }
+
+    // The sliding block is the interface case: an elastic block pushed until the joint under it
+    // slips. Nothing in the soil yields, so the ONLY local criterion with anything to say is the
+    // interface one -- which makes it the clean test that Eq. 9-8 is wired at all.
+    const Run b = solve(block, 0.0, false);
+    check(b.ok, "sliding block solves");
+    std::printf("     sliding block: %d/%d interface points inaccurate, worst %.2e (force %.3e)\n",
+                b.c.iface_inaccurate, b.c.iface_points, b.c.worst_iface_error, b.c.force_error);
+    check(b.c.iface_points > 0, "the interface's slipping points are counted");
+    check(b.c.plastic_points == 0,
+          "...and the soil contributes none, so this is the interface criterion alone");
+    check(b.c.force_ok() && !b.c.iface_points_ok(),
+          "the global force criterion is met while the interface criterion is not");
+    const Run b2 = solve(block, 0.0, true);
+    check(b2.ok && b2.c.iface_points_ok(),
+          "binding the local criteria settles the interface points");
+    check(b2.iterations > b.iterations, "...and that costs iterations");
+
+    // The pile is the foot case. Eq. 9-9 is a ratio over every foot in the model rather than a
+    // count, and it is tolerated at five times the tolerated error -- the source's factor, which
+    // this checks is actually applied rather than quietly rounded to the same bar as the rest.
+    const Run p = solve(pile, 0.0, false);
+    check(p.ok, "axial pile solves");
+    std::printf("     axial pile: foot error %.2e of %.2e tolerated; skin+interface %d/%d\n",
+                p.c.foot_force_error, p.c.kFootToleranceFactor * p.c.tolerated,
+                p.c.iface_inaccurate, p.c.iface_points);
+    check(p.c.feet == 1, "the pile's foot is seen");
+    check(p.c.iface_points > 0,
+          "the skin coupling springs are counted with the interface points, as the source does");
+    check(p.c.foot_ok(), "the foot force is in balance on a run that reached full load");
+    // Two-sided: the allowance must be the source's five times, not one.
+    katai::core::NewtonResult::Convergence probe = p.c;
+    probe.foot_force_error = 3.0 * probe.tolerated;
+    check(probe.foot_ok(), "a foot error at 3x the tolerated error is allowed (the 5x factor)");
+    probe.foot_force_error = 7.0 * probe.tolerated;
+    check(!probe.foot_ok(), "...and one at 7x is not");
+}
+
 }  // namespace
 
 int main() {
     test_convergence_family();
+    test_structural_criteria();
     test_local_criteria_cost();
     std::printf("%s\n", failures == 0 ? "ALL PASS" : "FAILURES");
     return failures == 0 ? 0 : 1;

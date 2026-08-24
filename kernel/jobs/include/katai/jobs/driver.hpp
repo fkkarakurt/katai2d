@@ -154,9 +154,11 @@ struct NumericalControls {
     // the last W, which on a non-smooth problem decides whether the increment survives.
     int line_search_window = 0;
     // Require the LOCAL convergence criteria as well as the global force residual (Scientific
-    // Manual §9.1.2; NewtonOptions::enforce_local_criteria). 0 = the engine's default, which
-    // is off. The fourth measurement seam, and it exists for the same reason as the third: so
-    // a study can ask what a published number owes to its stopping rule.
+    // Manual §9.1.2; NewtonOptions::enforce_local_criteria). TRI-STATE, unlike the three above,
+    // because the engine's default here is ON: 0 = leave the engine's default alone, +1 = force
+    // on, -1 = force OFF. The negative case is the one that matters -- without it a study could
+    // no longer ask what a published number owes to its stopping rule, which is the whole
+    // purpose these seams exist for.
     int enforce_local_criteria = 0;
 };
 

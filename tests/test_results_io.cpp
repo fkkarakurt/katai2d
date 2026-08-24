@@ -60,6 +60,12 @@ std::vector<katai::app::SolveResult> build_phases() {
         R.convergence.nl_elastic_inaccurate = 5 * k;
         R.convergence.worst_plastic_error = 2.334e-2 * k;
         R.convergence.worst_nl_elastic_error = 7.69e-5 * k;
+        // v8: the structural half of the same family.
+        R.convergence.iface_points = 47 * k;
+        R.convergence.iface_inaccurate = 14 * k;
+        R.convergence.worst_iface_error = 2.05e-6 * k;
+        R.convergence.feet = k;
+        R.convergence.foot_force_error = 5.58e-9 * k;
         R.disp = Eigen::VectorXd::LinSpaced(12, -0.5 + k, 0.75);
         R.stress.stress.resize(6);
         for (int n = 0; n < 6; ++n)
@@ -99,7 +105,10 @@ bool same(const katai::app::SolveResult& a, const katai::app::SolveResult& b) {
         ca.nl_elastic_points != cb.nl_elastic_points ||
         ca.nl_elastic_inaccurate != cb.nl_elastic_inaccurate ||
         ca.worst_plastic_error != cb.worst_plastic_error ||
-        ca.worst_nl_elastic_error != cb.worst_nl_elastic_error) return false;
+        ca.worst_nl_elastic_error != cb.worst_nl_elastic_error ||
+        ca.iface_points != cb.iface_points || ca.iface_inaccurate != cb.iface_inaccurate ||
+        ca.worst_iface_error != cb.worst_iface_error || ca.feet != cb.feet ||
+        ca.foot_force_error != cb.foot_force_error) return false;
     if (a.disp.size() != b.disp.size() || (a.disp - b.disp).cwiseAbs().maxCoeff() != 0.0) return false;
     if (a.stress.stress.size() != b.stress.stress.size()) return false;
     for (size_t i = 0; i < a.stress.stress.size(); ++i)

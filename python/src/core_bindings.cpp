@@ -599,8 +599,20 @@ NB_MODULE(_core, m) {
                 &katai::core::NewtonResult::Convergence::worst_plastic_error)
         .def_ro("worst_nl_elastic_error",
                 &katai::core::NewtonResult::Convergence::worst_nl_elastic_error)
+        .def_ro("iface_points", &katai::core::NewtonResult::Convergence::iface_points,
+                "slipping interface points, including an embedded beam's skin coupling springs "
+                "-- the source counts them together and so does this")
+        .def_ro("iface_inaccurate", &katai::core::NewtonResult::Convergence::iface_inaccurate)
+        .def_ro("worst_iface_error", &katai::core::NewtonResult::Convergence::worst_iface_error)
+        .def_ro("feet", &katai::core::NewtonResult::Convergence::feet,
+                "embedded-beam feet in the model; 0 = the foot criterion does not apply")
+        .def_ro("foot_force_error", &katai::core::NewtonResult::Convergence::foot_force_error,
+                "out-of-balance at the pile toes, one ratio over all of them; tolerated at FIVE "
+                "times `tolerated`, which is the source's factor")
         .def("force_ok", &katai::core::NewtonResult::Convergence::force_ok)
         .def("moment_ok", &katai::core::NewtonResult::Convergence::moment_ok)
+        .def("iface_points_ok", &katai::core::NewtonResult::Convergence::iface_points_ok)
+        .def("foot_ok", &katai::core::NewtonResult::Convergence::foot_ok)
         .def("local_ok", &katai::core::NewtonResult::Convergence::local_ok,
              "every local count within its allowance. FALSE on a run that reports ok=True is not "
              "a contradiction: it says the force balance was reached before the stress points "

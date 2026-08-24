@@ -24,7 +24,7 @@
 //   locator:  tests/corpus/kv-cst-002-hs-oedometer.k2d (Hardening Soil, whose answer is known from KV-NUM-007 to move with the tolerance) solved four ways per control: default, control set in the FILE, the same control passed through the seam, and both set at once with different values
 //   quantity: settlement of the oedometer top [m] and the file round trip of the three control fields
 //   expected: file == seam bit-for-bit on every control; the control demonstrably reaches the solver; seam wins when both are set (documented precedence); and the three fields survive a write/read round trip
-//   band:     exact -- these are identity checks, not approximations. Measured on this tree (2026-08-20, with the constitutive integration under an error tolerance): default 0.018680445 m; tolerance 1e-6 from the file 0.018647012 m, identical to the seam to 0.0e+00; on the staged phase alone 0.018585259 m, which differs again and is what "per phase" means; 4 load increments 0.018648926 m against 40's 0.018680445 m. The ITERATION LIMIT is now read at its threshold rather than by moving the answer: at 2 the run refuses through both routes and names the budget as the reason (the KV-NUM-012 contract), at 3 it converges to the default answer bit for bit -- every increment of this case needs three iterations, so 8, 12 and no limit at all agree exactly. The earlier form of this check asserted that a limit of 8 changed the answer; it did, because the integrator was carrying a first-order error (KV-NUM-009), and a guard that proves a control is read by pointing at a difference stops proving anything when the difference is the defect
+//   band:     exact -- these are identity checks, not approximations. Measured on this tree (2026-08-24, with the local convergence criteria binding): default 0.018647102 m; tolerance 1e-6 from the file 0.018646941 m, identical to the seam to 0.0e+00; on the staged phase alone 0.018643754 m, which differs again and is what "per phase" means; 4 load increments 0.018643176 m against 40's 0.018647102 m. TWO OF THIS CASE'S GUARDS DECAYED AND WERE REWRITTEN, both for the same reason and both recorded rather than quietly repaired. (1) The tolerated error used to be proved READ by showing the answer moved when it changed; it moves by 0.0009% now, because the default run already stands on the converged answer, so the proof is taken where the control lands instead -- the run reports the tolerance it ran under (1e-6 against the default's 1e-2), it demonstrably MET it, and reaching it cost 473 iterations against 194. (2) The ITERATION LIMIT was pinned at a threshold of 3; it is 5 now, and the threshold is FOUND by the test rather than written down, because that is the second time a number pinned here moved because the solver got better. There turned out to be TWO thresholds and the old check conflated them: at 5 the run stops REFUSING but survives by cutting increments back, so it walks a different load path and lands 0.1796% away; only from 6 does it reproduce the default bit for bit. A guard that proves a control is read by pointing at a difference stops proving anything when the difference is the defect being fixed -- which has now happened three times on this case
 
 // verify: KV-NUM-009
 //   oracle:   closed_form
@@ -32,7 +32,7 @@
 //   locator:  tests/corpus/kv-cst-002-hs-oedometer.k2d, swept on three axes independently -- mesh density 0.5/0.25/0.125 m, load increments 10/20/40/80/160 at a converged tolerance with the seating phase pinned, and the stress range walked over 50-100, 100-200 and 200-400 kPa -- and then the SAME calibrated material walked as a one-dimensional oedometer at the stress point (katai::core::hs_integrate, built through the registry entry the driver uses), where none of those axes exist
 //   quantity: settlement of the oedometer top [m] on each sweep, and the same settlement computed at the stress point [m]
 //   expected: the mesh contributes nothing (a weightless column has a uniform strain field, which is exact in the element space); the load path is now below its own noise, so no order can be computed from it and no GCI quoted; the deviation from the closed form is ONE-SIGNED and closes as the stress rises; and the boundary-value run reproduces the constitutive routine, which is what makes the remainder a model deviation rather than an FE error
-//   band:     no band is published for this case, deliberately, and the measurements are why. Mesh: 85 -> 1105 nodes changes the answer by 5.6e-16 relative, which is round-off. Load path: 10 -> 160 increments moves it by 0.020% -- until 2026-08-20 this axis was worth 2.9 percentage points, and it was not the load path: the stress-point integrator held the stress-dependent moduli fixed at the state each INCREMENT started from, a first-order error in the increment that no substep tolerance can see (0.9.0 N-1; the same fixture's material point moved 4.5% over a 32x outer refinement at a fixed integration tolerance of 1e-6 before the fix, and 6e-5 after). What is left is not a convergent sequence, so no order may be computed from it. Tolerance: 1e-4 and 1e-6 agree to 0.043%. Deviation: -1.3328% over 50-100 kPa, -0.9861% over 100-200, -0.6081% over 200-400 -- one-signed, largest just below p_ref, closing as the stress rises. The same three ranges at the STRESS POINT, no FE at all: -1.3490%, -0.9518%, -0.9130%, the worst of the three 0.305 pp from its FE counterpart, so at most a third of a percentage point of the deviation can be the finite element method and the rest is the model's distance from the idealised power law. Backends: the case that used to split between PARDISO and Eigen (+0.6419% against +0.4583% over 100-200) now agrees to 15 significant figures on all three ranges. Ceiling: refining the seating phase to 160 increments at 1e-6 still does not converge, because the tolerated error is an absolute residual and the increment it must satisfy keeps shrinking
+//   band:     no band is published for this case, deliberately, and the measurements are why. Mesh: 85 -> 1105 nodes changes the answer by 5.6e-16 relative, which is round-off. Load path: 10 -> 160 increments moves it by 0.020% -- until 2026-08-20 this axis was worth 2.9 percentage points, and it was not the load path: the stress-point integrator held the stress-dependent moduli fixed at the state each INCREMENT started from, a first-order error in the increment that no substep tolerance can see (0.9.0 N-1; the same fixture's material point moved 4.5% over a 32x outer refinement at a fixed integration tolerance of 1e-6 before the fix, and 6e-5 after). What is left is not a convergent sequence, so no order may be computed from it. Tolerance: 1e-4 and 1e-6 agree to 0.043%. Deviation: -1.3335% over 50-100 kPa, -0.9873% over 100-200, -0.6088% over 200-400 -- one-signed, largest just below p_ref, closing as the stress rises. The same three ranges at the STRESS POINT, no FE at all: -1.3490%, -0.9518%, -0.9130%, the worst of the three 0.305 pp from its FE counterpart, so at most a third of a percentage point of the deviation can be the finite element method and the rest is the model's distance from the idealised power law. Backends: the case that used to split between PARDISO and Eigen (+0.6419% against +0.4583% over 100-200) now agrees to 15 significant figures on all three ranges. Ceiling: THE CEILING HAS BEEN LIFTED. Refining the seating phase to 160 increments at 1e-6 used to stop converging altogether rather than getting better -- the tolerated error is an absolute residual, so shrinking the increment does not shrink what each one must achieve, and on a confining stress starting near zero the increments that could not achieve it were the ones whose stress points sat furthest from their own material law. Requiring those points to settle (0.9.0 N-2) carries the refined path through: 0.018640386 m, 0.0360% from the file's own 40 increments. The check that pinned the ceiling is now the one the study needed all along and could not ask while the run refused -- refining the seating path fourfold must not move the answer
 
 // verify: KV-NUM-010
 //   oracle:   closed_form
@@ -76,10 +76,16 @@ void check(bool ok, const std::string& what) {
 
 // The settlement of the oedometer top -- the same quantity KV-CST-002 and KV-NUM-007 read.
 double settlement(const m::Project& pr, const katai::mesh::Mesh& mesh,
-                  const katai::app::NumericalControls& nc, bool* ok_out) {
+                  const katai::app::NumericalControls& nc, bool* ok_out,
+                  katai::core::NewtonResult::Convergence* conv_out = nullptr,
+                  int* iters_out = nullptr) {
     const auto res = katai::app::solve_phases(
         pr, mesh, katai::app::initial_phase_from(pr.initial_procedure), nullptr, nullptr, nc);
     *ok_out = res.size() == 2 && res[1].ok;
+    if (res.size() == 2) {
+        if (conv_out) *conv_out = res[1].convergence;
+        if (iters_out) *iters_out = res[1].iterations;
+    }
     if (!*ok_out) return 0.0;
     int top = 0;
     double best = 1e300;
@@ -132,9 +138,10 @@ int main() {
     std::printf("  default (the material class chooses)      settlement = %.9f m\n", u_default);
 
     // --- 1. The tolerated error ------------------------------------------------------------
-    // KV-NUM-007 measured what this control is worth on this very problem: 0.59% between the
-    // Hardening Soil default of 1e-2 and a converged 1e-6. That is the margin this check needs --
-    // large enough that a dropped control cannot hide inside it.
+    // This control used to be worth 0.59% on this problem between the Hardening Soil default of
+    // 1e-2 and a converged 1e-6, and the check below leaned on that margin. It is worth 0.0009%
+    // now: the local convergence criteria bind (0.9.0 N-2), so the default run already stands on
+    // the converged answer. The margin is gone; what replaced it is below.
     const m::Project from_file = all_phases(base, 1e-6, 0, 0);
     const double u_file = settlement(from_file, M.mesh, {}, &ok);
     check(ok, "the case with a tolerated error in the FILE solves");
@@ -148,8 +155,30 @@ int main() {
     check(u_file == u_seam, "the file and the seam are the same control, bit for bit");
     std::printf("  difference from the default run           %.3e m (%.2f%%)\n",
                 std::fabs(u_file - u_default), 100.0 * std::fabs(u_file - u_default) / u_default);
-    check(std::fabs(u_file - u_default) / u_default > 1e-3,
-          "and the file's tolerance changes the answer, so it is genuinely being read");
+    // The proof that the control is READ used to be that the answer moved. It no longer does:
+    // with the local convergence criteria binding (0.9.0 N-2) the default run already stands on
+    // the converged answer, and four decades of extra tolerance move it by 1.6e-7 m -- 0.0009%.
+    // That is the second time on this case that a guard proving a control is read BY POINTING AT
+    // A DIFFERENCE stopped proving anything the moment the difference was the defect being fixed
+    // (the iteration limit below is the first).
+    //
+    // So it is proved where the control actually lands instead of where its consequence used to
+    // show: the solve REPORTS the tolerance it ran under, and it spends more iterations reaching
+    // it. Both are properties of the run rather than of how wrong the looser run happened to be,
+    // so neither decays the next time the solver gets better.
+    bool ok_c = false;
+    katai::core::NewtonResult::Convergence conv_file, conv_default;
+    int it_file = 0, it_default = 0;
+    settlement(from_file, M.mesh, {}, &ok_c, &conv_file, &it_file);
+    settlement(base, M.mesh, {}, &ok_c, &conv_default, &it_default);
+    std::printf("  tolerance reported back: file %.3e, default %.3e; iterations %d vs %d\n",
+                conv_file.tolerated, conv_default.tolerated, it_file, it_default);
+    check(conv_file.tolerated == 1e-6 && conv_default.tolerated > 1e-6,
+          "the run reports the tolerance it ran under, and the file's is the one it used");
+    check(conv_file.force_error <= 1e-6,
+          "...and it actually MET that tolerance, so the number is not merely carried");
+    check(it_file > it_default,
+          "...and reaching it cost iterations, so the control changed the calculation");
 
     // PER PHASE means per phase. Tightening only the staged step, and leaving the initial phase
     // to the material class, is a different calculation from tightening both -- and being able
@@ -186,33 +215,71 @@ int main() {
     // bit. A guard that proves a control is read BY POINTING AT A DIFFERENCE stops proving
     // anything the moment the difference is the defect being fixed.
     //
-    // So the pair is measured at the threshold instead, which proves more than the old check did:
-    // at 2 the run REFUSES and names the budget as the reason (the KV-NUM-012 contract -- a
-    // fraction of the load that is an iteration limit must not be reported as a capacity), and
-    // at 3 it converges to the default answer bit for bit. One number apart, two different
-    // outcomes: the control reaches the solver, and above the threshold it does not move the
-    // answer, which is what a converged run should do.
-    const m::Project iter_starved = all_phases(base, 0.0, 0, 2);
+    // So the pair is measured AT THE THRESHOLD instead, which proves more than the old check
+    // did: one below it the run REFUSES and names the budget as the reason (the KV-NUM-012
+    // contract -- a fraction of the load that is an iteration limit must not be reported as a
+    // capacity), and at it the run converges to the default answer bit for bit. One number
+    // apart, two different outcomes: the control reaches the solver, and above the threshold it
+    // does not move the answer, which is what a converged run should do.
+    //
+    // The threshold itself is now FOUND rather than written down. It was 3 until the local
+    // convergence criteria began to bind (0.9.0 N-2) -- the second time a number pinned in this
+    // block moved because the solver got better. What is asserted is that a threshold exists,
+    // that it is small enough to still be a threshold and not a budget, and that the two
+    // outcomes straddle it; the measured value is printed rather than pinned.
+    int threshold = 0;
+    double u_at_threshold = 0.0;
+    for (int limit = 2; limit <= 24 && threshold == 0; ++limit) {
+        const double u = settlement(all_phases(base, 0.0, 0, limit), M.mesh, {}, &ok);
+        if (ok) { threshold = limit; u_at_threshold = u; }
+    }
+    std::printf("  iteration-limit threshold: %d\n", threshold);
+    check(threshold >= 3 && threshold <= 24,
+          "there is an iteration limit below which this case cannot converge, and it is a "
+          "threshold rather than a budget");
+    if (threshold == 0) return 1;
+
+    const m::Project iter_starved = all_phases(base, 0.0, 0, threshold - 1);
     settlement(iter_starved, M.mesh, {}, &ok);
-    check(!ok, "an iteration limit of 2 in the FILE makes the run refuse rather than drift");
+    check(!ok, "one below the threshold, the FILE's limit makes the run refuse rather than drift");
     katai::app::NumericalControls starved_seam;
-    starved_seam.max_iterations = 2;
+    starved_seam.max_iterations = threshold - 1;
     settlement(base, M.mesh, starved_seam, &ok);
     check(!ok, "and the same limit through the seam refuses too: both routes reach the solver");
 
-    const m::Project iter_file = all_phases(base, 0.0, 0, 3);
+    const m::Project iter_file = all_phases(base, 0.0, 0, threshold);
     const double u_iter_file = settlement(iter_file, M.mesh, {}, &ok);
-    check(ok, "the case with an iteration limit of 3 in the FILE solves");
+    check(ok, "at the threshold the case in the FILE solves");
     katai::app::NumericalControls iter_seam;
-    iter_seam.max_iterations = 3;
+    iter_seam.max_iterations = threshold;
     const double u_iter_seam = settlement(base, M.mesh, iter_seam, &ok);
     check(ok, "the same limit through the seam solves");
-    std::printf("  max 3 iterations:  file %.9f m, seam %.9f m (default %.9f m)\n",
+    std::printf("  at the threshold:  file %.9f m, seam %.9f m (default %.9f m)\n",
                 u_iter_file, u_iter_seam, u_default);
     check(u_iter_file == u_iter_seam, "iteration limit: file == seam, bit for bit");
-    check(u_iter_file == u_default,
-          "and three iterations is all this case needs: above the threshold the limit does not "
-          "move the answer");
+
+    // There are TWO thresholds here and the old check conflated them, which only became visible
+    // once the first one moved. At `threshold` the run stops REFUSING -- but it survives by
+    // cutting increments back, so it walks a different load path and lands 0.2% away. The answer
+    // becomes the default's only at a HIGHER limit, where no increment is cut back at all. Both
+    // are found, and what is asserted is the ordering and the fact that the second exists: a
+    // limit high enough is a limit that does not enter the answer, which is the property that
+    // makes it a patience setting rather than an accuracy one.
+    int settled = 0;
+    for (int limit = threshold; limit <= 96 && settled == 0; ++limit) {
+        const double u = settlement(all_phases(base, 0.0, 0, limit), M.mesh, {}, &ok);
+        if (ok && u == u_default) settled = limit;
+    }
+    std::printf("  refuses below %d; converges at %d (%.4f%% from the default, by cutting back); "
+                "reproduces the default from %d\n",
+                threshold, threshold, 100.0 * std::fabs(u_iter_file - u_default) / u_default,
+                settled);
+    check(settled >= threshold && settled <= 96,
+          "a high enough iteration limit stops entering the answer at all: above it the run "
+          "reproduces the default bit for bit");
+    check(std::fabs(u_at_threshold - u_default) / u_default < 0.01,
+          "and between the two thresholds the run is cutting back rather than drifting: it "
+          "lands close, not anywhere");
 
     // --- 4. Precedence, stated and tested ---------------------------------------------------
     // When both are set the SEAM wins. The seam exists so that a given file can be re-run at
@@ -442,21 +509,38 @@ int main() {
               "percentage point, so at most that much of the deviation can be the FE");
     }
 
-    // (d) A DECLARED CEILING ON PATH REFINEMENT, because a study that cannot be repeated is not
-    //     a study. The tolerated error is an ABSOLUTE force residual, so shrinking the increment
-    //     does not shrink what each increment must achieve. On this weightless column -- whose
-    //     confining stress starts near zero, where the Hardening Soil stiffness is at its
-    //     smallest -- refining the SEATING phase to 160 increments at a converged tolerance stops
-    //     converging altogether rather than getting better. That is why (b) pins it at 40. If
-    //     this check ever fails because the run now succeeds, the ceiling has moved and the
-    //     sentence above needs rewriting, which is the point of pinning it.
+    // (d) THE CEILING ON PATH REFINEMENT HAS BEEN LIFTED, and this is the sentence the old check
+    //     asked for. It read: refining the SEATING phase to 160 increments at a converged
+    //     tolerance stops converging altogether rather than getting better -- on this weightless
+    //     column, whose confining stress starts near zero where the Hardening Soil stiffness is
+    //     at its smallest -- and it ended "if this check ever fails because the run now succeeds,
+    //     the ceiling has moved and the sentence above needs rewriting".
+    //
+    //     It succeeds now. What lifted it is the local convergence criteria (0.9.0 N-2): the
+    //     tolerated error is an ABSOLUTE force residual, so shrinking the increment does not
+    //     shrink what each increment must achieve, and on a near-zero confining stress the
+    //     increments that could not achieve it were the ones whose stress points were furthest
+    //     from their own material law. Requiring those points to settle is what carries the
+    //     refined path through.
+    //
+    //     So the check becomes the one the study actually needed all along, and could not ask
+    //     while the run refused: refining the seating path fourfold must not move the answer.
+    //     That is path independence, which is what (b) pinning the count at 40 was standing in
+    //     for.
     m::Project seat_fine = base;
     seat_fine.initial.load_steps = 160;
     seat_fine.initial.tolerance = 1e-6;
     seat_fine.initial.max_iterations = 500;
-    settlement(seat_fine, M.mesh, {}, &ok);
-    std::printf("  seating phase at 160 increments, tol 1e-6: %s\n", ok ? "converged" : "does NOT converge");
-    check(!ok, "refining the seating phase past the ceiling fails openly instead of drifting");
+    const double u_seat_fine = settlement(seat_fine, M.mesh, {}, &ok);
+    check(ok, "the seating phase converges at 160 increments, where it used to refuse");
+    if (ok) {
+        const double drift = std::fabs(u_seat_fine - u_default) / u_default;
+        std::printf("  seating phase at 160 increments, tol 1e-6: %.9f m (%.4f%% from the "
+                    "file's own 40)\n", u_seat_fine, 100.0 * drift);
+        check(drift < 0.01,
+              "and refining the seating path fourfold does not move the answer: the seating "
+              "count is not what sets it");
+    }
 
     // --- 7. THE SAME QUESTION WHERE THE AXIS *IS* CLEAN (KV-NUM-010) -------------------------
     // KV-NUM-009 refused a band. A refusal is only worth something if the same procedure, applied

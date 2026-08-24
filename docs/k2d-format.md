@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **14** · Current `.res` version: **7**
+Current `.k2d` version: **14** · Current `.res` version: **8**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -381,7 +381,9 @@ u32 phase count · per phase: flags + scalars + message + displacements/stresses
   `convergence`, WHICH of the convergence criteria the accepted iterate satisfied (the current
   stiffness parameter, the CSP-normalised force error, the moment residual and the local error
   counts at the soil stress points) — "converged" is a claim about the accuracy of every number in
-  the file, and a reopened result used to keep the claim while dropping its evidence.
+  the file, and a reopened result used to keep the claim while dropping its evidence · **v8**
+  completes that family with the interface / coupling-spring counts and the embedded-beam foot
+  force error, which landed one package after the soil ones.
 - Committed Gauss states are NOT stored: restored results are for viewing and post-processing;
   continuing a staged run re-calculates. This is honest and keeps the file an order of magnitude
   smaller.

@@ -91,6 +91,16 @@ void print_convergence(const api::SolveResult& R) {
                     "LOCAL error above\n"
                     "          the same tolerance (worst %.2e).\n",
                     c.nl_elastic_inaccurate, c.nl_elastic_points, c.worst_nl_elastic_error);
+    if (!c.iface_points_ok())
+        std::printf("  note    %d of %d slipping interface points carry a LOCAL error above the "
+                    "same tolerance\n"
+                    "          (worst %.2e). The shear those points transfer is not yet settled.\n",
+                    c.iface_inaccurate, c.iface_points, c.worst_iface_error);
+    if (!c.foot_ok())
+        std::printf("  note    the embedded-beam foot force is out of balance by %.2e, above the "
+                    "%.2e allowed\n"
+                    "          for it. The load the pile toe carries is not yet settled.\n",
+                    c.foot_force_error, c.kFootToleranceFactor * c.tolerated);
 }
 
 bool any_error_note(const std::vector<api::Issue>& notes) {

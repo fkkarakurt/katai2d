@@ -25,10 +25,18 @@
 // fixing. The controls are now threaded into the search (and, since .k2d v7, into the file), and
 // the re-measured answer is BETTER than the claim it replaces AND has a hard edge the original
 // could never have found: below the search's own 1e-3 the factor is bit-identical over five
-// orders of magnitude, while ABOVE it the factor climbs, monotonically and always UNSAFE-SIDED
-// (+2.0% at 1e-2, +45.6% at 1e-1, and at 3e-1 the search returns its own cap because no trial
-// ever fails to "converge"). A slope that is reported 45% safer than it is would be a fine
-// example of the kind of number this project exists to refuse.
+// orders of magnitude, while ABOVE it the factor climbs, one-sided and always UNSAFE-SIDED. It
+// climbed by +2.0% at 1e-2 and +45.6% at 1e-1, and a slope reported 45% safer than it is would be
+// a fine example of the kind of number this project exists to refuse.
+//
+// 2026-08-24: THAT CLIMB IS GONE, and what removed it is worth naming. It was never really about
+// the tolerance. A run that stops on the global force residual alone can stop with its stress
+// points nowhere near the strengths the search has reduced them to, and the search reads exactly
+// that gap as "this reduced strength still reached equilibrium". With the local convergence
+// criteria binding (0.9.0 N-2) the gap is closed before a trial is allowed to count, and the same
+// sweep now reads +0.0% at 1e-2 and +0.6% at 1e-1. The sweep stays, because a bound nobody
+// measures is a hope; what it asserts is now the DIRECTION plus a bound on the size, rather than
+// a size that only existed because of the defect.
 //
 // verify: KV-NUM-007
 //   oracle:   independent_path
@@ -36,7 +44,7 @@
 //   locator:  factor of safety by phi-c reduction on the checked-in tests/corpus/kv-slp-002-griffiths-lane-example1.k2d, one fixed mesh, solved at tolerated residuals 1e-1, 1e-2, 1e-3 (what the strength-reduction search uses when nothing is asked for), 1e-4, 1e-6 and 1e-8; and the elastic strip-load benchmark, whose linear system is solved directly and therefore carries no iterative tolerance at all
 //   quantity: factor of safety [-] and, for the Hardening Soil oedometer KV-CST-002, the settlement of the loading step [m], each as a function of the tolerated force residual, with the spread relative to the default run and the SIGN of the deviation on the loose side
 //   expected: below the search's own stopping rule, a spread far under the mesh dependence of the same quantity (4-8% in KV-SLP-003), so that the published comparison is a statement about the model and the mesh rather than about the stopping rule; above it, a monotone one-sided error -- a looser rule must report a HIGHER factor of safety, since a trial that stops early counts as equilibrium; for the Hardening Soil family, whose default residual is a hundred times looser, a bounded and stated cost rather than an unknown one
-//   band:     as asserted below and MEASURED on this tree, not inherited. Slope factor of safety on this mesh: 1.421021 at 1e-3, 1e-4, 1e-6 and 1e-8 -- BIT-IDENTICAL, spread 0.0000%, inside the reduction search's own resolution of 6.3e-4; 1.449585 at 1e-2 (+2.0%) and 2.069116 at 1e-1 (+45.6%), monotone and always high. Hardening Soil oedometer (re-measured 2026-08-20, after the constitutive integration came under an error tolerance -- KV-NUM-009): 0.018680 m at the default 1e-2 (-0.932% vs the closed form), 0.018639 m at 1e-4 (-1.152%), 0.018647 m at 1e-6 (-1.109%) -- so the default costs 0.179% on this quantity and 1e-4 is converged to 0.043%. Note the default's smaller deviation is cancellation, not accuracy. What sets the floor here is no longer the stopping rule: below about 1e-4 the INTEGRATION tolerance (KATAI_HS_STOL, 1e-5) is what the answer is resolved to, which is why the two tight runs agree to 0.04% rather than to six figures. Asserted: the tight-side spread below 1% and inside the search resolution, monotone unsafe-sided inflation on the loose side with 1e-1 above +30%, 1e-4 and 1e-6 agreeing to 0.05%, and the default HS run within 3% of the closed form
+//   band:     as asserted below and MEASURED on this tree, not inherited. Slope factor of safety on this mesh: 1.421021 at 1e-3, 1e-4, 1e-6 and 1e-8 -- BIT-IDENTICAL, spread 0.0000%, inside the reduction search's own resolution of 6.3e-4; 1.421021 at 1e-2 (+0.0%) and 1.429578 at 1e-1 (+0.6%), one-sided and BOUNDED. Those last two were 1.449585 (+2.0%) and 2.069116 (+45.6%) until the local convergence criteria bound (0.9.0 N-2): a run stopping on the global force residual alone could stop with its stress points nowhere near the strengths the search had reduced them to, and the search read that gap as equilibrium. Closing it removed a whole class of unsafe-sided factor of safety that the stopping rule could produce. Hardening Soil oedometer (re-measured 2026-08-24, with the local convergence criteria binding): 0.018647 m at the default 1e-2 (-1.109% vs the closed form), 0.018649 m at 1e-4 (-1.097%), 0.018647 m at 1e-6 (-1.110%) -- a spread of 0.0129% across four decades, where the default alone used to cost 0.179%. Note the default's smaller deviation is cancellation, not accuracy. What sets the floor here is no longer the stopping rule: below about 1e-4 the INTEGRATION tolerance (KATAI_HS_STOL, 1e-5) is what the answer is resolved to, which is why the two tight runs agree to 0.04% rather than to six figures. Asserted: the tight-side spread below 1% and inside the search resolution, one-sided inflation on the loose side bounded below 2% at 1e-1, 1e-4 and 1e-6 agreeing to 0.05%, and the default HS run within 3% of the closed form
 
 #include <katai/io/project_io.hpp>
 #include <katai/jobs/driver.hpp>
@@ -109,19 +117,34 @@ int main() {
           "an untouched PhaseIO reproduces the 1e-3 run bit-for-bit (the override changes "
           "nothing when it is not set)");
 
-    // THE LOOSE SIDE, and it is one-sided. Every relaxation of the stopping rule RAISES the
-    // reported factor of safety, because the question the search asks -- did this reduced
-    // strength still reach equilibrium? -- is answered "yes" by a solver that was allowed to
-    // stop before it got there. The error therefore always points the unsafe way, and it is
-    // large long before the tolerance looks absurd.
-    check(fos[0] > fos[1] && fos[1] > fos[2],
-          "a looser stopping rule reports a HIGHER factor of safety, monotonically");
-    std::printf("\n  1e-1 inflates the factor of safety by %+.1f%%, 1e-2 by %+.1f%% -- always "
-                "unsafe-sided\n",
-                100.0 * (fos[0] - fos[kDefault]) / fos[kDefault],
-                100.0 * (fos[1] - fos[kDefault]) / fos[kDefault]);
-    check((fos[0] - fos[kDefault]) / fos[kDefault] > 0.30,
-          "and at 1e-1 it is not a rounding matter: over 30% too high");
+    // THE LOOSE SIDE, and it is one-sided. Every relaxation of the stopping rule can only RAISE
+    // the reported factor of safety, because the question the search asks -- did this reduced
+    // strength still reach equilibrium? -- is answered "yes" by a solver that was allowed to stop
+    // before it got there. The error therefore points the unsafe way, which is the direction that
+    // matters on this particular number.
+    //
+    // WHAT THIS BLOCK USED TO ASSERT WAS THE SIZE OF THAT ERROR: over 30% too high at 1e-1, and
+    // monotone all the way down. The local convergence criteria (0.9.0 N-2) removed it. A run
+    // that stops on the global force residual alone can stop with its stress points nowhere near
+    // the strengths they were given, and it is exactly that gap the search reads as "equilibrium
+    // reached"; requiring the local criteria closes it, and the inflation at 1e-1 falls from
+    // above 30% to +0.6%, with 1e-2 indistinguishable from the default. On a factor of safety
+    // that is not a tidier number -- it is a whole class of unsafe-sided answer that the stopping
+    // rule can no longer produce.
+    //
+    // So what is asserted is the DIRECTION, which is physics and does not decay, and a BOUND on
+    // the magnitude, which is the measurement. Both can fail: a looser rule reporting a LOWER
+    // factor would break the first, and a return of the old sensitivity would break the second.
+    check(fos[0] >= fos[1] && fos[1] >= fos[kDefault],
+          "a looser stopping rule never reports a LOWER factor of safety: the error is "
+          "one-sided, and the side it takes is the unsafe one");
+    const double inflate = (fos[0] - fos[kDefault]) / fos[kDefault];
+    std::printf("\n  1e-1 inflates the factor of safety by %+.1f%%, 1e-2 by %+.1f%% -- "
+                "unsafe-sided, and bounded (it exceeded 30%% before the local criteria bound)\n",
+                100.0 * inflate, 100.0 * (fos[1] - fos[kDefault]) / fos[kDefault]);
+    check(inflate >= 0.0 && inflate < 0.02,
+          "and a hundredfold relaxation of the stopping rule now moves it by less than 2%, "
+          "where it used to move it by more than 30%");
 
     // THE TIGHT SIDE, which is what the published comparison rests on: below the search's own
     // rule the answer stops moving entirely.
