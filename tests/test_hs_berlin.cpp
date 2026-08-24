@@ -53,30 +53,42 @@ void test_berlin_triaxial() {
 
     // Drained triaxial: sigma3 const, axial strain driven; pp initialised to the isotropic
     // consolidation stress sigma3 (NC). Solve lateral strain each step for sigma3 = const.
-    Eigen::Vector3d sig(sigma3, sigma3, sigma3);
-    double gp = 0, pp = sigma3, eps1 = 0, epsv = 0;
+    // Parameterised by the integration tolerance, because the distance from the plateau is a
+    // function of it -- see the plateau check below.
     double q50_err = -1.0, epsv_max_contr = 0.0, epsv_final = 0.0, q_final = 0.0;
-    for (int s = 0; s < 12000; ++s) {
-        double dlat = 0.0; HsIntegrated r;
-        for (int it = 0; it < 30; ++it) {
-            r = hs_integrate(p, sig, gp, pp, Eigen::Vector3d(5e-6, dlat, dlat));
-            const double g = r.stress(2) - sigma3;
-            if (std::fabs(g) <= 1e-8 * (1 + sigma3)) break;
-            dlat -= g / (r.tangent(2, 1) + r.tangent(2, 2));
+    const auto walk = [&](double stol) {
+        Eigen::Vector3d sig(sigma3, sigma3, sigma3);
+        double gp = 0, pp = sigma3, eps1 = 0, epsv = 0;
+        q50_err = -1.0; epsv_max_contr = 0.0; epsv_final = 0.0; q_final = 0.0;
+        for (int s = 0; s < 12000; ++s) {
+            double dlat = 0.0; HsIntegrated r;
+            for (int it = 0; it < 30; ++it) {
+                r = hs_integrate(p, sig, gp, pp, Eigen::Vector3d(5e-6, dlat, dlat), stol);
+                const double g = r.stress(2) - sigma3;
+                if (std::fabs(g) <= 1e-8 * (1 + sigma3)) break;
+                dlat -= g / (r.tangent(2, 1) + r.tangent(2, 2));
+            }
+            epsv += 5e-6 + 2.0 * dlat;  // axial + 2*lateral (compression +)
+            sig = r.stress; gp = r.gamma_p; pp = r.pp; eps1 += 5e-6;
+            epsv_max_contr = std::fmax(epsv_max_contr, epsv);  // peak contraction (positive)
+            const double q = sig(0) - sig(2);
+            if (q50_err < 0 && q >= 0.5 * qf) q50_err = std::fabs((q / eps1) - E50) / E50;
+            q_final = q; epsv_final = epsv;
+            if (eps1 > 0.05) break;
         }
-        epsv += 5e-6 + 2.0 * dlat;  // axial + 2*lateral (compression +)
-        sig = r.stress; gp = r.gamma_p; pp = r.pp; eps1 += 5e-6;
-        epsv_max_contr = std::fmax(epsv_max_contr, epsv);  // peak contraction (positive)
-        const double q = sig(0) - sig(2);
-        if (q50_err < 0 && q >= 0.5 * qf) q50_err = std::fabs((q / eps1) - E50) / E50;
-        q_final = q; epsv_final = epsv;
-        if (eps1 > 0.05) break;
-    }
-    std::printf("  reached q=%.1f (qf=%.1f) secant@50%%-vs-E50 err=%.2e | "
-                "eps_v: peak-contr=%+.5f  final(@5%%)=%+.5f\n",
-                q_final, qf, q50_err, epsv_max_contr, epsv_final);
+        return q_final;
+    };
+    walk(0.0);   // the shipped integration tolerance
+    // Printed to three decimals, not one: what this line is read for is HOW CLOSE the deviator
+    // gets to its plateau, and the two returns of the failure bound that this tree once carried
+    // were recorded as differing by 0.16% of q_f. One decimal cannot show a difference that size,
+    // which is how a recorded difference can quietly stop reproducing -- as that one had.
+    std::printf("  reached q=%.3f (qf=%.3f, %.3f%% of it) secant@50%%-vs-E50 err=%.2e | "
+                "eps_v: peak-contr=%+.6f  final(@5%%)=%+.6f\n",
+                q_final, qf, 100.0 * q_final / qf, q50_err, epsv_max_contr, epsv_final);
     // Deviatoric (shear) parity -- unchanged from the shear-dominated validation.
-    check(close(q_final, qf, 5e-3), "q reaches the qf plateau (perfect plasticity at failure)");
+    const double q_shipped = q_final;
+    check(close(q_shipped, qf, 5e-3), "q reaches the qf plateau (perfect plasticity at failure)");
     check(q50_err >= 0 && q50_err < 0.05, "secant at qf/2 = E50 (HS hyperbola, PLAXIS parity)");
     // Volumetric (Fig 15.4): initial contraction then net dilation.
     check(epsv_max_contr > 2e-4 && epsv_max_contr < 3e-3,
@@ -84,6 +96,34 @@ void test_berlin_triaxial() {
     check(epsv_final < -2.5e-3,
           "net dilation at 5% axial strain (psi=6 deg), eps_v < -0.0025 (Fig 15.4 ~ -0.006)");
     check(epsv_final > -8e-3, "dilation magnitude physical (not runaway)");
+
+    // WHY THE PLATEAU IS NOT REACHED EXACTLY, asserted rather than tolerated. The check above is
+    // a 0.5% band and the shortfall at the shipped integration tolerance is 0.31%, so the band
+    // cannot see the shortfall at all -- and a band that cannot see the thing it is standing in
+    // front of is not a guard. The shortfall has a cause: the Mohr-Coulomb failure bound is a
+    // one-sided clamp on sigma1, so it RATCHETS on whatever error the substepping leaves in
+    // sigma3, and the size of that error is STOL. It is therefore not a defect in the bound but a
+    // declared, controllable quantity, and the falsifiable form of that claim is that TIGHTENING
+    // the integration must move the deviator TOWARDS the plateau. Measured with
+    // study_hs_integration (5% / 20% axial strain): 1e-3 gives 98.671% / 96.177% -- falling with
+    // strain, an artefact that imitates softening -- 1e-5 (shipped) 99.686% / 99.686%, 1e-7
+    // 99.949% / 99.984%, 1e-9 99.993% / 100.011%.
+    //
+    // Until 2026-08-24 this shortfall was recorded as the bound's one-sidedness alone, curable by
+    // returning along the consistent direction De.n_s (a seam, KATAI_HS_MCPROJ). Re-measured, that
+    // return leaves the deviator at exactly the SAME 99.686% and still costs the strip footing, so
+    // it was removed. The direction below is what the record now rests on.
+    const double q_tight = walk(1e-8);
+    std::printf("  plateau vs integration tolerance: shipped %.3f%% of qf -> stol 1e-8 %.3f%%\n",
+                100.0 * q_shipped / qf, 100.0 * q_tight / qf);
+    // Absolute distance on both sides, not the signed shortfall: at 1e-8 the deviator lands
+    // 0.03% ABOVE q_f (the drift loop's own convergence), and a signed comparison would call an
+    // arbitrarily large overshoot an improvement.
+    check(std::fabs(qf - q_tight) < std::fabs(qf - q_shipped),
+          "tightening the integration moves the deviator TOWARDS the failure plateau, which is "
+          "what makes the shortfall integration error rather than a defect in the bound");
+    check(close(q_tight, qf, 1e-3),
+          "...and it gets within 0.1% of it, so the plateau is reached and not merely approached");
 }
 
 } // namespace

@@ -616,16 +616,12 @@ inline int hs_max_substeps() {
     return v;
 }
 
-// MEASURED AND NOT TAKEN (2026-08-20): KATAI_HS_MCPROJ=1 returns the MC failure bound along the
-// CONSISTENT direction De.n_s instead of clamping sigma1. See the bound itself, below, for what
-// each does and what each costs.
-inline bool hs_consistent_mc_bound() {
-    static const bool v = [] {
-        const char* e = std::getenv("KATAI_HS_MCPROJ");
-        return e && *e == '1';
-    }();
-    return v;
-}
+// The seam that used to stand here (KATAI_HS_MCPROJ, returning the failure bound along the
+// consistent direction De.n_s instead of clamping sigma1) is GONE, swept and removed on
+// 2026-08-24. It was kept because a measurement said it fixed a 0.24% shortfall on the failure
+// plateau at a cost of one boundary-value case. Re-measured, the fix is not there: both returns
+// leave the deviator at the SAME 99.686% of q_f, and the cost still is. The shortfall was never
+// the return direction -- see the bound below.
 
 // The default integration tolerance, and the measurement that set it. KV-CST-002 (100->200 kPa,
 // 40+160 increments, equilibrium tolerance 1e-6); the same material walked at the STRESS POINT
@@ -859,34 +855,35 @@ inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
         // failure can leave the state outside the failure surface with the hardening surface
         // satisfied.
         //
-        // It is a bare clamp on sigma1, which leaves sigma3 alone. That is one-sided, and once
-        // q_f follows the substep (rather than being frozen for the whole increment) it is a
-        // RATCHET: the clamp only ever lowers sigma1, so every excursion of sigma3 below its
-        // end-of-step value permanently caps q at the smallest q_f the path passed through.
-        // MEASURED, Berlin Sand III drained triaxial (test_hs_berlin, sigma3 = 200, q_f = 644.85):
-        // the deviator stalls at 643.32 (99.76% of q_f) at 5% axial strain and is still there at
-        // 20% -- the plateau is approached but never reached.
+        // It is a bare clamp on sigma1, which leaves sigma3 alone, and that is ONE-SIDED: it only
+        // ever lowers sigma1, and nothing gives back what it took when q_f rises again. So it
+        // ratchets. WHAT it ratchets on is the point, and the record had that wrong until
+        // 2026-08-24: it ratchets on the substep INTEGRATION ERROR in sigma3, not on the shape of
+        // the return, so the size of the shortfall is set by STOL. Berlin Sand III drained
+        // triaxial (study_hs_integration triax, sigma3 = 200, q_f = 644.85), deviator as a
+        // fraction of q_f at 5% and at 20% axial strain:
         //
-        // The principled replacement is the same CONSISTENT projection the drift loop uses, along
-        // De.n_s, iterated because q_f moves with sigma3. It works: 644.36 (99.93%). It also
-        // costs a case that passes today -- the shear-dominated, low-confinement strip footing
-        // (test_hs_footing) stops converging at the full service load, 1.000 -> 0.922 (portable)
-        // and 0.824 (MKL), with twice the iterations. A bound that fixes a 0.24% shortfall on a
-        // material-point plateau and loses a boundary-value problem is not a trade to take
-        // silently, so it is not taken: `KATAI_HS_MCPROJ=1` selects it, the clamp ships, and the
-        // reason the footing dislikes it is not yet understood. (The clamp's ratchet is
-        // conservative -- it under-predicts strength -- which is why this is affordable.)
-        for (int it = 0; it < 5; ++it) {
+        //     STOL    at 5%       at 20%
+        //     1e-3    98.671%      96.177%   <- FALLS with strain: the artefact imitates softening
+        //     1e-5    99.686%      99.686%   (the shipped default)
+        //     1e-7    99.949%      99.984%
+        //     1e-9    99.993%     100.011%
+        //
+        // The plateau IS reached. What stands between the shipped run and it is integration error,
+        // a declared and controllable quantity (KATAI_HS_STOL, whose default was set by its own
+        // measurement above), not a defect in the bound. The consistent De.n_s projection that
+        // used to sit behind KATAI_HS_MCPROJ was recorded as the cure and is not one: at the
+        // shipped STOL it leaves the deviator at the SAME 99.686%, differing only in the fifth
+        // decimal of volumetric strain, while still costing the shear-dominated low-confinement
+        // strip footing (test_hs_footing stops converging at the full service load, 1.000 ->
+        // 0.815, 1005 iterations). A branch with no measured benefit and a measured cost is not a
+        // seam, it is a second program, so it is gone. The ratchet is also CONSERVATIVE -- it
+        // under-predicts strength -- which is what makes the residual affordable at the shipped
+        // tolerance rather than merely tolerable.
+        {
             const Stiff k = stiff_at(s);
-            const double qd = s(0) - s(2);
-            const double over = qd - k.qf;
-            if (over <= 1e-12 * (1.0 + k.qf)) break;
-            if (!hs_consistent_mc_bound()) { s(0) -= over; break; }   // TEMPORARY seam
-            const double spm = spm_of(qd, k), R = -(1.0 + spm) / (2.0 - spm);
-            const Eigen::Vector3d n_s(1.0, R, R);
-            const Eigen::Vector3d Den = k.De * n_s;
-            const Eigen::Vector3d a(1.0, 0.0, -1.0);          // df/dsigma of f = q - q_f
-            s -= (over / a.dot(Den)) * Den;
+            const double over = (s(0) - s(2)) - k.qf;
+            if (over > 1e-12 * (1.0 + k.qf)) s(0) -= over;
         }
     };
 

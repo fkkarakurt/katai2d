@@ -24,7 +24,7 @@
 //   locator:  tests/corpus/kv-cst-002-hs-oedometer.k2d (Hardening Soil, whose answer is known from KV-NUM-007 to move with the tolerance) solved four ways per control: default, control set in the FILE, the same control passed through the seam, and both set at once with different values
 //   quantity: settlement of the oedometer top [m] and the file round trip of the three control fields
 //   expected: file == seam bit-for-bit on every control; the control demonstrably reaches the solver; seam wins when both are set (documented precedence); and the three fields survive a write/read round trip
-//   band:     exact -- these are identity checks, not approximations. Measured on this tree (2026-08-24, with the local convergence criteria binding): default 0.018647102 m; tolerance 1e-6 from the file 0.018646941 m, identical to the seam to 0.0e+00; on the staged phase alone 0.018643754 m, which differs again and is what "per phase" means; 4 load increments 0.018643176 m against 40's 0.018647102 m. TWO OF THIS CASE'S GUARDS DECAYED AND WERE REWRITTEN, both for the same reason and both recorded rather than quietly repaired. (1) The tolerated error used to be proved READ by showing the answer moved when it changed; it moves by 0.0009% now, because the default run already stands on the converged answer, so the proof is taken where the control lands instead -- the run reports the tolerance it ran under (1e-6 against the default's 1e-2), it demonstrably MET it, and reaching it cost 473 iterations against 194. (2) The ITERATION LIMIT was pinned at a threshold of 3; it is 5 now, and the threshold is FOUND by the test rather than written down, because that is the second time a number pinned here moved because the solver got better. There turned out to be TWO thresholds and the old check conflated them: at 5 the run stops REFUSING but survives by cutting increments back, so it walks a different load path and lands 0.1796% away; only from 6 does it reproduce the default bit for bit. A guard that proves a control is read by pointing at a difference stops proving anything when the difference is the defect being fixed -- which has now happened three times on this case
+//   band:     exact -- these are identity checks, not approximations. Measured on this tree (2026-08-24, with the local convergence criteria binding): default 0.018647102 m; tolerance 1e-6 from the file 0.018646941 m, identical to the seam to 0.0e+00; on the staged phase alone 0.018643754 m, which differs again and is what "per phase" means; 4 load increments 0.018643176 m against 40's 0.018647102 m. TWO OF THIS CASE'S GUARDS DECAYED AND WERE REWRITTEN, both for the same reason and both recorded rather than quietly repaired. (1) The tolerated error used to be proved READ by showing the answer moved when it changed; it moves by 0.0009% now, because the default run already stands on the converged answer, so the proof is taken where the control lands instead -- the run reports the tolerance it ran under (1e-6 against the default's 1e-2), it demonstrably MET it, and reaching it cost 473 iterations against 194. (2) The ITERATION LIMIT was pinned at a threshold of 3; it is 5 now. The threshold is RECORDED AND CHECKED rather than pinned-and-asserted: the recorded value has to straddle the boundary (it converges, one below it refuses), which is two solves and exactly the proof a scan would give, and the scan runs only when that straddle stops holding -- and then it reports the value it found. Searching from scratch every run cost up to a hundred two-phase solves and made this file the slowest test in the suite by a factor of two, which is a real price for a property that changes about once a year. There turned out to be TWO thresholds and the old check conflated them: at 5 the run stops REFUSING but survives by cutting increments back, so it walks a different load path and lands 0.1796% away; only from 6 does it reproduce the default bit for bit. A guard that proves a control is read by pointing at a difference stops proving anything when the difference is the defect being fixed -- which has now happened three times on this case
 
 // verify: KV-NUM-009
 //   oracle:   closed_form
@@ -227,11 +227,33 @@ int main() {
     // block moved because the solver got better. What is asserted is that a threshold exists,
     // that it is small enough to still be a threshold and not a budget, and that the two
     // outcomes straddle it; the measured value is printed rather than pinned.
+    // HOW the threshold is found matters for what this test COSTS. Walking limit = 2, 3, 4 ... and
+    // then again from the threshold up to 96, each step a full two-phase solve, is up to a hundred
+    // solves and it made this the slowest test in the suite by a factor of two -- 2597 s of a
+    // 2597 s wall clock, so the whole suite was as long as this one file. The search is kept but
+    // it is no longer the FIRST thing tried: the recorded value is CHECKED, which costs two solves
+    // and proves exactly the same straddle, and the scan runs only if the recorded value has
+    // stopped being the boundary. Then it reports the new one loudly. A guard that cannot decay
+    // silently was the whole point; paying a hundred solves for it every run was not.
+    constexpr int kRecordedThreshold = 5;   // 2026-08-24; it was 3 before the local criteria bound
+    const auto converges_at = [&](int limit, double* u_out) {
+        const double u = settlement(all_phases(base, 0.0, 0, limit), M.mesh, {}, &ok);
+        if (u_out) *u_out = u;
+        return ok;
+    };
     int threshold = 0;
     double u_at_threshold = 0.0;
-    for (int limit = 2; limit <= 24 && threshold == 0; ++limit) {
-        const double u = settlement(all_phases(base, 0.0, 0, limit), M.mesh, {}, &ok);
-        if (ok) { threshold = limit; u_at_threshold = u; }
+    const bool at_recorded = converges_at(kRecordedThreshold, &u_at_threshold);
+    const bool below_recorded = converges_at(kRecordedThreshold - 1, nullptr);
+    if (at_recorded && !below_recorded) {
+        threshold = kRecordedThreshold;
+    } else {
+        std::printf("  NOTE: the recorded iteration-limit threshold %d no longer straddles the "
+                    "boundary (converges at it: %s, one below: %s) -- scanning for the new one\n",
+                    kRecordedThreshold, at_recorded ? "yes" : "no",
+                    below_recorded ? "yes" : "no");
+        for (int limit = 2; limit <= 24 && threshold == 0; ++limit)
+            if (converges_at(limit, &u_at_threshold)) threshold = limit;
     }
     std::printf("  iteration-limit threshold: %d\n", threshold);
     check(threshold >= 3 && threshold <= 24,
@@ -239,17 +261,23 @@ int main() {
           "threshold rather than a budget");
     if (threshold == 0) return 1;
 
-    const m::Project iter_starved = all_phases(base, 0.0, 0, threshold - 1);
-    settlement(iter_starved, M.mesh, {}, &ok);
+    // One below the threshold refuses. When the recorded value held, this is already known from
+    // the probe above and is not re-solved; only a moved threshold pays for it again.
+    if (threshold != kRecordedThreshold) {
+        settlement(all_phases(base, 0.0, 0, threshold - 1), M.mesh, {}, &ok);
+    } else {
+        ok = below_recorded;
+    }
     check(!ok, "one below the threshold, the FILE's limit makes the run refuse rather than drift");
     katai::app::NumericalControls starved_seam;
     starved_seam.max_iterations = threshold - 1;
     settlement(base, M.mesh, starved_seam, &ok);
     check(!ok, "and the same limit through the seam refuses too: both routes reach the solver");
 
-    const m::Project iter_file = all_phases(base, 0.0, 0, threshold);
-    const double u_iter_file = settlement(iter_file, M.mesh, {}, &ok);
-    check(ok, "at the threshold the case in the FILE solves");
+    // The FILE's run at the threshold is the probe above -- solving the same calculation twice
+    // would prove nothing the first solve did not.
+    const double u_iter_file = u_at_threshold;
+    check(threshold > 0 && u_iter_file > 0.0, "at the threshold the case in the FILE solves");
     katai::app::NumericalControls iter_seam;
     iter_seam.max_iterations = threshold;
     const double u_iter_seam = settlement(base, M.mesh, iter_seam, &ok);
@@ -265,10 +293,22 @@ int main() {
     // are found, and what is asserted is the ordering and the fact that the second exists: a
     // limit high enough is a limit that does not enter the answer, which is the property that
     // makes it a patience setting rather than an accuracy one.
+    // Recorded-then-searched, for the same reason and at the same saving as the threshold above:
+    // this scan could run to 96 full solves on its own.
+    constexpr int kRecordedSettled = 6;   // 2026-08-24, one above the threshold
+    const auto reproduces_default = [&](int limit) {
+        double u = 0.0;
+        return converges_at(limit, &u) && u == u_default;
+    };
     int settled = 0;
-    for (int limit = threshold; limit <= 96 && settled == 0; ++limit) {
-        const double u = settlement(all_phases(base, 0.0, 0, limit), M.mesh, {}, &ok);
-        if (ok && u == u_default) settled = limit;
+    if (reproduces_default(kRecordedSettled) &&
+        (kRecordedSettled <= threshold || !reproduces_default(kRecordedSettled - 1))) {
+        settled = kRecordedSettled;
+    } else {
+        std::printf("  NOTE: the recorded settling limit %d is no longer the first that reproduces "
+                    "the default -- scanning for the new one\n", kRecordedSettled);
+        for (int limit = threshold; limit <= 96 && settled == 0; ++limit)
+            if (reproduces_default(limit)) settled = limit;
     }
     std::printf("  refuses below %d; converges at %d (%.4f%% from the default, by cutting back); "
                 "reproduces the default from %d\n",

@@ -336,6 +336,33 @@ else()
   message(STATUS "Python interpreter not found - source-tree gates (language, architecture) disabled")
 endif()
 
+# THE SLOW SET, measured rather than guessed, so that the inner development loop does not
+# have to pay for the full suite. Measured 2026-08-24 on the MKL composition (ctest -j 6):
+# the 154 tests cost 9089 s of CPU between them and TWELVE of them are 8461 s of that -- 93%.
+# With `-j 6` the wall clock cannot fall below the single longest test, so the suite took as
+# long as its slowest file did.
+#
+#   ctest -LE slow -j 6     the inner loop: everything except these, ~600 s of CPU
+#   ctest -j 6              before a commit: everything
+#
+# The second number on each line is the measured cost in seconds, given to CTest so that it
+# schedules the long ones FIRST on a cold checkout too (CTest learns costs from previous runs,
+# but only after there has been one). A number here going badly stale is visible in the ctest
+# output as poor packing, not as a wrong answer, which is the right failure mode for a hint.
+set(_katai_slow_tests
+  test_phase_numerics 2597    test_input_corpus 1349    test_no_silent_drop 1126
+  test_hs_footing 891         test_slope_fos_convergence 536
+  test_tolerance_independence 406  test_hs_axisym 317    test_plaxis_validation 294
+  test_convergence_criteria 232    test_gui_matrix 174   test_dynamic_gui 129
+  test_bearing_phi 126)
+while(_katai_slow_tests)
+  list(POP_FRONT _katai_slow_tests _t _cost)
+  if(TEST ${_t})
+    set_property(TEST ${_t} APPEND PROPERTY LABELS slow)
+    set_property(TEST ${_t} PROPERTY COST ${_cost})
+  endif()
+endwhile()
+
 # Say out loud what this composition left out, so a shrunken test set is a stated
 # fact rather than a surprise in the ctest total.
 get_property(_katai_skipped GLOBAL PROPERTY KATAI_SKIPPED_TESTS)
