@@ -314,7 +314,20 @@ struct NewtonResult {
         // Eq. 9-1 LOOSEN towards failure. Implemented from Eq. 7-22, deliberately.
         double csp = 1.0;
         double force_error = 0.0;      // Eq. 9-1
+        // The number the DEFAULT gate actually uses: ||r|| over a FIXED scale,
+        // max(||f_ext||, ||f_const||, 1). Reported next to Eq. 9-1 because the two are not the
+        // same question and the tree used to publish only the one it does NOT gate on -- so a
+        // run could say "force error 3e-2, tolerance 1e-1" while the quantity that let it stop
+        // was a different ratio entirely.
+        double global_error = 0.0;
         double moment_error = 0.0;     // Eq. 9-3; meaningless unless has_moment
+        // The DENOMINATOR of that ratio, BEFORE the floor: the sum of absolute nodal moment
+        // contributions over every rotational freedom in the model. Reported, not just used,
+        // because this is a ratio that can blow up from below -- a structure nothing is driving
+        // carries no moment, and dividing a round-off residual by a round-off reference is not a
+        // measurement. Measured at 1.11e-12 kNm/m on an undriven plate against 4.71e+02 on the
+        // same plate under load; the floor that separates them is in measure_convergence.
+        double moment_ref = 0.0;
         bool has_moment = false;       // something in the model carries a rotational DOF
         double tolerated = 0.0;        // the tolerated error all of these are measured against
         // Local criteria (Eq. 9-5, 9-7), counted over the active soil stress points.
@@ -333,6 +346,22 @@ struct NewtonResult {
         int feet = 0;
         static constexpr double kFootToleranceFactor = 5.0;
         bool measured = false;         // false = no accepted iterate was ever reached
+
+        // CONSTITUTIVE INTEGRATION GUARD SATURATION. Deliberately NOT "at the last accepted
+        // iterate" like everything above it: this is the largest count over EVERY committed
+        // iterate of the solve, because a cut-short integration corrupts the path the answer
+        // was walked along, and an increment that recovered afterwards did not un-walk it.
+        //
+        // What it means: the Hardening Soil integrator subdivides an increment until its own
+        // error estimate is under STOL, but it is allowed at most hs_max_substeps() pieces, and
+        // when it runs out it returns the best it has. Nothing in the equilibrium iteration can
+        // see that -- the two stresses of Fig. 9-1 are both computed from the same cut-short
+        // walk, so they agree with each other and the local criteria pass. Until 2026-08-25 the
+        // integrator's own flag was dropped between the material and the solver, so a run that
+        // hit the ceiling was reported exactly like one that met its tolerance.
+        int saturated_points = 0;      // most points saturated in any one committed iterate
+        int saturated_increments = 0;  // increments whose committed iterate had any
+        bool integration_met_tolerance() const { return saturated_increments == 0; }
 
         // The tolerated fraction of inaccurate points, and the +3 that goes with it: a handful
         // of points may lag without the solution being wrong, and on a small model a pure
@@ -359,6 +388,26 @@ struct NewtonResult {
             return plastic_points_ok() && nl_elastic_ok() && iface_points_ok() && foot_ok();
         }
         bool all_ok() const { return force_ok() && moment_ok() && local_ok(); }
+        // What the solver actually REFUSES to call converged on, when enforce_local_criteria is
+        // on. It is local_ok() plus the moment residual, and the moment residual is here for a
+        // reason that is not symmetry: the global gate is ||r||, a Euclidean norm taken over a
+        // vector whose entries are forces AND moments. Adding kN and kNm in quadrature is not a
+        // norm of anything, and the rotational rows are the part of it that no force scale can
+        // read back out. Eq. 9-3 is the dimensionally honest question about those rows.
+        //
+        // MEASURED before it was switched on (2026-08-25), because a criterion that binds where
+        // nothing was wrong is a regression:
+        //  * With an ELASTIC plate the rotational rows are LINEAR in the plate DOFs, so one
+        //    Newton step zeroes them: the excavation wall reports 1.2e-14 at every tolerance
+        //    from 1e-1 to 1e-10 -- including the 1e-1 run whose tip deflection is 21% wrong.
+        //    The criterion cannot bind there, by construction, and saying so is the measurement.
+        //  * With a PLASTIC plate (M-N hinge) it is alive: the plate BVP walks 1.4e-3 -> 5e-14
+        //    as the tolerance tightens. Over 15 (load, tolerance) pairs it never exceeded 6% of
+        //    the force error, so binding it costs nothing on anything this tree runs today.
+        // It is bound anyway, for the case the tree does not have yet: a structure-dominated
+        // collapse, where the wall is what fails and the soil around it is still elastic. There
+        // the force residual is scaled by a soil that is not being asked for anything.
+        bool enforced_ok() const { return local_ok() && moment_ok(); }
     };
     Convergence convergence;
     // Wall-clock breakdown of the computation (seconds) + call counters. The counterpart of

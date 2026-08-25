@@ -12,6 +12,9 @@
 //   oedo     KV-CST-002, the Hardening Soil oedometer, over a sweep of tolerances
 //   footing  a Mohr-Coulomb strip footing walked towards its limit load (CSP must fall)
 //   struct   the corpus interface and embedded-beam cases (Eq. 9-8 and Eq. 9-9)
+//   staged   a staged excavation, where the two GLOBAL ratios pull apart (KATAI_CONV_CSPGATE)
+//   el7      HSsmall UNLOADING: the only place Eq. 9-7's count can be non-zero
+//   moment   an UNDRIVEN plate next to a driven one: what Eq. 9-3's reference does
 //   elastic  a linear-elastic block: every local count must be zero and CSP exactly 1
 //   all      all of the above (default)
 #include <katai/analysis/results.hpp>
@@ -75,8 +78,8 @@ m::Project mc_footing(double q, m::SoilModel model) {
 }
 
 void print_header() {
-    std::printf("%-26s %7s %10s %10s %5s %5s %12s %7s  %s\n", "case", "CSP", "force err",
-                "tolerated", "lf", "iters", "max|u| [m]", "time",
+    std::printf("%-26s %7s %10s %10s %10s %5s %5s %12s %7s  %s\n", "case", "CSP",
+                "Eq9-1 err", "GATE err", "tolerated", "lf", "iters", "max|u| [m]", "time",
                 "local criteria (inaccurate / points, worst error)");
     std::printf("%s\n", std::string(170, '-').c_str());
 }
@@ -104,9 +107,10 @@ void run(const char* label, m::Project pr, double tol) {
     // one that moves it by a per cent is the reason the rule exists.
     double umax = 0.0;
     for (int i = 0; i < r.disp.size(); ++i) umax = std::max(umax, std::fabs(r.disp[i]));
-    std::printf("%-26s %7.5f %10.3e %10.3e %5.3f %5d %12.9f %6.1fs  plastic %4d/%-5d "
+    std::printf("%-26s %7.5f %10.3e %10.3e %10.3e %5.3f %5d %12.9f %6.1fs  plastic %4d/%-5d "
                 "worst %8.2e %-4s | nl-el %4d/%-5d (of %5d el) worst %8.2e %-4s%s\n",
-                label, c.csp, c.force_error, c.tolerated, r.load_factor, r.iterations, umax,
+                label, c.csp, c.force_error, c.global_error, c.tolerated, r.load_factor,
+                r.iterations, umax,
                 r.timings.total,
                 c.plastic_inaccurate, c.plastic_points, c.worst_plastic_error,
                 c.plastic_points_ok() ? "ok" : "FAIL",
@@ -123,9 +127,10 @@ void run(const char* label, m::Project pr, double tol) {
         std::printf("      embedded-beam feet (%d): force error %8.2e of %8.2e tolerated  %s\n",
                     c.feet, c.foot_force_error,
                     c.kFootToleranceFactor * c.tolerated, c.foot_ok() ? "ok" : "FAIL");
-    if (c.has_moment)
-        std::printf("      moment residual: %8.2e of %8.2e tolerated  %s\n", c.moment_error,
-                    c.tolerated, c.moment_ok() ? "ok" : "FAIL");
+    if (c.moment_ref > 0.0 || c.has_moment)
+        std::printf("      moment residual: %8.2e of %8.2e tolerated  %-4s  (reference "
+                    "sum|M_nodal| = %8.2e)\n", c.moment_error, c.tolerated,
+                    c.moment_ok() ? "ok" : "FAIL", c.moment_ref);
     if (c.force_ok() && !c.local_ok())
         std::printf("    ^^ GLOBAL MET, LOCAL FAILED -- the case N-2 predicted exists.\n");
 }
@@ -198,6 +203,140 @@ int main(int argc, char** argv) {
                 continue;
             }
             run(cs.label, pr, 0.0);
+        }
+    }
+
+    // Eq. 9-3/9-4 -- the MOMENT criterion, and specifically the case that made it bind: a plate
+    // standing on a line that is pushed down. The prescribed displacement fixes those nodes, so
+    // the plate is UNDRIVEN (the run says so itself, K2D-A003) and carries no moment. Its own
+    // reference then collapses towards zero, and a round-off residual over a round-off reference
+    // is not a measurement -- it is a ratio with nothing under it.
+    if (which == "moment" || which == "all") {
+        std::printf("\n-- Eq. 9-3: a plate nothing is driving, and what its reference does --\n");
+        m::Project pr;
+        std::string err;
+        const std::string path = std::string(KATAI_CORPUS_DIR) + "/kv-fnd-008-strip-load.k2d";
+        if (m::load_project(path, pr, &err, nullptr)) {
+            m::PlateMaterial pm;
+            pm.name = "Sheet pile"; pm.EA = 7.5e6; pm.EI = 1.0e5; pm.w = 0.0; pm.nu = 0.0;
+            pr.plates.push_back(pm);
+            m::StructElement se;
+            se.kind = m::StructKind::Plate; se.name = "Wall";
+            se.x1 = 18.0; se.y1 = 20.0; se.x2 = 22.0; se.y2 = 20.0;
+            se.material = (int)pr.plates.size() - 1;
+            pr.structs.push_back(se);
+            pr.loads.clear();
+            m::PrescribedDisp D;
+            D.name = "Footing settlement";
+            D.x1 = 18.0; D.y1 = 20.0; D.x2 = 22.0; D.y2 = 20.0;
+            D.set_uy = true; D.uy = -0.01;
+            pr.disps.push_back(D);
+            run("plate on a pushed line", pr, 0.0);
+            // The loaded twin: the SAME plate with the settlement replaced by a surface load, so
+            // the plate is driven and its reference is a real moment. Read the two together --
+            // the criterion is the same one, and only the denominator differs.
+            m::Project drv = pr;
+            drv.disps.clear();
+            m::Load L;
+            L.kind = m::LoadKind::Distributed;
+            L.name = "Strip";
+            L.x1 = 18.0; L.y1 = 20.0; L.x2 = 22.0; L.y2 = 20.0;
+            L.qx1 = L.qx2 = 0.0; L.qy1 = L.qy2 = -100.0;
+            drv.loads.push_back(L);
+            for (auto& ph : drv.phases) ph.load_active = {1};
+            run("plate under a strip load", drv, 0.0);
+        } else {
+            std::printf("FAIL load %s: %s\n", path.c_str(), err.c_str());
+        }
+    }
+
+    // Eq. 9-7 -- the criterion for a point whose ELASTIC stiffness moves with stress while
+    // nothing about it is yielding. It has never been the binding count on anything measured so
+    // far, and the reason is case selection rather than the criterion: on the Hardening Soil
+    // oedometer every point is plastic the moment loading starts, and the Mohr-Coulomb cases have
+    // no stress-dependent modulus at all, so the count has only ever been read where it must be
+    // zero. UNLOADING is where it is not: an unloading point leaves every yield surface and
+    // re-enters on Eur, which is a function of the stress it is in the middle of changing.
+    if (which == "el7" || which == "all") {
+        std::printf("\n-- Eq. 9-7: unloading, where a NON-yielding point still has a stress-dependent stiffness --\n");
+        struct Case { const char* file; const char* label; };
+        const Case cases[] = {
+            {"kv-cst-008-hssmall-unloading.k2d", "HSsmall unloading"},
+            {"kv-cst-012-reset-small-strain.k2d", "HSsmall reset (unload)"},
+        };
+        for (const Case& cs : cases) {
+            m::Project pr;
+            std::string err;
+            if (!m::load_project(std::string(KATAI_CORPUS_DIR) + "/" + cs.file, pr, &err,
+                                 nullptr)) {
+                std::printf("FAIL load %s: %s\n", cs.file, err.c_str());
+                continue;
+            }
+            for (double t : {1e-2, 1e-3, 1e-4, 1e-6}) {
+                char lbl[64];
+                std::snprintf(lbl, sizeof lbl, "%s %.0e", cs.label, t);
+                run(lbl, pr, t);
+            }
+            // The same case with only the LAST phase tightened. run() sets the tolerance on
+            // EVERY phase including the initial one, so a case that changes character when it is
+            // swept may be reacting to where its earlier phases land rather than to the
+            // difficulty of the phase being measured. This separates the two.
+            for (double t : {1e-3, 1e-4}) {
+                m::Project last = pr;
+                if (!last.phases.empty()) last.phases.back().tolerance = t;
+                char lbl[64];
+                std::snprintf(lbl, sizeof lbl, "%s LAST-only %.0e", cs.label, t);
+                run(lbl, last, 0.0);
+            }
+            // ... and, for the phase that turns out to be the one reacting, whether it is the
+            // LOAD PATH rather than the tolerance: a phase that cannot reach equilibrium at a
+            // tighter bar with the increments it was given may simply need more of them.
+            for (int mult : {0, 2, 4, 8}) {
+                m::Project one = pr;
+                if (one.phases.empty()) break;
+                one.phases[0].tolerance = 1e-3;
+                if (mult) one.phases[0].load_steps = mult * 10;
+                char lbl[64];
+                std::snprintf(lbl, sizeof lbl, "%s ph0 1e-3 steps=%d", cs.label,
+                              one.phases[0].load_steps);
+                run(lbl, one, 0.0);
+            }
+            // ... and one phase at a time, so a case that only fails when everything is
+            // tightened together names the phase that is actually reacting.
+            for (size_t k = 0; k <= pr.phases.size(); ++k) {
+                m::Project one = pr;
+                if (k == 0) one.initial.tolerance = 1e-3;
+                else one.phases[k - 1].tolerance = 1e-3;
+                char lbl[64];
+                std::snprintf(lbl, sizeof lbl, "%s only %s 1e-3", cs.label,
+                              k == 0 ? "INITIAL" : one.phases[k - 1].name.c_str());
+                run(lbl, one, 0.0);
+            }
+        }
+    }
+
+    // STAGED CONSTRUCTION, and it is here for the GATE question rather than for the criteria.
+    // The default gate divides the out-of-balance force by max(||f_ext||, ||f_const||, 1); Eq. 9-1
+    // divides it by ||f_int|| + CSP*||f_const||. In a staged phase those denominators are not
+    // close: ||f_const|| is the whole standing K0 load and ||f_ext|| is only the release the
+    // phase itself applies, so the two columns printed above are measuring the same residual
+    // against scales that differ by however much the excavation is smaller than the ground it
+    // stands in. Run this group with and without KATAI_CONV_CSPGATE to read what SWAPPING the
+    // gate does to the answer and to the iteration count.
+    if (which == "staged" || which == "all") {
+        std::printf("\n-- staged construction: the two global ratios side by side --\n");
+        m::Project pr;
+        std::string err;
+        const std::string path =
+            std::string(KATAI_CORPUS_DIR) + "/kv-exc-001-staged-excavation.k2d";
+        if (m::load_project(path, pr, &err, nullptr)) {
+            for (double t : {1e-2, 1e-3, 1e-4}) {
+                char lbl[64];
+                std::snprintf(lbl, sizeof lbl, "staged excavation tol=%.0e", t);
+                run(lbl, pr, t);
+            }
+        } else {
+            std::printf("FAIL load %s: %s\n", path.c_str(), err.c_str());
         }
     }
 

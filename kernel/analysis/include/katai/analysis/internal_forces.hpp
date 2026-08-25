@@ -177,6 +177,11 @@ struct LocalErrorProbe {
     int nl_elastic_inaccurate = 0;   // ... of those, over the tolerated local error (Eq. 9-7)
     double worst_plastic = 0.0;      // the largest local error of each kind, so that a count
     double worst_nl_elastic = 0.0;   //   of zero can still say how much room it had
+    // Points whose CONSTITUTIVE INTEGRATION hit its substep guard on this iterate, i.e. walked
+    // the material law without meeting the error tolerance it was given. Not a local convergence
+    // criterion and not derivable from one: the two stresses of Fig. 9-1 can agree perfectly
+    // while both of them are wrong, because they are both computed from the same cut-short walk.
+    int integration_saturated = 0;
 
     // CSP (Reference Manual Eq. 7-22) numerator and denominator, integrated over the active
     // volume: the work actually done against the stress increment, over the work the same
@@ -210,6 +215,7 @@ struct LocalErrorProbe {
         plastic = plastic_inaccurate = 0;
         elastic_total = nl_elastic = nl_elastic_inaccurate = 0;
         worst_plastic = worst_nl_elastic = 0.0;
+        integration_saturated = 0;
         energy_total = energy_elastic = 0.0;
         iface_plastic = iface_plastic_inaccurate = 0;
         worst_iface = 0.0;
@@ -255,6 +261,7 @@ struct LocalErrorPartial {
     int plastic = 0, plastic_inaccurate = 0;
     int elastic_total = 0, nl_elastic = 0, nl_elastic_inaccurate = 0;
     double worst_plastic = 0.0, worst_nl_elastic = 0.0;
+    int integration_saturated = 0;
     double energy_total = 0.0, energy_elastic = 0.0;
 };
 
@@ -488,6 +495,7 @@ public:
                     const Eigen::Vector4d s_eq =
                         Kin::full_stress((*probe->prev_sigma_c)[gi]) +
                         Kin::elastic_step(rep.elastic, ddeps);              // Eq. 9-6
+                    if (rep.integration_saturated) ++acc.integration_saturated;
                     const double diff = (s_eq - s_c).norm();
                     const double tmax = tau_max_of(s_c(0), s_c(1), s_c(2), s_c(3));
                     const double coh = cohesion_of(matg);
@@ -561,6 +569,7 @@ public:
                 probe->nl_elastic_inaccurate += a.nl_elastic_inaccurate;
                 probe->worst_plastic = std::max(probe->worst_plastic, a.worst_plastic);
                 probe->worst_nl_elastic = std::max(probe->worst_nl_elastic, a.worst_nl_elastic);
+                probe->integration_saturated += a.integration_saturated;
                 probe->energy_total += a.energy_total;
                 probe->energy_elastic += a.energy_elastic;
             }

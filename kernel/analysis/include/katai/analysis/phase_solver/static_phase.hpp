@@ -190,6 +190,22 @@ inline bool solve_static_phase(
     R.iterations = nr.total_iterations;
     R.stopped_by = nr.converged ? NewtonResult::Abandonment::None : nr.last_abandonment;
     R.convergence = nr.convergence;
+    // The integration guard, said out loud. A phase whose COMMITTED path contains a cut-short
+    // constitutive integration is not the same object as one whose path met its tolerance, and
+    // nothing else on this result can tell the two apart -- the equilibrium residual cannot,
+    // because it is assembled from the very stresses the cut-short walk produced. This is the
+    // "never in silence" rule applied to the one quantity that used to be exempt from it.
+    if (nr.convergence.saturated_increments > 0)
+        add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A012", "",
+                       "the constitutive integration ran out of substeps in " +
+                           std::to_string(nr.convergence.saturated_increments) +
+                           " committed increment(s) (worst: " +
+                           std::to_string(nr.convergence.saturated_points) +
+                           " stress points at once), so those increments did NOT meet the "
+                           "integration tolerance they were given. The answer is the best the "
+                           "integrator could do within its guard, not the one the tolerance "
+                           "asks for; raise the guard (KATAI_HS_MAXSUB) or loosen the "
+                           "integration tolerance to make the two agree.");
     if (!nr.converged) {
         R.message = non_convergence_message(nr);
         return false;

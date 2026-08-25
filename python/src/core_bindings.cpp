@@ -584,7 +584,12 @@ NB_MODULE(_core, m) {
         .def_ro("stiffness_parameter", &katai::core::NewtonResult::Convergence::csp,
                 "1 while the response is elastic, towards 0 as a mechanism forms. The force "
                 "criterion is normalised by it, so the check tightens as the soil plastifies")
-        .def_ro("force_error", &katai::core::NewtonResult::Convergence::force_error)
+        .def_ro("force_error", &katai::core::NewtonResult::Convergence::force_error,
+                "Eq. 9-1: the out-of-balance force over ||f_int|| + CSP*||f_const||")
+        .def_ro("global_error", &katai::core::NewtonResult::Convergence::global_error,
+                "the ratio the DEFAULT gate uses: the out-of-balance force over a FIXED scale, "
+                "max(||f_ext||, ||f_const||, 1). Reported next to force_error because they are "
+                "not the same question, and only this one decides when a step stops")
         .def_ro("moment_error", &katai::core::NewtonResult::Convergence::moment_error,
                 "meaningless unless has_moment")
         .def_ro("has_moment", &katai::core::NewtonResult::Convergence::has_moment,
@@ -616,6 +621,16 @@ NB_MODULE(_core, m) {
         .def_ro("foot_force_error", &katai::core::NewtonResult::Convergence::foot_force_error,
                 "out-of-balance at the pile toes, one ratio over all of them; tolerated at FIVE "
                 "times `tolerated`, which is the source's factor")
+        .def_ro("saturated_points", &katai::core::NewtonResult::Convergence::saturated_points,
+                "most stress points, in any one committed increment, whose constitutive "
+                "integration ran out of substeps and therefore did NOT meet its "
+                "tolerance. No equilibrium residual can see this")
+        .def_ro("saturated_increments",
+                &katai::core::NewtonResult::Convergence::saturated_increments,
+                "committed increments that contained such a point; 0 = the whole path "
+                "was integrated to the tolerance it was given")
+        .def("integration_met_tolerance",
+             &katai::core::NewtonResult::Convergence::integration_met_tolerance)
         .def("force_ok", &katai::core::NewtonResult::Convergence::force_ok)
         .def("moment_ok", &katai::core::NewtonResult::Convergence::moment_ok)
         .def("iface_points_ok", &katai::core::NewtonResult::Convergence::iface_points_ok)
@@ -625,6 +640,9 @@ NB_MODULE(_core, m) {
              "a contradiction: it says the force balance was reached before the stress points "
              "settled, and the phase's tolerated error is what closes the gap")
         .def("all_ok", &katai::core::NewtonResult::Convergence::all_ok)
+        .def("enforced_ok", &katai::core::NewtonResult::Convergence::enforced_ok,
+             "the criteria the solver actually refuses to stop on: the local ones plus "
+             "the moment residual")
         .def("__repr__", [](const katai::core::NewtonResult::Convergence& c) {
             if (!c.measured) return std::string("<Convergence not measured>");
             return "<Convergence force " + std::to_string(c.force_error) + " of " +

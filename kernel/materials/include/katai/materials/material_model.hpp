@@ -321,6 +321,11 @@ struct HsReturnCore {
     PrincipalTangent tan;
     bool plastic;               // did any surface activate this increment
     int nsub;                   // substep count used by hs_integrate
+    // 1 when the substep guard clipped the subdivision, i.e. the integration did NOT meet its
+    // tolerance on this call. Carried out of the integrator because a run that hit the ceiling
+    // must never be reported as one that met its tolerance -- and until 2026-08-25 the finite
+    // element path dropped this flag on the floor, so exactly that was happening.
+    int saturated = 0;
 };
 
 // The material's own tension cut-off, as the cap the principal returns take. PLAXIS switches
@@ -415,6 +420,7 @@ inline HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
     out.pp = ret.pp;
     out.plastic = ret.plastic || capped;
     out.nsub = ret.nsub;
+    out.saturated = ret.saturated;
     return out;
 }
 
@@ -445,7 +451,8 @@ inline void hs_forward(const MaterialModel& m, const GaussState& committed,
                        Eigen::Matrix3d* tangent_out = nullptr,
                        const HsSubstepPlan* plan_in = nullptr,
                        bool* plastic_out = nullptr, HsSubstepPlan* plan_out = nullptr,
-                       double* Eur_out = nullptr, double substep_tol = 0.0) {
+                       double* Eur_out = nullptr, double substep_tol = 0.0,
+                       int* saturated_out = nullptr) {
     HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
     // Dilatancy cut-off: psi = 0 clamps the mobilised dilatancy sin(psi_m) to [0, 0] inside the
     // return core, which IS Eq. 5.16b -- the rule enters where the manual puts it, and nothing
@@ -473,6 +480,7 @@ inline void hs_forward(const MaterialModel& m, const GaussState& committed,
     if (tangent_out) *tangent_out = c.tan.tangent;
     if (plastic_out) *plastic_out = c.plastic;
     if (Eur_out) *Eur_out = Eur;
+    if (saturated_out) *saturated_out = c.saturated;
 
     // HSsmall: γ_hist += Δγ (monotone accumulation; Eq 7-5 γ=√(1.5 e:e), e=deviatoric; plane strain εzz=0).
     if (m.hs.G0_ref > 0.0) {
@@ -753,6 +761,11 @@ template <class MatT>
 struct PointReportT {
     bool plastic = false;
     bool stress_dependent = false;
+    // The constitutive integration at this point hit its substep GUARD, so it did not meet the
+    // error tolerance it was asked for. This is not a convergence question -- no equilibrium
+    // residual can see it -- and it is the one state in which a "converged" answer rests on an
+    // integration that was cut short.
+    bool integration_saturated = false;
     MatT elastic = MatT::Zero();
 };
 using PointReport = PointReportT<Eigen::Matrix3d>;    // plane strain [xx, yy, xy]
@@ -808,12 +821,14 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
         case MaterialType::HardeningSoil: {
             bool plastic = false;
             double Eur = 0.0;
+            int saturated = 0;
             HsSubstepPlan plan;   // the base run's subdivision, replayed by the perturbed runs
             hs_forward(m, committed, strain_increment, trial, &tangent, nullptr, &plastic, &plan,
-                       &Eur, substep_tol);
+                       &Eur, substep_tol, &saturated);
             if (report) {
                 report->plastic = plastic;
                 report->stress_dependent = true;
+                report->integration_saturated = saturated != 0;
                 report->elastic = elastic_plane_strain_of(Eur, m.hs.nu_ur);
             }
             // kConsistent + plastic step → numerical consistent tangent (TangentMode
@@ -967,6 +982,7 @@ inline void integrate_point_axisym(const MaterialModel& m,
             if (report) {
                 report->plastic = c.plastic;
                 report->stress_dependent = true;
+                report->integration_saturated = c.saturated != 0;
                 report->elastic = De_ur;
             }
             // kConsistent + plastic step → numerical consistent 4x4 tangent (same rationale

@@ -80,9 +80,14 @@ Eigen::VectorXd internal_force0(const Mesh& mesh, const DofMap& dofs,
 struct WallResult {
     std::vector<double> y, ux;
     bool converged = false;
+    // The convergence criteria family at the last accepted iterate. This fixture is here for
+    // the MOMENT criterion (Eq. 9-3/9-4): it is the only nonlinear case in the tree that
+    // carries rotational freedom, so it is the only place that criterion can be read at all.
+    NewtonResult::Convergence conv;
+    int iterations = 0;
 };
 
-WallResult run(bool excavate) {
+WallResult run(bool excavate, double tol = 1e-6) {
     constexpr double W = 20.0, Htot = 12.0, xw = 10.0, y_exc = 9.0, gamma = 18.0;
     const double pi = std::acos(-1.0);
     const double phi = 30.0 * pi / 180.0, c = 2.0, psi = phi;  // associated; small c regularises corner
@@ -138,11 +143,13 @@ WallResult run(bool excavate) {
     const Eigen::VectorXd fint0 = internal_force0(mesh, dofs, init, active);
     const Eigen::VectorXd f_ramp = grav - fint0;
     const std::vector<MaterialModel> mm = {{MaterialType::MohrCoulomb, E, nu, c, phi, psi}};
-    const auto r = solve_nonlinear(mesh, dofs, mm, f_ramp, solve_unsym, {100, 60, 1e-6}, init,
+    const auto r = solve_nonlinear(mesh, dofs, mm, f_ramp, solve_unsym, {100, 60, tol}, init,
                                    active, Structures{plates, {}, {}, {}}, {}, fint0);
 
     WallResult out;
     out.converged = r.converged;
+    out.conv = r.convergence;
+    out.iterations = r.total_iterations;
     for (size_t i = 0; i < wnode.size(); ++i) {
         out.y.push_back(mesh.y[wnode[i]]);
         out.ux.push_back(r.displacement[dofs.global_dof(wnode[i], 0)]);
@@ -177,10 +184,51 @@ void test_excavation_wall() {
     check(std::fabs(tip) > 5.0 * max_abs_a, "excavation deflection >> no-excavation (excavation-driven)");
 }
 
+// The MOMENT criterion (Eq. 9-3/9-4), read on the only kind of case that has rotational
+// freedom at all. Until 2026-08-25 the record said this criterion "participates in the gate";
+// it did not -- the gate called local_ok(), which does not contain it -- and no case had ever
+// been examined through it. Both halves are closed here: it is in the gate now
+// (Convergence::enforced_ok), and this is what it reads.
+//
+// The reading is negative, and that is the point of writing it down. With an ELASTIC plate the
+// rotational rows are LINEAR in the plate DOFs, so the linear solve zeroes them exactly and the
+// criterion sits at round-off at EVERY tolerance -- including the loose run whose answer is a
+// fifth wrong. A criterion that reports "fine" next to a wrong answer is not broken; it is
+// answering a different question, and a guard that does not say which question it answers will
+// eventually be read as covering the other one.
+void test_moment_criterion() {
+    std::printf("\n-- moment criterion (Eq. 9-3/9-4) on the wall: what it reads, and what it does not --\n");
+    const WallResult tight = run(true, 1e-6);
+    const WallResult loose = run(true, 1e-1);
+    for (const auto* p : {&tight, &loose}) {
+        const auto& c = p->conv;
+        std::printf("   tol=%.0e  tip ux=%+.6e  iters=%-4d | moment=%.3e of %.3e tolerated %-4s "
+                    "| force=%.3e\n",
+                    c.tolerated, p->ux.back(), p->iterations, c.moment_error, c.tolerated,
+                    c.moment_ok() ? "ok" : "FAIL", c.force_error);
+    }
+    check(tight.conv.has_moment && loose.conv.has_moment,
+          "the moment criterion is MEASURED wherever a rotational freedom exists (has_moment)");
+    // Round-off, not merely "small": four decades below the loosest tolerance the tree ships,
+    // so this is a claim about the structure of the equations rather than about a threshold.
+    check(tight.conv.moment_error < 1e-10 && loose.conv.moment_error < 1e-10,
+          "an ELASTIC plate's rotational rows are linear -> the moment residual is at round-off "
+          "at every tolerance (measured 8.5e-15 .. 1.7e-14 over 1e-1 .. 1e-10)");
+    // ... and the same loose run is materially wrong, which is what makes the line above a
+    // limitation and not a pass mark. What catches this run is the global force gate.
+    const double err = std::fabs(loose.ux.back() - tight.ux.back()) / std::fabs(tight.ux.back());
+    std::printf("   the loose run is %.1f%% away from the converged tip deflection, and the "
+                "moment criterion calls it ok\n", 100.0 * err);
+    check(err > 0.05,
+          "the tol=1e-1 run IS materially wrong (>5%), so the criterion's 'ok' above is a "
+          "statement about the rotational rows and NOT about the answer");
+}
+
 } // namespace
 
 int main() {
     test_excavation_wall();
+    test_moment_criterion();
     if (g_failures == 0) {
         std::printf("OK: coupled embedded wall + soil excavation verified\n");
         return 0;

@@ -6,6 +6,54 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A run says when its material integration ran out of room
+
+The Hardening Soil integrator subdivides a load increment until its own error estimate is under the
+integration tolerance, and it is allowed a limited number of pieces to do it in. When it ran out it
+returned the best it had — correctly, that is what a guard is for — and then **the flag saying so
+was dropped between the material and the solver**. Nothing downstream could tell a run that met its
+integration tolerance from one that did not, and no equilibrium check can recover the difference:
+the residual is assembled from the very stresses the cut-short walk produced, so it balances
+perfectly around them.
+
+The flag now reaches the result. A phase whose committed path contains such an increment raises
+**`K2D-A012`**, naming how many increments were affected and the worst number of stress points
+involved, and the count is on the result for a script to read
+(`convergence.saturated_increments`, `convergence.saturated_points`). Runs that met their tolerance
+are unchanged and say nothing, which is the point.
+
+### Two convergence criteria had never been consulted; both have been now
+
+The criteria family added above was measured and reported, but two of its members had no case
+behind them. Both have been read through to the end, and neither answer was the expected one.
+
+- **The moment residual (Eq. 9-3/9-4) was not actually in the gate**, although the record said it
+  was. It is now — and measuring what that is worth found a real defect. With an *elastic* plate the
+  rotational equations are linear, so the linear solve satisfies them exactly and the criterion
+  reads round-off at every tolerance, including a run whose wall deflection is 21% wrong: it is
+  answering a question about the rotational equations, not about the answer. With a *plastic* plate
+  it comes alive and follows the tolerance down, but never exceeded 6% of the force error over 15
+  load/tolerance pairs. Binding it therefore costs nothing on anything this program runs today, and
+  covers the case it does not yet have — a structure that fails while the soil around it is still
+  elastic, where the force balance is scaled by ground that is not being asked for much.
+- **That binding cost exactly one case, and the case was right.** A plate standing on a line that is
+  pushed down is undriven — the program already says so — and an undriven plate carries no moment,
+  so the criterion was dividing one round-off by another and refusing the analysis outright. Every
+  other criterion in this family has a floor for exactly that situation; this one did not, because
+  nothing had ever consulted it. It has one now (1 kNm/m), which is ten decades above the undriven
+  case's own reference and two decades below a loaded plate's, and both ends are pinned by tests.
+- **The non-linear elastic criterion (Eq. 9-7) is identically zero in this program, and now it is
+  known why.** Run on unloading — the only place a non-yielding point can have a stress-dependent
+  stiffness — all 96 points are counted and the error is 1.3e-15 at every tolerance. The unloading
+  modulus is held at the state each increment begins from, so a point that does not yield walks the
+  increment with a constant elastic operator and the two stresses the criterion compares are built
+  from the same arithmetic. The check is therefore a check of that identity: if the modulus ever
+  starts changing inside an iteration, this is the first count that moves.
+
+**A run also now reports both global force ratios**, the CSP-normalised one and the fixed-scale one
+that actually decides when a step stops. Only the first was published before, so a run could print a
+force error next to a tolerance it was never compared against.
+
 ### A run now says which convergence criteria it met, not just that it "converged"
 
 The solver checked one thing — a global force residual against a fixed scale — and reported the

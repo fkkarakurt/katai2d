@@ -950,18 +950,173 @@ it demonstrably MET it, and reaching it cost iterations. The other pinned the it
 case needs at 3; the threshold is now FOUND by the test rather than written down, because that is
 the second time a number pinned there moved because the solver got better.
 
-### 11.7 What this section still does not cover
+### 11.7 The two criteria that had never been read, and what they turned out to measure
 
-* **The moment residual (Eq. 9-3/9-4)** is computed and reported wherever a rotational freedom
-  exists, and it participates in the gate, but no case in the matrix has yet been examined
-  *through* it — no run in this suite has been observed failing it.
-* **The global force criterion still uses the old normalisation as its gate.** Eq. 9-1's
-  CSP-normalised form is computed and reported alongside it, and the two differ most exactly where
-  it matters — a phase whose standing load dwarfs its own increment. Which one gates is the same
-  kind of decision as §11.6 and has not been taken.
-* **Non-linear elastic points (Eq. 9-7) have never been the binding count** on any case run so
-  far: on the Hardening Soil oedometer every point is plastic once loading starts, and the
-  Mohr-Coulomb cases have no stress-dependent elastic stiffness at all. The criterion is
-  implemented and exercised by the elastic control; it has not yet been exercised where it bites.
+**First, a correction.** The paragraph this section used to open with said the moment residual
+"participates in the gate". It did not. The gate called `local_ok()`, and `local_ok()` is the
+three local counts plus the pile toe — the moment residual was computed, stored, printed, and
+never consulted. That is the third guard sentence in this document to decay the same way, and the
+pattern is now specific enough to name: **a sentence describing what the code checks decays as
+soon as the check moves, because nothing fails when the sentence stops being true.**
+
+Both halves are closed. It is in the gate now (`Convergence::enforced_ok`, 2026-08-25), and it has
+been read through the only two kinds of case in this tree that carry rotational freedom.
+
+**Case 1 — an ELASTIC plate: the criterion cannot bind, by construction.** The coupled wall +
+excavation fixture (`test_excavation_wall`: Mohr-Coulomb soil under K0, a 12 m bonded sheet-pile
+wall, staged excavation to 9 m), swept over the tolerance it is solved at:
+
+| tolerated | wall tip u_x [m] | iterations | moment residual | force residual (Eq. 9-1) |
+|---|---|---|---|---|
+| 1e-1 | −5.087516e-3 | 111 | 8.51e-15 | 3.13e-2 |
+| 1e-2 | −6.459047e-3 | 206 | 1.54e-14 | 7.03e-7 |
+| 1e-3 | −6.457048e-3 | 328 | 1.25e-14 | 1.95e-11 |
+| 1e-6 | −6.457049e-3 | 407 | 1.66e-14 | 4.44e-14 |
+| 1e-10 | −6.457049e-3 | 468 | 1.25e-14 | 2.74e-14 |
+
+The moment residual does not move at all — nine decades of tolerance, one decade of scatter around
+1e-14 — and the reason is structural rather than numerical. An elastic plate's internal force is
+`K_p u`, so the rotational rows are LINEAR in the plate degrees of freedom: whatever the soil is
+doing, the linear solve satisfies them exactly and the next assembly reads back round-off. The
+criterion is therefore incapable of failing on an elastic plate, **including the 1e-1 run, whose
+tip deflection is 21.2% away from the converged one.** It reports "ok" next to an answer that is a
+fifth wrong, and that is not a defect: it is answering a question about the rotational rows, and
+the run is caught by the global force gate instead. What would be a defect is a record that lets
+the "ok" be read as covering the answer, which is what this table exists to prevent.
+
+**Case 2 — a PLASTIC plate: the criterion is alive.** The M-N hinge BVP (`test_plate_plastic`: a
+plate on an elastic bed, central load past its plastic moment) makes the rotational rows nonlinear,
+and then the residual behaves like every other residual — it follows the tolerance down:
+
+| tolerated | moment residual | force residual | ratio |
+|---|---|---|---|
+| 1e-2 | 1.530e-4 | 2.433e-3 | 0.063 |
+| 1e-3 | 4.522e-5 | 8.298e-4 | 0.054 |
+| 1e-4 | 8.355e-13 | 1.014e-10 | 0.008 |
+
+Over 15 (load, tolerance) pairs — 1.1× to 5× the plate's limit load, tolerances 1e-1 to 1e-3 — the
+ratio never exceeded **0.063**. On everything this tree runs today the rotational rows converge at
+least as fast as the translational ones, so **binding Eq. 9-3 costs nothing**: no case in the suite
+changed by a single iteration when it was switched on.
+
+It is bound anyway, for the case the tree does not have yet. The global gate is `||r||` — a
+Euclidean norm over a vector whose entries are forces AND moments — and adding kN to kNm in
+quadrature is not a norm of anything. Where the wall is what fails and the soil around it is still
+elastic, that sum is dominated by a soil which is not being asked for much, and Eq. 9-3 is the only
+dimensionally honest question left about the rows that matter.
+
+**What binding it actually cost: exactly one case, and that case found a missing floor.** The
+claim above — that binding Eq. 9-3 is free — was made on the two fixtures and then tested against
+the whole suite, which is the only place such a claim can be tested. One test failed:
+`test_no_silent_drop`'s plate standing on a line that is pushed down. That fixture exists because
+the prescribed displacement fixes those nodes and the plate is therefore **undriven** — the run
+says so itself (`K2D-A003`) — and an undriven plate carries no moment at all:
+
+| the same plate | reference sum \|M_nodal\| | moment error | outcome |
+|---|---|---|---|
+| standing on a pushed line (undriven) | 1.11e-12 kNm/m | 2.06e-1 | **phase refused at load factor 0** |
+| under a 100 kPa strip load | 4.71e+02 kNm/m | 4.5e-14 | converged in 2 iterations |
+
+Fourteen orders of magnitude of denominator. The ratio that refused the phase was one round-off
+divided by another. And the defect it exposed is not the binding: **every other criterion in this
+family has a floor and Eq. 9-3 did not**. Eq. 9-5 divides by `max(tau_max, c, 1 kPa)`, Eq. 9-9 by
+`max(|F_c|, 1% of |F_max|, 1 kN)`, and the manual's stated reason for them is that a point carrying
+almost nothing must not report an enormous relative error on a difference that is numerically
+nothing. A structure carrying almost no moment is that situation in different units. The floor is
+1 kNm/m — ten decades above the undriven reference and two below the driven one — and it is
+recorded here as what it is: not in the manual's Eq. 9-3, adopted from the device the manual
+applies to its siblings, and forced by a measurement rather than chosen by taste.
+
+`has_moment` changed with it. It used to mean "there is a rotational freedom **and** its reference
+is non-zero", which quietly excused the one case that needed saying; it now means what it says, and
+an unloaded structure reports a small number instead of vanishing from the report.
+
+**The same shape of answer on a different criterion: Eq. 9-7.** This document has said three times
+that the non-linear elastic criterion "has never been the binding count", and blamed the case list:
+the Hardening Soil oedometer is plastic everywhere the moment it loads, and the Mohr-Coulomb cases
+have no stress-dependent modulus at all. Run on the case that is nothing but such points — an
+HSsmall **unloading**, where every point leaves its yield surfaces and re-enters on `Eur`:
+
+| tolerated | non-linear elastic points | inaccurate | worst Eq. 9-7 error |
+|---|---|---|---|
+| 1e-2 | 96 | 0 | 1.29e-15 |
+| 1e-4 | 96 | 0 | 1.29e-15 |
+| 1e-6 | 96 | 0 | 1.29e-15 |
+
+The points are counted — the criterion is wired, and this is the first case that proves it — and
+the error is not small, it is **zero, and it does not move**. The cause is not case selection: it is
+the integration scheme. `hs_frozen_Eur` evaluates the unloading modulus at the **committed** state
+and holds it for the whole increment, which is what makes the tangent consistent and the line
+search safe. A point that does not yield therefore walks the increment with a **constant** elastic
+operator, and Eq. 9-6 builds the equilibrium stress as `sigma_c,j-1 + D^e delta-eps` — exactly what
+the constitutive routine then returns. The two stresses of Fig. 9-1 coincide identically. Eq. 9-7
+measures their difference, so in this tree it measures zero **by construction**, and it is a code
+that updates the modulus inside the iteration where it would have something to say.
+
+That makes it a live check of an identity rather than a dead criterion, and the test says so: if
+the modulus ever starts iterating, or the elastic operator handed to the probe stops being the one
+the return actually used, this count is the first thing that moves.
+
+**A side finding that outlives this subsection: CSP is blind to structural plasticity.** Across
+every plastic-plate run above — hinge fully formed, `|M|` saturated at `Mp`, loads to 5× the limit
+load — the Current Stiffness Parameter reads **1.00000**, i.e. "fully elastic". The energy
+integrals it is built from are accumulated in the soil Gauss loop and nowhere else, so a mechanism
+that forms in a structure is invisible to it. That is not an issue for the parameter's use in this
+document so far (every case it has been read on plastifies through the soil), but it bears directly
+on two things that are planned on top of it: Eq. 9-1's denominator is scaled by CSP, and the
+arc-length switch is specified to engage below CSP 0.5. Both would sit still through a wall
+collapsing.
+
+### 11.8 What this section still does not cover
+
+* **The global force criterion still uses the old normalisation as its gate — and the swap has
+  now been measured, so the decision is a small one.** Both ratios are on the record at the same
+  iterate (`Convergence::force_error` for Eq. 9-1 and `Convergence::global_error` for the gate —
+  until 2026-08-25 only the one that does NOT gate was published, so a run could print "force error
+  3e-2, tolerance 1e-1" while the quantity that let it stop was a different ratio entirely), and
+  `KATAI_CONV_CSPGATE` swaps the gate over. What the swap is worth, measured on the Mohr-Coulomb
+  footing walked to collapse:
+
+  | case | CSP | Eq. 9-1 | the gate | Eq. 9-1 is stricter by |
+  |---|---|---|---|---|
+  | q = 100 kPa (converges) | 0.437 | 1.87e-15 | 3.31e-15 | 0.6× (looser) |
+  | q = 300 kPa (converges) | 0.098 | 7.56e-12 | 8.46e-12 | 0.9× (looser) |
+  | q = 600 kPa (collapses) | 0.00012 | 3.46e-3 | 2.41e-3 | **1.4×** |
+  | q = 900 kPa (collapses) | 0.00009 | 2.36e-3 | 1.09e-3 | **2.2×** |
+
+  The CSP normalisation does tighten as a mechanism forms, which is the property it is there for,
+  by a factor of 1.4 to 2.2 at collapse; on every run that converges the two agree within about
+  1.5× and both sit twelve or more decades below any tolerance the tree ships. Read alone, that
+  table says the swap is a wash. **It is not, and the suite says so: with `KATAI_CONV_CSPGATE` set,
+  5 of the 142 fast-lane tests fail** — and the clearest of them, `test_anchor_prestress`,
+  equilibrates *0% of its load*.
+
+  The reason is the same defect this subsection's other half found in Eq. 9-3, in the same place:
+  **the denominator has no floor tied to what is being applied.** Eq. 9-1 divides by
+  `||f_int|| + CSP·||f_const||`, and its only floor is `1e-6` of the phase's load scale — six
+  decades down, so it bites only when literally nothing is resisting. A phase that prestresses an
+  anchor against ground which has not responded yet has very little internal force, so the
+  denominator is small, the ratio never reaches the tolerance, and every increment is abandoned.
+  The gate in place divides by `max(||f_ext||, ||f_const||, 1)`, which contains the load being
+  applied and therefore cannot collapse that way.
+
+  So the open question is not "which normalisation do we prefer". It is that **Eq. 9-1's
+  denominator needs the floor discipline its siblings have before it can gate anything**, and until
+  that is designed against the source rather than invented, the swap is a measurement seam and not
+  a candidate. The staged excavation this was predicted to separate on cannot show any of it: the
+  only staged case in the corpus stays elastic (CSP = 1), where the two denominators differ by a
+  factor of 1.45 at 1e-16.
 * **The `portable` composition has not been re-measured** with the criteria binding. Every number
   in this section is from the MKL build.
+* **KV-CST-012 does not converge at a tolerance tighter than the 1e-2 it ships with**, and the
+  phase that refuses has been named. Sweeping the whole case fails from 1e-3 down (load factor
+  0.041, 0.034, 0.011); tightening the phases ONE AT A TIME shows every other phase — the initial
+  one, the unload, the excavation — solving at 1e-3 unchanged, and **`Surcharge on` alone
+  reproducing the failure exactly**. It is not the local criteria: with them off
+  (`KATAI_CONV_NOLOCAL`) the same phase fails at the same place. So the published answer for that
+  case cannot presently be shown to be converged — the same class of statement as KV-CST-010's
+  band, which turned out to be luck — and the phase that has to be understood is the first one.
+* **Nothing in the criteria family is measured in a DYNAMIC phase.** The nonlinear Newmark solver
+  has its own Newton loop and does not build the probe at all, so a shaking phase's stress points
+  are held to the global force residual alone — the state this section was written to end.
+

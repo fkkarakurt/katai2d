@@ -50,13 +50,36 @@ void measure_convergence(const detail::LocalErrorProbe& p, const Eigen::VectorXd
     // yet, and then a huge relative error is the honest reading.
     const double denom = std::max(f_int.norm() + cv.csp * cf_norm, 1e-6 * ref);
     cv.force_error = rnorm / denom;
+    // The default gate's own ratio, so that both are on the record at the same iterate.
+    cv.global_error = rnorm / ref;
 
     // Eq. 9-3/9-4. Only structural elements with rotational freedom have one.
-    cv.has_moment = !p.moment_eq.empty() && p.m_ref > 0.0;
+    //
+    // THE FLOOR IS NOT IN EQ. 9-3, and it is here deliberately. Every other criterion in this
+    // family has one -- Eq. 9-5 divides by max(tau_max, c, 1 kPa), Eq. 9-9 by max(|F_c|,
+    // 1% of |F_max|, 1 kN) -- and the manual's reason for them is that a point carrying almost
+    // nothing must not report an enormous relative error on a difference that is numerically
+    // nothing. A structure carrying almost no moment is the same situation in different units,
+    // and the tree had no floor there because the criterion was never consulted: the moment
+    // reference is a sum of ABSOLUTE nodal moments, which cannot cancel, but it CAN be empty.
+    //
+    // Measured, on the day the criterion first gated (2026-08-25): a plate standing on a line
+    // that is pushed down is UNDRIVEN -- the prescribed displacement fixes those nodes and the
+    // run says so itself (K2D-A003) -- and its reference is 1.11e-12 kNm/m, i.e. round-off. The
+    // ratio of one round-off to another came out at 2.06e-1 and refused the phase outright, at
+    // load factor 0. The same plate under a strip load has a reference of 4.71e+02 kNm/m and an
+    // error of 4.5e-14. Fourteen orders of magnitude of denominator separate a criterion that
+    // measures something from one that measures nothing, and 1 kNm/m sits between them by ten.
+    cv.moment_ref = p.m_ref;
+    // has_moment is now about the MODEL, not about the loading: if something in it carries a
+    // rotational freedom the criterion applies, and an unloaded structure reports a small error
+    // rather than disappearing from the report. (Before the floor it had to mean "and the
+    // reference is non-zero", which quietly excused exactly the case that needed saying.)
+    cv.has_moment = !p.moment_eq.empty();
     if (cv.has_moment) {
         double worst = 0.0;
         for (int eq : p.moment_eq) worst = std::max(worst, std::fabs(residual(eq)));
-        cv.moment_error = worst / p.m_ref;
+        cv.moment_error = worst / std::max(p.m_ref, 1.0);
     } else {
         cv.moment_error = 0.0;
     }
@@ -243,6 +266,23 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             ? true
             : (std::getenv("KATAI_CONV_NOLOCAL") != nullptr ? false
                                                             : options.enforce_local_criteria);
+    // MEASUREMENT SEAM, not a setting: which GLOBAL criterion gates the step. The default is the
+    // one this tree has always used -- ||r|| against a FIXED scale, max(||f_ext||, ||f_const||, 1)
+    // -- and KATAI_CONV_CSPGATE swaps in Eq. 9-1, ||r|| / (||f_int|| + CSP*||f_const||), which is
+    // the form the criteria family already REPORTS.
+    //
+    // WHAT THE SEAM MEASURED (2026-08-25), because a seam with no reading is just an option. On
+    // the footing walked to collapse the two ratios agree within ~1.5x wherever the run converges,
+    // and Eq. 9-1 is 1.4x (q=600) to 2.2x (q=900) STRICTER at collapse -- the property the CSP
+    // normalisation exists for. But swapping the gate outright FAILS 5 of the 142 fast tests, and
+    // the clearest of them equilibrates 0% of its load: a phase that prestresses an anchor against
+    // ground that has not responded has almost no internal force, so Eq. 9-1's denominator is
+    // small and the ratio never reaches the tolerance. Its only floor is 1e-6 of the phase's load
+    // scale -- six decades down. That is the SAME defect the moment criterion had (see
+    // measure_convergence): a ratio in this family whose denominator has no floor tied to what is
+    // being applied. Eq. 9-1 cannot gate until that is designed against the source, so this stays
+    // a seam.
+    const bool csp_gate = std::getenv("KATAI_CONV_CSPGATE") != nullptr;
 
     // Adaptive (automatic) load incrementation. The external load is advanced from
     // 0 to f_ext by increments d_lambda; an increment that fails to converge is
@@ -341,7 +381,17 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                              c.nl_elastic_inaccurate, c.nl_elastic_points,
                              c.worst_nl_elastic_error);
             }
-            if (rnorm <= rtol * ref && (!enforce_local || result.convergence.local_ok())) {
+            const bool global_ok =
+                csp_gate ? result.convergence.force_ok() : (rnorm <= rtol * ref);
+            if (global_ok && (!enforce_local || result.convergence.enforced_ok())) {
+                // This iterate is the one about to be committed, so its integration is the one
+                // the answer is walked along: record the guard here and nowhere else. Trial
+                // iterates that were discarded are not part of the path and do not count.
+                if (probe.integration_saturated > 0) {
+                    ++result.convergence.saturated_increments;
+                    result.convergence.saturated_points = std::max(
+                        result.convergence.saturated_points, probe.integration_saturated);
+                }
                 step_converged = true;
                 ++result.total_iterations;
                 break;

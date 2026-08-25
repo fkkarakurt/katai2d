@@ -263,11 +263,138 @@ void test_structural_criteria() {
     check(!probe.foot_ok(), "...and one at 7x is not");
 }
 
+// Eq. 9-7 -- the criterion for a NON-yielding point whose elastic stiffness depends on stress.
+// The record used to say it "has never been the binding count", and blamed case selection: the
+// Hardening Soil oedometer is plastic everywhere the moment it loads, and Mohr-Coulomb has no
+// stress-dependent modulus at all. Measured on the case that has nothing but such points -- an
+// HSsmall UNLOADING, where every point leaves its yield surfaces and re-enters on Eur -- the
+// answer turns out not to be case selection at all:
+//
+//   96 of 96 points are counted, and the worst error is 1.3e-15 at EVERY tolerance from 1e-2 to
+//   1e-6. It does not lag the force residual; it is zero.
+//
+// The reason is the integration scheme, and it is worth stating because it says exactly what
+// would make the count non-zero. `hs_frozen_Eur` evaluates the unloading modulus at the
+// COMMITTED state and holds it for the whole increment (that is what makes the tangent
+// consistent and the line search safe). A point that does not yield therefore has a CONSTANT
+// elastic operator through the iteration -- and Eq. 9-6 builds the equilibrium stress as
+// sigma_c,j-1 + D^e delta-eps, which is then exactly what the constitutive routine returns. The
+// two stresses of Fig. 9-1 coincide identically. Eq. 9-7 measures the difference between them,
+// so in this tree it measures zero BY CONSTRUCTION, and a code that updated the modulus within
+// the iteration is where it would have something to say.
+//
+// So this is not a dead check: it is the check that the identity above HOLDS. Freeze the modulus
+// somewhere else, report a different elastic operator to the probe than the return actually
+// used, and the count is the first thing that moves.
+void test_nonlinear_elastic_criterion() {
+    m::Project pr;
+    std::string err;
+    const std::string path = std::string(KATAI_CORPUS_DIR) + "/kv-cst-008-hssmall-unloading.k2d";
+    if (!m::load_project(path, pr, &err, nullptr)) {
+        check(false, "load the HSsmall unloading corpus file: " + err);
+        return;
+    }
+    double worst_seen = 0.0;
+    bool counted = true, ok_everywhere = true;
+    for (double t : {1e-2, 1e-4, 1e-6}) {
+        const Run r = solve(pr, t, true);
+        std::printf("     HSsmall unloading tol=%.0e: %d/%d non-linear elastic points "
+                    "inaccurate, worst %.2e (force %.3e)\n",
+                    t, r.c.nl_elastic_inaccurate, r.c.nl_elastic_points,
+                    r.c.worst_nl_elastic_error, r.c.force_error);
+        counted = counted && r.ok && r.c.nl_elastic_points > 0;
+        ok_everywhere = ok_everywhere && r.c.nl_elastic_ok();
+        worst_seen = std::max(worst_seen, r.c.worst_nl_elastic_error);
+    }
+    check(counted,
+          "an unloading HSsmall point IS a non-linear elastic point, and Eq. 9-7 counts it");
+    check(ok_everywhere, "and none of them is inaccurate");
+    // Round-off, four decades below the tightest tolerance swept: this is the identity, not a
+    // threshold. If the unloading modulus ever starts iterating, this is what fails first.
+    std::printf("     worst Eq. 9-7 error over 1e-2 .. 1e-6: %.2e\n", worst_seen);
+    check(worst_seen < 1e-10,
+          "Eq. 9-7 is identically zero while the elastic modulus is frozen per increment -- the "
+          "two stresses of Fig. 9-1 are built from the same constant operator");
+}
+
+// Eq. 9-3's REFERENCE, and the floor it needed. Every other criterion in this family divides by
+// max(something the point carries, a floor): Eq. 9-5 by max(tau_max, c, 1 kPa), Eq. 9-9 by
+// max(|F_c|, 1% of |F_max|, 1 kN). The moment criterion had no floor, and nothing noticed while
+// it was measured-but-not-consulted. On the day it started gating, the first case in the suite
+// to meet it was a plate standing on a line that is pushed DOWN: the prescribed displacement
+// fixes those nodes, the plate is undriven (the run says so itself, K2D-A003), and its reference
+// was 1.11e-12 kNm/m. One round-off over another came to 2.06e-1 and refused the phase at load
+// factor zero.
+//
+// Both ends are asserted here, because a floor that is never approached from either side is a
+// number nobody can check.
+void test_moment_reference_floor() {
+    m::Project pr;
+    std::string err;
+    const std::string path = std::string(KATAI_CORPUS_DIR) + "/kv-fnd-008-strip-load.k2d";
+    if (!m::load_project(path, pr, &err, nullptr)) {
+        check(false, "load the strip-load corpus file: " + err);
+        return;
+    }
+    m::PlateMaterial pm;
+    pm.name = "Sheet pile"; pm.EA = 7.5e6; pm.EI = 1.0e5; pm.w = 0.0; pm.nu = 0.0;
+    pr.plates.push_back(pm);
+    m::StructElement se;
+    se.kind = m::StructKind::Plate; se.name = "Wall";
+    se.x1 = 18.0; se.y1 = 20.0; se.x2 = 22.0; se.y2 = 20.0;
+    se.material = (int)pr.plates.size() - 1;
+    pr.structs.push_back(se);
+    pr.loads.clear();
+
+    // (a) UNDRIVEN: the settlement is the action, and the plate does not see it.
+    m::Project undriven = pr;
+    m::PrescribedDisp D;
+    D.name = "Footing settlement";
+    D.x1 = 18.0; D.y1 = 20.0; D.x2 = 22.0; D.y2 = 20.0;
+    D.set_uy = true; D.uy = -0.01;
+    undriven.disps.push_back(D);
+    const Run u = solve(undriven, 0.0, true);
+    std::printf("     undriven plate: reference sum|M| = %.2e kNm/m, moment error %.2e of "
+                "%.2e tolerated, load factor %.3f\n",
+                u.c.moment_ref, u.c.moment_error, u.c.tolerated, u.load_factor);
+    check(u.ok && u.load_factor >= 1.0,
+          "a plate nothing is driving does not stop the phase it is standing in");
+    check(u.c.has_moment,
+          "...and it still REPORTS a moment criterion: has_moment is about the model, not the "
+          "loading, so an unloaded structure says a small number rather than disappearing");
+    check(u.c.moment_ref < 1e-6,
+          "...because its own reference has collapsed to round-off (measured 1.1e-12 kNm/m)");
+    check(u.c.moment_ok(), "...and the floor is what keeps the ratio finite");
+
+    // (b) DRIVEN: the same plate under a strip load. The reference is a real moment, so the
+    // floor is nowhere near it and changes nothing -- which is the other half of the claim.
+    m::Project driven = pr;
+    m::Load L;
+    L.kind = m::LoadKind::Distributed;
+    L.name = "Strip";
+    L.x1 = 18.0; L.y1 = 20.0; L.x2 = 22.0; L.y2 = 20.0;
+    L.qx1 = L.qx2 = 0.0; L.qy1 = L.qy2 = -100.0;
+    driven.loads.push_back(L);
+    for (auto& ph : driven.phases) ph.load_active = {1};
+    const Run d = solve(driven, 0.0, true);
+    std::printf("     driven plate:   reference sum|M| = %.2e kNm/m, moment error %.2e\n",
+                d.c.moment_ref, d.c.moment_error);
+    check(d.ok && d.c.has_moment, "the same plate under load solves and carries the criterion");
+    check(d.c.moment_ref > 1e2,
+          "...and its reference is a real moment (measured 4.7e+02 kNm/m), so the 1 kNm/m floor "
+          "is two decades below it and does not touch this case");
+    check(d.c.moment_ok(), "...and the criterion is met");
+    check(d.c.moment_ref > 1e10 * u.c.moment_ref,
+          "the two references are ten decades apart, which is the whole reason a floor is needed");
+}
+
 }  // namespace
 
 int main() {
     test_convergence_family();
     test_structural_criteria();
+    test_nonlinear_elastic_criterion();
+    test_moment_reference_floor();
     test_local_criteria_cost();
     std::printf("%s\n", failures == 0 ? "ALL PASS" : "FAILURES");
     return failures == 0 ? 0 : 1;

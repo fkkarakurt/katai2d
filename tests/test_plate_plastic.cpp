@@ -309,7 +309,7 @@ struct BvpRun {
     double crit_N = 0.0;           // N at the same point
 };
 BvpRun run_bvp(const plate::PlateProps& props, const MaterialModel& soil, double P, double T,
-               bool free_right_ux) {
+               bool free_right_ux, double tol = 1e-9) {
     Bvp bb = make_bvp(props, free_right_ux);
     bb.dofs.finalize();
     Eigen::VectorXd f = Eigen::VectorXd::Zero(bb.dofs.equation_count());
@@ -317,7 +317,7 @@ BvpRun run_bvp(const plate::PlateProps& props, const MaterialModel& soil, double
     if (T != 0.0) f(bb.dofs.equation(bb.dofs.global_dof(bb.top.back(), 0))) = T;
     BvpRun out;
     out.nr = katai::core::solve_nonlinear(bb.mesh, bb.dofs, {soil}, f, solve_gen,
-                                          {40, 60, 1e-9}, {}, {},
+                                          {40, 60, tol}, {}, {},
                                           katai::core::Structures{bb.plates, {}});
     out.u_mid = out.nr.displacement[bb.dofs.global_dof(bb.mid_node, 1)];
     double best = -1.0;
@@ -562,6 +562,51 @@ void test_bvp_tri15_limit() {
     check(close(maxM, pr.Mp, 1e-9), "tri15: critical Gauss |M| saturated EXACTLY at Mp");
 }
 
+// (8) The MOMENT criterion (Eq. 9-3/9-4) where it is ALIVE. On an elastic plate the
+// rotational rows are linear and the linear solve zeroes them, so the criterion reads round-off
+// no matter how wrong the answer is (test_excavation_wall records that). Here the plate has an
+// M-N hinge: f_p(u) is nonlinear, the rotational rows have to be iterated like everything else,
+// and the residual is a real measurement.
+//
+// Two claims, both falsifiable:
+//   (a) it FOLLOWS the tolerance down -- it is a residual, not a floor. If m_ref had collapsed
+//       (the reference is a sum of ABSOLUTE nodal moments precisely so that it cannot), or if
+//       the rotational rows were not being iterated, this number would sit still.
+//   (b) it is never the binding one HERE: over the sweep the rotational rows converge at least
+//       as fast as the translational ones. That is the measurement that made binding the
+//       criterion (Convergence::enforced_ok, 2026-08-25) free on everything this tree runs.
+void test_moment_criterion() {
+    std::printf("\n-- (8) moment criterion (Eq. 9-3/9-4) on the PLASTIC plate: alive, and not binding --\n");
+    const double E = 3.0e7, d = 0.4, nu = 0.15;
+    plate::PlateProps pr;
+    pr.EA = E * d; pr.EI = E * d * d * d / 12.0; pr.nu = nu;
+    pr.Mp = 100.0;
+    const MaterialModel soil{MaterialType::LinearElastic, 10.0, 0.3};
+    Bvp b = make_bvp(pr, false);
+    const double P_lim = 2.0 * pr.Mp / critical_gauss_lever(b);
+    double prev = -1.0;
+    bool falls = true, never_binds = true, measured = true;
+    for (double t : {1e-2, 1e-3, 1e-4}) {
+        const BvpRun r = run_bvp(pr, soil, 1.5 * P_lim, 0.0, false, t);
+        const auto& c = r.nr.convergence;
+        std::printf("   tol=%-8.0e iters=%-4d u_mid=%+.9e | moment=%.3e %-4s | force=%.3e | "
+                    "moment/force=%.3f\n",
+                    t, r.nr.total_iterations, r.u_mid, c.moment_error,
+                    c.moment_ok() ? "ok" : "FAIL", c.force_error,
+                    c.force_error > 0.0 ? c.moment_error / c.force_error : 0.0);
+        measured = measured && c.has_moment && r.nr.converged;
+        never_binds = never_binds && c.moment_ok() && c.moment_error <= c.force_error;
+        if (prev >= 0.0 && !(c.moment_error < prev)) falls = false;
+        prev = c.moment_error;
+    }
+    check(measured, "the plastic plate carries a moment criterion at every tolerance");
+    check(falls, "the moment residual FALLS as the tolerance tightens (1.5e-4 -> 4.5e-5 -> ...), "
+                 "so it is a residual and m_ref has not collapsed");
+    check(never_binds,
+          "the rotational rows converge at least as fast as the translational ones (measured "
+          "ratio <= 0.06 over 15 load/tolerance pairs) -- which is why binding Eq. 9-3 is free");
+}
+
 }  // namespace
 
 int main() {
@@ -572,6 +617,7 @@ int main() {
     test_bvp_mn_interaction();
     test_bvp_diagram();
     test_bvp_tri15_limit();
+    test_moment_criterion();
     if (g_failures == 0) {
         std::printf("\nOK: plate M-N hinge verified (return map CPP-exact + FD tangent + "
                     "elastic identity + onset 2Mp/s_g + full-Mp saturation + M-N diamond "
