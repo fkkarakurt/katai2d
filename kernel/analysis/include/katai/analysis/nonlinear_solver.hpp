@@ -55,6 +55,12 @@ struct NewtonOptions {
     // monotone test reads that as failure and halves the step, and four such halvings in a row
     // abandon the increment, which is how the LOAD PATH stops being the one the file asked for.
     int line_search_window = 1;
+    // The CONSTITUTIVE integration error tolerance (STOL), handed to the assembly rather than to
+    // the iteration: it governs how accurately each stress point is walked along its material law
+    // WITHIN an increment, which no equilibrium residual can see (0.9.0 N-1 measured a first-order
+    // error that no stopping rule could detect). 0 = the material class's own default, measured
+    // at 1e-5 for Hardening Soil.
+    double substep_tolerance = 0.0;
     // Require the LOCAL convergence criteria (NewtonResult::Convergence, Scientific Manual
     // §9.1.2) as well as the global force residual before an increment is called converged.
     //

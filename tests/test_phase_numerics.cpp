@@ -20,10 +20,10 @@
 //
 // verify: KV-NUM-008
 //   oracle:   independent_path
-//   source:   the same numerical control applied through two independent routes -- the .k2d file (model::Phase::tolerance / load_steps / max_iterations, io v7) and the jobs-layer seam (app::NumericalControls, the route KV-NUM-007 measures with) -- must reach the same solver and produce the same run; the controls themselves are the phase-level numerical control parameters of PLAXIS 2D 2025.1 Reference Manual (Tolerated error, Max iterations), whose per-phase presence in the input is what makes a calculation reproducible by a third party
+//   source:   the same numerical control applied through two independent routes -- the .k2d file (model::Phase::tolerance / load_steps / max_iterations since io v7, and substep_tolerance since io v15) and the jobs-layer seam (app::NumericalControls, the route KV-NUM-007 measures with) -- must reach the same solver and produce the same run; the controls themselves are the phase-level numerical control parameters of PLAXIS 2D 2025.1 Reference Manual (Tolerated error, Max iterations), whose per-phase presence in the input is what makes a calculation reproducible by a third party
 //   locator:  tests/corpus/kv-cst-002-hs-oedometer.k2d (Hardening Soil, whose answer is known from KV-NUM-007 to move with the tolerance) solved four ways per control: default, control set in the FILE, the same control passed through the seam, and both set at once with different values
-//   quantity: settlement of the oedometer top [m] and the file round trip of the three control fields
-//   expected: file == seam bit-for-bit on every control; the control demonstrably reaches the solver; seam wins when both are set (documented precedence); and the three fields survive a write/read round trip
+//   quantity: settlement of the oedometer top [m] and the file round trip of the four control fields
+//   expected: file == seam bit-for-bit on every control; the control demonstrably reaches the solver; seam wins when both are set (documented precedence); and the four fields survive a write/read round trip
 //   band:     exact -- these are identity checks, not approximations. Measured on this tree (2026-08-24, with the local convergence criteria binding): default 0.018647102 m; tolerance 1e-6 from the file 0.018646941 m, identical to the seam to 0.0e+00; on the staged phase alone 0.018643754 m, which differs again and is what "per phase" means; 4 load increments 0.018643176 m against 40's 0.018647102 m. TWO OF THIS CASE'S GUARDS DECAYED AND WERE REWRITTEN, both for the same reason and both recorded rather than quietly repaired. (1) The tolerated error used to be proved READ by showing the answer moved when it changed; it moves by 0.0009% now, because the default run already stands on the converged answer, so the proof is taken where the control lands instead -- the run reports the tolerance it ran under (1e-6 against the default's 1e-2), it demonstrably MET it, and reaching it cost 473 iterations against 194. (2) The ITERATION LIMIT was pinned at a threshold of 3; it is 5 now. The threshold is RECORDED AND CHECKED rather than pinned-and-asserted: the recorded value has to straddle the boundary (it converges, one below it refuses), which is two solves and exactly the proof a scan would give, and the scan runs only when that straddle stops holding -- and then it reports the value it found. Searching from scratch every run cost up to a hundred two-phase solves and made this file the slowest test in the suite by a factor of two, which is a real price for a property that changes about once a year. There turned out to be TWO thresholds and the old check conflated them: at 5 the run stops REFUSING but survives by cutting increments back, so it walks a different load path and lands 0.1796% away; only from 6 does it reproduce the default bit for bit. A guard that proves a control is read by pointing at a difference stops proving anything when the difference is the defect being fixed -- which has now happened three times on this case
 
 // verify: KV-NUM-009
@@ -100,12 +100,14 @@ double settlement(const m::Project& pr, const katai::mesh::Mesh& mesh,
 // routes as the same control, the file has to say on every phase what the seam says once --
 // including the initial phase, which is a phase like any other and where a run usually spends
 // its first and most delicate solve.
-m::Project all_phases(const m::Project& base, double tol, int steps, int iters) {
+m::Project all_phases(const m::Project& base, double tol, int steps, int iters,
+                      double substol = 0.0) {
     m::Project pr = base;
     const auto set = [&](m::Phase& ph) {
         if (tol > 0.0) ph.tolerance = tol;
         if (steps > 0) ph.load_steps = steps;
         if (iters > 0) ph.max_iterations = iters;
+        if (substol > 0.0) ph.substep_tolerance = substol;
     };
     set(pr.initial);
     for (auto& ph : pr.phases) set(ph);
@@ -321,6 +323,45 @@ int main() {
           "and between the two thresholds the run is cutting back rather than drifting: it "
           "lands close, not anywhere");
 
+    // --- 3b. The FOURTH control: the constitutive integration tolerance ----------------------
+    // The three above govern the equilibrium iteration. This one governs the material law: how
+    // accurately a stress point is walked along it INSIDE an increment. It was an environment
+    // variable until .k2d v15, which meant the half of a published claim that says "and this is
+    // how the constitutive path was integrated" could not be written down at all.
+    //
+    // It is asserted the same hostile way as the others -- file == seam, and both different from
+    // the default -- because the failure this whole case exists to catch is a control that is
+    // read, stored, echoed and then not used. Here that failure would be especially quiet: a
+    // dropped integration tolerance produces a perfectly convergent run with a slightly wrong
+    // stress path, which no residual reports and no plot shows.
+    // ALL THREE RUNS USE FOUR LOAD INCREMENTS instead of the file's forty, and that is a
+    // measurement, not a shortcut. What is asserted here is that a control REACHES the solver --
+    // identity between two routes and a difference from the default -- and neither claim needs
+    // the converged settlement. The full-increment version of this block cost 912 s, because a
+    // LOOSER integration is expensive on this case: the equilibrium iteration grinds against the
+    // integration noise it can no longer resolve (the same effect that set the default at 1e-5 in
+    // the first place). Paying fifteen minutes per run to re-learn that would be a poor trade for
+    // a check about plumbing.
+    constexpr int kSubSteps = 4;
+    const double u_sub_base = settlement(all_phases(base, 0.0, kSubSteps, 0), M.mesh, {}, &ok);
+    check(ok, "the four-increment baseline solves");
+    const m::Project sub_file = all_phases(base, 0.0, kSubSteps, 0, 1.0e-3);
+    const double u_sub_file = settlement(sub_file, M.mesh, {}, &ok);
+    check(ok, "the case with a substep tolerance in the FILE solves");
+    katai::app::NumericalControls sub_seam;
+    sub_seam.substep_tolerance = 1.0e-3;
+    const double u_sub_seam = settlement(all_phases(base, 0.0, kSubSteps, 0), M.mesh, sub_seam, &ok);
+    check(ok, "the same substep tolerance through the seam solves");
+    std::printf("  substep tolerance 1e-3 (%d increments):  file %.9f m, seam %.9f m "
+                "(default 1e-5 %.9f m, apart by %.4f%%)\n",
+                kSubSteps, u_sub_file, u_sub_seam, u_sub_base,
+                100.0 * std::fabs(u_sub_file - u_sub_base) / u_sub_base);
+    check(u_sub_file == u_sub_seam,
+          "substep tolerance: file == seam, bit for bit -- one control, two routes");
+    check(std::fabs(u_sub_file - u_sub_base) / u_sub_base > 1e-4,
+          "and a looser constitutive integration changes the answer, so the file's value is "
+          "genuinely reaching the material routine rather than the environment's default");
+
     // --- 4. Precedence, stated and tested ---------------------------------------------------
     // When both are set the SEAM wins. The seam exists so that a given file can be re-run at
     // other numerics (that is what KV-NUM-007 does to a checked-in corpus case); a file that
@@ -341,12 +382,14 @@ int main() {
     written.phases[0].tolerance = 3.5e-4;
     written.phases[0].load_steps = 17;
     written.phases[0].max_iterations = 33;
+    written.phases[0].substep_tolerance = 2.5e-6;   // .k2d v15, the fourth control
     written.initial.tolerance = 1e-7;     // the initial phase carries them too
     const std::string text = m::project_to_json(written);
     check(m::project_from_json(text, trip, &err, nullptr), "the written project reads back");
     check(trip.phases[0].tolerance == 3.5e-4 && trip.phases[0].load_steps == 17 &&
-              trip.phases[0].max_iterations == 33 && trip.initial.tolerance == 1e-7,
-          "all three controls survive the round trip, on the initial phase as well");
+              trip.phases[0].max_iterations == 33 && trip.initial.tolerance == 1e-7 &&
+              trip.phases[0].substep_tolerance == 2.5e-6,
+          "all four controls survive the round trip, on the initial phase as well");
     check(m::project_to_json(base).find("\"tol\"") == std::string::npos,
           "a project that sets no controls writes no control keys (the corpus stays as it is)");
     const katai::io::ValidationReport rep = katai::io::validate_project(written);

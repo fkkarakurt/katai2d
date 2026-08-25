@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **14** · Current `.res` version: **8**
+Current `.k2d` version: **15** · Current `.res` version: **8**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -31,7 +31,11 @@ straight through a cut-off wall, and **v13** the embedded beam's connection poin
 by the pile, and the same drawing settles several times as much, and **v14** the small-strain
 history reset (`phases[i].resetsmall`), which an older build would ignore and run the phase on
 the stiffness the earlier phases had already degraded, so the settlements and deflections it
-reports are systematically larger than the ones the file asks for. Every bump
+reports are systematically larger than the ones the file asks for, and **v15** the constitutive
+integration tolerance (`phases[i].substol`), the first numerical control that governs the material
+law rather than the equilibrium iteration -- an older build substitutes its own default for the
+number the file names, so the stress path each increment walks is not the one that was published.
+Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
 than one that was tensioned against it -- so it must refuse the file instead.
@@ -353,6 +357,7 @@ with `name` (default `"Well"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
 | `tol` | num | — | *by material class* | Tolerated relative force residual (PLAXIS "Tolerated error"). Written only when set |
 | `loadsteps` | int | — | *by material class* | Load increments for this phase. Not PLAXIS's "Max steps": KATAI splits the load into a fixed number of increments (with adaptive cut-back), it does not step automatically to a cap. Written only when set |
 | `maxiter` | int | — | *by phase strategy* | Newton iterations per increment (PLAXIS "Max iterations"). Written only when set |
+| `substol` | double | — | *by material class* | Constitutive integration error tolerance (STOL) for this phase — the accuracy of the substepping that walks a stress point along its material law INSIDE one increment, as distinct from `tol`, which is the equilibrium residual BETWEEN increments. Read only by models with an error-controlled integrator (Hardening Soil, default 1e-5); ignored, not rejected, by the others. Written only when set |
 
 with `name` (default `"Phase"`) as above.
 

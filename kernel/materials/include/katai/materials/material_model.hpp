@@ -339,7 +339,10 @@ inline HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
                                    double gamma_p_n, double pp_n,
                                    const HsSubstepPlan* plan_in = nullptr,
                                    double sigma_t_cap = kNoTensionCap,
-                                   HsSubstepPlan* plan_out = nullptr) {
+                                   HsSubstepPlan* plan_out = nullptr,
+                                   // The constitutive integration error tolerance (STOL), from
+                                   // the phase (.k2d v15) or 0 for the material class's default.
+                                   double substep_tol = 0.0) {
     const double cxx = comm_in_plane(0), cyy = comm_in_plane(1), cxy = comm_in_plane(2);
     const double cmean = 0.5 * (cxx + cyy);
     const double cR = std::sqrt(0.25 * (cxx - cyy) * (cxx - cyy) + cxy * cxy);
@@ -374,7 +377,7 @@ inline HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
     Ce << 1.0, -nu, -nu, -nu, 1.0, -nu, -nu, -nu, 1.0;
     Ce /= Eur;
     const Eigen::Vector3d deps_p = Ce * (sigHS - sig_n_cp);
-    const HsIntegrated ret = hs_integrate(pe, sig_n_cp, gamma_p_n, pp_n, deps_p, 0.0,
+    const HsIntegrated ret = hs_integrate(pe, sig_n_cp, gamma_p_n, pp_n, deps_p, substep_tol,
                                          plan_out, plan_in);
     double r[3] = {-ret.stress(2), -ret.stress(1), -ret.stress(0)};  // tension, desc
     // Tension cut-off (MMM Eq. 3-11), applied to the principals the model's own return produced.
@@ -442,7 +445,7 @@ inline void hs_forward(const MaterialModel& m, const GaussState& committed,
                        Eigen::Matrix3d* tangent_out = nullptr,
                        const HsSubstepPlan* plan_in = nullptr,
                        bool* plastic_out = nullptr, HsSubstepPlan* plan_out = nullptr,
-                       double* Eur_out = nullptr) {
+                       double* Eur_out = nullptr, double substep_tol = 0.0) {
     HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
     // Dilatancy cut-off: psi = 0 clamps the mobilised dilatancy sin(psi_m) to [0, 0] inside the
     // return core, which IS Eq. 5.16b -- the rule enters where the manual puts it, and nothing
@@ -460,7 +463,8 @@ inline void hs_forward(const MaterialModel& m, const GaussState& committed,
 
     const HsReturnCore c = hs_return_core(pe, Eur, committed.stress, committed.stress_zz,
                                           pred.in_plane, pred.zz, committed.gamma_p,
-                                          committed.pp, plan_in, tension_cap_of(m), plan_out);
+                                          committed.pp, plan_in, tension_cap_of(m), plan_out,
+                                          substep_tol);
     trial.stress = c.in_plane;
     trial.stress_zz = c.zz;
     trial.gamma_p = c.gamma_p;
@@ -764,7 +768,7 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
                             const Eigen::Vector3d& strain_increment,
                             GaussState& trial, Eigen::Matrix3d& tangent,
                             TangentMode mode = TangentMode::kConsistent, double dt_day = 0.0,
-                            PointReport* report = nullptr) {
+                            PointReport* report = nullptr, double substep_tol = 0.0) {
     const LameConstants lame = lame_from(m.youngs_modulus, m.poisson_ratio);
     const PlaneStrainStress previous{committed.stress, committed.stress_zz};
     const PlaneStrainStress predictor =
@@ -806,7 +810,7 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
             double Eur = 0.0;
             HsSubstepPlan plan;   // the base run's subdivision, replayed by the perturbed runs
             hs_forward(m, committed, strain_increment, trial, &tangent, nullptr, &plastic, &plan,
-                       &Eur);
+                       &Eur, substep_tol);
             if (report) {
                 report->plastic = plastic;
                 report->stress_dependent = true;
@@ -820,7 +824,8 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
                     Eigen::Vector3d dep = strain_increment;
                     const double h = hs_fd_step(strain_increment(j));
                     dep(j) += h;
-                    hs_forward(m, committed, dep, pert, nullptr, &plan);
+                    hs_forward(m, committed, dep, pert, nullptr, &plan, nullptr, nullptr,
+                               nullptr, substep_tol);
                     tangent.col(j) = (pert.stress - trial.stress) / h;
                 }
             }
@@ -896,7 +901,8 @@ inline void integrate_point_axisym(const MaterialModel& m,
                                    GaussState& trial, Eigen::Matrix4d& tangent,
                                    TangentMode mode = TangentMode::kConsistent,
                                    double dt_day = 0.0,
-                                   PointReport4* report = nullptr) {
+                                   PointReport4* report = nullptr,
+                                   double substep_tol = 0.0) {
     const Eigen::Matrix4d De = m.elastic_axisym();
     Eigen::Vector4d s_n;
     s_n << committed.stress, committed.stress_zz;       // [r, z, rz, theta]
@@ -951,7 +957,7 @@ inline void integrate_point_axisym(const MaterialModel& m,
             const HsReturnCore c = hs_return_core(pe, Eur, committed.stress, committed.stress_zz,
                                                   s_tr_ur.head<3>(), s_tr_ur(3),
                                                   committed.gamma_p, committed.pp, nullptr,
-                                                  tension_cap_of(m), &plan);
+                                                  tension_cap_of(m), &plan, substep_tol);
             trial.stress = c.in_plane;
             trial.stress_zz = c.zz;
             trial.gamma_p = c.gamma_p;
@@ -974,7 +980,7 @@ inline void integrate_point_axisym(const MaterialModel& m,
                     const HsReturnCore cp = hs_return_core(
                         pe, Eur, committed.stress, committed.stress_zz,
                         s_tr_p.head<3>(), s_tr_p(3), committed.gamma_p, committed.pp,
-                        &plan, tension_cap_of(m));
+                        &plan, tension_cap_of(m), nullptr, substep_tol);
                     tangent(0, j) = (cp.in_plane(0) - c.in_plane(0)) / h;
                     tangent(1, j) = (cp.in_plane(1) - c.in_plane(1)) / h;
                     tangent(2, j) = (cp.in_plane(2) - c.in_plane(2)) / h;

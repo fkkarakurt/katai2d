@@ -103,7 +103,17 @@ namespace katai::model {
 // reset -- typically a surcharge placed and removed to leave a preconsolidation pressure, whose
 // strain history ageing would long since have erased -- is invisible to that older build, so
 // the phase it runs is a different problem with the same drawing.
-inline constexpr int kProjectFileVersion = 14;
+// v15 (2026-08): THE CONSTITUTIVE INTEGRATION TOLERANCE (`phases[].substol`), the fourth
+// numerical control and the first that governs the material law rather than the equilibrium
+// iteration. Until now it could only be set through an environment variable, so a run's second
+// half -- what numerics produced the answer -- was not writable. An older build reads no such key
+// and integrates at its own default (1e-5 for Hardening Soil). The direction is NOT systematic,
+// which is why this needs saying: a file asking for a LOOSER integration comes out with a
+// different constitutive path, and a file asking for a TIGHTER one comes out closer to the
+// material law and, measured on the oedometer, often in FEWER Newton iterations rather than more,
+// because the equilibrium iteration stops grinding against integration noise. Either way the
+// older build silently substitutes its own number for the one the file names.
+inline constexpr int kProjectFileVersion = 15;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -355,6 +365,7 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     if (ph.tolerance > 0.0) wfield(o, "tol", ph.tolerance);
     if (ph.load_steps > 0) wfield(o, "loadsteps", (double)ph.load_steps);
     if (ph.max_iterations > 0) wfield(o, "maxiter", (double)ph.max_iterations);
+    if (ph.substep_tolerance > 0.0) wfield(o, "substol", ph.substep_tolerance);
     // Same rule for the staged-construction target and the undrained switch: the default IS the
     // ordinary case (the whole stage, undrained soil behaving undrained), so it costs no bytes.
     if (ph.sum_mstage != 1.0) wfield(o, "mstage", ph.sum_mstage);
@@ -398,6 +409,7 @@ inline Phase rphase(const Json& j) {
     ph.tolerance = j.num("tol", ph.tolerance);
     ph.load_steps = (int)j.num("loadsteps", ph.load_steps);
     ph.max_iterations = (int)j.num("maxiter", ph.max_iterations);
+    ph.substep_tolerance = j.num("substol", ph.substep_tolerance);
     ph.sum_mstage = j.num("mstage", ph.sum_mstage);
     ph.ignore_undrained = j.flag("ignoreund", ph.ignore_undrained);
     ph.reset_small_strain = j.flag("resetsmall", ph.reset_small_strain);

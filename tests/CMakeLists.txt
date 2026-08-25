@@ -350,7 +350,7 @@ endif()
 # but only after there has been one). A number here going badly stale is visible in the ctest
 # output as poor packing, not as a wrong answer, which is the right failure mode for a hint.
 set(_katai_slow_tests
-  test_phase_numerics 2597    test_input_corpus 1349    test_no_silent_drop 1126
+  test_phase_numerics 1548    test_input_corpus 1368    test_no_silent_drop 1071
   test_hs_footing 891         test_slope_fos_convergence 536
   test_tolerance_independence 406  test_hs_axisym 317    test_plaxis_validation 294
   test_convergence_criteria 232    test_gui_matrix 174   test_dynamic_gui 129

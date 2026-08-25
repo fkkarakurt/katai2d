@@ -225,6 +225,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         }
         // The time share is proportional to this increment's Δλ (SoftSoilCreep; time_interval=0 → 0, old path).
         fasm.dt_day = options.time_interval * std::max(0.0, cur_target - cur_lambda);
+        fasm.substep_tol = options.substep_tolerance;
         return fasm.assemble(u_struct, du_free, build_tangent, tmode, astate, ramp, builder,
                              &result.timings);
     };

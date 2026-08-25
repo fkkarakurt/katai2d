@@ -484,6 +484,24 @@ struct Phase {
     double tolerance = 0.0;     // tolerated relative force residual (PLAXIS "Tolerated error")
     int load_steps = 0;         // load increments for this phase
     int max_iterations = 0;     // Newton iterations per increment (PLAXIS "Max iterations")
+    // The FOURTH control, and the one that took longest to earn its place here. The three above
+    // govern the EQUILIBRIUM iteration; this one governs the CONSTITUTIVE integration -- the
+    // error tolerance of the substepping that walks a stress point along its material law inside
+    // one increment. It has to be a phase control for the same reason the other three are: an
+    // answer is a claim about the numerics as well as the model, and until 2026-08-25 this
+    // particular number could only be set through an environment variable, which is exactly the
+    // half of the claim that cannot be written down or re-run by someone else.
+    //
+    // It also is not interchangeable with `tolerance`. Tightening the equilibrium residual below
+    // the integration error does not buy accuracy, it buys iterations grinding against noise --
+    // measured on the Hardening Soil oedometer, where a LOOSER integration costs MORE Newton
+    // iterations, not fewer (0.9.0 N-1). A run whose two tolerances are set against each other is
+    // a run nobody can interpret; carrying both in the file is what makes that visible.
+    //
+    // 0 = the material class's own default (Hardening Soil: 1e-5, set by measurement). Only the
+    // models with an error-controlled integrator read it; every other model ignores it, so a file
+    // that sets it on a Mohr-Coulomb phase is not wrong, it is simply not consulted.
+    double substep_tolerance = 0.0;  // constitutive integration error tolerance (STOL)
     // Active flags per project object, by index (kept in sync by the GUI; an entry missing
     // because the vector is short counts as ACTIVE -- new objects default to active).
     std::vector<char> poly_active, struct_active, load_active, disp_active, hydro_active;

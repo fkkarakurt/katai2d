@@ -71,8 +71,8 @@ struct PlaneStrainKin {
     using Report = PointReportT<Tangent>;
     static void integrate(const MaterialModel& m, const GaussState& comm,
                           const Strain& de, GaussState& tr, Tangent& t, TangentMode mode,
-                          double creep_dt, Report* rep = nullptr) {
-        integrate_point(m, comm, de, tr, t, mode, creep_dt, rep);
+                          double creep_dt, Report* rep = nullptr, double substep_tol = 0.0) {
+        integrate_point(m, comm, de, tr, t, mode, creep_dt, rep, substep_tol);
     }
     static Eigen::Matrix<double, 3, 1> stress(const GaussState& s) { return s.stress; }
     // The stress with the OUT-OF-PLANE component put back: [xx, yy, xy, zz]. Plane strain
@@ -111,8 +111,8 @@ struct AxisymKin {
     using Report = PointReportT<Tangent>;
     static void integrate(const MaterialModel& m, const GaussState& comm,
                           const Strain& de, GaussState& tr, Tangent& t, TangentMode mode,
-                          double creep_dt, Report* rep = nullptr) {
-        integrate_point_axisym(m, comm, de, tr, t, mode, creep_dt, rep);
+                          double creep_dt, Report* rep = nullptr, double substep_tol = 0.0) {
+        integrate_point_axisym(m, comm, de, tr, t, mode, creep_dt, rep, substep_tol);
     }
     static Eigen::Matrix<double, 4, 1> stress(const GaussState& s) {
         Eigen::Matrix<double, 4, 1> v;
@@ -342,6 +342,12 @@ public:
     // time_interval·Δλ per increment; consolidation/dynamics write their own step duration
     // (converted to days).
     double dt_day = 0.0;
+    // The CONSTITUTIVE integration error tolerance for this solve (.k2d v15 / NewtonOptions).
+    // 0 = the material class's own default, which is what every path did before it was writable.
+    // It sits here beside dt_day because both are per-solve numerics the Gauss loop reads, not
+    // material properties: a tolerance published as a soil parameter is the mistake this tree has
+    // already made once.
+    double substep_tol = 0.0;
 
     // Internal-force (and, if build_tangent, consistent-tangent) assembly. Since Δε = B·du_e,
     // f_int is a pure function of du_free (of u_free+du_free for structural elements) given
@@ -461,7 +467,7 @@ public:
                 const MaterialModel& matg = *mp;
                 if (probe) rep = typename Kin::Report{};
                 Kin::integrate(matg, committed[gi], dstrain, trial[gi], dt, tm, dt_day,
-                               probe ? &rep : nullptr);
+                               probe ? &rep : nullptr, substep_tol);
                 typename Kin::Strain sigma = Kin::stress(trial[gi]);
                 if (probe) {
                     LocalErrorPartial& acc = probe_buf_[e];

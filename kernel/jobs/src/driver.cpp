@@ -2222,6 +2222,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         stin.max_iterations = iters;
         stin.line_search_window = io.numeric.line_search_window;
         stin.enforce_local_criteria = io.numeric.enforce_local_criteria;
+        stin.substep_tolerance = io.numeric.substep_tolerance;
         // SumMstage: a partial stage is a construction step only where there IS a stage, so the
         // fraction is read on chained phases and left at 1 on the initial one (the validator
         // refuses it there rather than letting a scaled gravity look like a partial excavation).
@@ -2311,6 +2312,7 @@ std::vector<SolveResult> solve_phases(const model::Project& pr,
         if (!(n.tolerance > 0.0)) n.tolerance = ph.tolerance;
         if (n.steps <= 0) n.steps = ph.load_steps;
         if (n.max_iterations <= 0) n.max_iterations = ph.max_iterations;
+        if (!(n.substep_tolerance > 0.0)) n.substep_tolerance = ph.substep_tolerance;
         return n;
     };
 

@@ -153,6 +153,12 @@ struct NumericalControls {
     // it decides whether a trial step is judged against the latest residual or the worst of
     // the last W, which on a non-smooth problem decides whether the increment survives.
     int line_search_window = 0;
+    // The CONSTITUTIVE integration tolerance (Phase::substep_tolerance, .k2d v15). Same
+    // precedence as the three above and the same reason for existing: it is the other half of
+    // "what numerics produced this answer", and until it was writable a study could ask what a
+    // number owed to its stopping rule but not what it owed to its material integration.
+    // 0 = keep the phase's value, then the material class's own default.
+    double substep_tolerance = 0.0;
     // Require the LOCAL convergence criteria as well as the global force residual (Scientific
     // Manual §9.1.2; NewtonOptions::enforce_local_criteria). TRI-STATE, unlike the three above,
     // because the engine's default here is ON: 0 = leave the engine's default alone, +1 = force

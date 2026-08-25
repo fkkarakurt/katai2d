@@ -405,7 +405,14 @@ NB_MODULE(_core, m) {
         .def_rw("load_steps", &api::Phase::load_steps,
                 "load increments for this phase; 0 = chosen by material class")
         .def_rw("max_iterations", &api::Phase::max_iterations,
-                "Newton iterations per increment; 0 = the phase strategy's own limit");
+                "Newton iterations per increment; 0 = the phase strategy's own limit")
+        .def_rw("substep_tolerance", &api::Phase::substep_tolerance,
+                "constitutive integration error tolerance (STOL) -- how accurately a stress "
+                "point is walked along its material law INSIDE one increment, as distinct from "
+                "`tolerance`, which is the equilibrium residual between increments. Read only by "
+                "models with an error-controlled integrator (Hardening Soil, default 1e-5); "
+                "0 = that default. Tightening it is not always more expensive: below about 1e-5 "
+                "the equilibrium iteration stops grinding against integration noise");
 
     nb::class_<api::MeshSettings>(m, "MeshSettings")
         .def(nb::init<>())

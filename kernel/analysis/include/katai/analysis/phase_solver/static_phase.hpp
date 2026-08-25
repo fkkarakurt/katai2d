@@ -113,6 +113,11 @@ struct StaticPhase {
     // Line-search memory handed to the Newton loop; 0 = the engine's default. See
     // NewtonOptions::line_search_window.
     int line_search_window = 0;
+    // NewtonOptions::hs_substep_tolerance: the CONSTITUTIVE integration error tolerance.
+    // 0 = the material class's own default. Unlike the three equilibrium controls this one is
+    // read inside the Gauss loop rather than by the iteration, so it reaches the solver as an
+    // assembly parameter rather than a stopping rule.
+    double substep_tolerance = 0.0;
     // NewtonOptions::enforce_local_criteria: require the LOCAL convergence criteria too.
     // Tri-state: 0 = the engine's default (ON), +1 = force on, -1 = force off.
     int enforce_local_criteria = 0;
@@ -158,6 +163,7 @@ inline bool solve_static_phase(
     nopt.kinematics = in.axisymmetric ? Kinematics::Axisymmetric
                                       : Kinematics::PlaneStrain;
     if (in.line_search_window > 0) nopt.line_search_window = in.line_search_window;
+    if (in.substep_tolerance > 0.0) nopt.substep_tolerance = in.substep_tolerance;
     if (in.enforce_local_criteria != 0)
         nopt.enforce_local_criteria = in.enforce_local_criteria > 0;
     // SSC TIME (Stage 3): a staged Plastic phase's Time interval [days] enters the constitutive

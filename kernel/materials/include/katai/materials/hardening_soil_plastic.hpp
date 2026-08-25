@@ -645,6 +645,21 @@ inline double hs_default_substep_tol() {
     return v;
 }
 
+// The same value read as a whole-run OVERRIDE rather than as a default: 0 when the variable is
+// not set. Since .k2d v15 a phase can name its own integration tolerance, and a study sweeping
+// this axis has to be able to re-run a file that does -- otherwise the one thing the seam exists
+// for, asking what a published number owes to its integration, is exactly what it cannot do on
+// the files that state it. So the environment wins over the file here, which is the same
+// precedence KATAI_CONV_NOLOCAL has over the phase's convergence setting.
+inline double hs_env_substep_tol() {
+    static const double v = [] {
+        const char* e = std::getenv("KATAI_HS_STOL");
+        const double d = e ? std::atof(e) : 0.0;
+        return d > 0.0 ? d : 0.0;
+    }();
+    return v;
+}
+
 inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
                                  const Eigen::Vector3d& sigma_n, double gamma_p_n,
                                  double pp_n, const Eigen::Vector3d& dstrain,
@@ -894,7 +909,9 @@ inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
     // continuum tangent (an elastic increment returns this one).
     Eigen::Matrix3d tangent = k_n.De;
 
-    const double tol = stol > 0.0 ? stol : hs_default_substep_tol();
+    const double env_tol = hs_env_substep_tol();
+    const double tol = env_tol > 0.0 ? env_tol
+                                     : (stol > 0.0 ? stol : hs_default_substep_tol());
     // Ceiling on the measured subdivision. It is a GUARD, not a policy: an increment that asks
     // for more than this is an increment the load stepping should have cut, and the counter below
     // records every time it fires so a saturated integration is never silently reported as one

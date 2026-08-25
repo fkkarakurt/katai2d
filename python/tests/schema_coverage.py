@@ -71,6 +71,7 @@ KEY_TO_ATTR = {
     "tol": "tolerance",
     "loadsteps": "load_steps",
     "maxiter": "max_iterations",
+    "substol": "substep_tolerance",
     "lamstar": "lam_star",
     "kapstar": "kap_star",
     "mustar": "mu_star",
@@ -172,6 +173,7 @@ def coverage_project():
     ph.tolerance = 1e-5
     ph.load_steps = 12
     ph.max_iterations = 40
+    ph.substep_tolerance = 2.5e-6
     ph.poly_active = [1]
     ph.struct_active = [1]
     ph.load_active = [1]
