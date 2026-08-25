@@ -114,30 +114,58 @@ m::Project all_phases(const m::Project& base, double tol, int steps, int iters,
     return pr;
 }
 
-}  // namespace
-
-int main() {
-    std::printf("== numerical controls carried by the file (KV-NUM-008) ==\n");
-
+// THE FOUR CASES IN THIS FILE RUN SEPARATELY, and the reason is wall clock rather than tidiness.
+// With `ctest -j 6` a suite cannot finish faster than its single longest test, and this file was
+// that test by a wide margin -- measured 2683 s on 2026-08-26, which IS the whole suite's 2683 s.
+// The four verification cases share nothing but a corpus file, so they are four ctest entries
+// over one executable: `test_phase_numerics <008|009|010|011>`, no argument meaning all four (the
+// way it ran before, kept so a developer can still get the whole story in one run).
+//
+// KV-NUM-008 and KV-NUM-009 share the oedometer fixture below -- the same corpus case, its mesh,
+// and the settlement the untouched file produces. Building it twice costs one extra solve, which
+// is the price of the two running side by side.
+struct Oedometer {
     m::Project base;
+    katai::mesh::Mesh mesh;
+    double u_default = 0.0;
+    bool ok = false;
+};
+
+Oedometer oedometer_fixture() {
+    Oedometer O;
     std::string err;
     const std::string path = std::string(KATAI_CORPUS_DIR) + "/kv-cst-002-hs-oedometer.k2d";
-    if (!m::load_project(path, base, &err, nullptr)) {
+    if (!m::load_project(path, O.base, &err, nullptr)) {
         std::printf("FAIL: cannot load %s: %s\n", path.c_str(), err.c_str());
-        return 1;
+        ++g_failures;
+        return O;
     }
-    check(!base.phases.empty(), "the case has a staged phase to control");
-    if (base.phases.empty()) return 1;
+    check(!O.base.phases.empty(), "the case has a staged phase to control");
+    if (O.base.phases.empty()) return O;
 
-    const auto M = katai::app::mesh_from_project(base);
+    const auto M = katai::app::mesh_from_project(O.base);
     check(M.ok, "oedometer mesh built from the case file");
-    if (!M.ok) { std::printf("      (%s)\n", M.message.c_str()); return 1; }
+    if (!M.ok) { std::printf("      (%s)\n", M.message.c_str()); return O; }
+    O.mesh = M.mesh;
 
+    bool solved = false;
+    O.u_default = settlement(O.base, O.mesh, {}, &solved);
+    check(solved, "the untouched case solves");
+    if (!solved) return O;
+    std::printf("  default (the material class chooses)      settlement = %.9f m\n", O.u_default);
+    O.ok = true;
+    return O;
+}
+
+void case_008(const Oedometer& O) {
+    std::printf("== numerical controls carried by the file (KV-NUM-008) ==\n");
+    if (!O.ok) return;
+    const m::Project& base = O.base;
+    const katai::mesh::Mesh& mesh = O.mesh;
+    const double u_default = O.u_default;
+    std::string err;
     bool ok = false;
-    const double u_default = settlement(base, M.mesh, {}, &ok);
-    check(ok, "the untouched case solves");
-    if (!ok) return 1;
-    std::printf("  default (the material class chooses)      settlement = %.9f m\n", u_default);
+    (void)u_default;
 
     // --- 1. The tolerated error ------------------------------------------------------------
     // This control used to be worth 0.59% on this problem between the Hardening Soil default of
@@ -145,11 +173,11 @@ int main() {
     // now: the local convergence criteria bind (0.9.0 N-2), so the default run already stands on
     // the converged answer. The margin is gone; what replaced it is below.
     const m::Project from_file = all_phases(base, 1e-6, 0, 0);
-    const double u_file = settlement(from_file, M.mesh, {}, &ok);
+    const double u_file = settlement(from_file, mesh, {}, &ok);
     check(ok, "the case with a tolerated error in the FILE solves");
     katai::app::NumericalControls seam;
     seam.tolerance = 1e-6;
-    const double u_seam = settlement(base, M.mesh, seam, &ok);
+    const double u_seam = settlement(base, mesh, seam, &ok);
     check(ok, "the same tolerance through the seam solves");
     std::printf("  tolerance 1e-6 from the file              settlement = %.9f m\n", u_file);
     std::printf("  tolerance 1e-6 through the seam           settlement = %.9f m\n", u_seam);
@@ -171,8 +199,8 @@ int main() {
     bool ok_c = false;
     katai::core::NewtonResult::Convergence conv_file, conv_default;
     int it_file = 0, it_default = 0;
-    settlement(from_file, M.mesh, {}, &ok_c, &conv_file, &it_file);
-    settlement(base, M.mesh, {}, &ok_c, &conv_default, &it_default);
+    settlement(from_file, mesh, {}, &ok_c, &conv_file, &it_file);
+    settlement(base, mesh, {}, &ok_c, &conv_default, &it_default);
     std::printf("  tolerance reported back: file %.3e, default %.3e; iterations %d vs %d\n",
                 conv_file.tolerated, conv_default.tolerated, it_file, it_default);
     check(conv_file.tolerated == 1e-6 && conv_default.tolerated > 1e-6,
@@ -187,7 +215,7 @@ int main() {
     // to say which is the reason the controls live on the phase rather than on the project.
     m::Project one_phase = base;
     one_phase.phases[0].tolerance = 1e-6;
-    const double u_one = settlement(one_phase, M.mesh, {}, &ok);
+    const double u_one = settlement(one_phase, mesh, {}, &ok);
     check(ok, "the case with the tolerance on ONE phase solves");
     std::printf("  tolerance 1e-6 on the staged phase only   settlement = %.9f m\n", u_one);
     check(u_one != u_file,
@@ -198,11 +226,11 @@ int main() {
     // same load, and a path-dependent model does not arrive at quite the same place -- which is
     // the point: if the number were ignored, it would.
     const m::Project steps_file = all_phases(base, 0.0, 4, 0);
-    const double u_steps_file = settlement(steps_file, M.mesh, {}, &ok);
+    const double u_steps_file = settlement(steps_file, mesh, {}, &ok);
     check(ok, "the case with 4 load increments in the FILE solves");
     katai::app::NumericalControls steps_seam;
     steps_seam.steps = 4;
-    const double u_steps_seam = settlement(base, M.mesh, steps_seam, &ok);
+    const double u_steps_seam = settlement(base, mesh, steps_seam, &ok);
     check(ok, "the same 4 increments through the seam solve");
     std::printf("  4 load increments: file %.9f m, seam %.9f m (default has 40: %.9f m)\n",
                 u_steps_file, u_steps_seam, u_default);
@@ -239,7 +267,7 @@ int main() {
     // silently was the whole point; paying a hundred solves for it every run was not.
     constexpr int kRecordedThreshold = 5;   // 2026-08-24; it was 3 before the local criteria bound
     const auto converges_at = [&](int limit, double* u_out) {
-        const double u = settlement(all_phases(base, 0.0, 0, limit), M.mesh, {}, &ok);
+        const double u = settlement(all_phases(base, 0.0, 0, limit), mesh, {}, &ok);
         if (u_out) *u_out = u;
         return ok;
     };
@@ -261,19 +289,19 @@ int main() {
     check(threshold >= 3 && threshold <= 24,
           "there is an iteration limit below which this case cannot converge, and it is a "
           "threshold rather than a budget");
-    if (threshold == 0) return 1;
+    if (threshold == 0) return;
 
     // One below the threshold refuses. When the recorded value held, this is already known from
     // the probe above and is not re-solved; only a moved threshold pays for it again.
     if (threshold != kRecordedThreshold) {
-        settlement(all_phases(base, 0.0, 0, threshold - 1), M.mesh, {}, &ok);
+        settlement(all_phases(base, 0.0, 0, threshold - 1), mesh, {}, &ok);
     } else {
         ok = below_recorded;
     }
     check(!ok, "one below the threshold, the FILE's limit makes the run refuse rather than drift");
     katai::app::NumericalControls starved_seam;
     starved_seam.max_iterations = threshold - 1;
-    settlement(base, M.mesh, starved_seam, &ok);
+    settlement(base, mesh, starved_seam, &ok);
     check(!ok, "and the same limit through the seam refuses too: both routes reach the solver");
 
     // The FILE's run at the threshold is the probe above -- solving the same calculation twice
@@ -282,7 +310,7 @@ int main() {
     check(threshold > 0 && u_iter_file > 0.0, "at the threshold the case in the FILE solves");
     katai::app::NumericalControls iter_seam;
     iter_seam.max_iterations = threshold;
-    const double u_iter_seam = settlement(base, M.mesh, iter_seam, &ok);
+    const double u_iter_seam = settlement(base, mesh, iter_seam, &ok);
     check(ok, "the same limit through the seam solves");
     std::printf("  at the threshold:  file %.9f m, seam %.9f m (default %.9f m)\n",
                 u_iter_file, u_iter_seam, u_default);
@@ -343,14 +371,14 @@ int main() {
     // the first place). Paying fifteen minutes per run to re-learn that would be a poor trade for
     // a check about plumbing.
     constexpr int kSubSteps = 4;
-    const double u_sub_base = settlement(all_phases(base, 0.0, kSubSteps, 0), M.mesh, {}, &ok);
+    const double u_sub_base = settlement(all_phases(base, 0.0, kSubSteps, 0), mesh, {}, &ok);
     check(ok, "the four-increment baseline solves");
     const m::Project sub_file = all_phases(base, 0.0, kSubSteps, 0, 1.0e-3);
-    const double u_sub_file = settlement(sub_file, M.mesh, {}, &ok);
+    const double u_sub_file = settlement(sub_file, mesh, {}, &ok);
     check(ok, "the case with a substep tolerance in the FILE solves");
     katai::app::NumericalControls sub_seam;
     sub_seam.substep_tolerance = 1.0e-3;
-    const double u_sub_seam = settlement(all_phases(base, 0.0, kSubSteps, 0), M.mesh, sub_seam, &ok);
+    const double u_sub_seam = settlement(all_phases(base, 0.0, kSubSteps, 0), mesh, sub_seam, &ok);
     check(ok, "the same substep tolerance through the seam solves");
     std::printf("  substep tolerance 1e-3 (%d increments):  file %.9f m, seam %.9f m "
                 "(default 1e-5 %.9f m, apart by %.4f%%)\n",
@@ -369,7 +397,7 @@ int main() {
     const m::Project both = all_phases(base, 1e-2, 0, 0);   // the file asks for the loose default
     katai::app::NumericalControls tight;
     tight.tolerance = 1e-6;               // the caller asks for a converged run
-    const double u_both = settlement(both, M.mesh, tight, &ok);
+    const double u_both = settlement(both, mesh, tight, &ok);
     check(ok, "the case with a control in BOTH places solves");
     std::printf("  file 1e-2 + seam 1e-6 -> %.9f m (seam run was %.9f m)\n", u_both, u_seam);
     check(u_both == u_seam,
@@ -402,12 +430,22 @@ int main() {
     check(!katai::io::validate_project(absurd).ok(),
           "a tolerated error of 1.0 (100%) is refused, not silently accepted");
 
-    // --- 6. WHERE THE NUMERICAL ERROR OF THIS CASE ACTUALLY LIVES (KV-NUM-009) ---------------
-    // Everything above shows the controls are read. This asks the question underneath it: of the
-    // +1% this case sits from its closed form, how much is the mesh, how much the stopping rule,
-    // how much the load path -- and how much is not numerical at all. Until now the corpus has
-    // only ever banded the MESH, which for a path-dependent model is the wrong axis to start on.
+}
+
+// --- 6. WHERE THE NUMERICAL ERROR OF THIS CASE ACTUALLY LIVES (KV-NUM-009) -------------------
+// KV-NUM-008 shows the controls are read. This asks the question underneath it: of the +1% this
+// case sits from its closed form, how much is the mesh, how much the stopping rule, how much the
+// load path -- and how much is not numerical at all. Until KV-NUM-009 the corpus had only ever
+// banded the MESH, which for a path-dependent model is the wrong axis to start on.
+void case_009(const Oedometer& O) {
     std::printf("\n== where the numerical error lives (KV-NUM-009) ==\n");
+    if (!O.ok) return;
+    const m::Project& base = O.base;
+    const katai::mesh::Mesh& mesh = O.mesh;
+    const double u_default = O.u_default;
+    std::string err;
+    bool ok = false;
+    (void)err;
 
     // (a) THE MESH CONTRIBUTES NOTHING HERE, AND THAT IS MEASURABLE RATHER THAN ARGUABLE. The
     //     column is weightless, so sigma_1 is the surcharge and the strain field is UNIFORM; a
@@ -465,7 +503,7 @@ int main() {
         pr.phases[0].load_steps = path_steps[i];
         pr.phases[0].tolerance = 1e-6;         // converged: 1e-8 agrees to six figures
         pr.phases[0].max_iterations = 500;
-        u_path[i] = settlement(pr, M.mesh, {}, &ok);
+        u_path[i] = settlement(pr, mesh, {}, &ok);
         if (!ok) { path_ok = false; break; }
         std::printf("  %4d load increments  settlement = %.12e\n", path_steps[i], u_path[i]);
     }
@@ -519,7 +557,7 @@ int main() {
         pr.initial.load_steps = 40; pr.initial.tolerance = 1e-6; pr.initial.max_iterations = 500;
         pr.phases[0].load_steps = 160; pr.phases[0].tolerance = 1e-6;
         pr.phases[0].max_iterations = 500;
-        const double got = settlement(pr, M.mesh, {}, &ok);
+        const double got = settlement(pr, mesh, {}, &ok);
         if (!ok) { range_ok = false; break; }
         // The closed form of the HS oedometric law over this range (c = 0, so sin(phi) cancels).
         const double kH = 4.0, kEoed = 30000.0, kPref = 100.0, kM = 0.5;
@@ -614,7 +652,7 @@ int main() {
     seat_fine.initial.load_steps = 160;
     seat_fine.initial.tolerance = 1e-6;
     seat_fine.initial.max_iterations = 500;
-    const double u_seat_fine = settlement(seat_fine, M.mesh, {}, &ok);
+    const double u_seat_fine = settlement(seat_fine, mesh, {}, &ok);
     check(ok, "the seating phase converges at 160 increments, where it used to refuse");
     if (ok) {
         const double drift = std::fabs(u_seat_fine - u_default) / u_default;
@@ -625,7 +663,13 @@ int main() {
               "count is not what sets it");
     }
 
-    // --- 7. THE SAME QUESTION WHERE THE AXIS *IS* CLEAN (KV-NUM-010) -------------------------
+}
+
+// --- 7. THE SAME QUESTION WHERE THE AXIS *IS* CLEAN (KV-NUM-010) -----------------------------
+void case_010() {
+    std::string err;
+    bool ok = false;
+    (void)ok;
     // KV-NUM-009 refused a band. A refusal is only worth something if the same procedure, applied
     // to a case whose axis IS a proper discretisation parameter, produces one -- otherwise the
     // refusal is indistinguishable from the machinery not working. Terzaghi consolidation is that
@@ -638,7 +682,8 @@ int main() {
     const std::string tz_path = std::string(KATAI_CORPUS_DIR) + "/kv-con-002-terzaghi-column.k2d";
     if (!m::load_project(tz_path, tz, &err, nullptr)) {
         std::printf("FAIL: cannot load %s: %s\n", tz_path.c_str(), err.c_str());
-        return 1;
+        ++g_failures;
+        return;
     }
     check(!tz.phases.empty(), "the consolidation case has a phase to control");
 
@@ -753,7 +798,13 @@ int main() {
               "the mesh contributes essentially nothing to an integral quantity like U either");
     }
 
-    // --- 8. WHERE "THE ALGEBRA DECIDES THE ORDER" STOPS BEING TRUE (KV-NUM-011) --------------
+}
+
+// --- 8. WHERE "THE ALGEBRA DECIDES THE ORDER" STOPS BEING TRUE (KV-NUM-011) ------------------
+void case_011() {
+    std::string err;
+    bool ok = false;
+    (void)ok;
     // KV-STR-003 knew its order was 2 before any run (the moment overshoot is q h^2/12) and
     // KV-NUM-010 knew its order was 1 (backward Euler). It is tempting to generalise that, and
     // this case is the counterexample that stops it. Newmark here is gamma = 1/2, beta = 1/4 --
@@ -767,7 +818,8 @@ int main() {
     const std::string dy_path = std::string(KATAI_CORPUS_DIR) + "/kv-dyn-002-resonant-column.k2d";
     if (!m::load_project(dy_path, dy, &err, nullptr)) {
         std::printf("FAIL: cannot load %s: %s\n", dy_path.c_str(), err.c_str());
-        return 1;
+        ++g_failures;
+        return;
     }
     check(!dy.phases.empty(), "the dynamic case has a phase to control");
 
@@ -870,6 +922,24 @@ int main() {
         check(std::fabs(u_m2 - u_m1) / u_m1 < 1e-4, "the mesh is not where this error lives either");
     }
 
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    const std::string which = argc > 1 ? argv[1] : "all";
+    if (which == "008" || which == "009" || which == "all") {
+        const Oedometer O = oedometer_fixture();
+        if (which != "009") case_008(O);
+        if (which != "008") case_009(O);
+    }
+    if (which == "010" || which == "all") case_010();
+    if (which == "011" || which == "all") case_011();
+    if (which != "all" && which != "008" && which != "009" && which != "010" && which != "011") {
+        std::printf("FAIL: unknown case '%s' (use 008, 009, 010, 011 or nothing)\n",
+                    which.c_str());
+        return 1;
+    }
     std::printf(g_failures ? "\n%d CHECK(S) FAILED\n" : "\nall checks passed\n", g_failures);
     return g_failures ? 1 : 0;
 }

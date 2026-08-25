@@ -30,13 +30,27 @@ function(katai_add_test name)
   add_executable(${name} ${name}.cpp)
   target_link_libraries(${name} PRIVATE ${libs} katai::linsolve)
   katai_use_pch(${name})
-  add_test(NAME ${name} COMMAND ${name})
-  set_tests_properties(${name} PROPERTIES LABELS "${labels}")
+  # ONE EXECUTABLE, OPTIONALLY SEVERAL CTEST ENTRIES. Set KATAI_TEST_CASES before the call and
+  # each case becomes `<name>_<case>` running `<name> <case>`. This exists for wall clock, not
+  # for tidiness: with `ctest -j N` the suite cannot finish faster than its single longest test,
+  # so a file holding several independent verification cases sets the floor for everything else.
+  # Splitting it lets the cases run side by side. The executable still runs all of them when
+  # invoked with no argument, so a developer keeps the whole story in one command.
+  if(KATAI_TEST_CASES)
+    foreach(case ${KATAI_TEST_CASES})
+      add_test(NAME ${name}_${case} COMMAND ${name} ${case})
+      list(APPEND _katai_entries ${name}_${case})
+    endforeach()
+  else()
+    add_test(NAME ${name} COMMAND ${name})
+    set(_katai_entries ${name})
+  endif()
+  set_tests_properties(${_katai_entries} PROPERTIES LABELS "${labels}")
   # With MKL linked dynamically its runtime has to be locatable at load time. Putting
   # it in the test's own environment rather than expecting the caller's PATH means
   # `ctest` works from any shell, including a bare one and CI.
   if(KATAI_MKL_RUNTIME_DIR)
-    set_tests_properties(${name} PROPERTIES
+    set_tests_properties(${_katai_entries} PROPERTIES
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${KATAI_MKL_RUNTIME_DIR}")
   endif()
 endfunction()
@@ -189,7 +203,16 @@ katai_add_test(test_wells_drains katai::jobs katai::mesh katai::analysis katai::
 katai_add_test(test_undrained_c katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-007: Undrained (C), the total-stress analysis (MMM sec. 2.7) -- the same soil described two ways must agree, and the difference is the compressibility nu_u < 0.5 leaves behind
 katai_add_test(test_undrained_stiffness katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-006: the pore fluid's stiffness per material (MMM Eqs. 2-50/2-54/2-55/2-57) -- two undrained layers with different Kw/n, and the Hardening Soil family sized by its own unload/reload pair
 katai_add_test(test_staged_options katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-EXC-002 + KV-CST-005: the staged-construction target (Sum-Mstage) as an exact linear identity, and "ignore undrained behaviour" as the drained calculation it claims to be
-katai_add_test(test_phase_numerics katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-NUM-008: the per-phase numerical controls (.k2d v7) must REACH the solver -- file == seam, and both != default, so a reviewer receives the numerics a published run was computed with
+# FOUR independent verification cases in one file, so four ctest entries: KV-NUM-008 (the
+# per-phase numerical controls of .k2d v7 must REACH the solver -- file == seam, and both !=
+# default, so a reviewer receives the numerics a published run was computed with), KV-NUM-009
+# (where this case's numerical error actually lives), KV-NUM-010 (the same procedure on an axis
+# that IS clean) and KV-NUM-011 (where "the algebra decides the order" stops being true). Run
+# together they were 2683 s -- measured 2026-08-26 -- which was the entire suite's wall clock,
+# because `ctest -j 6` cannot finish faster than its longest single test.
+set(KATAI_TEST_CASES 008 009 010 011)
+katai_add_test(test_phase_numerics katai::jobs katai::mesh katai::analysis katai::model katai::io)
+unset(KATAI_TEST_CASES)
 if(TARGET test_phase_numerics)
   target_compile_definitions(test_phase_numerics PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
@@ -339,8 +362,8 @@ endif()
 # THE SLOW SET, measured rather than guessed, so that the inner development loop does not
 # have to pay for the full suite. Measured 2026-08-24 on the MKL composition (ctest -j 6):
 # the 154 tests cost 9089 s of CPU between them and TWELVE of them are 8461 s of that -- 93%.
-# With `-j 6` the wall clock cannot fall below the single longest test, so the suite took as
-# long as its slowest file did.
+# With `-j 6` the wall clock cannot fall below the single longest test, so the suite takes as
+# long as its slowest file does.
 #
 #   ctest -LE slow -j 6     the inner loop: everything except these, ~600 s of CPU
 #   ctest -j 6              before a commit: everything
@@ -349,8 +372,17 @@ endif()
 # schedules the long ones FIRST on a cold checkout too (CTest learns costs from previous runs,
 # but only after there has been one). A number here going badly stale is visible in the ctest
 # output as poor packing, not as a wrong answer, which is the right failure mode for a hint.
+#
+# 2026-08-26: test_phase_numerics was the whole suite's wall clock -- 2683 s of a 2683 s run --
+# and it held four INDEPENDENT verification cases. Split into four ctest entries over the one
+# executable, they measure 1176 / 401 / 30 / 2 s, so the file's contribution to the critical path
+# is 1176 s: the suite floor moved from that file to test_input_corpus, which is the next thing
+# to split (its cases are per-corpus-file and already independent). Two of the four are now cheap
+# enough to live in the INNER loop, which is a gain beyond the wall clock -- KV-NUM-010 and
+# KV-NUM-011 used to be checked only before a commit.
 set(_katai_slow_tests
-  test_phase_numerics 1548    test_input_corpus 1368    test_no_silent_drop 1071
+  test_phase_numerics_009 1176    test_phase_numerics_008 401
+  test_input_corpus 1368    test_no_silent_drop 1071
   test_hs_footing 891         test_slope_fos_convergence 536
   test_tolerance_independence 406  test_hs_axisym 317    test_plaxis_validation 294
   test_convergence_criteria 232    test_gui_matrix 174   test_dynamic_gui 129
