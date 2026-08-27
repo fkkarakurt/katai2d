@@ -133,11 +133,26 @@ katai_add_test(test_design_gui katai::jobs katai::mesh katai::analysis katai::mo
 katai_add_test(test_project_io katai::model katai::io)                # Project file JSON round trip (every field exact + honest failure modes)
 katai_add_test(test_results_io katai::mesh katai::analysis katai::model katai::io)  # Binary result file: bitwise round trip + model-hash staleness + refusal of a corrupt file
 katai_add_test(test_k2d_validator katai::model katai::io)             # .k2d input contract: every rule probed at its exact field path + reader forward-version notes
+# One ctest entry per corpus case. Together they were 1370 s and, once test_phase_numerics had
+# been split, the whole suite's wall clock; they are independent by construction, so this is the
+# same trade the phase-numerics split made. The ids are the corpus ids, so a red line in the ctest
+# output names the case without anyone opening the log. The executable still runs all 26 when
+# invoked with no argument -- which is also what KATAI_CORPUS_WRITE=1 regeneration needs.
+set(KATAI_TEST_CASES
+  kv-con-002 kv-cst-001 kv-cst-002 kv-cst-008 kv-cst-009 kv-cst-010 kv-cst-011 kv-cst-012
+  kv-dyn-002 kv-dyn-003 kv-exc-001 kv-flw-001
+  kv-fnd-008 kv-fnd-009 kv-fnd-010 kv-fnd-011 kv-fnd-012 kv-fnd-013 kv-fnd-014
+  kv-num-003 kv-slp-001 kv-slp-002 kv-str-002 kv-str-003 kv-str-004 kv-str-005)
+list(LENGTH KATAI_TEST_CASES _katai_corpus_ids)
 katai_add_test(test_input_corpus katai::jobs katai::mesh katai::analysis katai::model katai::io)  # Input corpus (roadmap 6.3): checked-in .k2d byte-identical to the programmatic build, validated, then SOLVED FROM THE FILE against its declared closed form
+unset(KATAI_TEST_CASES)
 if(TARGET test_input_corpus)
   target_compile_definitions(test_input_corpus PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus"
-    KATAI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")   # El Centro record (KV-DYN-003)
+    KATAI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"    # El Centro record (KV-DYN-003)
+    # ...and the count the ids above registered, which the test static_asserts against its own
+    # table. See the comment there: without it a case can exist with no ctest entry.
+    KATAI_CORPUS_CASE_COUNT=${_katai_corpus_ids})
 endif()
 katai_add_test(test_phase_water katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-003: staged dewatering (.k2d v4 per-phase water) against the effective-stress closed form -- the second capability the anchored-excavation benchmark needed
 katai_add_test(test_anchor_prestress katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-001: the anchor lock-off force (.k2d v3) against an equivalent external-force model -- the first structural case in the matrix, and the input every anchored excavation needs
@@ -196,10 +211,20 @@ if(TARGET test_mesh_convergence)
   target_compile_definitions(test_mesh_convergence PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
+# One ctest entry per fixture: fourteen models built and solved, sharing nothing but the failure
+# counter, and 1071 s of wall clock that `ctest -j 6` could not overlap with anything else.
+set(KATAI_TEST_CASES
+  reference load_above_surface load_outside_model load_half_outside
+  point_load_off_mesh point_load_between_nodes plate_above_soil plate_clipped
+  geogrid_above_soil anchor_outside_soil wall_above_soil tension_cutoff_ignored
+  prescribed_disp_on_structure linear_dynamic_zero_stress)
+list(LENGTH KATAI_TEST_CASES _katai_drop_ids)
 katai_add_test(test_no_silent_drop katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-DIA-001: no input may be discarded in silence -- one fixture per driver build loop, each perturbing ONE field of a corpus case, asserting the stable diagnostic code and that a clipped object equals the object drawn where the mesh took it
+unset(KATAI_TEST_CASES)
 if(TARGET test_no_silent_drop)
   target_compile_definitions(test_no_silent_drop PRIVATE
-    KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+    KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus"
+    KATAI_DROP_CASE_COUNT=${_katai_drop_ids})
 endif()
 katai_add_test(test_jobs katai::jobs katai::mesh katai::analysis katai::model katai::io)  # The Job object (Stage D): driver-path equivalence bit-identical, progress, cooperative phase-boundary cancel, timings, two concurrent jobs in one process
 if(TARGET test_jobs)
@@ -326,20 +351,52 @@ endif()
 # but only after there has been one). A number here going badly stale is visible in the ctest
 # output as poor packing, not as a wrong answer, which is the right failure mode for a hint.
 #
-# 2026-08-26: test_phase_numerics was the whole suite's wall clock -- 2683 s of a 2683 s run --
-# and it held four INDEPENDENT verification cases. Split into four ctest entries over the one
-# executable, they measure 1176 / 401 / 30 / 2 s, so the file's contribution to the critical path
-# is 1176 s: the suite floor moved from that file to test_input_corpus, which is the next thing
-# to split (its cases are per-corpus-file and already independent). Two of the four are now cheap
-# enough to live in the INNER loop, which is a gain beyond the wall clock -- KV-NUM-010 and
-# KV-NUM-011 used to be checked only before a commit.
+# 2026-08-26, three splits in one day, each of a file that was the suite's wall clock at the time:
+#
+#   test_phase_numerics   2683 s -> four entries, worst 1176 s   (four independent KV cases)
+#   test_input_corpus     1370 s -> 26 entries, worst  306 s     (one per corpus file)
+#   test_no_silent_drop   1071 s -> 14 entries, worst  469 s     (one per dropped-input fixture)
+#
+# AND THAT IS AS FAR AS SPLITTING GOES. Splitting buys wall clock only while one entry exceeds
+# the suite's total divided by N, and none does any more: the longest is test_hs_footing at 890 s
+# solo against a 1796 s run. Past that the lever is the work the solves do, not the size of the
+# entries -- which is exactly what the next line shows, since 2026-08-27's 470 s came from ONE
+# verification block giving up a rung it should never have been standing on (KV-NUM-009 (d)):
+#
+#   full suite, MKL/PARDISO      154 tests / 2597 s  ->  195 / 2266 s  ->  195 / 1796 s
+#   full suite, portable/Eigen                           193 /  ---   ->  193 / 1881 s
+#   inner loop                   144 tests /  144 s  ->  180 /  169 s
+#
+# The gain beyond the wall clock is that 36 real verification cases fell below the slow threshold
+# and joined the INNER loop, where before they were checked only in the pre-commit run.
+#
+# OVER-SUBSCRIPTION IS REAL AND COSTS NOTHING, WHICH IS WHY `-j 6` STAYS. Six slots on four
+# physical cores does slow each heavy solve down, and the two full runs say by how much -- these
+# are each one run's own accumulated test time for the same fifteen entries, out of that run's
+# label summary rather than out of any average:
+#
+#   ctest -j 6    slow set 8491 s of test time    wall 2266 s
+#   ctest -j 4    slow set 6546 s of test time    wall 2257 s
+#
+# Thirty per cent more test time at -j 6, and the same wall clock to nine seconds. What -j 4 buys
+# back per test it gives up again in slots, so the machine is saturated on memory bandwidth either
+# way and the scheduler is not where anything is left. Effective parallelism is 3.6x on four
+# cores; the lever that remains is the work the solves do.
+#
+# THE SECONDS BELOW ARE SOLO WALL CLOCK, one entry run by itself, and that is a choice worth
+# stating. CTest keeps its own estimate in CTestCostData, but that file holds a RUNNING AVERAGE
+# over every run it has seen -- the format is `name count cost`, and test_phase_numerics_009 sat
+# at 1735.9 s over 5 runs on a day when the entry itself measured 781 s. Reading a number out of
+# that file is not reading a measurement. What is here is what a cold tree will see, and CTest
+# replaces it with its own average as soon as it has one.
 set(_katai_slow_tests
-  test_phase_numerics_009 1176    test_phase_numerics_008 401
-  test_input_corpus 1368    test_no_silent_drop 1071
-  test_hs_footing 891         test_slope_fos_convergence 536
-  test_tolerance_independence 406  test_hs_axisym 317    test_plaxis_validation 294
-  test_convergence_criteria 232    test_gui_matrix 174   test_dynamic_gui 129
-  test_bearing_phi 126)
+  test_hs_footing 890             test_phase_numerics_009 781
+  test_no_silent_drop_tension_cutoff_ignored 469  test_slope_fos_convergence 535
+  test_tolerance_independence 409 test_phase_numerics_008 401
+  test_hs_axisym 317              test_input_corpus_kv-cst-012 306
+  test_plaxis_validation 294      test_convergence_criteria 230
+  test_gui_matrix 173             test_dynamic_gui 128    test_bearing_phi 125
+  test_input_corpus_kv-str-004 90 test_input_corpus_kv-fnd-013 72)
 while(_katai_slow_tests)
   list(POP_FRONT _katai_slow_tests _t _cost)
   if(TEST ${_t})

@@ -3391,7 +3391,15 @@ void oracle_tension_cutoff(const m::Project& pr) {
           "the column deforms by the order of the stretch imposed, not by a collapse");
 }
 
-int main() {
+// ONE EXECUTABLE, ONE CTEST ENTRY PER CASE. Passing a corpus id (kv-fnd-010) runs that case
+// alone; passing nothing runs all 26, which is what a developer wants and what
+// KATAI_CORPUS_WRITE=1 regeneration needs. The reason is wall clock: run together the cases were
+// 1370 s -- measured 2026-08-26 -- and with `ctest -j 6` no suite can finish faster than its
+// longest single test, so this one file set the floor for the whole run. They are independent by
+// construction (each is a file, a build function and an oracle), so the split costs nothing but
+// a process launch each.
+int main(int argc, char** argv) {
+    const std::string which = argc > 1 ? argv[1] : "";
     std::printf("Input corpus: checked-in .k2d == programmatic build, validated, solved from the file\n");
     const CorpusCase cases[] = {
         {"kv-con-002-terzaghi-column.k2d", build_terzaghi, oracle_terzaghi},
@@ -3421,10 +3429,34 @@ int main() {
         {"kv-str-005-geogrid-tension.k2d", build_geogrid, oracle_geogrid},
         {"kv-cst-011-tension-cutoff-hs.k2d", build_tension_cutoff, oracle_tension_cutoff},
     };
-    for (const CorpusCase& c : cases) run_case(c);
+    // The dangerous direction of the split: a case added to the table above but not to
+    // KATAI_TEST_CASES in tests/CMakeLists.txt would have no ctest entry, so it would run only
+    // when someone invokes this executable by hand -- which nothing in the suite does. The build
+    // passes the number of ids it registered, and a mismatch fails every entry at compile time
+    // rather than passing quietly forever.
+#ifdef KATAI_CORPUS_CASE_COUNT
+    static_assert(sizeof(cases) / sizeof(cases[0]) == KATAI_CORPUS_CASE_COUNT,
+                  "corpus case count != the ids in KATAI_TEST_CASES (tests/CMakeLists.txt): "
+                  "a case here has no ctest entry, or an id there has no case");
+#endif
+
+    int ran = 0;
+    for (const CorpusCase& c : cases) {
+        if (!which.empty() && std::string(c.file).rfind(which, 0) != 0) continue;
+        run_case(c);
+        ++ran;
+    }
+    // A selector that matches nothing is a silent pass otherwise -- a renamed case would take its
+    // ctest entry with it and the run would still report success.
+    if (ran == 0) {
+        std::fprintf(stderr, "\nFAIL: no corpus case begins with '%s'\n", which.c_str());
+        return 1;
+    }
 
     if (g_failures == 0) {
-        std::printf("\nOK: every corpus case is reproducible from its checked-in .k2d\n");
+        std::printf(which.empty()
+                        ? "\nOK: every corpus case is reproducible from its checked-in .k2d\n"
+                        : "\nOK: the selected corpus case is reproducible from its checked-in .k2d\n");
         return 0;
     }
     std::fprintf(stderr, "\n%d check(s) failed\n", g_failures);

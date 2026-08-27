@@ -422,22 +422,53 @@ void case_linear_dynamic_zero_stress() {
 
 }  // namespace
 
-int main() {
+// ONE EXECUTABLE, ONE CTEST ENTRY PER CASE. Each case is a whole model built, solved and checked
+// for a diagnostic, and they share nothing but the failure counter -- so the only thing running
+// them in one process bought was a single line of ctest output, at the price of 1071 s of wall
+// clock that `ctest -j 6` could not overlap with anything. Named rather than numbered, so a red
+// line says which input was dropped without anyone opening the log.
+struct Case {
+    const char* name;
+    void (*run)();
+};
+
+int main(int argc, char** argv) {
+    const std::string which = argc > 1 ? argv[1] : "";
     std::printf("== no input may be discarded in silence (KV-DIA-001) ==\n");
-    case_reference();
-    case_load_above_surface();
-    case_load_outside_model();
-    case_load_half_outside();
-    case_point_load_off_mesh();
-    case_point_load_between_nodes();
-    case_plate_above_soil();
-    case_plate_clipped();
-    case_geogrid_above_soil();
-    case_anchor_outside_soil();
-    case_wall_above_soil();
-    case_tension_cutoff_ignored();
-    case_prescribed_disp_on_structure();
-    case_linear_dynamic_zero_stress();
+    const Case cases[] = {
+        {"reference", case_reference},
+        {"load_above_surface", case_load_above_surface},
+        {"load_outside_model", case_load_outside_model},
+        {"load_half_outside", case_load_half_outside},
+        {"point_load_off_mesh", case_point_load_off_mesh},
+        {"point_load_between_nodes", case_point_load_between_nodes},
+        {"plate_above_soil", case_plate_above_soil},
+        {"plate_clipped", case_plate_clipped},
+        {"geogrid_above_soil", case_geogrid_above_soil},
+        {"anchor_outside_soil", case_anchor_outside_soil},
+        {"wall_above_soil", case_wall_above_soil},
+        {"tension_cutoff_ignored", case_tension_cutoff_ignored},
+        {"prescribed_disp_on_structure", case_prescribed_disp_on_structure},
+        {"linear_dynamic_zero_stress", case_linear_dynamic_zero_stress},
+    };
+    // A case added here but not to KATAI_TEST_CASES in tests/CMakeLists.txt would have no ctest
+    // entry and would never run again. The build passes the number of ids it registered.
+#ifdef KATAI_DROP_CASE_COUNT
+    static_assert(sizeof(cases) / sizeof(cases[0]) == KATAI_DROP_CASE_COUNT,
+                  "case count != the ids in KATAI_TEST_CASES (tests/CMakeLists.txt): "
+                  "a case here has no ctest entry, or an id there has no case");
+#endif
+
+    int ran = 0;
+    for (const Case& c : cases) {
+        if (!which.empty() && which != c.name) continue;
+        c.run();
+        ++ran;
+    }
+    if (ran == 0) {
+        std::fprintf(stderr, "\nFAIL: no case named '%s'\n", which.c_str());
+        return 1;
+    }
     std::printf(g_failures ? "\n%d CHECK(S) FAILED\n" : "\nall checks passed\n", g_failures);
     return g_failures ? 1 : 0;
 }
