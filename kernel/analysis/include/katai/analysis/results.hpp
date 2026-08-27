@@ -203,6 +203,42 @@ struct SolveResult {
     NewtonResult::Convergence convergence;
 };
 
+// PLAXIS engages arc-length automatically below this (Reference §7.9.3.15) on exactly the
+// question asked here: has the body gone substantially plastic, or is it still stiff? The number
+// is theirs rather than ours because the criterion is theirs.
+inline constexpr double kMechanismCsp = 0.5;
+
+// May the load factor of a run that ended THIS way be published as a capacity?
+//
+// One place, because four surfaces ask it -- this message, the Studio's Phases panel and Output
+// window, and both reports -- and a rule that lives in four places is a rule that will disagree
+// with itself. The two arguments it carries:
+//
+//   SolveRefused   the linear solver would not answer: the tangent went singular along a
+//                  mechanism. That IS the fingerprint, and it needs no second opinion.
+//   NoDescent      the search stalled while the tangent stayed non-singular. Ambiguous on its
+//                  own -- measured 2026-08-27, KV-CST-002's confined seating phase and
+//                  KV-FND-010's Prandtl footing END THE SAME WAY, and one is a verified bearing
+//                  capacity while the other has no mechanism available at all. What separates
+//                  them is the current stiffness parameter: 0.00010 for the footing against
+//                  0.65550 for the column, four orders of magnitude, with 1468 yielding stress
+//                  points against 96.
+//
+// THE ASYMMETRY IS DELIBERATE AND IS THE KNOWN HOLE. A low CSP proves the body softened into a
+// mechanism; a high one proves nothing, because CSP is blind to STRUCTURAL plasticity -- a plate
+// that has formed a hinge reports 1.00000. So a structural mechanism ending in NoDescent is
+// reported as "not established" rather than as a capacity, which is the safe side of a signal
+// that cannot see it. Closing that is the arc-length package's business, not this predicate's.
+inline bool abandonment_establishes_a_limit_load(NewtonResult::Abandonment a, double csp) {
+    switch (a) {
+        case NewtonResult::Abandonment::SolveRefused: return true;
+        case NewtonResult::Abandonment::NoDescent:    return csp < kMechanismCsp;
+        case NewtonResult::Abandonment::IterationBudget:
+        case NewtonResult::Abandonment::None:         return false;
+    }
+    return false;
+}
+
 // The one spelling of "say this out loud", shared by the driver and the phase strategies so a
 // diagnostic reads the same wherever it was raised. A refusal ALSO sets ok/message, because a
 // front end that only looks at those two must not be able to miss it.

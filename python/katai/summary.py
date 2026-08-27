@@ -109,13 +109,26 @@ def _one(r, name, fields, structures, diagnostics):
         L.append(f"  reason        {r.message}")
     L.append(f"  max |u|       {r.max_disp:.6e} m")
     if r.load_factor != 1.0:
-        # The fraction alone does not say what it is. It is the incremental limit load when a
-        # mechanism formed, and merely where the iteration budget ran out otherwise -- the same
-        # model reaches full load when max_iterations is adequate (KV-STR-004). The engine
-        # records which, so the line says it instead of leaving the reader to assume.
-        why = {"mechanism": "   <- the incremental limit (collapse) load",
-               "singular tangent": "   <- the incremental limit (collapse) load",
+        # The fraction alone does not say what it is. It is the incremental limit load only when
+        # the tangent went singular along a mechanism; where the iteration budget ran out the same
+        # model reaches full load once max_iterations is adequate (KV-STR-004); and a stalled line
+        # search is produced by both, so it settles nothing on its own (measured 2026-08-27 on
+        # KV-CST-002's seating phase: four answers for one problem, decided by the load-step count
+        # and the backend). The engine records which, so the line says it instead of leaving the
+        # reader to assume the one reading that flatters the run.
+        # 'stalled line search' is ambiguous by itself and the stiffness parameter decides it,
+        # with PLAXIS's 0.5: the same ending is a verified bearing capacity at 0.00010 and a
+        # confined column that cannot form a mechanism at 0.65550. The rule is the engine's
+        # (abandonment_establishes_a_limit_load, static_phase.hpp); this reads the same two
+        # values rather than inventing a second opinion.
+        LIMIT = "   <- the incremental limit (collapse) load"
+        why = {"singular tangent": LIMIT,
                "iteration budget": "   <- where the ITERATION BUDGET ran out, NOT a capacity"}
+        if r.stopped_by == "stalled line search":
+            csp = r.convergence.stiffness_parameter
+            why["stalled line search"] = (
+                LIMIT if csp < 0.5
+                else f"   <- a STALLED SEARCH at stiffness parameter {csp:.5f}, NOT a capacity")
         L.append(f"  load factor   {r.load_factor:.4f}"
                  + why.get(r.stopped_by, "   <- the fraction that reached equilibrium"))
     if r.fos >= 0.0:

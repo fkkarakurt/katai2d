@@ -663,16 +663,21 @@ NB_MODULE(_core, m) {
         .def_prop_ro("stopped_by", [](const api::SolveResult& r) {
             using A = katai::core::NewtonResult::Abandonment;
             switch (r.stopped_by) {
-                case A::NoDescent:       return "mechanism";
+                // Was "mechanism", which is the claim this ending cannot support: the tangent
+                // was never singular in it. Renamed for what it is (see NewtonResult::no_descent).
+                case A::NoDescent:       return "stalled line search";
                 case A::SolveRefused:    return "singular tangent";
                 case A::IterationBudget: return "iteration budget";
                 case A::None:            break;
             }
             return "";
         }, "Why a solve stopped short of full load, machine-readable so a script does not have to "
-           "read the message: '' (reached full load), 'mechanism' or 'singular tangent' (load_factor "
-           "IS the incremental limit load), 'iteration budget' (it is NOT a capacity -- the same "
-           "model carries the load when the phase's max_iterations is adequate)")
+           "read the message: '' (reached full load), 'singular tangent' (load_factor IS the "
+           "incremental limit load -- the tangent went singular along a mechanism), 'stalled line "
+           "search' (AMBIGUOUS: a mechanism and a well-supported model both produce it, so "
+           "load_factor is not a capacity until a re-run at a different load-step count leaves it "
+           "where it was), 'iteration budget' (it is NOT a capacity -- the same model carries the "
+           "load when the phase's max_iterations is adequate)")
         .def_prop_ro("convergence", [](const api::SolveResult& r) { return r.convergence; },
                      "WHICH convergence criteria the accepted iterate satisfied. `ok` is a claim "
                      "about ONE quantity, the out-of-balance force; a run can meet it while "

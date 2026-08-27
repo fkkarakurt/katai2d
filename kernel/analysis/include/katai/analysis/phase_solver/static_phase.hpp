@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -55,7 +56,7 @@ namespace katai::core {
 // One sentence used to be printed for every non-convergence: "a collapse mechanism
 // formed ... the remaining load exceeds the soil capacity", followed by the claim that
 // the equilibrated fraction IS the incremental limit load. That is true of exactly one
-// of the three ways an increment is abandoned, and KV-STR-004 was measured ending in
+// of the ways an increment is abandoned, and KV-STR-004 was measured ending in
 // another: every abandoned increment there was still reducing its out-of-balance force
 // and simply ran out of iterations, on a mesh where the same file converges to full load
 // once the per-increment limit is raised. The load factor was a patience setting, printed
@@ -63,9 +64,19 @@ namespace katai::core {
 // the linear solver's rounding, the same file "collapsed" on one backend and carried its
 // full load on the other.
 //
-// So the message names the reason the solver actually stopped for, and only the mechanism
-// case keeps the limit-load reading. The counts come from the solver's own record; nothing
-// here re-derives them, so a message cannot drift from what happened.
+// THAT FIX CAUGHT ONE OF THE TWO, AND THE ARGUMENT IT WAS MADE WITH CONVICTS THE OTHER
+// (2026-08-27). NoDescent was left sharing the mechanism reading, and it does not belong
+// there: it is the ending where the tangent was NOT singular -- the linear solver answered
+// every time, which is the whole of what separates it from SolveRefused -- so it is a
+// stalled line search, and a stall is not a capacity. Measured on KV-CST-002's seating
+// phase, a laterally confined weightless column that has no mechanism available: the same
+// file reported 68%, 74% and 83% of the load, and on a fourth run carried all of it, decided
+// only by the load-step count and by which linear solver ran it. Four capacities for one
+// problem is the same evidence the paragraph above used, arriving a second time.
+//
+// So the message names the reason the solver actually stopped for, and only the singular-
+// tangent case keeps the limit-load reading. The counts come from the solver's own record;
+// nothing here re-derives them, so a message cannot drift from what happened.
 inline std::string non_convergence_message(const NewtonResult& nr) {
     const std::string pct = std::to_string((int)std::lround(100.0 * nr.load_factor));
     std::string msg = "Did not fully converge: equilibrated " + pct + "% of the applied load. ";
@@ -84,18 +95,41 @@ inline std::string non_convergence_message(const NewtonResult& nr) {
                    "equilibrated fraction is the incremental limit (collapse) load.";
             break;
         case NewtonResult::Abandonment::NoDescent:
+            if (abandonment_establishes_a_limit_load(nr.last_abandonment, nr.convergence.csp)) {
+                char csp[64];
+                std::snprintf(csp, sizeof(csp), "%.5f", nr.convergence.csp);
+                msg += "No step along the Newton direction reduced the out-of-balance force, at "
+                       "increments repeatedly cut back, with the stiffness parameter down to ";
+                msg += csp;
+                msg += " -- the body has softened into a mechanism. This equilibrated fraction "
+                       "is the incremental limit (collapse) load.";
+            } else {
+                char csp[64];
+                std::snprintf(csp, sizeof(csp), "%.5f", nr.convergence.csp);
+                msg += "No step along the Newton direction reduced the out-of-balance force, at "
+                       "increments repeatedly cut back. But the tangent was never singular -- the "
+                       "linear solver answered every time -- and the stiffness parameter was "
+                       "still ";
+                msg += csp;
+                msg += ", so the body had NOT softened into a mechanism: this is a stalled search "
+                       "and the fraction is not established as a capacity. One re-run separates "
+                       "them, because a limit load does not move with the load-step count or with "
+                       "the linear solver, and a stall does. (A plate that has formed a hinge is "
+                       "the exception the stiffness parameter cannot see, and lands here too.)";
+            }
+            break;
         case NewtonResult::Abandonment::None:
-            msg += "No increment of the remaining load could be equilibrated at any step size: a "
-                   "collapse mechanism formed (the remaining load exceeds the soil capacity). "
-                   "This equilibrated fraction is the incremental limit (collapse) load.";
+            msg += "The solver stopped without recording which increment ended it, so nothing "
+                   "here may be read as a capacity.";
             break;
     }
-    // A limit load read off a run that ALSO spent increments on the iteration budget is a lower
-    // bound twice over, so the count travels with it rather than being left in the solver.
+    // A load fraction read off a run that ALSO spent increments on the iteration budget is a lower
+    // bound twice over, so the count travels with it rather than being left in the solver. The
+    // wording does not presuppose a mechanism, because two of the four endings above do not.
     if (nr.last_abandonment != NewtonResult::Abandonment::IterationBudget && nr.budget_exhausted > 0)
         msg += " " + std::to_string(nr.budget_exhausted) +
                " earlier increment(s) also ran out of iterations, so the load reached before the "
-               "mechanism may be an underestimate.";
+               "run stopped may be an underestimate.";
     return msg;
 }
 

@@ -254,8 +254,17 @@ struct NewtonResult {
     // out-of-balance force and simply ran out of iterations -- a patience setting
     // presented as a capacity. The three reasons are not interchangeable:
     //
-    //   no_descent        no step along the Newton direction reduces the residual,
-    //                     repeatedly. THIS is the mechanism signal: the limit load.
+    //   no_descent        no step along the Newton direction reduces the residual, repeatedly.
+    //                     This was recorded here as "THE mechanism signal: the limit load", and
+    //                     that is withdrawn (2026-08-27). It is AMBIGUOUS: the tangent was never
+    //                     singular in this ending -- the linear solver answered every time, which
+    //                     is what separates it from refused_solves -- so a stalled line search on
+    //                     a well-supported model produces it too. Measured on KV-CST-002's
+    //                     seating phase, a laterally confined weightless column with no mechanism
+    //                     available: the same file ended at 68%, 74% and 83% of the load and also
+    //                     converged to full load, decided only by the load-step count and by
+    //                     which linear solver ran it. A capacity is not a function of either.
+    //                     The abandonment stays recorded; what changed is the claim it supports.
     //   budget_exhausted  the residual was still falling when max_iterations ran out.
     //                     Says nothing about capacity; raising the limit changes it.
     //   refused_solves    the linear solver would not answer: the tangent was singular

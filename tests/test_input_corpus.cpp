@@ -1149,8 +1149,15 @@ void oracle_prandtl_footing(const m::Project& pr) {
     // The RESULT is the honest non-convergence: the load exceeds the capacity, the
     // driver says so, and the equilibrated fraction is the limit load.
     check(!res[1].ok, "the collapse phase honestly does NOT fully converge");
-    check(res[1].message.find("collapse") != std::string::npos,
-          "the refusal message names the collapse mechanism");
+    // Not the WORD but the CLAIM, because the word survived a message that was wrong. This case
+    // ends the same way as a confined column that has no mechanism available (Abandonment::
+    // NoDescent, measured 2026-08-27), and what separates them is the stiffness parameter: 0.00010
+    // here against 0.65550 there. So the assertion is that this run keeps the limit-load reading
+    // AND that the signal it keeps it on is the one that actually distinguishes the two.
+    check(res[1].message.find("incremental limit (collapse) load") != std::string::npos,
+          "the refusal publishes the equilibrated fraction AS the limit load");
+    check(res[1].convergence.csp < 0.5,
+          "and does so on a collapsed stiffness parameter, which is what says a mechanism formed");
     const double nc = res[1].load_factor * kPrQ / kPrC;
     const double nc_ex = 2.0 + kPi;
     std::printf("      N_c = %.3f (Prandtl 2+pi = %.3f, %+.1f%%)\n",

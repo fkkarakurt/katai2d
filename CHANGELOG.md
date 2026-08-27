@@ -166,6 +166,41 @@ signature that grew with stress level and changed sign — is **retracted**, bec
 was the frozen-modulus error. `docs/validation/numerical-uncertainty.md` §6 and §7 are rewritten
 around what is measured now.
 
+### A stalled search was being published as a bearing capacity
+
+A run that stops below full load has to say which of three things happened, because the same
+fraction means different things and only one of them is a capacity. That distinction was made once
+already, for the run that merely exhausts its iteration budget. It was not made for the second
+case, and the second case is the common one.
+
+When no step along the Newton direction reduces the out-of-balance force — the search stalls — the
+program reported "a collapse mechanism formed (the remaining load exceeds the soil capacity)" and
+published the equilibrated fraction as the incremental limit load. In four places: the message, the
+Studio's Phases panel and Output window, and both reports. But that ending happens with the tangent
+still non-singular — the linear solver answered every time, which is exactly what separates it from
+the singular-tangent ending — so a well-supported model reaches it too. Measured on a laterally
+confined weightless column, which has no mechanism available at all: the same file reported 68%,
+74% and 83% of the load and on a fourth run carried all of it, decided by nothing but the load-step
+count and which linear solver ran it. A capacity is not a function of either.
+
+**The fix is a discrimination, not a retreat.** The first attempt was to stop claiming a capacity on
+that ending, and it was wrong: `KV-FND-010`'s Prandtl strip footing, whose limit load is verified
+against `N_c = 2 + π`, ends the very same way. What separates them is the current stiffness
+parameter — **0.00010 for the footing against 0.65550 for the column**, with 1468 yielding stress
+points against 96 — and the threshold is PLAXIS's own, the CSP < 0.5 at which it engages arc-length
+(Reference §7.9.3.15). So the rule is now one function beside the field it reads, called by all four
+surfaces, and each of them names the stiffness parameter it decided on rather than deciding
+invisibly.
+
+The asymmetry it leaves is deliberate and stated where the rule lives: a low stiffness parameter
+proves the body softened into a mechanism, a high one proves nothing, because CSP is blind to
+STRUCTURAL plasticity — a plate that has formed a hinge reports 1.00000. Such a run is reported as
+"not established as a capacity", which is the safe side of a signal that cannot see it.
+
+**Python surface:** `SolveResult.stopped_by` returned `'mechanism'` for this ending. The name was
+the claim, so it is now `'stalled line search'`, and `katai.summary()` reads the stiffness parameter
+alongside it rather than trusting the label.
+
 ### Known limits
 
 - The integration tolerance is a build-time default with an environment override

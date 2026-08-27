@@ -301,6 +301,78 @@ void test_non_convergence_names_its_reason() {
     const auto ok = run(0.5 * Q_ult, 50);
     check(ok.converged && ok.load_factor > 0.999,
           "half the capacity converges when the budget is adequate");
+
+    // (c) THE STALLED LINE SEARCH, which shared (a)'s verdict until 2026-08-27 and must not.
+    // The two endings above are reached by running a model; this one is asserted on the mapping
+    // itself, because what was wrong was never the recording -- the solver has always written
+    // down which of the reasons ended a run -- but the CLAIM the message drew from it. The
+    // fixture that produced the measurement is KV-CST-002's seating phase at 120 and 160
+    // increments, which takes minutes and lives in the corpus; the invariant it established is
+    // one line and belongs where the other two verdicts are.
+    //
+    // A mechanism makes the tangent singular and the linear solver refuse: that is (a), and it
+    // keeps the limit-load reading. NoDescent is the ending where the solver ANSWERED and the
+    // line search still found nothing -- ambiguous by construction, and measured ambiguous: the
+    // same confined column, which has no mechanism available, ended at 68%, 74% and 83% and also
+    // carried its full load, decided by the load-step count and the backend alone.
+    katai::core::NewtonResult stalled;
+    stalled.converged = false;
+    stalled.load_factor = 0.68;
+    stalled.last_abandonment = katai::core::NewtonResult::Abandonment::NoDescent;
+    stalled.no_descent = 5;
+    stalled.refused_solves = 0;              // the tangent was never singular: that is the point
+    stalled.convergence.csp = 0.65550;       // measured on the confined column that stalls
+    const std::string m_stall = katai::core::non_convergence_message(stalled);
+    std::printf("  stalled search: %s\n", m_stall.c_str());
+    check(m_stall.find("incremental limit (collapse) load") == std::string::npos &&
+              m_stall.find("collapse mechanism formed") == std::string::npos,
+          "a stalled line search does not publish a limit load");
+    check(m_stall.find("not established as a capacity") != std::string::npos,
+          "and says so in as many words, rather than merely omitting the claim");
+    check(m_stall.find("0.65550") != std::string::npos,
+          "and names the stiffness parameter it decided on, rather than deciding invisibly");
+    check(m_stall.find("load-step count") != std::string::npos &&
+              m_stall.find("linear solver") != std::string::npos,
+          "and names the re-run that separates a stall from a capacity");
+
+    // The separation is the assertion: the SAME load factor, ended by a singular tangent, still
+    // publishes the limit load. Without this the check above would pass on a message that had
+    // simply stopped claiming anything, which is a different and worse fix.
+    katai::core::NewtonResult mechanism = stalled;
+    mechanism.last_abandonment = katai::core::NewtonResult::Abandonment::SolveRefused;
+    mechanism.refused_solves = 3;
+    const std::string m_mech = katai::core::non_convergence_message(mechanism);
+    check(m_mech.find("incremental limit (collapse) load") != std::string::npos,
+          "a singular tangent at the same load factor still publishes the limit load");
+
+    // AND THE SAME ENDING AS THE STALL, SEPARATED ONLY BY THE STIFFNESS PARAMETER. This is the
+    // pair that makes the fix a discrimination rather than a retreat: KV-FND-010's Prandtl
+    // footing, whose limit load is verified against the closed form, ends in NoDescent exactly
+    // like the confined column -- at csp 0.00010 against 0.65550, with 1468 yielding stress
+    // points against 96. Without this check the honest thing to do would have been to stop
+    // claiming a capacity on ANY NoDescent, and a verified bearing capacity would have lost its
+    // name.
+    katai::core::NewtonResult softened = stalled;
+    softened.convergence.csp = 0.00010;
+    const std::string m_soft = katai::core::non_convergence_message(softened);
+    std::printf("  softened      : %s\n", m_soft.c_str());
+    check(m_soft.find("incremental limit (collapse) load") != std::string::npos,
+          "the same ending at a collapsed stiffness parameter DOES publish the limit load");
+    check(m_soft.find("0.00010") != std::string::npos,
+          "and names the stiffness parameter it decided on, rather than deciding invisibly");
+    check(katai::core::abandonment_establishes_a_limit_load(
+              katai::core::NewtonResult::Abandonment::NoDescent, 0.65550) == false &&
+          katai::core::abandonment_establishes_a_limit_load(
+              katai::core::NewtonResult::Abandonment::NoDescent, 0.00010) == true,
+          "the rule itself turns on PLAXIS's 0.5, and the two measured cases fall either side");
+
+    // And the unrecorded ending claims nothing either, so no path reaches a capacity by default.
+    katai::core::NewtonResult unknown = stalled;
+    unknown.last_abandonment = katai::core::NewtonResult::Abandonment::None;
+    check(katai::core::non_convergence_message(unknown).find("capacity") != std::string::npos &&
+              katai::core::non_convergence_message(unknown)
+                      .find("incremental limit (collapse) load") == std::string::npos,
+          "an unrecorded ending publishes no capacity either");
 }
 
 } // namespace
