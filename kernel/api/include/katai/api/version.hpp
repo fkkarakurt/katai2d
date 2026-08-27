@@ -9,11 +9,18 @@
 //
 // Scheme: MAJOR.MINOR.PATCH per the project's release gates ("-dev" while the
 // gate's checklist is open; drop it in the gate-closing commit, which also updates kVersionDate).
+// kVersionDate moves whenever kVersion does, opening a line as well as closing one: a report
+// printed from a development build must not carry the previous release's date, which is the same
+// traceability argument that put the identity here in the first place.
+//
+// 0.9.0's checklist is open. What is already in it is in CHANGELOG.md under [Unreleased]; what is
+// not yet done is the numerical-controls line N-3 onward (automatic step size from the iteration
+// band, then arc-length). Drop the "-dev" in the commit that closes the gate.
 
 namespace katai::api {
 
-inline constexpr const char* kVersion = "0.8.1";
-inline constexpr const char* kVersionDate = "2026-08-19";
+inline constexpr const char* kVersion = "0.9.0-dev";
+inline constexpr const char* kVersionDate = "2026-08-27";
 
 // "KATAI 2D <kVersion>" -- the canonical short identity for titles and report headers.
 inline constexpr const char* kAppName = "KATAI 2D";

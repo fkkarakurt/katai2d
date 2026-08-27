@@ -19,10 +19,13 @@
 #     import check cannot reach and the half a real job starts at.
 # "The wheel works" means "the numbers are still right", not "import succeeded".
 #
-# Usage:  .\scripts\build_wheel.ps1 [-SkipVerify]
+# Usage:  .\scripts\build_wheel.ps1 [-SkipVerify] [-AllowDev]
 [CmdletBinding()]
 param(
-    [switch]$SkipVerify
+    [switch]$SkipVerify,
+    # Package a version whose release gate is still open ("-dev"). For testing the packaging
+    # itself; the wheel it produces must not be published.
+    [switch]$AllowDev
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,6 +73,16 @@ Copy-Item (Join-Path $repo "NOTICE") $root
 
 $version = & $python -c "import sys; sys.path.insert(0, r'$root'); import katai; print(katai.__version__)"
 if (-not $version) { throw "cannot read katai.__version__ from the staged package" }
+# A "-dev" version means the release gate for that version is still open (see
+# katai/api/version.hpp). A wheel built from it would be installable and would answer
+# `katai.__version__` with a number no release note describes -- which is how a package once
+# reached another machine claiming a version whose features it did not have. Refuse it here
+# rather than at the far end. -AllowDev is for testing the packaging itself.
+if ($version -match '-dev' -and -not $AllowDev) {
+    throw "refusing to package $version -- the release gate for it is open. Close it in " +
+          "katai/api/version.hpp (drop the -dev, set kVersionDate), or pass -AllowDev to " +
+          "build a wheel that must not be published."
+}
 
 # BOM-less on purpose: PowerShell 5.1's Out-File utf8 prepends a BOM and the
 # TOML parser refuses the file at byte one.
