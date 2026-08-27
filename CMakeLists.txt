@@ -118,12 +118,44 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# --- MSVC: ccache-friendly embedded debug info (/Z7), instead of /Zi (CMP0141) ---
-# /Zi writes a separate PDB and does not ccache; /Z7 embeds into the .obj → cache hit.
+# --- Build KPI: debugger symbols are opt-in --------------------------------
+# Measured on this tree 2026-08-26. RelWithDebInfo emitted /Z7 for every translation unit and
+# passed /debug to every link, and what that costs is not compilation -- it is the disk:
+#
+#   one test translation unit    19.2 MB object with /Z7      0.2 MB without   (96x)
+#   katai_analysis.lib            457 MB                       ~15 MB
+#   build/msvc-rwdi              58.5 GB, of which 49.3 GB is 145 .pdb files (340 MB each)
+#   one test link                 5.1 s alone, ~20 s inside the build, where three of them
+#                                 share one 5400 rpm laptop disk -- 2862 s of a 10738 s build
+#   the same unit COMPILED        14.4 s with /Z7, 15.3 s without
+#
+# Debug information is free to produce and expensive to carry. Fifty gigabytes of symbols per
+# build tree, written to a hard disk, for 145 test executables that no debugger has ever been
+# attached to: every crash in this project's record was diagnosed from an assertion message or
+# from an object file's mtime, never from a PDB.
+#
+# So the symbols are opt-in, and the switch is real rather than nominal: configure with
+# -D KATAI_DEBUG_INFO=ON when a debugger IS the right tool, or use the msvc-debug preset, which
+# always has them. ccache keeps both variants keyed on the flag, so going back and forth costs
+# one build each way and nothing after that.
+option(KATAI_DEBUG_INFO "Emit debugger symbols in RelWithDebInfo (see the measurement above)" OFF)
 if(POLICY CMP0141)
   cmake_policy(SET CMP0141 NEW)
-  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
-      "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+  # Where symbols ARE emitted they are embedded (/Z7) rather than written to a side PDB (/Zi):
+  # /Zi writes that PDB during compilation and does not ccache; /Z7 goes in the .obj and does.
+  if(KATAI_DEBUG_INFO)
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+  else()
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug>:Embedded>")
+  endif()
+endif()
+# CMake's own RelWithDebInfo link flags carry /debug, and /debug is what writes the .pdb. With no
+# symbols in the objects it would write an empty one at full price, so it goes with them.
+if(MSVC AND NOT KATAI_DEBUG_INFO)
+  foreach(_kind EXE SHARED MODULE)
+    string(REPLACE "/debug" "" CMAKE_${_kind}_LINKER_FLAGS_RELWITHDEBINFO
+           "${CMAKE_${_kind}_LINKER_FLAGS_RELWITHDEBINFO}")
+  endforeach()
 endif()
 
 # Default build type on single-config generators
@@ -215,8 +247,24 @@ endif()
 # composition every test executable links the whole solver (~130 MB each), so
 # building them is far from free.
 option(KATAI_WITH_TESTS "Build the test suite" ON)
+# ...and a second switch, for a superbuild that wants katai_add_test without wanting the core
+# suite compiled again. Measured 2026-08-26: of the studio superbuild's 11308 s of compilation,
+# 7587 s -- 67% -- was the core's 143 test translation units and their links, every one of which
+# had just been built and run in build/msvc-rwdi. Two build trees cannot share a ccache entry
+# either (ccache's own debug log: `hash_dir` puts the build directory in the hash, and /Yu /Fp
+# /FI carry the absolute path of that tree's precompiled header), so the work was not merely
+# repeated, it was repeated at full price. The studio gate runs 17 studio tests; the core suite
+# belongs to the core's own tree.
+option(KATAI_WITH_CORE_TESTS "Build the core's own test executables" ON)
+# ...and, between all and nothing, a regex. The studio superbuild does not need the core suite
+# rebuilt, but it does need the part of it that exercises the path its app takes into the engine
+# (the *_gui family: project -> problem -> solve). Naming that subset keeps the studio gate the
+# same 17 tests it was while dropping the other ~128 executables from the build.
+set(KATAI_CORE_TESTS_MATCHING "" CACHE STRING
+    "Regex selecting which core test executables to build (empty: all of them)")
 enable_testing()
-if(KATAI_WITH_TESTS)
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/KataiAddTest.cmake)
+if(KATAI_WITH_TESTS AND KATAI_WITH_CORE_TESTS)
   add_subdirectory(tests)
 endif()
 

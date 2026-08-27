@@ -1,59 +1,12 @@
 # tests -- unit and regression. No framework: CTest plus assertions is enough, and
 # every test is a plain executable that returns non-zero on failure.
 #
-# Adding a test: katai_add_test(<name> [link targets...]). The default link is
-# katai::math. katai::linsolve is added to every test unconditionally, because a
-# test executable is a composition root: it is a whole program, and a program that
-# solves has to contain a backend. Which backend that is comes from the
-# configuration, never from the test -- see kernel/linsolve/CMakeLists.txt.
+# katai_add_test is defined in cmake/KataiAddTest.cmake, which the root includes whether or not
+# this directory is added -- see the header there for what the function does and why it moved.
 #
-# The named modules do two more jobs. They label the test, so `ctest -L materials`
-# runs exactly the tests whose subject is that module. And they scope it: in a
-# composition that does not build one of the named modules the test is skipped,
-# never linked against a substitute -- a missing module is refused, not imitated
-# (composability rule 3).
-function(katai_add_test name)
-  set(libs ${ARGN})
-  if(NOT libs)
-    set(libs katai::math)
-  endif()
-  set(labels "")
-  foreach(lib ${libs})
-    if(lib MATCHES "^katai::(.+)$")
-      if(NOT TARGET ${lib})
-        set_property(GLOBAL APPEND PROPERTY KATAI_SKIPPED_TESTS ${name})
-        return()
-      endif()
-      list(APPEND labels ${CMAKE_MATCH_1})
-    endif()
-  endforeach()
-  add_executable(${name} ${name}.cpp)
-  target_link_libraries(${name} PRIVATE ${libs} katai::linsolve)
-  katai_use_pch(${name})
-  # ONE EXECUTABLE, OPTIONALLY SEVERAL CTEST ENTRIES. Set KATAI_TEST_CASES before the call and
-  # each case becomes `<name>_<case>` running `<name> <case>`. This exists for wall clock, not
-  # for tidiness: with `ctest -j N` the suite cannot finish faster than its single longest test,
-  # so a file holding several independent verification cases sets the floor for everything else.
-  # Splitting it lets the cases run side by side. The executable still runs all of them when
-  # invoked with no argument, so a developer keeps the whole story in one command.
-  if(KATAI_TEST_CASES)
-    foreach(case ${KATAI_TEST_CASES})
-      add_test(NAME ${name}_${case} COMMAND ${name} ${case})
-      list(APPEND _katai_entries ${name}_${case})
-    endforeach()
-  else()
-    add_test(NAME ${name} COMMAND ${name})
-    set(_katai_entries ${name})
-  endif()
-  set_tests_properties(${_katai_entries} PROPERTIES LABELS "${labels}")
-  # With MKL linked dynamically its runtime has to be locatable at load time. Putting
-  # it in the test's own environment rather than expecting the caller's PATH means
-  # `ctest` works from any shell, including a bare one and CI.
-  if(KATAI_MKL_RUNTIME_DIR)
-    set_tests_properties(${_katai_entries} PROPERTIES
-      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${KATAI_MKL_RUNTIME_DIR}")
-  endif()
-endfunction()
+# KATAI_CORE_TESTS_MATCHING narrows THIS directory only. It is copied into a directory-scoped
+# name so that a superbuild adding its own tests after this one is unaffected by it.
+set(KATAI_TEST_FILTER "${KATAI_CORE_TESTS_MATCHING}")
 
 katai_add_test(test_math_smoke)                    # Eigen smoke (P0.1)
 katai_add_test(test_sparse_matrix)                 # CSR + builder (P0.2)
@@ -401,4 +354,14 @@ get_property(_katai_skipped GLOBAL PROPERTY KATAI_SKIPPED_TESTS)
 if(_katai_skipped)
   list(LENGTH _katai_skipped _n)
   message(STATUS "katai tests: ${_n} skipped (their modules are not in this composition): ${_katai_skipped}")
+endif()
+# The same for a narrowed suite. A filter is a build-time saving traded against coverage, and
+# which side of that trade a tree is on has to be readable in its configure output, not inferred
+# from a test count.
+get_property(_katai_filtered GLOBAL PROPERTY KATAI_FILTERED_TESTS)
+if(_katai_filtered)
+  list(LENGTH _katai_filtered _n)
+  message(STATUS "katai tests: ${_n} NOT BUILT here -- KATAI_CORE_TESTS_MATCHING="
+                 "'${KATAI_CORE_TESTS_MATCHING}' selects a subset of the core suite. "
+                 "The full suite lives in the core's own build tree.")
 endif()

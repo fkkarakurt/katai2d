@@ -7,7 +7,11 @@ param(
     [switch]$Configure,   # force the configure step (first setup / CMake change)
     [switch]$Test,        # run ctest after the build
     [int]$Jobs = 6,       # ctest parallelism
-    [string]$Target = ""  # optional single build target (default: everything)
+    [string]$Target = "", # optional single build target (default: everything)
+    # Debugger symbols, off by default -- see KATAI_DEBUG_INFO in CMakeLists.txt for what they
+    # cost here (49 GB of PDBs and 2862 s of link time in a 10738 s build). Implies -Configure,
+    # because it is a compile flag: nothing already built is reusable across the switch.
+    [switch]$DebugInfo
 )
 
 $ErrorActionPreference = "Stop"
@@ -80,8 +84,9 @@ if (-not $python) {
 Push-Location $root
 try {
     $buildDir = Join-Path $root "build\$Preset"
-    if ($Configure -or -not (Test-Path (Join-Path $buildDir "CMakeCache.txt"))) {
+    if ($DebugInfo -or $Configure -or -not (Test-Path (Join-Path $buildDir "CMakeCache.txt"))) {
         $cfgArgs = @("--preset", $Preset)
+        $cfgArgs += @("-D", "KATAI_DEBUG_INFO=$(if ($DebugInfo) { 'ON' } else { 'OFF' })")
         if ($mklDir) { $cfgArgs += @("-D", "MKL_DIR=$mklDir") }
         # One FindPython module across the tree (nanobind requires the NEW module,
         # and mixing FindPython with FindPython3 corrupts each other's cache).
