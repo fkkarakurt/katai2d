@@ -630,36 +630,51 @@ void case_009(const Oedometer& O) {
               "percentage point, so at most that much of the deviation can be the FE");
     }
 
-    // (d) THE CEILING ON PATH REFINEMENT HAS BEEN LIFTED, and this is the sentence the old check
-    //     asked for. It read: refining the SEATING phase to 160 increments at a converged
-    //     tolerance stops converging altogether rather than getting better -- on this weightless
-    //     column, whose confining stress starts near zero where the Hardening Soil stiffness is
-    //     at its smallest -- and it ended "if this check ever fails because the run now succeeds,
-    //     the ceiling has moved and the sentence above needs rewriting".
+    // (d) THE CEILING ON PATH REFINEMENT IS STILL THERE, AND ASKING ONE POINT SAID OTHERWISE.
+    //     This block used to refine the SEATING phase to 160 increments and assert that it
+    //     converged, "where it used to refuse" -- reading that success as proof that the local
+    //     convergence criteria (0.9.0 N-2) had lifted a ceiling. That reading came from a single
+    //     point on an axis, and it did not survive its own neighbours. Measured 2026-08-27 by
+    //     running the case file itself through the CLI on both linear-solver backends:
     //
-    //     It succeeds now. What lifted it is the local convergence criteria (0.9.0 N-2): the
-    //     tolerated error is an ABSOLUTE force residual, so shrinking the increment does not
-    //     shrink what each increment must achieve, and on a near-zero confining stress the
-    //     increments that could not achieve it were the ones whose stress points were furthest
-    //     from their own material law. Requiring those points to settle is what carries the
-    //     refined path through.
+    //       seating steps    Eigen                    PARDISO
+    //          40            ok, 3.093e-08            ok, 3.093e-08     <- identical, every digit
+    //          80            ok, 1.478e-08            ok, 1.478e-08     <- identical, every digit
+    //         120            REFUSED at 74% of load   REFUSED at 83% of load
+    //         160            REFUSED at 68% of load   ok, 6.570e-07 (of 1e-6), 390 s
     //
-    //     So the check becomes the one the study actually needed all along, and could not ask
-    //     while the run refused: refining the seating path fourfold must not move the answer.
-    //     That is path independence, which is what (b) pinning the count at 40 was standing in
-    //     for.
+    //     BOTH backends refuse at 120. The ceiling was not lifted; it sits between 80 and 120,
+    //     and 160 is the one rung where PARDISO gets through -- non-monotonically, a coarser path
+    //     failing where a finer one passes, at 66% of the tolerance and for twenty times the run
+    //     time of a rung that converges thirty times further inside it. Nothing about that is a
+    //     property of this program: below the ceiling the two backends agree to every printed
+    //     digit, and above it the answer is decided by round-off. The portable composition is
+    //     what said so -- this is what §11.7 exists for, and the first thing it caught.
+    //
+    //     SO THE CHECK ASKS THE QUESTION THE STUDY ACTUALLY NEEDED, at a rung where the answer
+    //     exists on both compositions: refining the seating path does not move the answer. That
+    //     is path independence, which is what (b) pinning the count at 40 was standing in for.
+    //
+    //     WHAT THIS DOES NOT ASSERT, DELIBERATELY: that 120 refuses. Asserting a refusal is the
+    //     trap this block already fell into once -- the old sentence had to end "if this check
+    //     ever fails because the run now succeeds, the ceiling has moved", and then a single
+    //     backend moved it and the sentence was rewritten the wrong way. The asymmetry is
+    //     honest: if the ceiling drops below 80 this check fails, and if it rises the table
+    //     above goes stale without failing anything. Re-measuring it is four CLI runs on the
+    //     case file with `initial.loadsteps` set, and it belongs to N-3, whose subject is
+    //     choosing the step size rather than being handed one.
     m::Project seat_fine = base;
-    seat_fine.initial.load_steps = 160;
+    seat_fine.initial.load_steps = 80;
     seat_fine.initial.tolerance = 1e-6;
     seat_fine.initial.max_iterations = 500;
     const double u_seat_fine = settlement(seat_fine, mesh, {}, &ok);
-    check(ok, "the seating phase converges at 160 increments, where it used to refuse");
+    check(ok, "the seating phase converges at 80 increments, the last rung below the ceiling");
     if (ok) {
         const double drift = std::fabs(u_seat_fine - u_default) / u_default;
-        std::printf("  seating phase at 160 increments, tol 1e-6: %.9f m (%.4f%% from the "
-                    "file's own 40)\n", u_seat_fine, 100.0 * drift);
+        std::printf("  seating phase at 80 increments, tol 1e-6: %.9f m (%.4f%% from the "
+                    "file's own count)\n", u_seat_fine, 100.0 * drift);
         check(drift < 0.01,
-              "and refining the seating path fourfold does not move the answer: the seating "
+              "and refining the seating path does not move the answer: the seating "
               "count is not what sets it");
     }
 

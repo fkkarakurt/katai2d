@@ -180,6 +180,19 @@ around what is measured now.
   ratchets slightly when the failure deviator moves inside an increment (measured: a drained
   triaxial stalls 0.24% below its plateau). The consistent projection that fixes it costs a
   boundary-value problem that passes today, so it is measured, recorded and not taken.
+- **Refining the load path has a ceiling, and above it whether a run converges at all is not a
+  property of this program.** The claim above that the two linear-solver backends agree holds
+  below that ceiling and only there. On `KV-CST-002`'s seating phase — a weightless column whose
+  confining stress starts near zero, where the Hardening Soil stiffness is at its smallest — the
+  measured ladder is: 40 and 80 increments converge and agree to every printed digit on both
+  backends; 120 refuses on both; 160 refuses on Eigen and converges on PARDISO at 66% of the
+  tolerated residual, taking twenty times as long as a rung that converges thirty times further
+  inside it. A coarser path failing where a finer one passes is round-off deciding the answer,
+  not refinement improving it. So the verification case asks its path-independence question at 80,
+  where the answer exists in both compositions, and the ceiling itself is deliberately not
+  asserted — a test that asserts a refusal is a test that fails when the program improves.
+  Choosing the increment size instead of being handed one is what the next release's automatic
+  step control is for.
 
 ## [0.8.1] - 2026-08-19
 
