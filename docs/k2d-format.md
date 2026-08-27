@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **15** · Current `.res` version: **8**
+Current `.k2d` version: **16** · Current `.res` version: **8**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -117,7 +117,9 @@ flagged places differs from the in-memory default of a freshly created object.
 | `anchors` | array | — | `[]` | Anchor material data sets |
 | `geogrids` | array | — | `[]` | Geogrid material data sets |
 | `embedded` | array | — | `[]` | Embedded-beam (pile row) material data sets |
-| `polygons` | array | — | `[]` | Soil regions (user-drawn polygons) |
+| `strata` | array | — | `[]` | The global soil-layer list a borehole log refers to (objects below). Written only when boreholes are used |
+| `boreholes` | array | — | `[]` | Borehole logs: layer-boundary levels and a water head at one x (objects below) |
+| `polygons` | array | — | `[]` | Soil regions — drawn by hand, or generated from `boreholes` |
 | `structs` | array | — | `[]` | Structural elements (lines) |
 | `loads` | array | — | `[]` | External loads |
 | `disps` | array | — | `[]` | Line prescribed displacements (objects below) |
@@ -232,6 +234,36 @@ and the capacities.
 
 with `name` (default `"Embedded beam"`), `color`, `E` (default `3e7` kN/m²) and `Lspacing`
 (default `2.5` m) as above.
+
+#### Soil layer object (`strata[i]`)
+
+The layer list is GLOBAL: every layer exists at every borehole, and a layer that is not present at
+some location is a zero thickness there rather than a missing row (PLAXIS 2D Reference Manual
+sec. 4.2 and 4.3.1.1). `strata[i]` is the top-down layer order, so `strata[0]` is the uppermost.
+
+| Key | Type | Unit | Default | Meaning |
+|---|---|---|---|---|
+| `material` | int | — | `-1` | Index into `materials` |
+
+with `name` (default `"Layer"`) as above.
+
+#### Borehole object (`boreholes[i]`)
+
+| Key | Type | Unit | Default | Meaning |
+|---|---|---|---|---|
+| `x` | num | m | `0` | Where the log was taken |
+| `level` | num[] | m | `[]` | Layer-boundary levels top down: `level[j]` is the top of `strata[j]`, `level[j+1]` its base, so the length is `strata.length + 1`. Must not increase going down; equal consecutive values are a layer that pinches out here |
+| `has_head` | bool | — | `true` | Whether this log records a water level |
+| `head` | num | m | `0` | The phreatic level at this borehole. Several heads combine into a sloped water surface; one head is horizontal to the model edges (sec. 7.10.1.1) |
+
+with `name` (default `"BH"`) as above.
+
+**What generation does, and what it does not.** Boreholes GENERATE `polygons` and the water
+polyline (`wx`/`wy`); they do not replace them. The polygons remain the model — what the mesher
+meshes and what a phase activates — and the logs are the record of where that geometry came from.
+Between boreholes the boundaries are interpolated linearly; outside the outermost log its levels are
+HELD, not extrapolated. Generation is an action the user takes, never something a solve does on the
+way past, because a geometry with two sources of truth is a geometry that can disagree with itself.
 
 #### Soil region object (`polygons[i]`)
 

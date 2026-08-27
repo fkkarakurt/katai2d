@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["katai2d"],
   "properties": {
-    "katai2d": { "type": "integer", "minimum": 1, "maximum": 15 },
+    "katai2d": { "type": "integer", "minimum": 1, "maximum": 16 },
     "name": { "type": "string" },
     "axisymmetric": { "type": "boolean" },
     "initial_procedure": { "type": "integer", "minimum": 0, "maximum": 2 },
@@ -23,6 +23,8 @@
     "anchors": { "type": "array", "items": { "$ref": "#/$defs/anchorMaterial" } },
     "geogrids": { "type": "array", "items": { "$ref": "#/$defs/geogridMaterial" } },
     "embedded": { "type": "array", "items": { "$ref": "#/$defs/embeddedBeamMaterial" } },
+    "strata": { "type": "array", "items": { "$ref": "#/$defs/stratum" } },
+    "boreholes": { "type": "array", "items": { "$ref": "#/$defs/borehole" } },
     "polygons": { "type": "array", "items": { "$ref": "#/$defs/soilPolygon" } },
     "structs": { "type": "array", "items": { "$ref": "#/$defs/structElement" } },
     "loads": { "type": "array", "items": { "$ref": "#/$defs/load" } },
@@ -176,6 +178,25 @@
         "Fmax_base": { "type": "number" }
       },
       "additionalProperties": true
+    },
+    "stratum": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "material": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "borehole": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "x": { "type": "number" },
+        "level": { "type": "array", "items": { "type": "number" } },
+        "has_head": { "type": "boolean" },
+        "head": { "type": "number" }
+      },
+      "additionalProperties": false
     },
     "soilPolygon": {
       "type": "object",

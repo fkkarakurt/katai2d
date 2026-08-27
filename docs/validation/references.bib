@@ -91,12 +91,17 @@
   note  = {cited by KV-CST-005},
 }
 
+@misc{plaxis2025e,
+  title = {PLAXIS 2D 2025.1 Reference Manual, sec. 4.2 "Creating boreholes" -- "If multiple boreholes are defined, PLAXIS 2D will automatically interpolate between boreholes, and derive the position of the soil layers from the borehole information. Each defined soil layer is used throughout the whole model contour. In other words, all soil layers appear in all boreholes. The top and the bottom boundaries of the layers may vary through boreholes, making it possible to define non-horizontal soil layers of non-uniform thickness as well as layers that locally have a zero thickness." -- with sec. 4.3.1.1 ("If a certain soil layer does not exist at the position indicated by a model borehole, it should be assigned a zero thickness (bottom level equal to top level) in the relevant borehole") and sec. 7.10.1.1 ("A single borehole can be used to create a horizontal water surface that extends to the model boundaries. When multiple boreholes are used, a non-horizontal water surface can be created by combining the heads in the various boreholes")},
+  note  = {cited by KV-GEO-001},
+}
+
 @misc{plaxis,
   title = {PLAXIS 2D Material Models Manual, dilatancy cut-off: Eq. 5.16a for the mobilised dilatancy, Eq. 5.16b "for e >= e_max: psi_m = 0", Eq. 5.17 for the void ratio, Fig. 5.6 for the resulting drained-triaxial strain curve; the manual also states that e_min "is not used within the context of the Hardening-Soil model", which is why KATAI does not carry it},
   note  = {cited by KV-CST-004},
 }
 
-@misc{plaxis2025e,
+@misc{plaxis2025f,
   title = {PLAXIS 2D Scientific Manual 2025.1 sec 9.1 -- the deformation convergence criteria as a FAMILY: Eq. 9-1 the CSP-normalised global force error, Eq. 9-3/9-4 the moment residual, Eq. 9-5 the local error at a plastic soil stress point and Eq. 9-7 at a non-linear elastic one, with the equilibrium/constitutive stress pair of Fig. 9-1 and Eq. 9-6; and PLAXIS 2D Reference Manual 2025.1 sec 7.13.8, Eq. 7-21/7-22 for the same global check and for CSP itself. THE TWO MANUALS PRINT CSP AS RECIPROCALS OF EACH OTHER: Scientific Eq. 9-2 gives elastic energy over total, Reference Eq. 7-22 gives total over elastic. Only the Reference orientation matches the behaviour BOTH manuals state in words -- "when the solution is fully elastic the Stiffness is equal to unity, whereas at failure the Stiffness approaches zero" -- and the uses built on it there (arc-length engages below CSP 0.5, collapse is reported below 0.015). The inverted form is >= 1 and GROWS without bound as a mechanism forms, which would make Eq. 9-1 loosen towards failure instead of tightening. Implemented from Eq. 7-22, deliberately, and this case is what holds it there},
   note  = {cited by KV-NUM-013},
 }

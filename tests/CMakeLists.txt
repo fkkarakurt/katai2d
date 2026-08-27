@@ -133,6 +133,7 @@ katai_add_test(test_design_gui katai::jobs katai::mesh katai::analysis katai::mo
 katai_add_test(test_project_io katai::model katai::io)                # Project file JSON round trip (every field exact + honest failure modes)
 katai_add_test(test_results_io katai::mesh katai::analysis katai::model katai::io)  # Binary result file: bitwise round trip + model-hash staleness + refusal of a corrupt file
 katai_add_test(test_k2d_validator katai::model katai::io)             # .k2d input contract: every rule probed at its exact field path + reader forward-version notes
+katai_add_test(test_stratigraphy katai::model)                        # KV-GEO-001: borehole logs -> soil regions + water surface (PLAXIS Ref. 4.2 / 4.3.1.1 / 7.10.1.1). A wrong stratigraphy is invisible downstream -- the mesher meshes it, every phase converges on it, and no residual sees it
 # One ctest entry per corpus case. Together they were 1370 s and, once test_phase_numerics had
 # been split, the whole suite's wall clock; they are independent by construction, so this is the
 # same trade the phase-numerics split made. The ids are the corpus ids, so a red line in the ctest

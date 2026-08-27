@@ -69,7 +69,13 @@ ORACLES = ("closed_form", "independent_path", "external_code", "published_benchm
 # discipline as the rest (its independent path is the model drawn the way the mesh
 # actually took it), and it belongs in the matrix because "what does this code refuse
 # to answer?" is a verification question a reviewer is entitled to ask.
-CLASSES = ("NUM", "CST", "FND", "EXC", "SLP", "CON", "FLW", "STR", "DYN", "SSI", "DIA")
+#
+# GEO is the second of that kind, added 2026-08-27 on the same argument. It verifies what the
+# PRE-PROCESSING produces -- the geometry a set of borehole logs describes -- against a rule
+# published in a manual and levels a reader can compute by hand. It earns its row because a wrong
+# stratigraphy is the one error no residual can see: the mesher will mesh it, every phase will
+# converge on it, and the answer will be a correct solution to a model nobody meant.
+CLASSES = ("NUM", "CST", "FND", "EXC", "SLP", "CON", "FLW", "STR", "DYN", "SSI", "DIA", "GEO")
 
 CASE_RE = re.compile(r"^KV-(" + "|".join(CLASSES) + r")-\d{3}$")
 # Only 'KV-...' or 'none ...' payloads open a block: an English sentence that

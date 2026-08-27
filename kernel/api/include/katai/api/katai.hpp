@@ -41,6 +41,8 @@ using model::AnchorMaterial;
 using model::GeogridMaterial;
 using model::EmbeddedBeamMaterial;
 using model::SoilPolygon;
+using model::Stratum;           // the global soil-layer list a borehole log refers to
+using model::Borehole;          // one ground-investigation log: layer levels + a water head at an x
 using model::StructElement;
 using model::Load;
 using model::PrescribedDisp;

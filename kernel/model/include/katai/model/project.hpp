@@ -535,6 +535,61 @@ struct SoilPolygon {
     double coarseness = 1.0;
 };
 
+// ---------------------------------------------------------------- stratigraphy from boreholes --
+//
+// How ground data actually arrives: a log per borehole, giving the level of each layer boundary
+// and the water table at one x. Until this existed the engineer had to turn those logs into
+// polygons by hand, which is both the slowest part of setting a model up and the easiest place to
+// put a number in the wrong row.
+//
+// The contract is PLAXIS's, because it is the workflow every user of this kind of program already
+// knows (Reference Manual 2025.1 sec. 4.2, "Creating boreholes"):
+//
+//   "Boreholes are locations in the drawing area at which the information on the position of soil
+//    layers and the water table is given. If multiple boreholes are defined, PLAXIS 2D will
+//    automatically interpolate between boreholes ... Each defined soil layer is used throughout
+//    the whole model contour. In other words, all soil layers appear in all boreholes. The top and
+//    the bottom boundaries of the layers may vary through boreholes, making it possible to define
+//    non-horizontal soil layers of non-uniform thickness as well as layers that locally have a
+//    zero thickness."
+//
+// Two consequences are load-bearing and are why the types look like this:
+//
+//   * THE LAYER LIST IS GLOBAL, THE LEVELS ARE PER BOREHOLE. A stratum carries the name and the
+//     material; a borehole carries where its boundaries are. A layer missing at one location is
+//     not a missing row, it is a ZERO THICKNESS there (sec. 4.3.1.1: "it should be assigned a zero
+//     thickness (bottom level equal to top level) in the relevant borehole").
+//   * ONE BOREHOLE MEANS HORIZONTAL, AND THE LEVELS REACH THE MODEL EDGE. Stated for the water
+//     surface in sec. 7.10.1.1 -- "A single borehole can be used to create a horizontal water
+//     surface that extends to the model boundaries" -- and for the layers by "used throughout the
+//     whole model contour" above. So outside the outermost borehole the nearest one's levels
+//     continue unchanged; nothing is extrapolated on a slope.
+//
+// WHAT THIS DOES NOT DO, and the boundary is the point: boreholes GENERATE polygons, they do not
+// replace them. `polygons` remains the model -- what the mesher meshes and what a phase activates
+// -- and the boreholes are the record of where it came from. Generation is an action the user
+// takes, not something the solver does on the way past, because a geometry with two sources of
+// truth is a geometry that can disagree with itself.
+struct Stratum {
+    std::string name = "Layer";
+    int material = -1;                // index into Project::materials
+};
+
+struct Borehole {
+    std::string name = "BH";
+    double x = 0.0;                   // location along the model [m]
+    // Levels of the layer boundaries at this borehole, top down: level[j] is the TOP of stratum j
+    // and level[j+1] its bottom, so the size is strata.size() + 1 and the stack is continuous by
+    // construction (sec. 4.3.1: "the top boundary of an underlying layer is defined by the lower
+    // boundary of the overlying layer"). Equal consecutive values are a layer that pinches out
+    // here, which is legal and meant.
+    std::vector<double> level;
+    // The phreatic level at this borehole (sec. 4.3.2, water condition "Head"). Heads from several
+    // boreholes combine into a non-horizontal water surface (sec. 7.10.1.1).
+    bool has_head = true;
+    double head = 0.0;                // [m]
+};
+
 // A line prescribed displacement (PLAXIS "Prescribed displacement"): every mesh node on
 // the segment gets the set components IMPOSED (ramped 0 -> value over the phase, like a
 // load), the unset components stay free. A set component with value 0 is a rigid support
@@ -614,7 +669,11 @@ struct Project {
     std::vector<AnchorMaterial> anchors;        // anchor material sets
     std::vector<GeogridMaterial> geogrids;      // geogrid material sets
     std::vector<EmbeddedBeamMaterial> embedded; // embedded beam material sets
-    std::vector<SoilPolygon> polygons;          // explicit soil regions (user-drawn)
+    std::vector<SoilPolygon> polygons;          // soil regions (drawn, or generated from boreholes)
+    // The ground data the polygons above may have been generated FROM. Empty on a model drawn by
+    // hand, which is still the ordinary way to build one. See Stratum/Borehole for the contract.
+    std::vector<Stratum> strata;                // the global layer list (name + material)
+    std::vector<Borehole> boreholes;            // one log per location
     std::vector<StructElement> structs;         // structural elements (Structures mode)
     std::vector<Load> loads;                    // external loads
     std::vector<PrescribedDisp> disps;          // line prescribed displacements

@@ -103,6 +103,12 @@ namespace katai::model {
 // reset -- typically a surcharge placed and removed to leave a preconsolidation pressure, whose
 // strain history ageing would long since have erased -- is invisible to that older build, so
 // the phase it runs is a different problem with the same drawing.
+// v16 (2026-08): BOREHOLE LOGS (`strata[]`, `boreholes[]`). Where the ground data actually comes
+// from -- a level per layer boundary and a water head, at an x. Until this the engineer turned the
+// logs into polygons by hand, which is the slowest part of building a model and the easiest place
+// to put a number in the wrong row. The polygons stay the model; these are what generated them, and
+// keeping them in the file is what lets a reviewer see the logs the geometry was drawn from rather
+// than only the geometry. Written only when there are boreholes, so every older file is unchanged.
 // v15 (2026-08): THE CONSTITUTIVE INTEGRATION TOLERANCE (`phases[].substol`), the fourth
 // numerical control and the first that governs the material law rather than the equilibrium
 // iteration. Until now it could only be set through an environment variable, so a run's second
@@ -113,7 +119,7 @@ namespace katai::model {
 // material law and, measured on the oedometer, often in FEWER Newton iterations rather than more,
 // because the equilibrium iteration stops grinding against integration noise. Either way the
 // older build silently substitutes its own number for the one the file names.
-inline constexpr int kProjectFileVersion = 15;
+inline constexpr int kProjectFileVersion = 16;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -525,6 +531,33 @@ inline std::string project_to_json(const Project& p) {
     }
     o += "],";
 
+    // The ground data the regions below may have been generated from (v16). Omitted entirely on a
+    // hand-drawn model, so a file that never used boreholes is byte-identical to a v15 one.
+    if (!p.strata.empty() || !p.boreholes.empty()) {
+        wkey(o, "strata"); o += '[';
+        for (size_t i = 0; i < p.strata.size(); ++i) {
+            if (i) o += ',';
+            o += '{';
+            wfield(o, "name", p.strata[i].name);
+            wfield(o, "material", (double)p.strata[i].material);
+            closeobj(o);
+        }
+        o += "],";
+        wkey(o, "boreholes"); o += '[';
+        for (size_t i = 0; i < p.boreholes.size(); ++i) {
+            const Borehole& b = p.boreholes[i];
+            if (i) o += ',';
+            o += '{';
+            wfield(o, "name", b.name);
+            wfield(o, "x", b.x);
+            wfield(o, "has_head", b.has_head);
+            wfield(o, "head", b.head);
+            warr(o, "level", b.level);
+            closeobj(o);
+        }
+        o += "],";
+    }
+
     wkey(o, "polygons"); o += '[';
     for (size_t i = 0; i < p.polygons.size(); ++i) {
         const SoilPolygon& P = p.polygons[i];
@@ -775,6 +808,23 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             p.embedded.push_back(std::move(m));
         }
 
+    if (const Json* arr = root.find("strata"); arr && arr->type == Json::Arr)
+        for (const Json& j : arr->a) {
+            Stratum st;
+            st.name = j.str("name", st.name);
+            st.material = (int)j.num("material", -1);
+            p.strata.push_back(std::move(st));
+        }
+    if (const Json* arr = root.find("boreholes"); arr && arr->type == Json::Arr)
+        for (const Json& j : arr->a) {
+            Borehole b;
+            b.name = j.str("name", b.name);
+            b.x = j.num("x", 0.0);
+            b.has_head = j.flag("has_head", true);
+            b.head = j.num("head", 0.0);
+            b.level = j.nums("level");
+            p.boreholes.push_back(std::move(b));
+        }
     if (const Json* arr = root.find("polygons"); arr && arr->type == Json::Arr)
         for (const Json& j : arr->a) {
             SoilPolygon P;

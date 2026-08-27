@@ -282,6 +282,29 @@ NB_MODULE(_core, m) {
     nb::enum_<api::HydroKind>(m, "HydroKind", nb::is_arithmetic())
         .value("Well", api::HydroKind::Well)
         .value("Drain", api::HydroKind::Drain);
+    nb::class_<api::Stratum>(m, "Stratum",
+        "One entry of the GLOBAL soil-layer list. Every layer exists at every borehole; a layer "
+        "that is not present somewhere has zero thickness there rather than being absent.")
+        .def(nb::init<>())
+        .def_rw("name", &api::Stratum::name)
+        .def_rw("material", &api::Stratum::material, "index into Project.materials");
+
+    nb::class_<api::Borehole>(m, "Borehole",
+        "A ground-investigation log: where each layer boundary sits, and the water level, at one x. "
+        "Boreholes GENERATE the soil regions and the water polyline -- see katai.generate_stratigraphy "
+        "-- they do not replace them.")
+        .def(nb::init<>())
+        .def_rw("name", &api::Borehole::name)
+        .def_rw("x", &api::Borehole::x, "where the log was taken [m]")
+        .def_rw("level", &api::Borehole::level,
+                "layer-boundary levels top down [m]: level[j] is the top of strata[j] and "
+                "level[j+1] its base, so the length is len(strata) + 1. Must not increase going "
+                "down; equal consecutive values are a layer that pinches out here")
+        .def_rw("has_head", &api::Borehole::has_head, "whether this log records a water level")
+        .def_rw("head", &api::Borehole::head,
+                "the phreatic level at this borehole [m]; several heads make a sloped water "
+                "surface, one head is horizontal to the model edges");
+
     nb::class_<api::HydroLine>(m, "HydroLine")
         .def(nb::init<>())
         .def_rw("name", &api::HydroLine::name)
@@ -438,6 +461,10 @@ NB_MODULE(_core, m) {
         .def_rw("anchors", &api::Project::anchors)
         .def_rw("geogrids", &api::Project::geogrids)
         .def_rw("embedded", &api::Project::embedded)
+        .def_rw("strata", &api::Project::strata,
+                "the global soil-layer list borehole logs refer to")
+        .def_rw("boreholes", &api::Project::boreholes,
+                "ground-investigation logs; generate_stratigraphy() turns them into polygons")
         .def_rw("polygons", &api::Project::polygons)
         .def_rw("structs", &api::Project::structs)
         .def_rw("loads", &api::Project::loads)

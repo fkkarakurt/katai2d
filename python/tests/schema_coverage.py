@@ -159,6 +159,20 @@ def coverage_project():
     drain.head = 2.0
     pr.hydros = [well, drain]
 
+    # Borehole logs (v16), so the writer emits `strata` and `boreholes`. Two logs with a head, and
+    # a middle layer that pinches out on the right -- the shape the generator has to get right.
+    fill = core.Stratum(); fill.name = "Fill"; fill.material = 0
+    peat = core.Stratum(); peat.name = "Peat"; peat.material = 0
+    clay = core.Stratum(); clay.name = "Clay"; clay.material = 0
+    pr.strata = [fill, peat, clay]
+    bh1 = core.Borehole()
+    bh1.name = "BH-1"; bh1.x = 0.0; bh1.has_head = True; bh1.head = 2.0
+    bh1.level = [4.0, 3.0, 2.0, 0.0]
+    bh2 = core.Borehole()
+    bh2.name = "BH-2"; bh2.x = 20.0; bh2.has_head = True; bh2.head = 1.5
+    bh2.level = [4.0, 3.0, 3.0, 0.0]
+    pr.boreholes = [bh1, bh2]
+
     # The writer emits "rec"/"recdt" only when a record exists -- give the
     # staged phase one, so the coverage universe includes them.
     ph = core.Phase()

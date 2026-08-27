@@ -26,6 +26,7 @@
 // Every rule is pinned by tests/test_k2d_validator.cpp, which also prints the
 // full message catalogue so engineer-readability stays reviewable.
 
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -672,6 +673,54 @@ inline ValidationReport validate_project(const model::Project& p) {
                   at("embedded", i, m.Tskin_max < 0.0 ? "Tskin_max" : "Fmax_base"),
                   who + "a resistance cannot be negative (got skin " + num(m.Tskin_max) +
                       " kN/m, base " + num(m.Fmax_base) + " kN); use 0 for unlimited");
+    }
+
+    // -- Borehole logs (v16) ---------------------------------------------------
+    // Optional: a hand-drawn model has none. When they ARE there they are checked here rather than
+    // only inside the generator, because the file is the contract -- a log that cannot produce a
+    // stratigraphy should be refused at its own field path, before anything is generated from it.
+    for (size_t i = 0; i < p.strata.size(); ++i) {
+        const std::string who = "\"" + p.strata[i].name + "\": ";
+        if (p.strata[i].material < 0)
+            r.add(Severity::Error, at("strata", i, "material"),
+                  who + "no soil material assigned to this layer");
+        else if ((size_t)p.strata[i].material >= p.materials.size())
+            r.add(Severity::Error, at("strata", i, "material"),
+                  who + "material index " + std::to_string(p.strata[i].material) +
+                      " does not exist; the project has " + std::to_string(p.materials.size()));
+    }
+    if (!p.boreholes.empty() && p.strata.empty())
+        r.add(Severity::Error, "strata",
+              "there are boreholes but no soil layers; a log records where the layers are, so the "
+              "layer list has to exist first");
+    for (size_t i = 0; i < p.boreholes.size(); ++i) {
+        const auto& b = p.boreholes[i];
+        const std::string who = "\"" + b.name + "\": ";
+        if (!p.strata.empty() && b.level.size() != p.strata.size() + 1)
+            r.add(Severity::Error, at("boreholes", i, "level"),
+                  who + "carries " + std::to_string(b.level.size()) + " level(s) for " +
+                      std::to_string(p.strata.size()) + " layer(s); it needs " +
+                      std::to_string(p.strata.size() + 1) +
+                      " (a top for every layer, then the base of the lowest)");
+        for (size_t k = 0; k + 1 < b.level.size(); ++k)
+            if (b.level[k] < b.level[k + 1] - 1e-9) {
+                r.add(Severity::Error, at("boreholes", i, "level"),
+                      who + "layer boundaries must not rise going down (level " +
+                          std::to_string(k) + " is below level " + std::to_string(k + 1) +
+                          "); equal values are a layer that pinches out here, which is allowed");
+                break;
+            }
+        if (b.x < p.x_min - 1e-9 || b.x > p.x_max + 1e-9)
+            r.add(Severity::Warning, at("boreholes", i, "x"),
+                  who + "sits outside the model extent; its levels will be held horizontally from "
+                        "the nearest edge, which is probably not what the log means");
+        for (size_t k = 0; k < p.boreholes.size(); ++k)
+            if (k != i && std::fabs(p.boreholes[k].x - b.x) < 1e-9) {
+                r.add(Severity::Warning, at("boreholes", i, "x"),
+                      who + "shares its position with \"" + p.boreholes[k].name +
+                          "\"; two logs at one x cannot both describe the ground there");
+                break;
+            }
     }
 
     // -- Soil regions ----------------------------------------------------------
