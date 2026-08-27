@@ -37,6 +37,11 @@ using LinearSolve =
 // including hoop). In axisym the mesh is interpreted as (r, z).
 enum class Kinematics { PlaneStrain, Axisymmetric };
 
+// The line-search memory an increment escalates to when the monotone rule has stalled on it --
+// four consecutive iterations with no descent. Grippo, Lampariello and Lucidi's conventional M.
+// Why it is not simply the default is measured in NewtonOptions::line_search_window.
+inline constexpr int kStallEscalationWindow = 5;
+
 struct NewtonOptions {
     int load_steps = 1;       // (initial) number of steps the external load is split into
     int max_iterations = 50;  // maximum iterations per step
@@ -54,6 +59,39 @@ struct NewtonOptions {
     // norm can rise for one iteration while the iterate is on its way to equilibrium. A
     // monotone test reads that as failure and halves the step, and four such halvings in a row
     // abandon the increment, which is how the LOAD PATH stops being the one the file asked for.
+    //
+    // THAT PARAGRAPH WAS A PREDICTION UNTIL 2026-08-27, AND IT IS NOW A MEASUREMENT. KV-CST-002's
+    // seating phase, refined, was abandoned for exactly the described reason -- every abandonment
+    // `four consecutive iterations without descent`, at increments repeatedly halved, with the
+    // linear solver never once refusing and the iteration budget never reached (21/15/31/64/59/40
+    // of 500). Refining the path further did not help, because size was never the obstruction.
+    // The ladder, same fixture, same backend, monotone against a window of 5:
+    //
+    //   seating steps    W = 1                 W = 5
+    //      40            ok, -1.028%           ok, -0.853%
+    //      80            ok, -1.081%           ok, -1.057%
+    //     120            ok, -1.023%           ok, -1.036%
+    //     160            ok, -0.880%           ok, -0.789%
+    //     240            REFUSED               ok, -0.923%
+    //
+    // The window removes the refusal. But it is NOT the default, and the suite is why: with it on
+    // everywhere, KV-NUM-012's oedometer stops landing where it must. Binding the local criteria
+    // at the shipped tolerance used to reach the four-decades-tighter answer to within 0.05%; with
+    // the window open it lands 0.147% away -- barely better than the loose run's 0.184%, and on
+    // the far side of the tight answer. A non-monotone rule accepts iterates a monotone one
+    // rejects, so the stopping test fires further from the converged answer. That is a real price
+    // at a fixed tolerance, and it is paid on every increment, including the overwhelming majority
+    // that never stall.
+    //
+    // So this stays MONOTONE, and the window is escalated ONLY where the monotone rule has
+    // actually failed -- see kStallEscalationWindow in the solver. Same shape as the hybrid
+    // tangent beside it: when an increment cannot be closed the cheap way, retry THAT increment
+    // with the stronger tool before giving up on it, rather than paying for the stronger tool
+    // everywhere. 5 is Grippo, Lampariello and Lucidi's conventional M.
+    //
+    // Setting this explicitly (the phase's numeric controls, or a study) overrides both: a run
+    // asked for a window keeps it from the first iteration, which is how the ladder above was
+    // measured and how it can be measured again.
     int line_search_window = 1;
     // The CONSTITUTIVE integration error tolerance (STOL), handed to the assembly rather than to
     // the iteration: it governs how accurately each stress point is walked along its material law
@@ -276,6 +314,12 @@ struct NewtonResult {
     int refused_solves = 0;
     int budget_exhausted = 0;
     int no_descent = 0;
+    // Increments the monotone line search could not close, that the non-monotone window then did
+    // (or at least was given the chance to). Counted rather than left silent for the reason every
+    // other number here is counted: a run that quietly changed how it judged a step, and reached a
+    // different answer for it, must be able to say so. Zero on the overwhelming majority of runs,
+    // which is what makes a non-zero one worth reading.
+    int line_search_escalations = 0;
     // The reason the last abandoned increment ended. When the solve did not converge
     // this is the increment that reached the minimum size and stopped it; on a solve
     // that did converge it names an increment that was abandoned and then recovered by

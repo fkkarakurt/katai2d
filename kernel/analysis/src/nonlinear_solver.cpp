@@ -202,6 +202,9 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     for (const auto& mm : materials)
         if (mm.type == MaterialType::HardeningSoil) { has_hs = true; break; }
     bool hs_consistent_mode = false;
+    // Once an increment has been abandoned for a stalled line search, the phase judges every
+    // attempt from then on against the worst of the last few residuals instead of the latest.
+    bool ls_open = false;
 
     using Clock = std::chrono::steady_clock;
     const auto t_start = Clock::now();
@@ -343,7 +346,10 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         // yardstick when the window is open. It starts empty at every increment (including a
         // retried one), so the memory never crosses a load step.
         std::vector<double> recent;
-        const int ls_window = std::max(1, options.line_search_window);
+        // Not const: an increment that the monotone rule cannot close opens this once before it
+        // is abandoned. See kStallEscalationWindow and the stall handler below.
+        int ls_window = ls_open ? std::max(kStallEscalationWindow, options.line_search_window)
+                                : std::max(1, options.line_search_window);
         bool step_converged = false;
         // How this increment ended, if it did not converge. Set at each exit from the
         // iteration loop so the abandonment is named where it happens rather than
@@ -366,11 +372,18 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             const double rnorm = residual.norm();
             measure_convergence(probe, f_int, residual, rnorm, cf_norm, ref, rtol,
                                 result.convergence);
+            // The history is kept to the LARGEST window this increment could ever use, and only
+            // the tail of it is consulted. Keeping just ls_window entries would make the stall
+            // escalation below arrive with no memory at all -- it would be monotone for another
+            // five iterations, which are exactly the five that were failing, and the escalation
+            // measured as useless for that reason before this line was written.
             recent.push_back(rnorm);
-            if ((int)recent.size() > ls_window) recent.erase(recent.begin());
+            if ((int)recent.size() > kStallEscalationWindow) recent.erase(recent.begin());
             // What the trial step has to beat. With a window of 1 this is rnorm and the test
             // below is the strict Armijo condition, unchanged.
-            const double gate = *std::max_element(recent.begin(), recent.end());
+            const auto gate_first =
+                recent.end() - std::min<std::ptrdiff_t>((std::ptrdiff_t)recent.size(), ls_window);
+            const double gate = *std::max_element(gate_first, recent.end());
             if (debug) {
                 const auto& c = result.convergence;
                 std::fprintf(stderr,
@@ -473,7 +486,8 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 ended = NewtonResult::Abandonment::NoDescent;
                 if (debug)
                     std::fprintf(stderr, "  lambda %.4f iter %d  ABANDONED: four consecutive "
-                                         "iterations without descent\n", target_lambda, iter);
+                                         "iterations without descent%s\n", target_lambda, iter,
+                                 ls_open ? " (with the non-monotone window already open)" : "");
                 break;
             }
             du_free += alpha * delta;
@@ -500,6 +514,22 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             // increment with the consistent (FD) tangent without touching dlam; the
             // remaining increments stay consistent too.
             hs_consistent_mode = true;
+        } else if (ended == NewtonResult::Abandonment::NoDescent && !ls_open) {
+            // A STALL IS WHAT THE NON-MONOTONE RULE EXISTS FOR, so the increment is re-entered
+            // with the window open before its size is touched -- the same shape as the hybrid
+            // tangent above, and for the same reason: when an increment cannot be closed the
+            // cheap way, try the stronger tool on THAT increment rather than paying for it
+            // everywhere. Paying for it everywhere was measured and costs accuracy at a fixed
+            // tolerance: binding the local criteria at the shipped tolerance lands 0.147% from the
+            // four-decades-tighter answer with the window always open, against 0.05% without it.
+            // The remaining increments keep the window, exactly as they keep the consistent
+            // tangent, because a phase that needed it once is a phase that is in that regime.
+            ls_open = true;
+            ++result.line_search_escalations;
+            if (debug)
+                std::fprintf(stderr, "  lambda %.4f: retrying the increment with a line-search "
+                                     "window of %d (dlam untouched)", lambda,
+                             kStallEscalationWindow);
         } else {
             // The increment is abandoned: record WHY before the size is halved, so the
             // phase can report the reason it actually stopped for.
