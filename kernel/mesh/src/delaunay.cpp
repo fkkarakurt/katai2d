@@ -637,7 +637,9 @@ private:
         return -1;
     }
 
-    void refine(double min_angle_deg, double max_area) {
+    // Returns true when every in-domain triangle satisfies the bound, false when the step cap
+    // stopped it first. The caller MUST carry that answer out: see Triangulation::quality_met.
+    bool refine(double min_angle_deg, double max_area) {
         const double pi = 3.14159265358979323846;
         const double bound = 1.0 / (2.0 * std::sin(min_angle_deg * pi / 180.0));
         // Refinement only touches in-domain triangles (find_bad_triangle), and a
@@ -653,7 +655,7 @@ private:
                 continue;
             }
             const int bad = find_bad_triangle(bound, max_area);
-            if (bad < 0) return;  // quality achieved
+            if (bad < 0) { refine_steps_ = guard; return true; }  // quality achieved
             const auto [cx, cy] =
                 circumcenter(tris_[bad].v[0], tris_[bad].v[1], tris_[bad].v[2]);
             int ea, eb;
@@ -683,6 +685,11 @@ private:
                 split_segment(r.block_a, r.block_b);
             }
         }
+        // Fell out of the loop: the cap stopped the refinement before the bound was met. The mesh
+        // is still a valid triangulation of the domain -- it is simply not the quality mesh that
+        // was asked for, and saying so is the whole point of this return.
+        refine_steps_ = cap;
+        return false;
     }
 
 public:
@@ -700,8 +707,11 @@ public:
         // the ray-casting parity and delete the mesh on one side of it. Empty -> fall back to all.
         outline_ = outline.empty() ? segments : outline;
         mark_acute_vertices();  // corners needing concentric-shell splitting
-        refine(min_angle_deg, max_area);
-        return extract();
+        const bool met = refine(min_angle_deg, max_area);
+        Triangulation t = extract();
+        t.quality_met = met;
+        t.refinement_steps = refine_steps_;
+        return t;
     }
 
 private:
@@ -721,6 +731,7 @@ private:
     std::vector<std::array<int, 2>> outline_;        // domain OUTLINE only (in_domain inside/outside)
     std::unordered_set<int> acute_;                  // input vertices at a < 60 deg corner
     SizeField size_field_;                           // local area cap (empty = constant max_area)
+    int refine_steps_ = 0;                           // refinement steps the last refine() took
 };
 
 } // namespace

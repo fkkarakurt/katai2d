@@ -38,6 +38,12 @@ struct MeshResult {
     katai::mesh::Mesh mesh;
     bool ok = false;
     std::string message;
+    // Did the refinement reach the quality bound it was given, or did its step cap stop it first?
+    // Ruppert terminates for the angles asked here, so this is true on every ordinary model; it
+    // exists because the alternative was a mesh that had given up being indistinguishable from one
+    // that had not (see katai::mesh::Triangulation::quality_met for the argument).
+    bool quality_met = true;
+    double min_angle_asked = 0.0;   // the bound the refinement was given [deg]
 };
 
 // Local mesh-density options (PLAXIS coarseness semantics; docs/references/mesh-sizing.md).

@@ -57,6 +57,7 @@ katai_add_test(test_geometry2d katai::geometry)     # planar arrangement: geomet
 katai_add_test(test_model_mesh katai::jobs katai::mesh katai::model)  # project polygon -> FE mesh (katai/jobs/mesh_builder.hpp)
 katai_add_test(test_plate_mesh katai::jobs katai::mesh katai::model)  # regression: a structural line does not delete the mesh (outline separation)
 katai_add_test(test_mesh_domain katai::jobs katai::mesh katai::model)  # mesh triangles must NOT spill outside the domain (load/structure/non-convex)
+katai_add_test(test_mesh_quality_signal katai::jobs katai::mesh katai::model)  # KV-DIA-002: a mesh says whether it reached its own quality bound. Ruppert guarantees the angle, but the loop carries a step cap and the valve used to open in silence -- the K2D-A012 argument, applied to the mesher
 katai_add_test(test_k0_layered katai::analysis katai::mesh)  # general layered + water K0 initial stress
 katai_add_test(test_point_location katai::fem)    # Point location + inverse isoparametric map (embedded beam, Phase A.4)
 katai_add_test(test_embedded_beam katai::analysis)     # Embedded beam skin interaction -- axial pile closed form (Phase A.4)

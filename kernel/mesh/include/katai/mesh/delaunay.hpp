@@ -31,6 +31,18 @@ struct Triangulation {
     std::vector<double> x, y;                    // vertex coordinates
     std::vector<std::array<int, 3>> triangles;   // CCW vertex-index triples
     int point_count = 0;                         // number of input points
+    // DID THE REFINEMENT REACH ITS OWN QUALITY BOUND? Ruppert's algorithm terminates for the
+    // angles this tree asks for, and when it does every in-domain triangle satisfies the bound --
+    // which is why quality here is structural rather than measured per element. But the loop
+    // carries a step cap as a final safety valve, and a valve that opens in silence is not a
+    // safety valve: until this field existed, a mesh that met 20 degrees and a mesh that gave up
+    // trying were the same object to everything downstream, and mesh quality is not a detail the
+    // answer is indifferent to.
+    //
+    // Same argument, and the same shape, as the constitutive integrator running out of substeps
+    // (K2D-A012): the guard is right, and the silence was the defect.
+    bool quality_met = true;
+    int refinement_steps = 0;                    // how many the refinement actually took
 };
 
 // Delaunay-triangulate the points (px, py). Inputs must be distinct; the result

@@ -255,8 +255,20 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
     }
 
     R.mesh = std::move(m); R.ok = true;
+    R.quality_met = T.quality_met;
+    R.min_angle_asked = min_angle_deg;
     R.message = "Mesh: " + std::to_string(R.mesh.node_count) + " nodes, " +
                 std::to_string(R.mesh.element_count) + " elements.";
+    // A mesh that did not reach its own quality bound says so IN THE MESSAGE, because the message
+    // is what every front end already shows. Elements below the bound are not wrong, they are
+    // worse conditioned than the run was told to accept, and which of those it is has to be the
+    // reader's to make.
+    if (!R.quality_met)
+        R.message += " The refinement stopped at its step cap before every element met the " +
+                     std::to_string((int)min_angle_deg) +
+                     "-degree minimum angle, so some elements are worse conditioned than asked " +
+                     "for. Coarsen the element size, or simplify the geometry where it has very " +
+                     "sharp corners, and mesh again before reading the result as converged.";
     return R;
 }
 
