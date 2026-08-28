@@ -6,6 +6,45 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### The wall can stay in the ground while the ground consolidates
+
+A consolidation phase used to be soil-only: any structural element made it refuse, so the analysis
+an engineer most often wants — what the excavation does over the months while the excess pore
+pressure dissipates — could not be run with the structure holding it up. **Plates, anchors and
+geogrids now take part in the coupled solve.** Their stiffness enters the same system as the soil
+and the water, assembled by the same function `solve_nonlinear` uses, so the wall in a consolidation
+phase is the wall in a Plastic phase rather than a second implementation of one.
+
+**The oracle is the limit the coupled solution has to walk into.** As the excess pore pressure
+vanishes, the coupled problem *becomes* the drained problem — which this program already solves by
+a completely different path. So the phase is run to Tv = 4 and compared with the drained Plastic
+phase of the same model: settlement **−0.0025%**, plate moment **0.0000%**, anchor force
+**−0.00055%**. Removing the plate moves the same settlement by **17.66%**, three orders outside
+that band, which is what makes the agreement evidence rather than two soft numbers agreeing
+(`KV-STR-006`).
+
+**Two limits are reported, not declared.** The structural branch here is elastic, and what that
+means differs by element:
+
+- a plate or an anchor is elastic *until* it hinges or yields, so the limit is a capacity: a line
+  past the capacity the engineer entered raises **`K2D-A014`** with its utilisation, computed in
+  the units the capacity was entered in (per anchor, not per metre of wall — the conversion is a
+  documented trap and the test pins it);
+- a geogrid is different, and the measurement said so. Tension-only *is* its behaviour, so where
+  the settlement bowl puts a sheet in compression the elastic branch has it push **back** on the
+  soil instead of going slack — stiffening ground the real sheet would have stopped holding, which
+  errs on the unsafe side. It raises **`K2D-A015`** naming the stations. The size is measured:
+  −1.57% on a sheet with compressed ends, and **0.00000%** on the same sheet kept wholly in
+  tension, which is what proves the cause is the compression cut and not the coupling.
+
+**What is still refused now says why, and the reason is not effort.** An interface (and the
+embedded wall built from one) splits the mesh, so the two sides of the joint would carry separate
+pore pressures with nothing between them — silently making the joint impermeable, which is a
+modelling claim, not a default. An embedded beam's skin resistance follows the effective stress
+that consolidation is busy changing, so an elastic spring through it is a stronger claim than the
+same spring in drained ground. Both are their own work items.
+
+
 ### A refused linear solve ended the process instead of the time step
 
 Found by the test above on its first honest run, and older than it. When the coupled tangent of a

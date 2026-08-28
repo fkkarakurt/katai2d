@@ -111,6 +111,7 @@ katai_add_test(test_k0_slope katai::jobs katai::mesh katai::analysis katai::mode
 katai_add_test(test_seepage_gui katai::jobs katai::mesh katai::analysis katai::model) # Groundwater flow GUI path: exact Darcy + Charny seepage face + Terzaghi coupling
 katai_add_test(test_consolidation_gui katai::jobs katai::mesh katai::analysis katai::model) # Consolidation GUI path (PhaseType::Consolidation): 1D Terzaghi U-Tv + final settlement
 katai_add_test(test_consolidation_stop katai::jobs katai::mesh katai::analysis katai::model katai::linsolve) # Consolidation stop criteria (PLAXIS Ref 7.5): restart identity + the PRESSURE-ratio degree of consolidation against Terzaghi
+katai_add_test(test_consolidation_structures katai::jobs katai::mesh katai::analysis katai::model) # Plates/anchors/geogrids INSIDE a consolidation phase: the drained limit is the oracle (KV-STR-006)
 katai_add_test(test_dynamic_gui katai::jobs katai::mesh katai::analysis katai::model) # Dynamic/seismic GUI path (PhaseType::Dynamic, D4b): 1D site-response resonance (4/pi A/w1^2 2xi) + frequency selectivity
 katai_add_test(test_water_gui katai::jobs katai::mesh katai::analysis katai::model) # Water-history GUI path: FullyCoupled = Terzaghi + TransientFlow flow (W4 wiring)
 katai_add_test(test_undrained_gui katai::jobs katai::mesh katai::analysis katai::model) # Undrained (A/B) GUI path: confined column -qH/M_u + effective stress (Skempton 1D)

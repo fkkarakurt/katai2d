@@ -28,6 +28,8 @@
 #include <katai/analysis/post/consolidation_recovery.hpp>
 #include <katai/analysis/post/stress_recovery.hpp>
 #include <katai/analysis/results.hpp>
+#include <katai/analysis/structural_diagrams.hpp>   // force_diagram / DiagSpec (the validated recoveries)
+#include <katai/analysis/structural_dynamics.hpp>   // assemble_structural_stiffness (the shared assembler)
 #include <katai/fem/assembly/dof_map.hpp>
 #include <katai/materials/material_model.hpp>
 #include <katai/mesh/mesh.hpp>
@@ -66,7 +68,18 @@ struct ConsolidationPhase {
     // which is exactly what this solver's drained-node mask means, so a drain enters here rather
     // than as a new kind of boundary condition.
     std::vector<int> drain_nodes;
-    bool has_structural_elements = false;               // plates/anchors/geogrids/walls/embedded present
+    // Structural elements that sit in this phase's coupled solve. Plates, anchors and geogrids
+    // enter it; interfaces and embedded beams are refused below, and the refusal says why.
+    bool has_split_structures = false;   // interfaces / embedded walls: the mesh is SPLIT along them
+    bool has_embedded_beams = false;     // embedded beam rows (skin + foot springs)
+    // The structural elements themselves, the lines to report forces for, and the parent phase's
+    // total displacement. The last one matters because structural elements are TOTAL-displacement
+    // formulated: a wall installed in an earlier phase carries its force at the parent's datum,
+    // and a consolidation phase solves for the INCREMENT from there. Reporting the increment as
+    // the wall's moment would understate it by exactly the parent's share.
+    const Structures* structures = nullptr;
+    const std::vector<DiagSpec>* diagrams = nullptr;
+    const Eigen::VectorXd* carry_full = nullptr;
     double duration_day = 1.0;                          // <= 0 falls back to 1 day
     int time_steps = 25;                                // clamped to [1, 2000]
     double yscale = 1.0;                                // model height, for the top-drain tolerance
@@ -93,10 +106,34 @@ inline bool solve_consolidation_phase(
     const ConsolidationPhase& in,
     const ConsolidationSolveFactory& le_factory, const ConsolidationSolveFactory& plastic_factory,
     SolveResult& R, std::vector<GaussState>& committed_out) {
-    if (in.has_structural_elements) {
-        R.message = "Consolidation v1 is soil-only: structural elements (plates / anchors / "
-                    "geogrids / walls / embedded beams) are not supported in a consolidation "
-                    "phase yet -- use a Plastic phase for them.";
+    // WHAT A STRUCTURE IS IN A COUPLED PHASE. Plates, anchors and geogrids add stiffness to
+    // mechanical degrees of freedom the soil already owns, so they join the coupled system by
+    // addition and nothing about the pore field changes -- that is the case this phase solves.
+    // The two that are refused are refused for a reason that is not effort:
+    //   - an interface (and an embedded wall, which is a plate + interfaces) SPLITS the mesh, so
+    //     the two sides of the joint carry SEPARATE pore-pressure degrees of freedom with nothing
+    //     between them. That is not a missing feature, it is an unasked question: the seam would
+    //     silently behave as a perfectly impermeable barrier, which is a modelling claim
+    //     (PLAXIS makes interface permeability an input, Ref sec. 3.4);
+    //   - an embedded beam's skin resistance is a function of the EFFECTIVE stress around it, so
+    //     an elastic spring through a consolidating soil is a stronger claim than the same spring
+    //     in a drained one.
+    // Both are their own increments. Refusing them is cheaper than answering them by accident.
+    if (in.has_split_structures) {
+        R.message = "This consolidation phase contains an interface or an embedded wall, and the "
+                    "mesh is split along it: the two sides would carry separate pore pressures "
+                    "with no flow between them, which silently makes the joint an impermeable "
+                    "barrier. Interface permeability in a coupled analysis is a separate work "
+                    "item. Plates, anchors and geogrids without interfaces DO run in a "
+                    "consolidation phase; for a wall with interfaces use a Plastic phase.";
+        return false;
+    }
+    if (in.has_embedded_beams) {
+        R.message = "This consolidation phase contains an embedded beam (pile row). Its skin and "
+                    "foot resistance follow the EFFECTIVE stress around the pile, which changes "
+                    "throughout consolidation, so the elastic springs this phase would use are "
+                    "not the pile's behaviour here. Use a Plastic phase for the pile, or remove "
+                    "it from the consolidating stage.";
         return false;
     }
     const size_t nmat = in.materials.size();
@@ -179,6 +216,20 @@ inline bool solve_consolidation_phase(
     for (int n : in.drain_nodes)
         if (n >= 0 && n < mesh.node_count) drained[n] = 1;
 
+    // The structural elements' elastic stiffness, assembled ONCE with the shared assembler -- the
+    // same element matrices and DOF mapping solve_nonlinear uses, which is what makes "the wall in
+    // this phase is the wall in the Plastic phase" a fact rather than a hope. It enters the coupled
+    // system as a matrix (katai/analysis/consolidation.hpp), so the core stays structure-agnostic.
+    math::CsrMatrix struct_k_storage;
+    const math::CsrMatrix* struct_k = nullptr;
+    if (in.structures && (!in.structures->plates.empty() || !in.structures->plates5.empty() ||
+                          !in.structures->anchors.empty() || !in.structures->geogrids.empty())) {
+        math::SparseMatrixBuilder kb(dofs.equation_count());
+        assemble_structural_stiffness(mesh, dofs, *in.structures, kb);
+        struct_k_storage = kb.build();
+        struct_k = &struct_k_storage;
+    }
+
     // Time stepping. The phase's own interval (the historical path) OR a state criterion below.
     const double duration = in.duration_day > 0.0 ? in.duration_day : 1.0;
     const int nsteps = std::clamp(in.time_steps, 1, 2000);
@@ -208,14 +259,14 @@ inline bool solve_consolidation_phase(
             // phase's committed effective stresses (`init`) seed the state; dF drives it.
             ConsolidationPlasticResult r = solve_consolidation_plastic(
                 mesh, dofs, models, cperm, kGammaWater, kw_over_n, drained, state, p_state,
-                step_dt, n, in.active, load, plastic_factory, 40, 1e-6, profiles);
+                step_dt, n, in.active, load, plastic_factory, 40, 1e-6, profiles, struct_k);
             c.ok = r.converged;
             c.series = std::move(r.series);
             c.committed = std::move(r.committed);
         } else {
             c.series = solve_consolidation(mesh, dofs, models, cperm, kGammaWater, kw_over_n,
                                            drained, p_state, step_dt, n, in.active, load,
-                                           le_factory, profiles);
+                                           le_factory, profiles, struct_k);
             c.ok = !c.series.displacement.empty();
         }
         return c;
@@ -469,6 +520,104 @@ inline bool solve_consolidation_phase(
     R.stress = recover_nodal_stresses_from_gauss(mesh, committed, in.active);
     R.load_factor = 1.0;
     R.iterations = steps_done;
+
+    // Structural force diagrams, from the TOTAL displacement (the parent's datum plus this
+    // phase's increment) through the same validated recoveries the static phase uses. `elastic`
+    // is true because that is what this phase solved: the structural branch here carries no
+    // plastic state, so recovering it as if it did would report a cap that was never applied.
+    if (in.structures && in.diagrams && !in.diagrams->empty()) {
+        Eigen::VectorXd disp_total = v_total;
+        if (in.carry_full && in.carry_full->size() == v_total.size()) disp_total += *in.carry_full;
+        int over = 0;
+        std::string over_note;
+        int slack = 0;
+        std::string slack_note;
+        for (const auto& sp : *in.diagrams) {
+            StructForce d = force_diagram(sp, *in.structures, mesh, dofs, disp_total, {}, {},
+                                          /*elastic=*/true);
+            const auto env = force_envelope(d.stations);
+            d.max_N = env.max_abs_N; d.max_Q = env.max_abs_Q; d.max_M = env.max_abs_M;
+            // THE COST OF AN ELASTIC BRANCH, MADE VISIBLE. Nothing here capped the force at the
+            // capacity the engineer entered, so a line that has passed it is reporting a force
+            // the element could not carry -- and the redistribution that yielding would have
+            // caused did not happen anywhere else either. That is exactly the kind of limit that
+            // must not be reachable in silence, so the run says which line and by how much.
+            double util = 0.0;
+            if ((sp.kind == 0 || sp.kind == 5) && sp.begin < in.structures->plates.size() &&
+                sp.kind == 0) {
+                const auto& pp = in.structures->plates[sp.begin].props;
+                const double iN = pp.Np > 0.0 ? 1.0 / pp.Np : 0.0;
+                const double iM = pp.Mp > 0.0 ? 1.0 / pp.Mp : 0.0;
+                for (const auto& st : d.stations)
+                    util = std::fmax(util, std::fabs(st.N) * iN + std::fabs(st.M) * iM);
+            } else if (sp.kind == 1 && sp.begin < in.structures->anchors.size()) {
+                const auto& an = in.structures->anchors[sp.begin];
+                // The element's cap is per metre of wall and the diagram is per anchor, so the
+                // comparison is made in the diagram's units (the audit finding behind DiagSpec).
+                const double ft = an.Fmax_tens > 0.0 ? an.Fmax_tens * sp.anchor_spacing : 0.0;
+                const double fc = an.Fmax_comp > 0.0 ? an.Fmax_comp * sp.anchor_spacing : 0.0;
+                for (const auto& st : d.stations) {
+                    if (st.N > 0.0 && ft > 0.0) util = std::fmax(util, st.N / ft);
+                    if (st.N < 0.0 && fc > 0.0) util = std::fmax(util, -st.N / fc);
+                }
+            } else if (sp.kind == 2 && sp.begin < in.structures->geogrids.size()) {
+                const double np = in.structures->geogrids[sp.begin].props.Np;
+                if (np > 0.0)
+                    for (const auto& st : d.stations) util = std::fmax(util, st.N / np);
+                // A GEOGRID IS NOT AN ELASTIC BAR, AND THE DIFFERENCE IS NOT A CAPACITY. Its
+                // defining behaviour is tension-only: in compression it goes slack and carries
+                // nothing (reversible). The elastic branch this phase solves with has no such
+                // cut, so wherever the sheet is compressed it PUSHES BACK -- it stiffens the
+                // ground where the real one would have stopped acting, which errs on the unsafe
+                // side. It is exactly measurable, so it is reported rather than declared: on the
+                // verified fixture a sheet with compressed ends came out 1.57% off the drained
+                // answer, and the same sheet kept wholly in tension came out 0.00000% off
+                // (KV-STR-006). Every station in tension = no finding at all.
+                double nmax = 0.0;
+                for (const auto& st : d.stations) nmax = std::fmax(nmax, std::fabs(st.N));
+                int comp = 0;
+                for (const auto& st : d.stations) if (st.N < -1e-6 * nmax) ++comp;
+                if (comp > 0) {
+                    ++slack;
+                    char b[160];
+                    std::snprintf(b, sizeof(b), "%s%s (%d of %d stations)",
+                                  slack > 1 ? ", " : "", d.name.c_str(), comp,
+                                  (int)d.stations.size());
+                    slack_note += b;
+                }
+            }
+            if (util > 1.0) {
+                ++over;
+                char b[160];
+                std::snprintf(b, sizeof(b), "%s%s at %.0f%% of its capacity",
+                              over > 1 ? ", " : "", d.name.c_str(), 100.0 * util);
+                over_note += b;
+                d.yielded = true;   // it would have, had this phase been able to let it
+            }
+            R.struct_forces.push_back(std::move(d));
+        }
+        if (over > 0)
+            add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A014", "structures",
+                           "the structural elements in a consolidation phase are solved ELASTIC: "
+                           "no anchor yield, no geogrid tension cut-off, no plate hinge. " +
+                           over_note +
+                           " -- so those forces are larger than the elements can carry, and the "
+                           "redistribution that yielding would have caused is missing from the "
+                           "whole result, soil included. Check the capacity in a Plastic phase "
+                           "at the same stage before using these numbers.");
+        if (slack > 0)
+            add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A015", "structures",
+                           "a geogrid in this phase is in COMPRESSION over part of its length: " +
+                           slack_note +
+                           ". A geogrid carries tension only -- in compression it goes slack and "
+                           "carries nothing -- but the structural branch of a consolidation phase "
+                           "is elastic and has no such cut, so those stations pushed BACK on the "
+                           "soil instead. That stiffens the ground where the real sheet would "
+                           "have stopped acting, so the settlement here is on the unsafe side. "
+                           "Measured on the verification fixture: 1.57% on the sheet's force "
+                           "where it had compressed ends, and 0.00000% where it did not.");
+    }
+
     committed_out = std::move(committed);
     return true;
 }

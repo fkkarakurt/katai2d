@@ -7,6 +7,16 @@
 namespace katai::core {
 
 namespace detail {
+
+// Add a caller-supplied stiffness contribution to the MECHANICAL block of a coupled builder.
+// The pore equations are offset past it, so the row/column indices of `k` land where they mean.
+inline void add_structural_block(math::SparseMatrixBuilder& b, const math::CsrMatrix* k) {
+    if (!k) return;
+    for (math::Index r = 0; r < k->rows; ++r)
+        for (math::Index i = k->row_ptr[r]; i < k->row_ptr[r + 1]; ++i)
+            b.add_entry((int)r, (int)k->col_indices[i], k->values[i]);
+}
+
 template <class E>
 ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                                        const std::vector<MaterialModel>& materials,
@@ -18,7 +28,8 @@ ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dof
                                        double dt, int nsteps,
                                        const std::vector<char>& active,
                                        const Eigen::VectorXd* load_increment,
-                                       const ConsolidationSolveFactory& solve_factory) {
+                                       const ConsolidationSolveFactory& solve_factory,
+                                       const math::CsrMatrix* struct_k) {
     constexpr int N = E::kNodeCount;
     constexpr int ND = 2 * N;
     const int ndisp = dofs.equation_count();
@@ -108,6 +119,9 @@ ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dof
         }
     }
 
+    // Structural elements' elastic stiffness into the SAME mechanical block (see the header).
+    add_structural_block(Abuild, struct_k);
+
     const math::CsrMatrix A = Abuild.build();
     const math::CsrMatrix Hcsr = Hbuild.build();
 
@@ -179,7 +193,8 @@ ConsolidationPlasticResult consolidation_plastic_impl(
     const std::vector<char>& drained_node, const std::vector<GaussState>& initial_state,
     const std::vector<double>& initial_pore,
     double dt, int nsteps, const std::vector<char>& active, const Eigen::VectorXd* load_increment,
-    const ConsolidationSolveFactory& solve_factory, int max_newton, double newton_tol) {
+    const ConsolidationSolveFactory& solve_factory, int max_newton, double newton_tol,
+    const math::CsrMatrix* struct_k) {
     constexpr int N = E::kNodeCount;
     constexpr int ND = 2 * N;
     const int ndisp = dofs.equation_count();
@@ -287,6 +302,11 @@ ConsolidationPlasticResult consolidation_plastic_impl(
                 }
             }
         }
+        // The structural elements are linear here, so their internal force is K_s.dv exactly --
+        // no state, no return mapping. Adding it to BOTH the tangent and the internal force is
+        // what makes residual(dv) = 0 hold at the solution rather than approximately.
+        add_structural_block(Ab, struct_k);
+        if (struct_k) f_int.noalias() += (*struct_k) * dv;
     };
 
     Eigen::VectorXd v = Eigen::VectorXd::Zero(ndisp);
@@ -378,14 +398,15 @@ ConsolidationResult solve_consolidation(const mesh::Mesh& mesh, const DofMap& do
                                                const std::vector<char>& active,
                                                const Eigen::VectorXd* load_increment,
                                                const ConsolidationSolveFactory& solve_factory,
-                                               const std::vector<MaterialProfile>& profile) {
+                                               const std::vector<MaterialProfile>& profile,
+                                               const math::CsrMatrix* struct_k) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::consolidation_impl<Tri15Element>(mesh, dofs, materials, profile, perm, gamma_w,
                                                         kw_over_n, drained_node, initial_pore, dt, nsteps,
-                                                        active, load_increment, solve_factory);
+                                                        active, load_increment, solve_factory, struct_k);
     return detail::consolidation_impl<Tri6Element>(mesh, dofs, materials, profile, perm, gamma_w,
                                                    kw_over_n, drained_node, initial_pore, dt, nsteps,
-                                                   active, load_increment, solve_factory);
+                                                   active, load_increment, solve_factory, struct_k);
 }
 
 ConsolidationPlasticResult solve_consolidation_plastic(
@@ -395,14 +416,16 @@ ConsolidationPlasticResult solve_consolidation_plastic(
     const std::vector<double>& initial_pore, double dt, int nsteps, const std::vector<char>& active,
     const Eigen::VectorXd* load_increment, const ConsolidationSolveFactory& solve_factory,
     int max_newton, double newton_tol,
-    const std::vector<MaterialProfile>& profile) {
+    const std::vector<MaterialProfile>& profile, const math::CsrMatrix* struct_k) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::consolidation_plastic_impl<Tri15Element>(
             mesh, dofs, materials, profile, perm, gamma_w, kw_over_n, drained_node, initial_state,
-            initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol);
+            initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol,
+            struct_k);
     return detail::consolidation_plastic_impl<Tri6Element>(
         mesh, dofs, materials, profile, perm, gamma_w, kw_over_n, drained_node, initial_state,
-        initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol);
+        initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol,
+        struct_k);
 }
 
 }  // namespace katai::core

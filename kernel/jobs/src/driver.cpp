@@ -2040,9 +2040,16 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                      "flow and fully coupled analyses. Drains, which set the excess pore pressure "
                      "to zero, ARE applied.");
             cin.active = act;
-            cin.has_structural_elements = has_interfaces || has_embedded ||
-                !structures.plates.empty() || !structures.anchors.empty() ||
-                !structures.geogrids.empty();
+            // Plates, anchors and geogrids now take part in the coupled solve; interfaces (and
+            // the embedded walls built from them, which split the mesh) and embedded beams do
+            // not, and the phase says why. The structural system, the lines to report and the
+            // parent's displacement datum go in together: a wall installed in an earlier phase
+            // carries its force at that datum, and this phase solves the increment from there.
+            cin.has_split_structures = has_interfaces;
+            cin.has_embedded_beams = has_embedded;
+            cin.structures = &structures;
+            cin.diagrams = &diag_specs;
+            cin.carry_full = static_carry ? &carry_src->full_disp : nullptr;
             if (io.config) {
                 cin.duration_day = io.config->duration; cin.time_steps = io.config->time_steps;
                 // How the phase ends (PLAXIS Ref sec. 7.5). With a state criterion the two above

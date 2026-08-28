@@ -100,6 +100,18 @@ struct ConsolidationPlasticResult {
 };
 
 
+// STRUCTURAL STIFFNESS IN A COUPLED SOLVE. `struct_k` (optional, equation_count square) is added
+// to the MECHANICAL block of the coupled system: A = [K + K_s   L; Lt  -(dt H + S)]. It arrives as a
+// MATRIX rather than as a structural system on purpose -- this core knows soil, water and time, and
+// nothing about plates or anchors, exactly as it knows nothing about which linear backend solves it.
+// The caller's seam builds it with the shared assembler (assemble_structural_stiffness), which is
+// the same element matrices and the same DOF mapping solve_nonlinear uses. It is a CONSTANT
+// contribution, so the structural response here is ELASTIC: no anchor yield, no geogrid tension
+// cut-off, no plate hinge -- the same declared limit the dynamic branch carries, and the phase
+// strategy checks the elastic forces against their capacities so the limit cannot be reached in
+// silence. null = no structural elements, and then every arithmetic operation below is BIT-FOR-BIT
+// what it was before this parameter existed.
+//
 // Linear-elastic Biot consolidation. dofs: translations (2/node), finalized (lateral/base BCs).
 // materials: LinearElastic; perm: k by material id; gamma_w, kw_over_n=Kw/n (same as the undrained
 // wrapper); drained_node[n]=1 -> p=0 at that node (drainage boundary); initial_pore[n] = initial
@@ -124,7 +136,8 @@ ConsolidationResult solve_consolidation(const mesh::Mesh& mesh, const DofMap& do
                                         const std::vector<char>& active = {},
                                         const Eigen::VectorXd* load_increment = nullptr,
                                         const ConsolidationSolveFactory& solve_factory = {},
-                                        const std::vector<MaterialProfile>& profile = {});
+                                        const std::vector<MaterialProfile>& profile = {},
+                                        const math::CsrMatrix* struct_k = nullptr);
 
 // Elastoplastic (MC/HS) Biot consolidation -- monolithic coupled Newton (described above).
 // `initial_state`: committed EFFECTIVE Gauss states (K0/previous phase; size elem*ngp; empty =
@@ -140,6 +153,7 @@ ConsolidationPlasticResult solve_consolidation_plastic(
     const std::vector<double>& initial_pore, double dt, int nsteps, const std::vector<char>& active,
     const Eigen::VectorXd* load_increment, const ConsolidationSolveFactory& solve_factory,
     int max_newton = 40, double newton_tol = 1e-6,
-    const std::vector<MaterialProfile>& profile = {});
+    const std::vector<MaterialProfile>& profile = {},
+    const math::CsrMatrix* struct_k = nullptr);
 
 }  // namespace katai::core

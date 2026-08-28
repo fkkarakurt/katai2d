@@ -75,8 +75,11 @@ inline bool solve_fully_coupled_phase(
     const ConsolidationSolveFactory& le_factory, const ConsolidationSolveFactory& plastic_factory,
     SolveResult& R, std::vector<GaussState>& committed_out) {
     if (in.has_structural_elements) {
-        R.message = "Fully-coupled flow-deformation v1 is soil-only: structural elements are "
-                    "not supported in a coupled phase yet -- use a Plastic phase for them.";
+        R.message = "Fully-coupled flow-deformation is soil-only: structural elements do not "
+                    "take part in this phase yet. A CONSOLIDATION phase does carry plates, "
+                    "anchors and geogrids (the same coupled system, without the unsaturated "
+                    "retention this phase adds), so a staged excavation whose water table is not "
+                    "changing can be run there; otherwise use a Plastic phase for the structure.";
         return false;
     }
     const size_t nmat = in.materials.size();
