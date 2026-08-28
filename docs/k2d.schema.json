@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["katai2d"],
   "properties": {
-    "katai2d": { "type": "integer", "minimum": 1, "maximum": 16 },
+    "katai2d": { "type": "integer", "minimum": 1, "maximum": 17 },
     "name": { "type": "string" },
     "axisymmetric": { "type": "boolean" },
     "initial_procedure": { "type": "integer", "minimum": 0, "maximum": 2 },
@@ -307,7 +307,12 @@
         "tol": { "type": "number" },
         "loadsteps": { "type": "integer" },
         "maxiter": { "type": "integer" },
-        "substol": { "type": "number", "exclusiveMinimum": 0 }
+        "substol": { "type": "number", "exclusiveMinimum": 0 },
+        "cstop": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "cminp": { "type": "number", "exclusiveMinimum": 0 },
+        "cdeg": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 100 },
+        "cfirst": { "type": "number", "exclusiveMinimum": 0 },
+        "cmaxstep": { "type": "integer", "minimum": 1 }
       },
       "additionalProperties": true
     }

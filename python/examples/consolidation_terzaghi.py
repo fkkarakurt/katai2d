@@ -80,3 +80,36 @@ print(f"largest |U_FEM - U_Terzaghi| at the sampled times: {worst:.4f}")
 # The corpus band for this exact case, on this exact mesh.
 if worst > 0.03:
     raise SystemExit("consolidation drifted outside the corpus band -- investigate")
+
+# ---------------------------------------------------------------------------
+# 7. Asking the other question: HOW LONG until it has consolidated?
+#
+# Above, the duration was an input and the degree of consolidation was read off
+# the answer. Usually it is the other way round -- the design question is "how
+# long until the excess pore pressure has gone?" -- so the phase can be told the
+# target instead, and it reports the time it took.
+#
+# Careful with the name: `until_degree` is a PRESSURE ratio (the excess pore
+# pressure left, over the maximum this stage generated), not the settlement
+# ratio the same words mean in the textbooks. They are not the same instant: on
+# this column the settlement ratio reaches 90% at Tv = 0.848 and the pressure
+# ratio only at Tv = 1.031 -- 21.6% later in time.
+prj2 = katai.Project("Terzaghi column, to 90%", mesh_size=0.4, auto_refine=False)
+clay2 = prj2.materials.linear_elastic("Oedometer clay", E=E_OED, nu=0.0,
+                                      gamma=16.0, gamma_sat=18.0, k=K)
+prj2.geometry.rectangle(0.0, 0.0, 1.0, H, material=clay2, name="Column",
+                        flow={"top": ("head", H), "bottom": "closed",
+                              "right": "closed", "left": "closed"})
+q2 = prj2.loads.line_load((0.0, H), (1.0, H), qy=-Q, name="Surcharge")
+prj2.initial(procedure="k0", exclude=[q2])
+prj2.phases.consolidation("Until 90% consolidated", until_degree=90.0, activate=[q2])
+
+r2 = prj2.run().results()[-1]
+tv_stop = CV * r2.consol_time[-1] / (H * H)
+print()
+print(f"90% consolidation (pressure ratio) reached after {r2.consol_time[-1]:.2f} day"
+      f"  ->  Tv = {tv_stop:.3f}   (closed form 1.031)")
+print(f"   excess pore pressure left {r2.consol_excess_pore[-1]:.3f} kPa of the "
+      f"{r2.consol_pore_reference:.3f} kPa the surcharge generated")
+print(f"   settlement then {r2.consol_settlement[-1] / S_INF:.3f} of its final value "
+      f"-- NOT 0.90, because the 90% asked for was a pressure")

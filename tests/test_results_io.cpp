@@ -66,6 +66,14 @@ std::vector<katai::app::SolveResult> build_phases() {
         R.convergence.worst_iface_error = 2.05e-6 * k;
         R.convergence.feet = k;
         R.convergence.foot_force_error = 5.58e-9 * k;
+        // v9: WHAT a consolidation phase was asked to end on, and what it reached. A result that
+        // says "90% consolidated" without saying which 90% (a pressure ratio, not the settlement
+        // ratio) is the number without its definition -- the same reason stopped_by is stored.
+        R.consol_stop = k == 1 ? katai::core::ConsolidationStop::DegreeOfConsolidation
+                               : katai::core::ConsolidationStop::TimeInterval;
+        R.consol_stop_met = k == 1;
+        R.consol_pore_reference = 9.99833 * k;
+        R.consol_degree_reached = 0.90025 * k;
         R.disp = Eigen::VectorXd::LinSpaced(12, -0.5 + k, 0.75);
         R.stress.stress.resize(6);
         for (int n = 0; n < 6; ++n)
@@ -109,6 +117,9 @@ bool same(const katai::app::SolveResult& a, const katai::app::SolveResult& b) {
         ca.iface_points != cb.iface_points || ca.iface_inaccurate != cb.iface_inaccurate ||
         ca.worst_iface_error != cb.worst_iface_error || ca.feet != cb.feet ||
         ca.foot_force_error != cb.foot_force_error) return false;
+    if (a.consol_stop != b.consol_stop || a.consol_stop_met != b.consol_stop_met ||
+        a.consol_pore_reference != b.consol_pore_reference ||
+        a.consol_degree_reached != b.consol_degree_reached) return false;
     if (a.disp.size() != b.disp.size() || (a.disp - b.disp).cwiseAbs().maxCoeff() != 0.0) return false;
     if (a.stress.stress.size() != b.stress.stress.size()) return false;
     for (size_t i = 0; i < a.stress.stress.size(); ++i)

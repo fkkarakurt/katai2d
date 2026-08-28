@@ -19,8 +19,8 @@ forgets one of the four. This gate makes that impossible to do silently:
   * the format versions stated in the spec must equal kProjectFileVersion /
     kResultsFileVersion in the headers, and the schema's katai2d maximum;
   * the schema's file-stable enum bounds (initial procedure, soil model,
-    drainage, phase type, waveform, design approach, element kind, load kind,
-    edge BC, flow BC)
+    drainage, phase type, waveform, design approach, consolidation stop,
+    element kind, load kind, edge BC, flow BC)
     must equal the enum sizes in kernel/model/.../project.hpp -- appending an
     enum value without widening the schema fails here, not in a user's hands.
 
@@ -170,6 +170,7 @@ def main() -> int:
         (["$defs", "phase", "properties", "type", "maximum"], "PhaseType"),
         (["$defs", "phase", "properties", "seiswave", "maximum"], "SeismicWave"),
         (["$defs", "phase", "properties", "design", "maximum"], "DesignApproach"),
+        (["$defs", "phase", "properties", "cstop", "maximum"], "ConsolStop"),
         (["$defs", "structElement", "properties", "kind", "maximum"], "StructKind"),
         (["$defs", "load", "properties", "kind", "maximum"], "LoadKind"),
         (["$defs", "soilPolygon", "properties", "edge_bc", "items", "maximum"], "BCType"),

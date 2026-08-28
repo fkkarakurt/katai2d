@@ -103,6 +103,13 @@ NB_MODULE(_core, m) {
         .value("Harmonic", api::SeismicWave::Harmonic)
         .value("Ricker", api::SeismicWave::Ricker)
         .value("Record", api::SeismicWave::Record);
+    // How a Consolidation phase ends (PLAXIS Ref sec. 7.5). DegreeOfConsolidation is a PRESSURE
+    // ratio -- max excess pore pressure now over the maximum the stage generated -- not the
+    // settlement ratio the name suggests; the two are ~21% apart in time (KV-CON-003).
+    nb::enum_<api::ConsolStop>(m, "ConsolStop", nb::is_arithmetic())
+        .value("TimeInterval", api::ConsolStop::TimeInterval)
+        .value("MinExcessPore", api::ConsolStop::MinExcessPore)
+        .value("DegreeOfConsolidation", api::ConsolStop::DegreeOfConsolidation);
     nb::enum_<api::DesignApproach>(m, "DesignApproach", nb::is_arithmetic())
         .value("None_", api::DesignApproach::None)
         .value("EC7_DA1_C1", api::DesignApproach::EC7_DA1_C1)
@@ -341,6 +348,22 @@ NB_MODULE(_core, m) {
         .def_rw("type", &api::Phase::type)
         .def_rw("duration", &api::Phase::duration, "[day] (Dynamic: [s])")
         .def_rw("time_steps", &api::Phase::time_steps)
+        .def_rw("consol_stop", &api::Phase::consol_stop,
+                "how a Consolidation phase ends: on its `duration` (the default) or when the "
+                "excess pore pressure reaches a target, in which case the duration is NOT used "
+                "and the phase reports the time the target took")
+        .def_rw("consol_min_pore", &api::Phase::consol_min_pore,
+                "[kPa] ConsolStop.MinExcessPore threshold on the maximum |excess pore pressure|")
+        .def_rw("consol_degree", &api::Phase::consol_degree,
+                "[%] ConsolStop.DegreeOfConsolidation target -- the PRESSURE ratio "
+                "|p|max(t) / |p|max,initial, not the settlement ratio of the same name")
+        .def_rw("consol_first_step", &api::Phase::consol_first_step,
+                "[day] first time step of the march; 0 = automatic (four times the "
+                "Vermeer-Verruijt critical step, which is where the initial pore field stops "
+                "overshooting -- see KV-CON-003)")
+        .def_rw("consol_max_steps", &api::Phase::consol_max_steps,
+                "cap on the march's time steps; reaching it REFUSES the phase rather than "
+                "reporting the time it happened to stop at")
         .def_rw("design_approach", &api::Phase::design_approach)
         .def_rw("seismic_wave", &api::Phase::seismic_wave)
         .def_rw("seismic_amp", &api::Phase::seismic_amp)
@@ -737,7 +760,28 @@ NB_MODULE(_core, m) {
         .def_prop_ro("consol_settlement",
                      [](const api::SolveResult& r) { return r.consol_settlement; })
         .def_prop_ro("consol_excess_pore",
-                     [](const api::SolveResult& r) { return r.consol_excess_pore; });
+                     [](const api::SolveResult& r) { return r.consol_excess_pore; })
+        // What the phase was asked to end on, and what it reached. `consol_degree_reached` is the
+        // PRESSURE ratio 1 - |p|max(end) / consol_pore_reference (PLAXIS Ref sec. 7.5), so it is
+        // NOT the settlement ratio; on the verified column the two differ by 21% in time.
+        .def_prop_ro("consol_stop", [](const api::SolveResult& r) {
+            // The result carries the ENGINE's enum and the project carries the SCHEMA's; the two
+            // are the same three endings and the driver maps between them (to_core_consol_stop).
+            // Python should see ONE name, so the cast happens here -- gated, not hoped for.
+            static_assert((int)api::ConsolStop::TimeInterval ==
+                              (int)katai::core::ConsolidationStop::TimeInterval &&
+                          (int)api::ConsolStop::MinExcessPore ==
+                              (int)katai::core::ConsolidationStop::MinExcessPore &&
+                          (int)api::ConsolStop::DegreeOfConsolidation ==
+                              (int)katai::core::ConsolidationStop::DegreeOfConsolidation,
+                          "the schema and engine consolidation-stop enums have drifted apart");
+            return (api::ConsolStop)(int)r.consol_stop;
+        })
+        .def_prop_ro("consol_stop_met", [](const api::SolveResult& r) { return r.consol_stop_met; })
+        .def_prop_ro("consol_pore_reference",
+                     [](const api::SolveResult& r) { return r.consol_pore_reference; })
+        .def_prop_ro("consol_degree_reached",
+                     [](const api::SolveResult& r) { return r.consol_degree_reached; });
 
     // -------------------------------------------------------------------- job --
     nb::class_<katai::jobs::PhaseTiming>(m, "PhaseTiming")

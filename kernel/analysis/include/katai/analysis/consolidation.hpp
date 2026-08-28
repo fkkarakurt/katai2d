@@ -8,6 +8,8 @@
 // initial excess pore pressure p0 dissipates and settlement develops through K dv = -L dp ->
 // Terzaghi U(Tv). Formulation: docs/references/consolidation-formulation.md.
 
+#include <algorithm>
+#include <cmath>
 #include <functional>
 #include <vector>
 
@@ -43,6 +45,27 @@ inline double consolidation_critical_dt(double h, double eta, double Eoed, doubl
     if (h <= 0.0 || eta <= 0.0 || k_y <= 0.0 || Eoed <= 0.0) return 0.0;
     const double storage = 1.0 / Eoed + (Kw > 0.0 ? n / Kw : 0.0);
     return h * h * gamma_w / (eta * k_y) * storage;
+}
+
+// Mean element size h [m] of the mesh (area-based, the same measure the free-surface transition
+// width uses): h = sqrt(2*A_mean) from the corner triangle areas. It is the h that enters
+// consolidation_critical_dt, and it has ONE definition because two definitions of the same length
+// would let the editor warn about a step the solver then chooses differently.
+inline double mean_element_size(const mesh::Mesh& mesh) {
+    if (mesh.element_count == 0) return 0.0;
+    double area_sum = 0.0;
+    for (int e = 0; e < mesh.element_count; ++e) {
+        const int a = mesh.node_of(e, 0), b = mesh.node_of(e, 1), c = mesh.node_of(e, 2);
+        area_sum += 0.5 * std::fabs((mesh.x[b] - mesh.x[a]) * (mesh.y[c] - mesh.y[a]) -
+                                    (mesh.x[c] - mesh.x[a]) * (mesh.y[b] - mesh.y[a]));
+    }
+    return std::sqrt(2.0 * area_sum / std::max(1, mesh.element_count));
+}
+
+// Interpolation-order factor eta of the Vermeer-Verruijt criterion: 40 for the 6-noded, 80 for the
+// 15-noded triangle (PLAXIS 2D Sci.Man sec. 4.4).
+inline double consolidation_eta(const mesh::Mesh& mesh) {
+    return mesh.nodes_per_element == 15 ? 80.0 : 40.0;
 }
 
 struct ConsolidationResult {

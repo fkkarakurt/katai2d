@@ -57,6 +57,7 @@ inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::
                         size_t n_disp, size_t n_hydro = 0) {
     using model::PhaseType;
     using model::SeismicWave;
+    using model::ConsolStop;
     const auto path = [&base](const char* f) { return base + "." + f; };
 
     // Per-phase water conditions (staged dewatering): the polyline must be usable, or the
@@ -139,13 +140,54 @@ inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::
               "a staged-construction target below 1 is applied by the plastic (staged) solve; "
               "this phase type does not ramp a staged change, so the value is ignored");
 
+    // Consolidation stop criterion (PLAXIS Ref sec. 7.5). Its whole point is that the phase does
+    // NOT run for a stated time, so the rules about the time interval have to step aside for it --
+    // and every field it does read has to be checked here, because the alternative is a march that
+    // discovers a nonsensical target after the first hour of solving.
+    const int cstop = (int)ph.consol_stop;
+    const bool on_target = ph.consol_stop != ConsolStop::TimeInterval;
+    if (cstop < 0 || cstop >= 3) {
+        r.add(Severity::Error, path("cstop"),
+              "unknown consolidation stop criterion " + std::to_string(cstop) +
+                  "; this build knows 0..2 (time interval, minimum excess pore pressure, degree "
+                  "of consolidation)");
+    } else if (on_target && ph.type != PhaseType::Consolidation) {
+        r.add(Severity::Warning, path("cstop"),
+              "a stop criterion is read only by a Consolidation phase; this phase type ends on its "
+              "own time interval and the criterion is ignored");
+    } else if (on_target) {
+        r.add(Severity::Warning, path("duration"),
+              "this phase ends when its target is reached, so the time interval is not used; "
+              "the phase reports the time the target took instead of consuming a time given here");
+        if (ph.consol_stop == ConsolStop::MinExcessPore && !(ph.consol_min_pore > 0.0))
+            r.add(Severity::Error, path("cminp"),
+                  "the minimum excess pore pressure must be positive (got " +
+                      num(ph.consol_min_pore) + " kPa); it is a threshold on |p|, so zero would "
+                      "ask for exact dissipation and never be reached");
+        if (ph.consol_stop == ConsolStop::DegreeOfConsolidation &&
+            !(ph.consol_degree > 0.0 && ph.consol_degree < 100.0))
+            r.add(Severity::Error, path("cdeg"),
+                  "the target degree of consolidation must lie strictly between 0 and 100% (got " +
+                      num(ph.consol_degree) + "%); 100% is exact dissipation, which is reached "
+                      "asymptotically and never at a finite time");
+        if (ph.consol_first_step < 0.0)
+            r.add(Severity::Error, path("cfirst"),
+                  "the first time step cannot be negative (got " + num(ph.consol_first_step) +
+                      " day); leave it at 0 for the automatic Vermeer-Verruijt critical step");
+        if (ph.consol_max_steps < 1)
+            r.add(Severity::Error, path("cmaxstep"),
+                  "the march needs at least one time step (got " +
+                      std::to_string(ph.consol_max_steps) + ")");
+    }
+
     const bool timed = ph.type == PhaseType::Consolidation || ph.type == PhaseType::TransientFlow ||
                        ph.type == PhaseType::FullyCoupled || ph.type == PhaseType::Dynamic;
-    if (timed && !(ph.duration > 0.0))
+    const bool needs_interval = timed && !(on_target && ph.type == PhaseType::Consolidation);
+    if (needs_interval && !(ph.duration > 0.0))
         r.add(Severity::Error, path("duration"),
               "a time-dependent phase needs a positive time interval (got " + num(ph.duration) +
                   (ph.type == PhaseType::Dynamic ? " s)" : " day)"));
-    if (timed && ph.time_steps < 1)
+    if (needs_interval && ph.time_steps < 1)
         r.add(Severity::Error, path("steps"),
               "a time-dependent phase needs at least one time step (got " +
                   std::to_string(ph.time_steps) + ")");

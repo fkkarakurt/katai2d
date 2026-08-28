@@ -593,10 +593,53 @@ class _Phases:
         stiffness the earlier phases degraded it to."""
         return self._add(name, _core.PhaseType.Plastic, **kw)
 
-    def consolidation(self, name, *, duration, steps, **kw):
-        """Time-dependent Biot consolidation. duration [day]."""
-        return self._add(name, _core.PhaseType.Consolidation,
-                         duration=duration, steps=steps, **kw)
+    def consolidation(self, name, *, duration=None, steps=None, until_degree=None,
+                      until_excess_pore=None, first_step=None, max_steps=None, **kw):
+        """Time-dependent Biot consolidation, ended one of two ways.
+
+        By TIME -- ``duration`` [day] split into ``steps`` equal steps::
+
+            prj.phases.consolidation("Wait a month", duration=30, steps=100)
+
+        or by a STATE the dissipation has to reach, which is the shape the design
+        question usually has -- how long until it has settled out?  The phase then
+        chooses its own steps and REPORTS the time it took (``res.consol_time[-1]``)::
+
+            prj.phases.consolidation("Until 90%", until_degree=90)
+            prj.phases.consolidation("Until 1 kPa left", until_excess_pore=1.0)
+
+        ``until_degree`` is a PRESSURE ratio: the maximum excess pore pressure left,
+        over the maximum the stage generated.  It is NOT the settlement ratio the name
+        suggests -- on the verified 1-D column the settlement ratio reaches 90% a fifth
+        of the time earlier (KV-CON-003), so the two names give two different answers
+        to the same question.
+
+        ``first_step`` [day] overrides the automatic first time step; ``max_steps``
+        caps the march (reaching the cap refuses the phase rather than reporting the
+        time it happened to stop at).
+        """
+        target = (until_degree is not None) + (until_excess_pore is not None)
+        if target > 1:
+            raise ValueError("consolidation(): give until_degree= OR until_excess_pore=, "
+                             "not both -- they are two different stop criteria")
+        if target and (duration is not None or steps is not None):
+            raise ValueError("consolidation(): a phase that ends on a target does not use "
+                             "duration=/steps= -- it runs until the target is reached and "
+                             "reports the time. Drop them, or drop the target.")
+        if not target and (duration is None or steps is None):
+            raise ValueError("consolidation(): needs duration= and steps=, or a target "
+                             "(until_degree=90 / until_excess_pore=1.0)")
+        b = self._add(name, _core.PhaseType.Consolidation,
+                      duration=duration, steps=steps, **kw)
+        if until_degree is not None:
+            b.phase.consol_stop = _core.ConsolStop.DegreeOfConsolidation
+            b.phase.consol_degree = float(until_degree)
+        elif until_excess_pore is not None:
+            b.phase.consol_stop = _core.ConsolStop.MinExcessPore
+            b.phase.consol_min_pore = float(until_excess_pore)
+        if first_step is not None: b.phase.consol_first_step = float(first_step)
+        if max_steps is not None: b.phase.consol_max_steps = int(max_steps)
+        return b
 
     def safety(self, name="Safety", **kw):
         """phi-c reduction of the current state -> factor of safety."""

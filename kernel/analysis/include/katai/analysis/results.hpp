@@ -111,6 +111,24 @@ struct StructCarryState {
                         plate_plastic, plate5_plastic;            // plate M-N hinge state ([eps_p,kap_p]xGauss)
 };
 
+// How a CONSOLIDATION phase is asked to end (PLAXIS 2D Reference Manual sec. 7.5, "Loading type"
+// of a Consolidation phase). TimeInterval is the classic one -- the phase's own duration, split
+// into equal steps -- and is what every earlier build could do. The other two end the phase on a
+// STATE the dissipation has to reach, and for them "The input of a Time interval is not applicable"
+// (same section): the march runs until the criterion is met and REPORTS the time it took, which is
+// the form the design question actually has ("how long until it has settled out?").
+//
+// DegreeOfConsolidation carries a trap the manual states outright: "Although the
+// degree-of-consolidation is officially defined in terms of target settlement over final
+// settlement, in PLAXIS 2D it is defined as the target minimum excess pore pressure over the
+// maximum initial excess pore pressure p_max/p_max,initial." So U here is a PRESSURE ratio, not
+// Terzaghi's average settlement ratio -- and the two are different numbers, not two spellings of
+// one: on the 1-D column with a uniform initial excess pore pressure, the settlement ratio reaches
+// 90% at Tv = 0.848 while the pressure ratio reaches it only at Tv = 1.031, 21% later (both
+// closed-form, pinned in test_consolidation_stop / KV-CON-003). Every surface that prints the
+// number therefore names the definition next to it.
+enum class ConsolidationStop { TimeInterval, MinExcessPore, DegreeOfConsolidation };
+
 struct SolveResult {
     katai::mesh::Mesh mesh;                     // the mesh actually solved (split for embedded walls)
     Eigen::VectorXd disp;                      // full displacement (2 * node_count)
@@ -161,6 +179,18 @@ struct SolveResult {
     std::vector<double> consol_time;
     std::vector<double> consol_settlement;
     std::vector<double> consol_excess_pore;
+    // WHY the consolidation march ended, when it was asked to end on a state rather than on a time
+    // interval (ConsolidationStop above). `consol_stop` is what was ASKED for; `consol_stop_met`
+    // whether the march actually reached it (a march that runs out of steps refuses, so a stored
+    // result carries met = true, but a front end must never assume it); `consol_pore_reference` is
+    // the |p|max the ratio is taken against -- the maximum excess pore pressure REACHED in the
+    // phase, which for a load applied at t = 0+ is the undrained pressure it generated; and
+    // `consol_degree_reached` = 1 - |p|max(end) / consol_pore_reference, the PRESSURE ratio (see
+    // the enum). Zero / TimeInterval on every other phase family.
+    ConsolidationStop consol_stop = ConsolidationStop::TimeInterval;
+    bool consol_stop_met = false;
+    double consol_pore_reference = 0.0;
+    double consol_degree_reached = 0.0;
     // Final nodal degree of saturation S (size node_count) for transient/fully-coupled unsaturated
     // flow; empty otherwise. 1.0 in the saturated zone, < 1 where suction develops (van Genuchten).
     std::vector<double> saturation;

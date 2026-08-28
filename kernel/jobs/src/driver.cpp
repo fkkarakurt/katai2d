@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <exception>
 #include <memory>
 #include <unordered_map>
@@ -311,6 +312,16 @@ static katai::core::DesignApproach to_core_design_approach(model::DesignApproach
         case M::None:             return C::None;
     }
     return C::None;
+}
+
+static katai::core::ConsolidationStop to_core_consol_stop(model::ConsolStop c) {
+    using M = model::ConsolStop; using C = katai::core::ConsolidationStop;
+    switch (c) {
+        case M::MinExcessPore:         return C::MinExcessPore;
+        case M::DegreeOfConsolidation: return C::DegreeOfConsolidation;
+        case M::TimeInterval:          return C::TimeInterval;
+    }
+    return C::TimeInterval;
 }
 
 static katai::core::SeismicWave to_core_seismic_wave(model::SeismicWave w) {
@@ -2014,6 +2025,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 cm.porosity = Mt.e_init / (1.0 + Mt.e_init);
                 cm.nonporous = mat_nonporous[mi] != 0;
                 cm.total_stress = Mt.drainage == model::Drainage::UndrainedC;
+                cm.eoed = schema_oedometer_modulus(Mt);   // only the automatic first time step reads it
             }
             cin.flow_edges = flow_edges_from(pr);
             cin.have_flow_bcs = any_flow_bc_declared(pr);
@@ -2031,7 +2043,17 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             cin.has_structural_elements = has_interfaces || has_embedded ||
                 !structures.plates.empty() || !structures.anchors.empty() ||
                 !structures.geogrids.empty();
-            if (io.config) { cin.duration_day = io.config->duration; cin.time_steps = io.config->time_steps; }
+            if (io.config) {
+                cin.duration_day = io.config->duration; cin.time_steps = io.config->time_steps;
+                // How the phase ends (PLAXIS Ref sec. 7.5). With a state criterion the two above
+                // are not read at all -- the phase marches until the state is reached and its
+                // ANSWER is the time that took.
+                cin.stop = to_core_consol_stop(io.config->consol_stop);
+                cin.stop_min_pore = io.config->consol_min_pore;
+                cin.stop_degree = io.config->consol_degree / 100.0;   // file is per cent, engine a ratio
+                cin.first_dt = io.config->consol_first_step;
+                cin.max_steps = io.config->consol_max_steps;
+            }
             cin.yscale = ymax - ymin;
             const Eigen::VectorXd dF = f - B;   // configuration imbalance (SumMstage)
             // Sparse Biot solve factories: the coupled saddle-point system A = [K L; Lᵀ -(ΔtH+S)] is
@@ -2286,6 +2308,31 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                     std::to_string(s_inf) + " m over " + std::to_string(R.consol_time.back()) +
                     " days (excess pore -> " + std::to_string(R.consol_excess_pore.back()) +
                     " kPa). See the settlement-time curve below.";
+        // A phase that ended on a STATE answers a question the timed one does not ask -- how long
+        // -- so the time leads, and the definition of the number travels WITH the number. The
+        // degree of consolidation here is PLAXIS's pressure ratio, and saying so is not pedantry:
+        // the settlement ratio of the same name reaches 90% about 21% of the time earlier.
+        if (R.consol_stop != katai::core::ConsolidationStop::TimeInterval) {
+            char cbuf[520];
+            if (R.consol_stop == katai::core::ConsolidationStop::MinExcessPore)
+                std::snprintf(cbuf, sizeof(cbuf),
+                    "%s: the excess pore pressure fell to %.4g kPa after %.6g day(s) and %d time "
+                    "step(s) -- %.1f%% of the %.4g kPa this stage generated has dissipated. "
+                    "Settlement %.6g -> %.6g m.",
+                    label, R.consol_excess_pore.back(), R.consol_time.back(), R.iterations,
+                    100.0 * R.consol_degree_reached, R.consol_pore_reference, s0, s_inf);
+            else
+                std::snprintf(cbuf, sizeof(cbuf),
+                    "%s: %.1f%% consolidation reached after %.6g day(s) and %d time step(s). The "
+                    "degree of consolidation here is a PRESSURE ratio -- maximum excess pore "
+                    "pressure now (%.4g kPa) against the maximum this stage generated (%.4g kPa) -- "
+                    "and NOT the settlement ratio of the same name, which reaches the same figure "
+                    "earlier. Settlement %.6g -> %.6g m.",
+                    label, 100.0 * R.consol_degree_reached, R.consol_time.back(), R.iterations,
+                    R.consol_excess_pore.back(), R.consol_pore_reference, s0, s_inf);
+            R.message = cbuf;
+            R.message += " See the settlement-time curve below.";
+        }
     }
     if (R.nil_step && !io.chained)
         R.message += "  [K0 on non-level ground (sloped surface / layers / water table): the K0 field "

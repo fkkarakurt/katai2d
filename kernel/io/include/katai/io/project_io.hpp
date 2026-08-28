@@ -103,6 +103,15 @@ namespace katai::model {
 // reset -- typically a surcharge placed and removed to leave a preconsolidation pressure, whose
 // strain history ageing would long since have erased -- is invisible to that older build, so
 // the phase it runs is a different problem with the same drawing.
+// v17 (2026-08): THE CONSOLIDATION STOP CRITERION (`phases[].cstop`, `cminp`, `cdeg`, `cfirst`,
+// `cmaxstep`). Until this a consolidation phase could only be told a DURATION, so the design
+// question -- how long until the excess pore pressure has largely gone -- had to be answered by
+// guessing a duration, reading the curve, and guessing again. A phase with `cstop` runs until the
+// state is reached and reports the time. An older build reads no such key and runs the phase's
+// `duration` / `steps` instead, which are still in the file: it therefore reports a DIFFERENT
+// answer to a different question, and reports it as an ordinary consolidation result -- so files
+// using a stop criterion are written at v17 and refused there, rather than silently re-interpreted.
+// Written only when a criterion is set, so every older file is byte-identical.
 // v16 (2026-08): BOREHOLE LOGS (`strata[]`, `boreholes[]`). Where the ground data actually comes
 // from -- a level per layer boundary and a water head, at an x. Until this the engineer turned the
 // logs into polygons by hand, which is the slowest part of building a model and the easiest place
@@ -119,7 +128,7 @@ namespace katai::model {
 // material law and, measured on the oedometer, often in FEWER Newton iterations rather than more,
 // because the equilibrium iteration stops grinding against integration noise. Either way the
 // older build silently substitutes its own number for the one the file names.
-inline constexpr int kProjectFileVersion = 16;
+inline constexpr int kProjectFileVersion = 17;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -374,6 +383,15 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     if (ph.substep_tolerance > 0.0) wfield(o, "substol", ph.substep_tolerance);
     // Same rule for the staged-construction target and the undrained switch: the default IS the
     // ordinary case (the whole stage, undrained soil behaving undrained), so it costs no bytes.
+    // Consolidation stop criterion: the same rule again -- a phase that ends on its time interval
+    // (every phase that ever existed before v17) writes nothing at all.
+    if (ph.consol_stop != ConsolStop::TimeInterval) {
+        wfield(o, "cstop", (double)(int)ph.consol_stop);
+        wfield(o, "cminp", ph.consol_min_pore);
+        wfield(o, "cdeg", ph.consol_degree);
+        if (ph.consol_first_step > 0.0) wfield(o, "cfirst", ph.consol_first_step);
+        if (ph.consol_max_steps != 1000) wfield(o, "cmaxstep", (double)ph.consol_max_steps);
+    }
     if (ph.sum_mstage != 1.0) wfield(o, "mstage", ph.sum_mstage);
     if (ph.ignore_undrained) wfield(o, "ignoreund", true);
     if (ph.reset_small_strain) wfield(o, "resetsmall", true);
@@ -416,6 +434,11 @@ inline Phase rphase(const Json& j) {
     ph.load_steps = (int)j.num("loadsteps", ph.load_steps);
     ph.max_iterations = (int)j.num("maxiter", ph.max_iterations);
     ph.substep_tolerance = j.num("substol", ph.substep_tolerance);
+    ph.consol_stop = (ConsolStop)(int)j.num("cstop", 0);   // 0 = time interval (pre-v17 files)
+    ph.consol_min_pore = j.num("cminp", ph.consol_min_pore);
+    ph.consol_degree = j.num("cdeg", ph.consol_degree);
+    ph.consol_first_step = j.num("cfirst", ph.consol_first_step);
+    ph.consol_max_steps = (int)j.num("cmaxstep", ph.consol_max_steps);
     ph.sum_mstage = j.num("mstage", ph.sum_mstage);
     ph.ignore_undrained = j.flag("ignoreund", ph.ignore_undrained);
     ph.reset_small_strain = j.flag("resetsmall", ph.reset_small_strain);

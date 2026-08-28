@@ -57,6 +57,7 @@ using model::SoilModel;
 using model::Drainage;
 using model::PhaseType;
 using model::SeismicWave;
+using model::ConsolStop;      // how a Consolidation phase ends (time interval / a state it must reach)
 using model::DesignApproach;
 using model::StructKind;
 using model::LoadKind;

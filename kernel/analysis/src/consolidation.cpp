@@ -1,6 +1,7 @@
 // The Biot consolidation bodies (LE + elastoplastic), compiled ONCE (section 5.2
 // batch 3a): the element-templated detail implementations instantiate here for tri6
 // and tri15, and every consumer sees declarations only.
+#include <katai/math/solve_error.hpp>   // SingularSystem: a refused solve is an answer
 #include <katai/analysis/consolidation.hpp>
 
 namespace katai::core {
@@ -112,10 +113,18 @@ ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dof
 
     // Solve backend: a caller-provided factory (factor once -> repeated back-solve, e.g. PARDISO
     // mtype=-2) when given; otherwise a dense Eigen LU (MKL-free reference, small meshes only).
+    // A refused linear solve is a property of THIS system, not a fatal error: the coupled tangent
+    // is singular (commonly an insufficiently restrained model), and a verifying backend refuses to
+    // return a vector that does not satisfy it rather than returning a meaningless one. The static
+    // solver has caught exactly this since it began checking its answers (nonlinear_solver.cpp:
+    // "Only SingularSystem is caught"); here it used to escape the call stack and ABORT the
+    // process, which is the one answer a solver may never give. An empty result is this core's
+    // "no result", and the phase strategy already reports it.
     std::function<Eigen::VectorXd(const Eigen::VectorXd&)> solve_step;
     Eigen::PartialPivLU<Eigen::MatrixXd> lu;
     if (solve_factory) {
-        solve_step = solve_factory(A);
+        try { solve_step = solve_factory(A); }
+        catch (const math::SingularSystem&) { return {}; }
     } else {
         Eigen::MatrixXd Adense = Eigen::MatrixXd::Zero(NT, NT);
         for (int r = 0; r < NT; ++r)
@@ -150,7 +159,9 @@ ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dof
         // load generates an excess pore pressure that the subsequent (Δf=0) steps then dissipate.
         if (step == 0 && load_increment) rhs.head(ndisp) = *load_increment;
         if (npore > 0) rhs.tail(npore) += dt * (Hcsr * p);   // continuity right-hand side dt.H.p_n
-        const Eigen::VectorXd d = solve_step(rhs);
+        Eigen::VectorXd d;
+        try { d = solve_step(rhs); }
+        catch (const math::SingularSystem&) { return {}; }
         v += d.head(ndisp);
         if (npore > 0) p += d.tail(npore);
         record((step + 1) * dt);
@@ -333,8 +344,18 @@ ConsolidationPlasticResult consolidation_plastic_impl(
                 if (r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0)) { step_ok = true; break; }
             }
             if (!solve_factory) { step_ok = false; break; }
-            const auto solve = solve_factory(A);
-            const Eigen::VectorXd d = solve(r);
+            // A refused linear solve ends THIS time step, exactly as a non-converged Newton
+            // does -- the tangent is singular at this iterate, which on this path means the soil
+            // has reached its capacity under the load being consolidated. Letting the refusal
+            // escape aborted the process instead (measured: a confined column driven past its
+            // Mohr-Coulomb strength). Only SingularSystem is caught: a malformed request or a
+            // broken backend raises SolveError and still propagates, because turning one of those
+            // into "did not converge" would publish a modelling answer for a bug.
+            Eigen::VectorXd d;
+            try {
+                const auto solve = solve_factory(A);
+                d = solve(r);
+            } catch (const math::SingularSystem&) { step_ok = false; break; }
             dv += d.head(ndisp);
             if (npore > 0) dpv += d.tail(npore);
         }

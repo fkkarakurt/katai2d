@@ -1,6 +1,7 @@
 // The fully-coupled flow-deformation bodies (LE Picard + elastoplastic monolithic
 // Newton-Picard), compiled ONCE (section 5.2 batch 3b): the element-templated detail
 // implementations instantiate here for tri6 and tri15; consumers see declarations only.
+#include <katai/math/solve_error.hpp>   // SingularSystem: a refused solve is an answer
 #include <katai/analysis/coupled_flow_deformation.hpp>
 
 namespace katai::core {
@@ -158,7 +159,12 @@ CoupledFlowResult coupled_flow_impl(
             if (step == 0 && load_increment) rhs.head(ndisp) = *load_increment;
             if (npore > 0) rhs.tail(npore) += dt * (Hc * p);   // dt.H_kr.p_n (start-of-step pore)
             Eigen::VectorXd d;
-            if (solve_factory) { d = solve_factory(A)(rhs); }
+            // A refused solve ends the run rather than the process -- see consolidation.cpp, the
+            // same discipline and the same reason (an empty result is this core's "no result").
+            if (solve_factory) {
+                try { d = solve_factory(A)(rhs); }
+                catch (const math::SingularSystem&) { return {}; }
+            }
             else {
                 Eigen::MatrixXd Ad = Eigen::MatrixXd::Zero(NT, NT);
                 for (int r = 0; r < NT; ++r)
@@ -402,8 +408,12 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
                 if (r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0)) { step_ok = true; break; }
             }
             if (!solve_factory) { step_ok = false; break; }
-            const auto solve = solve_factory(A);
-            const Eigen::VectorXd d = solve(r);
+            // A refused solve ends THIS time step, not the process (see consolidation.cpp).
+            Eigen::VectorXd d;
+            try {
+                const auto solve = solve_factory(A);
+                d = solve(r);
+            } catch (const math::SingularSystem&) { step_ok = false; break; }
             dv += d.head(ndisp);
             if (npore > 0) dpv += d.tail(npore);
         }

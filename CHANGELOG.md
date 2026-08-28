@@ -6,6 +6,72 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A refused linear solve ended the process instead of the time step
+
+Found by the test above on its first honest run, and older than it. When the coupled tangent of a
+Biot solve goes singular — a soil body that reaches its strength under the load being consolidated,
+or a model that is not restrained enough — the linear backend verifies its answer, sees a relative
+residual of 9e-4 where 1e-6 was asked, and **refuses** rather than returning a vector that does not
+satisfy the system. The static solver has caught that refusal since it began checking its answers,
+and treats it as a property of the increment. Neither coupled core did: the exception escaped the
+call stack and terminated the process (0xC0000409).
+
+Both now end the time step with it and report `converged = false`, which the phase turns into the
+message it already had — *the load increment may exceed the soil capacity*, which is exactly what
+happened. Only `SingularSystem` is caught; a malformed request or a broken backend still propagates,
+because turning one of those into "did not converge" would publish a modelling answer for a bug.
+The case is pinned in `test_consolidation_stop`: a confined column dissipating more excess pore
+pressure than its Mohr-Coulomb strength can carry must come back and say so.
+
+### A consolidation phase can be asked how long, instead of being told
+
+Until now the only thing a consolidation phase could be given was a duration. The design question is
+the other way round — *how long until the excess pore pressure has gone?* — so answering it meant
+guessing a span, reading the curve, and guessing again. A phase can now end when the ground gets
+there instead: **at a maximum excess pore pressure**, or **at a target degree of consolidation**
+(PLAXIS Reference Manual §7.5). The time interval is then not used at all, and the time the target
+took is what the phase reports.
+
+**The degree of consolidation is a pressure ratio, and every surface that prints it says so.** The
+manual is explicit that its "degree of consolidation" is the excess pore pressure left over the
+maximum the stage generated, not the settlement ratio the name suggests — and the two are different
+numbers, not two spellings of one. On the 1-D column where both are known in closed form, the
+settlement ratio reaches 90% at Tv = 0.848 and the pressure ratio only at Tv = 1.031: **21.6% apart
+in time**, and at the pressure criterion's 90% the settlement is already 93.6% done. A build that
+implemented the name rather than the definition would be wrong by a fifth of its answer and would
+look entirely reasonable doing it, so the definition travels with the number in the solver message,
+the report (text and HTML), the Studio help, `katai.summary` and the Python result.
+
+The march that finds the time changes its step size as it goes, and it does that by **restarting the
+fixed-dt core** rather than by growing a new one — both cores are restartable by construction, and
+the test asserts it (one run of 40 steps against four of 10: 6e-16 relative). Its two constants were
+measured on the column whose answer is known, not chosen:
+
+- the reported time is first order in the steps-per-doubling (8 → +5.5%, 32 → +1.5%, 128 → +0.4%),
+  and 32 ships. The axis is not the mesh: a fine equal-step grid gives the same time on 99, 169 and
+  453 nodes alike;
+- the automatic first step is **four times** the Vermeer–Verruijt critical step, because dt_crit is
+  a stability bound on the pore field and not an accuracy bound on the pressure the ratio is
+  measured against — at dt_crit exactly, the first step overshoots the undrained pressure it
+  generates by 12.8%, and that peak is the ratio's denominator.
+
+Measured against the closed form the stop time is **+1.45%**; the two criteria agree with each other
+to 0.00% where they ask for the same instant, as does the elastoplastic path (`KV-CON-003`).
+
+Three endings that could have been silent are not. A march that runs out of steps **refuses**,
+saying how far it got in the definition it was asked in, rather than reporting where it happened to
+stop. A model with no drainage boundary is refused before the march starts, so a structural defect
+is not reported as a step budget. And a stage that generated no excess pore pressure at all — a
+phase whose load was left switched off — meets its target at the first time step; the run raises
+**`K2D-A013`** rather than presenting the size of that step as a settlement time.
+
+Python: `prj.phases.consolidation("...", until_degree=90)` or `until_excess_pore=1.0`, with
+`first_step=` and `max_steps=`; passing both a target and `duration=`/`steps=` is an error rather
+than a silent preference. File formats: **.k2d v17** (`cstop`, `cminp`, `cdeg`, `cfirst`,
+`cmaxstep`, written only when a criterion is set, so older files are byte-identical) and **.res v9**
+(what the phase was asked to end on, whether it got there, and the ratio's reference).
+
+
 ### A run says when its material integration ran out of room
 
 The Hardening Soil integrator subdivides a load increment until its own error estimate is under the

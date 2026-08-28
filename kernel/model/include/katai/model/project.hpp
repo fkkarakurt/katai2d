@@ -329,6 +329,24 @@ inline const char* const* phase_type_names() {
     return n;
 }
 
+// How a Consolidation phase ENDS (PLAXIS Ref. Man. sec. 7.5, "Loading type"). Model-level enum,
+// mapped to katai::core::ConsolidationStop in build_problem (like SoilModel/Drainage/PhaseType).
+// TimeInterval is the classic one: the phase's own duration, split into equal steps. The other two
+// end it on a STATE instead, and for them a time interval is not applicable at all -- the phase
+// runs until the excess pore pressure has fallen far enough and REPORTS how long that took, which
+// is the form the design question has ("how long until it has settled out?").
+// DegreeOfConsolidation is a PRESSURE ratio, not Terzaghi's settlement ratio -- PLAXIS defines it
+// as target minimum excess pore pressure over maximum initial excess pore pressure, and says so
+// explicitly because the name suggests the other definition. The two differ by ~20% in time on the
+// 1-D column. katai::core::ConsolidationStop (analysis/results.hpp) carries the full statement.
+// Values file-stable (append only).
+enum class ConsolStop { TimeInterval, MinExcessPore, DegreeOfConsolidation };
+inline const char* const* consol_stop_names() {
+    static const char* n[] = {"Time interval", "Minimum excess pore pressure",
+                              "Degree of consolidation"};
+    return n;
+}
+
 // Base-motion waveform for a Dynamic phase (v1 synthetic input; a loaded record is a later phase).
 // Record = a user accelerogram (real earthquake record): Phase.accel_record [m/s^2] +
 // Phase.record_dt sampling interval; seismic_amp becomes a SCALE factor (1 = record as-is).
@@ -369,6 +387,18 @@ struct Phase {
     // number of Newmark steps over it (so the step dt = duration/time_steps [s]).
     double duration = 1.0;
     int time_steps = 25;
+    // Consolidation stop criterion (PLAXIS Ref sec. 7.5). With consol_stop != TimeInterval the two
+    // fields above are NOT used -- there is no interval to divide -- and the phase instead marches
+    // until |p|max <= consol_min_pore [kPa], or until the degree of consolidation (as a PRESSURE
+    // ratio, see ConsolStop) reaches consol_degree [%]. consol_first_step [day] is the first time
+    // step; 0 = automatic (the Vermeer-Verruijt critical step, which is also PLAXIS's default).
+    // consol_max_steps caps the march: reaching it REFUSES the phase, it does not report a time as
+    // if the target had been met. Ignored by every other phase type.
+    ConsolStop consol_stop = ConsolStop::TimeInterval;
+    double consol_min_pore = 1.0;    // [kPa] (PLAXIS default: 1 stress unit)
+    double consol_degree = 90.0;     // [%]   (PLAXIS default: 90)
+    double consol_first_step = 0.0;  // [day] 0 = automatic
+    int consol_max_steps = 1000;
     // Dynamic (seismic) time-history input (PhaseType::Dynamic; ignored otherwise). Horizontal base
     // acceleration a_g(t): waveform seismic_wave, peak amplitude seismic_amp [m/s^2], dominant
     // frequency seismic_freq [Hz]. Rayleigh damping: ratio damping_ratio at the two target frequencies

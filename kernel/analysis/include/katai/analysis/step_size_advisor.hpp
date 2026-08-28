@@ -107,21 +107,20 @@ struct ConsolidationStepMaterial {
 // PORE field. h = mean element size; eta = 40 (tri6) / 80 (tri15); the most-restrictive dt_crit over
 // the materials actually present in the mesh binds. `materials` is indexed by material id, exactly
 // like the mesh's element_material. Returns "" when the step is adequate.
+// `first_step_given` = the caller handed the FIRST STEP itself rather than a duration split into
+// steps (a phase that ends on a target has no interval to divide), which changes only the remedy
+// the message offers -- there is no step count to reduce.
 inline std::string consolidation_step_warning(const std::vector<ConsolidationStepMaterial>& materials,
                                               const katai::mesh::Mesh& mesh,
-                                              double duration_day, int time_steps) {
+                                              double duration_day, int time_steps,
+                                              bool first_step_given = false) {
     if (mesh.element_count == 0 || time_steps < 1 || duration_day <= 0.0) return {};
 
-    // Mean element size h (area-based, like the flow solver's free-surface transition width).
-    double area_sum = 0.0;
-    for (int e = 0; e < mesh.element_count; ++e) {
-        const int a = mesh.node_of(e, 0), b = mesh.node_of(e, 1), c = mesh.node_of(e, 2);
-        area_sum += 0.5 * std::fabs((mesh.x[b] - mesh.x[a]) * (mesh.y[c] - mesh.y[a]) -
-                                    (mesh.x[c] - mesh.x[a]) * (mesh.y[b] - mesh.y[a]));
-    }
-    const double h = std::sqrt(2.0 * area_sum / std::max(1, mesh.element_count));
+    // Mean element size h and the order factor eta -- one definition, shared with the solver's own
+    // automatic first time step (katai/analysis/consolidation.hpp).
+    const double h = mean_element_size(mesh);
     const bool tri15 = mesh.nodes_per_element == 15;
-    const double eta = tri15 ? 80.0 : 40.0;
+    const double eta = consolidation_eta(mesh);
     constexpr double kWaterBulk = 2.0e6;   // water bulk modulus [kPa] (matches the consolidation solve)
 
     std::vector<char> used(materials.size(), 0);
@@ -139,12 +138,15 @@ inline std::string consolidation_step_warning(const std::vector<ConsolidationSte
     const double dt = duration_day / time_steps;
     if (dt_crit <= 0.0 || dt >= dt_crit) return {};
 
-    char buf[440];
+    char buf[460];
     std::snprintf(buf, sizeof(buf),
         "First time step dt = %.3g day is below the Vermeer-Verruijt critical step dt_crit = %.3g day "
         "(%s elements). Settlements stay reliable, but the early-time pore-pressure field can oscillate "
-        "(checkerboard). Use fewer / larger steps to raise dt above dt_crit%s.",
+        "(checkerboard). %s%s.",
         dt, dt_crit, tri15 ? "15-noded" : "6-noded",
+        first_step_given ? "Raise the phase's first time step above dt_crit, or leave it at 0 for "
+                           "the automatic one, which is above it by construction"
+                         : "Use fewer / larger steps to raise dt above dt_crit",
         tri15 ? "" : ", or switch to 15-noded elements (Mesh tab)");
     return buf;
 }

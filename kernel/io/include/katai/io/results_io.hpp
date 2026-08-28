@@ -57,9 +57,12 @@ using katai::core::InterfaceStation;
 // accuracy of the numbers in the file, and a reopened result that cannot say which criteria were
 // met would report the claim without the evidence for it; v8 completes that family with the
 // interface / coupling-spring counts and the embedded-beam foot force error, which arrived one
-// package later than the soil ones.
+// package later than the soil ones; v9 adds the consolidation stop record -- WHAT a consolidation
+// phase was asked to end on, whether it got there, and the pressure ratio it reached. A phase that
+// ends on a target answers a question ("how long?") that a phase ending on a time interval does not
+// ask, and a reopened result with the answer but not the question is a number with no units on it.
 // Older files predate each feature, so reading the fields back as false/0/None is correct for them.
-inline constexpr std::uint32_t kResultsFileVersion = 8;
+inline constexpr std::uint32_t kResultsFileVersion = 9;
 
 inline std::uint64_t fnv1a64(const std::string& s) {
     std::uint64_t h = 1469598103934665603ull;
@@ -224,6 +227,14 @@ inline bool save_results(const std::string& path, std::uint64_t model_hash,
         w.put<double>(cv.worst_iface_error);
         w.put<std::int32_t>(cv.feet);
         w.put<double>(cv.foot_force_error);
+        // v9: the consolidation stop record. The settlement-time curve itself is not stored (a
+        // restored result is for viewing, and the curve is re-computed by re-running), but WHICH
+        // ending the phase was asked for, whether it reached it, and the pressure ratio it reached
+        // are what the message's "90% consolidated" rests on.
+        w.put<std::int32_t>((std::int32_t)R.consol_stop);
+        w.put<std::uint8_t>(R.consol_stop_met ? 1 : 0);
+        w.put<double>(R.consol_pore_reference);
+        w.put<double>(R.consol_degree_reached);
     }
     std::ofstream f(path, std::ios::binary);
     if (!f) { if (err) *err = "cannot open file for writing: " + path; return false; }
@@ -357,6 +368,12 @@ inline bool load_results(const std::string& path, std::uint64_t model_hash,
             cv.worst_iface_error = r.get<double>();
             cv.feet = r.get<std::int32_t>();
             cv.foot_force_error = r.get<double>();
+        }
+        if (ver >= 9) {   // absent in v8: what the consolidation phase was asked to end on
+            R.consol_stop = (katai::core::ConsolidationStop)r.get<std::int32_t>();
+            R.consol_stop_met = r.get<std::uint8_t>() != 0;
+            R.consol_pore_reference = r.get<double>();
+            R.consol_degree_reached = r.get<double>();
         }
         // Per-phase sanity: nodal arrays must match the stored mesh.
         if (R.disp.size() != (Eigen::Index)mesh.node_count * 2 ||

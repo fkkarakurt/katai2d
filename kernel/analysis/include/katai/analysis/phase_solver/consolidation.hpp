@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,12 @@ struct ConsolidationPhaseMaterial {
     double kx = 1.0, ky = 1.0;     // permeability [m/day]
     double porosity = 0.3;         // n = e / (1 + e)
     bool nonporous = false;        // refused: a non-porous region would silently behave water-filled
+    // Oedometer modulus E_oed [kPa] of the material, resolved at the caller's seam (how a schema
+    // model yields one is schema knowledge: HS uses Eoed_ref, Soft Soil the NC tangent, the rest
+    // the closed form). Only the AUTOMATIC first time step reads it -- it is the same dt_crit the
+    // editor already warns below. 0 = unknown, which makes the automatic step refuse rather than
+    // guess.
+    double eoed = 0.0;
     // Undrained (C) is a TOTAL stress material: it has no pore pressures to consolidate.
     // PLAXIS states the same fact as "a Consolidation calculation does not affect Undrained (C)
     // materials"; this build refuses the phase rather than solving part of the mesh in total
@@ -63,6 +70,15 @@ struct ConsolidationPhase {
     double duration_day = 1.0;                          // <= 0 falls back to 1 day
     int time_steps = 25;                                // clamped to [1, 2000]
     double yscale = 1.0;                                // model height, for the top-drain tolerance
+    // How the phase ENDS (katai/analysis/results.hpp ConsolidationStop; PLAXIS Ref sec. 7.5).
+    // TimeInterval uses duration_day / time_steps above and is the historical path, untouched.
+    // The other two ignore both -- "the input of a Time interval is not applicable in this case" --
+    // and march until the state is reached, reporting the time it took.
+    ConsolidationStop stop = ConsolidationStop::TimeInterval;
+    double stop_min_pore = 1.0;   // [kPa] MinExcessPore threshold on |p|max (PLAXIS default: 1 stress unit)
+    double stop_degree = 0.9;     // [-]  DegreeOfConsolidation target, as a PRESSURE ratio (default 90%)
+    double first_dt = 0.0;        // [day] first time step; <= 0 = automatic (Vermeer-Verruijt dt_crit)
+    int max_steps = 1000;         // safety cap on the march; reaching it REFUSES, it does not report
 };
 
 // Solve the phase. Fills the settlement-time series, the final displacement and
@@ -163,59 +179,296 @@ inline bool solve_consolidation_phase(
     for (int n : in.drain_nodes)
         if (n >= 0 && n < mesh.node_count) drained[n] = 1;
 
-    // Time stepping from the phase duration / step count.
+    // Time stepping. The phase's own interval (the historical path) OR a state criterion below.
     const double duration = in.duration_day > 0.0 ? in.duration_day : 1.0;
     const int nsteps = std::clamp(in.time_steps, 1, 2000);
     const double dt = duration / nsteps;
-    const std::vector<double> p0(mesh.node_count, 0.0);   // load generates the excess pore at t=0+
 
-    // Solve with the linear-elastic OR the elastoplastic (MC/HS) consolidation core. The
-    // series + final committed EFFECTIVE Gauss state come back through a common pointer.
-    const ConsolidationResult* series = nullptr;
-    std::vector<GaussState> committed;
-    ConsolidationResult le_res;
-    ConsolidationPlasticResult pl_res;
-    if (nonlinear_soil) {
-        // Elastoplastic skeleton: effective stress from the constitutive return mapping; each
-        // time step is a monolithic coupled Newton. K_T is nonsymmetric for non-associated
-        // flow -> the caller's plastic factory selects the matching solver. The previous
-        // phase's committed effective stresses (`init`) seed the state; dF drives it.
-        pl_res = solve_consolidation_plastic(mesh, dofs, models, cperm, kGammaWater,
-            kw_over_n, drained, init, {}, dt, nsteps, in.active, &dF, plastic_factory,
-            40, 1e-6, profiles);
-        if (!pl_res.converged) {
-            R.message = "Elastoplastic consolidation did not converge in a time step (the load "
-                        "increment may exceed the soil capacity, or the time step is too large "
-                        "-- use a smaller load increment or more, smaller steps).";
+    // One run of the core from the CURRENT state: n steps of dt, with the phase's load increment
+    // applied in the first of them when `with_load`. Both cores are restartable BY CONSTRUCTION --
+    // the linear-elastic skeleton is time-invariant, and the elastoplastic one rebuilds its
+    // baseline internal force from the committed Gauss state it is handed -- so a march with a
+    // CHANGING dt is a SEQUENCE of fixed-dt runs, and the verified fixed-dt core is not touched at
+    // all. That equality is asserted, not assumed: test_consolidation_stop pins one run of 120
+    // steps against four runs of 30.
+    struct Chunk {
+        ConsolidationResult series;            // times RELATIVE to the chunk start; [0] = its start
+        std::vector<GaussState> committed;     // elastoplastic path: state at the chunk END only
+        bool ok = false;
+    };
+    std::vector<double> p_state(mesh.node_count, 0.0);   // excess pore at the chunk start (0 at t=0)
+    std::vector<GaussState> state = init;                // committed effective Gauss state
+    auto run_chunk = [&](double step_dt, int n, bool with_load) {
+        Chunk c;
+        const Eigen::VectorXd* load = with_load ? &dF : nullptr;
+        if (nonlinear_soil) {
+            // Elastoplastic skeleton: effective stress from the constitutive return mapping; each
+            // time step is a monolithic coupled Newton. K_T is nonsymmetric for non-associated
+            // flow -> the caller's plastic factory selects the matching solver. The previous
+            // phase's committed effective stresses (`init`) seed the state; dF drives it.
+            ConsolidationPlasticResult r = solve_consolidation_plastic(
+                mesh, dofs, models, cperm, kGammaWater, kw_over_n, drained, state, p_state,
+                step_dt, n, in.active, load, plastic_factory, 40, 1e-6, profiles);
+            c.ok = r.converged;
+            c.series = std::move(r.series);
+            c.committed = std::move(r.committed);
+        } else {
+            c.series = solve_consolidation(mesh, dofs, models, cperm, kGammaWater, kw_over_n,
+                                           drained, p_state, step_dt, n, in.active, load,
+                                           le_factory, profiles);
+            c.ok = !c.series.displacement.empty();
+        }
+        return c;
+    };
+    const char* const kFailedMessage =
+        nonlinear_soil
+            ? "Elastoplastic consolidation did not converge in a time step (the load increment may "
+              "exceed the soil capacity, or the time step is too large -- use a smaller load "
+              "increment or more, smaller steps)."
+            : "Consolidation produced no result.";
+
+    // The phase's own settlement-time curve, in ABSOLUTE phase time: max vertical settlement |u_y|
+    // and max |excess pore| per recorded step, plus the running PEAK excess pore pressure -- the
+    // reference the degree of consolidation is a ratio of.
+    double pore_peak = 0.0;
+    Eigen::VectorXd v_total = Eigen::VectorXd::Zero(dofs.total_dofs());
+    double t_now = 0.0;
+    int steps_done = 0;
+    bool load_pending = true;
+    R.consol_time.push_back(0.0);          // the phase's own start: no displacement, no excess pore
+    R.consol_settlement.push_back(0.0);
+    R.consol_excess_pore.push_back(0.0);
+
+    auto step_pmax = [&](const Chunk& c, int s) {
+        double pmax = 0.0;
+        for (int n = 0; n < mesh.node_count; ++n)
+            pmax = std::fmax(pmax, std::fabs(c.series.pore[s](n)));
+        return pmax;
+    };
+    // Append EVERY step of a chunk and adopt its end state. Only ever called with a whole chunk:
+    // the committed Gauss state exists at its end and nowhere else, so "stop half way through" is
+    // spelled as a shorter RE-RUN (identical arithmetic, same state), never as a partial commit.
+    auto commit = [&](const Chunk& c) {
+        const int n = (int)c.series.times.size() - 1;
+        for (int s = 1; s <= n; ++s) {
+            double smax = 0.0;
+            for (int nd = 0; nd < mesh.node_count; ++nd) {
+                const int d = dofs.global_dof(nd, 1);
+                smax = std::fmax(smax, std::fabs(v_total(d) + c.series.displacement[s](d)));
+            }
+            const double pmax = step_pmax(c, s);
+            R.consol_time.push_back(t_now + c.series.times[s]);
+            R.consol_settlement.push_back(smax);
+            R.consol_excess_pore.push_back(pmax);
+            pore_peak = std::fmax(pore_peak, pmax);
+        }
+        v_total += c.series.displacement[n];
+        for (int nd = 0; nd < mesh.node_count; ++nd) p_state[nd] = c.series.pore[n](nd);
+        if (nonlinear_soil) state = c.committed;
+        t_now += c.series.times[n];
+        steps_done += n;
+        load_pending = false;
+    };
+
+    if (in.stop == ConsolidationStop::TimeInterval) {
+        Chunk c = run_chunk(dt, nsteps, true);
+        if (!c.ok) { R.message = kFailedMessage; return false; }
+        commit(c);
+        R.consol_stop_met = true;   // a time interval always ends: it is a duration, not a target
+    } else {
+        // --- Ending on a STATE (PLAXIS Ref sec. 7.5) -----------------------------------------
+        // No duration is given, so the step size cannot come from one. The march starts from the
+        // Vermeer-Verruijt critical step (docs/references/consolidation-formulation.md sec. 4) and
+        // then DOUBLES every kStepsPerLevel steps, which holds dt/t ~ 1/kStepsPerLevel for the
+        // whole run: a log-time march, the shape dissipation actually has and the shape its own
+        // curve is read in. Both constants below were MEASURED on the 1-D column whose answer is
+        // known in closed form (KV-CON-003); neither was chosen for looking reasonable.
+        //
+        //   kStepsPerLevel -- the reported stop time is first-order in 1/N, and it is the ANSWER
+        //   of this phase, not a detail of its curve. Measured (stop at 1 kPa of the 10 kPa
+        //   generated; closed form 14.566 day, a fine equal-step grid gives 14.60):
+        //       N =   8 -> 15.367 (+5.5%)     N =  32 -> 14.778 (+1.5%)    N = 128 -> 14.624 (+0.4%)
+        //       N =  16 -> 15.014 (+3.1%)     N =  64 -> 14.675 (+0.8%)
+        //   The halving is clean. 32 buys 1.5% for 203 steps where 8 costs 5.5% for 67 -- and the
+        //   steps INSIDE a level are back-substitutions on one factorisation (dt is constant
+        //   there), so N costs far less than its step count suggests: the factorisations are the
+        //   levels, and there are ~log2(t_end/dt_0) of those whatever N is.
+        constexpr int kStepsPerLevel = 32;    // steps per doubling of dt
+        constexpr int kRefineSubsteps = 16;   // pieces the crossing step is re-run in
+        const int max_steps = std::clamp(in.max_steps, 1, 20000);
+
+        // Nothing can dissipate without somewhere to dissipate TO. A criterion that can never be
+        // met would otherwise be answered by exhausting the step budget on a model whose defect
+        // is structural, and the report would blame the budget.
+        bool any_drained = false;
+        for (char d : drained) if (d) { any_drained = true; break; }
+        if (!any_drained) {
+            R.message = "This consolidation phase is asked to run until the excess pore pressure "
+                        "reaches a target, but the model has no drainage boundary: every boundary "
+                        "is closed, so the excess pore pressure redistributes and never leaves. "
+                        "Give the model a Prescribed head / Seepage face edge (or a drain), or end "
+                        "the phase on a time interval.";
             return false;
         }
-        series = &pl_res.series;
-        committed = std::move(pl_res.committed);   // final effective Gauss state (from return mapping)
-    } else {
-        le_res = solve_consolidation(mesh, dofs, models, cperm, kGammaWater,
-                                     kw_over_n, drained, p0, dt, nsteps, in.active, &dF,
-                                     le_factory, profiles);
-        if (le_res.displacement.empty()) { R.message = "Consolidation produced no result."; return false; }
-        series = &le_res;
-        committed = init;   // sigma' = init + D B v_final (linear-elastic skeleton)
-        recover_consolidation_stress(mesh, dofs, models, le_res.displacement.back(), in.active, committed);
+
+        // The automatic first time step. dt_crit is a STABILITY bound on the pore field, not an
+        // accuracy bound on the pressure the ratio is measured against, and the difference shows:
+        // at dt_crit exactly, the first step of the column overshoots the undrained pressure it
+        // generates by 12.8% (11.275 kPa for a 10 kPa surcharge) -- the drainage-boundary layer is
+        // thinner the smaller the step, and an equal-order pore field cannot resolve it. That peak
+        // IS the denominator of the degree of consolidation, so the overshoot would land in the
+        // answer. Measured on the same column against the exact 9.9983 kPa: 1x dt_crit -> 11.275,
+        // 2x -> 10.034, 4x -> 9.9983, 64x -> 9.9980. Four is where it is clean, and dt_crit is a
+        // lower bound, so multiplying it is allowed.
+        constexpr double kFirstStepOverCritical = 4.0;
+        double dt_level = in.first_dt;
+        if (dt_level <= 0.0) {
+            const double h = mean_element_size(mesh);
+            const double eta = consolidation_eta(mesh);
+            for (size_t mi = 0; mi < nmat; ++mi)
+                if (used[mi])
+                    dt_level = std::fmax(dt_level,
+                                         consolidation_critical_dt(h, eta, in.materials[mi].eoed,
+                                                                   in.materials[mi].ky,
+                                                                   in.materials[mi].porosity,
+                                                                   kWaterBulk, kGammaWater));
+            dt_level *= kFirstStepOverCritical;
+            if (!(dt_level > 0.0)) {
+                R.message = "This consolidation phase ends on a target rather than on a time "
+                            "interval, so the solver must choose the first time step itself -- and "
+                            "the Vermeer-Verruijt critical step cannot be formed here (a material "
+                            "has no oedometer modulus: nu = 0.5, or a model whose stiffness is not "
+                            "resolved). Enter a first time step for the phase, or end it on a time "
+                            "interval.";
+                return false;
+            }
+        }
+
+        // Is the criterion met at this state? MinExcessPore is an ABSOLUTE threshold on |p| (it
+        // applies to suction as much as to pressure, which is why the magnitude is taken).
+        // DegreeOfConsolidation is the PRESSURE ratio PLAXIS defines (see ConsolidationStop):
+        // |p|max(t) <= (1 - U) * |p|max,initial.
+        // A ratio needs a denominator that is a pressure. Where the staged change generated
+        // nothing (a phase that activates no load, or one whose change is already in the ground),
+        // the peak is round-off, and 10% of round-off is a target the march would chase until its
+        // step budget ran out and then REFUSE -- a budget message for a modelling fact. Below the
+        // floor the criterion is simply true, and the run says so (K2D-A013 at the tail).
+        constexpr double kPoreFloor = 1e-9;   // [kPa] -- a micropascal is not an excess pore pressure
+        auto criterion_met = [&](double pmax, double peak) {
+            return in.stop == ConsolidationStop::MinExcessPore
+                       ? pmax <= in.stop_min_pore
+                       : pmax <= std::fmax((1.0 - in.stop_degree) * peak, kPoreFloor);
+        };
+        // First step of a chunk that meets it (1-based), or -1. The peak is carried forward: the
+        // reference of the ratio is the largest excess pore pressure the phase has reached, which
+        // for a load applied at t = 0+ is the undrained pressure that load generated.
+        auto scan = [&](const Chunk& c) {
+            double peak = pore_peak;
+            const int n = (int)c.series.times.size() - 1;
+            for (int s = 1; s <= n; ++s) {
+                const double pmax = step_pmax(c, s);
+                peak = std::fmax(peak, pmax);
+                if (criterion_met(pmax, peak)) return s;
+            }
+            return -1;
+        };
+
+        while (!R.consol_stop_met && steps_done < max_steps) {
+            const int n = std::min(kStepsPerLevel, max_steps - steps_done);
+            Chunk c = run_chunk(dt_level, n, load_pending);
+            if (!c.ok) { R.message = kFailedMessage; return false; }
+            const int hit = scan(c);
+            if (hit < 0) { commit(c); dt_level *= 2.0; continue; }
+            if (hit > 1) {   // land exactly on the step BEFORE the crossing (same dt, same state)
+                Chunk c2 = run_chunk(dt_level, hit - 1, load_pending);
+                if (!c2.ok) { R.message = kFailedMessage; return false; }
+                commit(c2);
+            }
+            // Localise the crossing INSIDE that one step: re-run it in kRefineSubsteps pieces and
+            // end at the first that meets the criterion. Without this the answer would be the step
+            // AFTER the crossing, which this late in a log-time march is ~12% of t away -- and the
+            // answer of this phase IS a time.
+            const double dt_fine = dt_level / kRefineSubsteps;
+            Chunk cr = run_chunk(dt_fine, kRefineSubsteps, load_pending);
+            if (!cr.ok) { R.message = kFailedMessage; return false; }
+            const int m = scan(cr);
+            if (m < 0) { commit(cr); continue; }   // the finer path has not crossed yet: march on
+            if (m < kRefineSubsteps) {
+                Chunk cf = run_chunk(dt_fine, m, load_pending);
+                if (!cf.ok) { R.message = kFailedMessage; return false; }
+                commit(cf);
+            } else {
+                commit(cr);
+            }
+            R.consol_stop_met = true;
+        }
+
+        if (!R.consol_stop_met) {
+            const double left = R.consol_excess_pore.back();
+            char buf[600];
+            if (in.stop == ConsolidationStop::MinExcessPore)
+                std::snprintf(buf, sizeof(buf),
+                    "The consolidation phase did not reach its target: after %d time steps and "
+                    "t = %.6g day the maximum excess pore pressure is still %.4g kPa, above the "
+                    "%.4g kPa asked. Raise the phase's maximum number of steps, or end the phase "
+                    "on a time interval -- the run is refused rather than reported as if the "
+                    "target had been met.",
+                    steps_done, t_now, left, in.stop_min_pore);
+            else
+                std::snprintf(buf, sizeof(buf),
+                    "The consolidation phase did not reach its target: after %d time steps and "
+                    "t = %.6g day the maximum excess pore pressure is %.4g kPa of the %.4g kPa "
+                    "generated -- a degree of consolidation of %.1f%% (pressure ratio) against the "
+                    "%.1f%% asked. Raise the phase's maximum number of steps, or end the phase on "
+                    "a time interval -- the run is refused rather than reported as if the target "
+                    "had been met.",
+                    steps_done, t_now, left, pore_peak,
+                    100.0 * (pore_peak > 0.0 ? 1.0 - left / pore_peak : 1.0),
+                    100.0 * in.stop_degree);
+            R.message = buf;
+            return false;
+        }
     }
 
-    // Settlement-time curve: max vertical settlement |u_y| + max |excess pore| per step.
-    for (size_t s = 0; s < series->times.size(); ++s) {
-        double smax = 0.0, pmax = 0.0;
-        for (int n = 0; n < mesh.node_count; ++n) {
-            smax = std::fmax(smax, std::fabs(series->displacement[s][dofs.global_dof(n, 1)]));
-            pmax = std::fmax(pmax, std::fabs(series->pore[s][n]));
-        }
-        R.consol_time.push_back(series->times[s]);
-        R.consol_settlement.push_back(smax);
-        R.consol_excess_pore.push_back(pmax);
+    // What the phase reached, in the definition it was asked in (results.hpp ConsolidationStop).
+    // pore_peak = 0 means the staged change generated no excess pore pressure at all: the ratio has
+    // no denominator, the criterion is trivially true, and the caller warns rather than printing a
+    // "90% consolidated" that describes nothing.
+    R.consol_stop = in.stop;
+    R.consol_pore_reference = pore_peak;
+    R.consol_degree_reached =
+        pore_peak > 0.0 ? 1.0 - R.consol_excess_pore.back() / pore_peak : 1.0;
+    // A target the phase was ALREADY inside when it started is met at the first time step, and the
+    // time that comes out is the size of that step -- not a consolidation time. The number is not
+    // wrong; the reading of it would be, so the run says so instead of letting the report present
+    // "reached the target in 1.6e-05 day" as a settlement rate.
+    if (in.stop != ConsolidationStop::TimeInterval) {
+        const bool never_rose = in.stop == ConsolidationStop::MinExcessPore
+                                    ? pore_peak <= in.stop_min_pore
+                                    : pore_peak <= 1e-9;   // the kPoreFloor of the march above
+        if (never_rose)
+            add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A013", "consolidation",
+                           "this phase was asked to run until the excess pore pressure fell to a "
+                           "target, but the staged change never generated excess pore pressure "
+                           "above it (peak " + std::to_string(pore_peak) +
+                           " kPa), so the target was already met at the first time step. The time "
+                           "reported is that step, not a consolidation time. Check that the load / "
+                           "excavation this phase is meant to apply is actually switched on in it.");
     }
-    R.disp = series->displacement.back().head(mesh.node_count * 2);
+
+    // Final effective Gauss state: from the return mapping (elastoplastic) or recovered from the
+    // total displacement of the linear-elastic skeleton (sigma' = init + D B v_final).
+    std::vector<GaussState> committed;
+    if (nonlinear_soil) {
+        committed = std::move(state);
+    } else {
+        committed = init;
+        recover_consolidation_stress(mesh, dofs, models, v_total, in.active, committed);
+    }
+    R.disp = v_total.head(mesh.node_count * 2);
     R.stress = recover_nodal_stresses_from_gauss(mesh, committed, in.active);
     R.load_factor = 1.0;
-    R.iterations = nsteps;
+    R.iterations = steps_done;
     committed_out = std::move(committed);
     return true;
 }

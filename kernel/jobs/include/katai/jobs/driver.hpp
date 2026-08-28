@@ -91,6 +91,13 @@ inline std::string dynamic_step_warning(const model::Phase& ph) {
 // = sigma'_v/lambda*, evaluated at the 100 kPa reference (dt_crit is only a WARNING
 // threshold; the stress-dependent true value is the phase solve's own business); HS
 // uses Eoed_ref; everything else the constant-E closed form.
+inline double schema_oedometer_modulus(const model::Material& M) {
+    const bool hs = M.model == model::SoilModel::HardeningSoil || M.model == model::SoilModel::HSsmall;
+    if (M.model == model::SoilModel::SoftSoil || M.model == model::SoilModel::SoftSoilCreep)
+        return 100.0 / std::max(M.lam_star, 1e-6);
+    return hs ? M.Eoedref : katai::core::oedometer_modulus(M.E, M.nu);
+}
+
 inline std::string consolidation_step_warning(const model::Project& pr, const katai::mesh::Mesh& mesh,
                                               const model::Phase& ph) {
     using PT = model::PhaseType;
@@ -98,13 +105,16 @@ inline std::string consolidation_step_warning(const model::Project& pr, const ka
     std::vector<katai::core::ConsolidationStepMaterial> mats(pr.materials.size());
     for (size_t mi = 0; mi < pr.materials.size(); ++mi) {
         const auto& M = pr.materials[mi];
-        const bool hs = M.model == model::SoilModel::HardeningSoil || M.model == model::SoilModel::HSsmall;
-        mats[mi].Eoed = (M.model == model::SoilModel::SoftSoil ||
-                         M.model == model::SoilModel::SoftSoilCreep)
-                            ? 100.0 / std::max(M.lam_star, 1e-6)
-                            : (hs ? M.Eoedref : katai::core::oedometer_modulus(M.E, M.nu));
+        mats[mi].Eoed = schema_oedometer_modulus(M);
         mats[mi].k_y = M.ky;
         mats[mi].porosity = M.e_init / (1.0 + M.e_init);
+    }
+    // A phase that ends on a TARGET divides no duration: what the criterion applies to is its
+    // first time step. When that is automatic the solver picks one above dt_crit by construction,
+    // so there is nothing to warn about; when the engineer names one, it is the number to check.
+    if (ph.type == model::PhaseType::Consolidation && ph.consol_stop != model::ConsolStop::TimeInterval) {
+        if (!(ph.consol_first_step > 0.0)) return {};
+        return katai::core::consolidation_step_warning(mats, mesh, ph.consol_first_step, 1, true);
     }
     return katai::core::consolidation_step_warning(mats, mesh, ph.duration, ph.time_steps);
 }

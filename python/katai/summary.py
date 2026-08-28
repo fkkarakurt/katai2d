@@ -168,4 +168,15 @@ def _one(r, name, fields, structures, diagnostics):
                  f"t = {r.consol_time[-1]:.4g} day, settlement "
                  f"{r.consol_settlement[-1]:.6e} m, excess pore "
                  f"{r.consol_excess_pore[-1]:.4g} kPa")
+        # A phase that ended on a target answers "how long?", so the time above is the ANSWER
+        # rather than an input -- and the degree is a pressure ratio, which is said next to it
+        # because the name means something else in the textbooks (KV-CON-003).
+        stop = int(r.consol_stop)
+        if stop == 2:
+            L.append(f"                 stopped at {100.0 * r.consol_degree_reached:.1f}% degree "
+                     f"of consolidation (pressure ratio |p|max / {r.consol_pore_reference:.4g} kPa "
+                     f"generated, not the settlement ratio)")
+        elif stop == 1:
+            L.append(f"                 stopped at {r.consol_excess_pore[-1]:.4g} kPa maximum "
+                     f"excess pore pressure, of the {r.consol_pore_reference:.4g} kPa generated")
     return "\n".join(L)

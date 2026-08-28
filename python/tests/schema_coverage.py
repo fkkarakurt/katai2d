@@ -72,6 +72,11 @@ KEY_TO_ATTR = {
     "loadsteps": "load_steps",
     "maxiter": "max_iterations",
     "substol": "substep_tolerance",
+    "cstop": "consol_stop",
+    "cminp": "consol_min_pore",
+    "cdeg": "consol_degree",
+    "cfirst": "consol_first_step",
+    "cmaxstep": "consol_max_steps",
     "lamstar": "lam_star",
     "kapstar": "kap_star",
     "mustar": "mu_star",
@@ -188,6 +193,13 @@ def coverage_project():
     ph.load_steps = 12
     ph.max_iterations = 40
     ph.substep_tolerance = 2.5e-6
+    # Same rule again for the consolidation stop criterion (v17): the writer emits it only when
+    # the phase ends on a target rather than on its time interval, so the coverage phase does.
+    ph.consol_stop = core.ConsolStop.DegreeOfConsolidation
+    ph.consol_min_pore = 2.0
+    ph.consol_degree = 80.0
+    ph.consol_first_step = 0.25
+    ph.consol_max_steps = 750
     ph.poly_active = [1]
     ph.struct_active = [1]
     ph.load_active = [1]
