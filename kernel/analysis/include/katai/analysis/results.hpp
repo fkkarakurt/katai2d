@@ -179,6 +179,14 @@ struct SolveResult {
     std::vector<double> consol_time;
     std::vector<double> consol_settlement;
     std::vector<double> consol_excess_pore;
+    // The EXCESS pore pressure field at the end of a consolidation / fully-coupled phase, node by
+    // node (size node_count; empty for every other family). `pore` above is the hydrostatic
+    // pressure the phase was set up in -- the water table or the flow field -- and it is what the
+    // driver writes there for every phase, so without this field the pressure the phase actually
+    // COMPUTED existed only as a maximum per time step: the engineer could see that something was
+    // still draining, but not where. In-memory result, like `reaction`: results_io does not
+    // persist it (a restored result is for viewing, and this one is re-computed by re-running).
+    std::vector<double> excess_pore;
     // WHY the consolidation march ended, when it was asked to end on a state rather than on a time
     // interval (ConsolidationStop above). `consol_stop` is what was ASKED for; `consol_stop_met`
     // whether the march actually reached it (a march that runs out of steps refuses, so a stored

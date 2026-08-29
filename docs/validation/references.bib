@@ -101,12 +101,17 @@
   note  = {cited by KV-CST-004},
 }
 
+@misc{plaxisb,
+  title = {PLAXIS 2D Reference Manual Table 5-2 / Scientific Manual sec. 3.4 for the three cross-permeability cases and what each means (the model's own field comment quotes them, and its default is fully permeable); and the drained limit of Biot consolidation, as in KV-STR-006 -- once the excess pore pressure is gone the coupled problem IS the drained problem, which this program solves by an independent path (solve_nonlinear, with a real Coulomb return on the joint)},
+  note  = {cited by KV-STR-007},
+}
+
 @misc{plaxis2025f,
   title = {PLAXIS 2D Scientific Manual 2025.1 sec 9.1 -- the deformation convergence criteria as a FAMILY: Eq. 9-1 the CSP-normalised global force error, Eq. 9-3/9-4 the moment residual, Eq. 9-5 the local error at a plastic soil stress point and Eq. 9-7 at a non-linear elastic one, with the equilibrium/constitutive stress pair of Fig. 9-1 and Eq. 9-6; and PLAXIS 2D Reference Manual 2025.1 sec 7.13.8, Eq. 7-21/7-22 for the same global check and for CSP itself. THE TWO MANUALS PRINT CSP AS RECIPROCALS OF EACH OTHER: Scientific Eq. 9-2 gives elastic energy over total, Reference Eq. 7-22 gives total over elastic. Only the Reference orientation matches the behaviour BOTH manuals state in words -- "when the solution is fully elastic the Stiffness is equal to unity, whereas at failure the Stiffness approaches zero" -- and the uses built on it there (arc-length engages below CSP 0.5, collapse is reported below 0.015). The inverted form is >= 1 and GROWS without bound as a mechanism forms, which would make Eq. 9-1 loosen towards failure instead of tightening. Implemented from Eq. 7-22, deliberately, and this case is what holds it there},
   note  = {cited by KV-NUM-013},
 }
 
-@misc{plaxisb,
+@misc{plaxisc,
   title = {PLAXIS 2D Validation Manual, Version 8 (Bentley Systems)},
   note  = {cited by KV-STR-002, KV-STR-003},
 }

@@ -70,8 +70,15 @@ struct ConsolidationPhase {
     std::vector<int> drain_nodes;
     // Structural elements that sit in this phase's coupled solve. Plates, anchors and geogrids
     // enter it; interfaces and embedded beams are refused below, and the refusal says why.
-    bool has_split_structures = false;   // interfaces / embedded walls: the mesh is SPLIT along them
     bool has_embedded_beams = false;     // embedded beam rows (skin + foot springs)
+    // An interface SPLITS the mesh, so the joint has two node sets at one place and what the water
+    // does between them is an INPUT (PLAXIS Ref Table 5-2 / Sci sec. 3.4): fully permeable = one
+    // pressure (the two share a pore equation, `pore_tie` below), impermeable = two. The third,
+    // semi-permeable, is a CONDUCTANCE dh/R between them and is not expressible as either -- it is
+    // refused rather than rounded to whichever neighbour looks closer.
+    bool has_semi_permeable_interface = false;
+    const std::vector<int>* pore_tie = nullptr;              // node -> the node it shares a pore eq with
+    const std::vector<IfaceDiag>* iface_diagrams = nullptr;  // joints to report tau / sigma_n / slip for
     // The structural elements themselves, the lines to report forces for, and the parent phase's
     // total displacement. The last one matters because structural elements are TOTAL-displacement
     // formulated: a wall installed in an earlier phase carries its force at the parent's datum,
@@ -107,25 +114,25 @@ inline bool solve_consolidation_phase(
     const ConsolidationSolveFactory& le_factory, const ConsolidationSolveFactory& plastic_factory,
     SolveResult& R, std::vector<GaussState>& committed_out) {
     // WHAT A STRUCTURE IS IN A COUPLED PHASE. Plates, anchors and geogrids add stiffness to
-    // mechanical degrees of freedom the soil already owns, so they join the coupled system by
-    // addition and nothing about the pore field changes -- that is the case this phase solves.
-    // The two that are refused are refused for a reason that is not effort:
-    //   - an interface (and an embedded wall, which is a plate + interfaces) SPLITS the mesh, so
-    //     the two sides of the joint carry SEPARATE pore-pressure degrees of freedom with nothing
-    //     between them. That is not a missing feature, it is an unasked question: the seam would
-    //     silently behave as a perfectly impermeable barrier, which is a modelling claim
-    //     (PLAXIS makes interface permeability an input, Ref sec. 3.4);
-    //   - an embedded beam's skin resistance is a function of the EFFECTIVE stress around it, so
-    //     an elastic spring through a consolidating soil is a stronger claim than the same spring
-    //     in a drained one.
-    // Both are their own increments. Refusing them is cheaper than answering them by accident.
-    if (in.has_split_structures) {
-        R.message = "This consolidation phase contains an interface or an embedded wall, and the "
-                    "mesh is split along it: the two sides would carry separate pore pressures "
-                    "with no flow between them, which silently makes the joint an impermeable "
-                    "barrier. Interface permeability in a coupled analysis is a separate work "
-                    "item. Plates, anchors and geogrids without interfaces DO run in a "
-                    "consolidation phase; for a wall with interfaces use a Plastic phase.";
+    // mechanical degrees of freedom the soil already owns. An interface adds that too, and one
+    // thing more: it splits the mesh, so the joint carries two pore pressures where the ground
+    // carried one, and which of them the water sees is the interface's own cross-permeability
+    // input -- fully permeable (the default: the two share a pore equation, so continuity and the
+    // flux balance across the joint hold by construction) or impermeable (two separate pressures,
+    // which is what the bare split gives). Both are the manual's own two cases.
+    //
+    // Semi-permeable is the third, and it is not a blend of the two: it is a conductance, the
+    // joint passing q_n = dh / R per unit area, which needs a term in H that this solver does not
+    // have. Refusing it costs the model that asks for it; rounding it to permeable or impermeable
+    // would cost every model that asks for it, silently, and in whichever direction the rounding
+    // happened to go.
+    if (in.has_semi_permeable_interface) {
+        R.message = "A semi-permeable interface (cross permeability with a hydraulic resistance) "
+                    "is in this consolidation phase. That is a conductance across the joint -- it "
+                    "passes q = dh / R per unit area -- and this solver carries only the two ends "
+                    "of that scale, fully permeable and impermeable. Set the interface to one of "
+                    "those for a consolidation phase, or run the stage as a Plastic phase with a "
+                    "groundwater-flow field, which does read the resistance.";
         return false;
     }
     if (in.has_embedded_beams) {
@@ -215,6 +222,16 @@ inline bool solve_consolidation_phase(
         flow_drained_nodes(in.flow_edges, in.have_flow_bcs, mesh, in.active, in.yscale);
     for (int n : in.drain_nodes)
         if (n >= 0 && n < mesh.node_count) drained[n] = 1;
+    // Two nodes that share a pore pressure share its boundary condition too: if either side of a
+    // permeable joint drains, the joint drains. Without this the mask could say "drained" on one
+    // side and "free" on the other of the SAME pressure, and the numbering would have to pick one
+    // -- silently, and differently depending on which side the splitter numbered first.
+    if (in.pore_tie)
+        for (int n = 0; n < mesh.node_count; ++n) {
+            const int rep = (*in.pore_tie)[n];
+            if (rep >= 0 && rep < mesh.node_count && (drained[n] || drained[rep]))
+                drained[n] = drained[rep] = 1;
+        }
 
     // The structural elements' elastic stiffness, assembled ONCE with the shared assembler -- the
     // same element matrices and DOF mapping solve_nonlinear uses, which is what makes "the wall in
@@ -223,7 +240,8 @@ inline bool solve_consolidation_phase(
     math::CsrMatrix struct_k_storage;
     const math::CsrMatrix* struct_k = nullptr;
     if (in.structures && (!in.structures->plates.empty() || !in.structures->plates5.empty() ||
-                          !in.structures->anchors.empty() || !in.structures->geogrids.empty())) {
+                          !in.structures->anchors.empty() || !in.structures->geogrids.empty() ||
+                          !in.structures->interfaces.empty() || !in.structures->interfaces5.empty())) {
         math::SparseMatrixBuilder kb(dofs.equation_count());
         assemble_structural_stiffness(mesh, dofs, *in.structures, kb);
         struct_k_storage = kb.build();
@@ -259,14 +277,15 @@ inline bool solve_consolidation_phase(
             // phase's committed effective stresses (`init`) seed the state; dF drives it.
             ConsolidationPlasticResult r = solve_consolidation_plastic(
                 mesh, dofs, models, cperm, kGammaWater, kw_over_n, drained, state, p_state,
-                step_dt, n, in.active, load, plastic_factory, 40, 1e-6, profiles, struct_k);
+                step_dt, n, in.active, load, plastic_factory, 40, 1e-6, profiles, struct_k,
+                in.pore_tie);
             c.ok = r.converged;
             c.series = std::move(r.series);
             c.committed = std::move(r.committed);
         } else {
             c.series = solve_consolidation(mesh, dofs, models, cperm, kGammaWater, kw_over_n,
                                            drained, p_state, step_dt, n, in.active, load,
-                                           le_factory, profiles, struct_k);
+                                           le_factory, profiles, struct_k, in.pore_tie);
             c.ok = !c.series.displacement.empty();
         }
         return c;
@@ -315,6 +334,7 @@ inline bool solve_consolidation_phase(
         }
         v_total += c.series.displacement[n];
         for (int nd = 0; nd < mesh.node_count; ++nd) p_state[nd] = c.series.pore[n](nd);
+        R.excess_pore = p_state;   // the field itself, not only its maximum (results.hpp)
         if (nonlinear_soil) state = c.committed;
         t_now += c.series.times[n];
         steps_done += n;
@@ -525,14 +545,15 @@ inline bool solve_consolidation_phase(
     // phase's increment) through the same validated recoveries the static phase uses. `elastic`
     // is true because that is what this phase solved: the structural branch here carries no
     // plastic state, so recovering it as if it did would report a cap that was never applied.
-    if (in.structures && in.diagrams && !in.diagrams->empty()) {
+    if (in.structures && ((in.diagrams && !in.diagrams->empty()) ||
+                          (in.iface_diagrams && !in.iface_diagrams->empty()))) {
         Eigen::VectorXd disp_total = v_total;
         if (in.carry_full && in.carry_full->size() == v_total.size()) disp_total += *in.carry_full;
         int over = 0;
         std::string over_note;
         int slack = 0;
         std::string slack_note;
-        for (const auto& sp : *in.diagrams) {
+        for (const auto& sp : (in.diagrams ? *in.diagrams : std::vector<DiagSpec>{})) {
             StructForce d = force_diagram(sp, *in.structures, mesh, dofs, disp_total, {}, {},
                                           /*elastic=*/true);
             const auto env = force_envelope(d.stations);
@@ -596,6 +617,52 @@ inline bool solve_consolidation_phase(
             }
             R.struct_forces.push_back(std::move(d));
         }
+        // The joints, reported the way the dynamic phase reports its own elastic ones: tau,
+        // sigma_n and the Coulomb demand/capacity ratio. `slip_checked` is FALSE on purpose --
+        // this phase applied no Coulomb return, so a station marked "bonded" means "not checked",
+        // not "checked and found bonded", and a reader who cannot tell those apart will read a
+        // wall that slipped as a wall that held.
+        double iface_util = 0.0;
+        std::string iface_note;
+        if (in.iface_diagrams)
+            for (const auto& is : *in.iface_diagrams) {
+                InterfaceResult ir = force_diagram(is, *in.structures, mesh, dofs, disp_total,
+                                                   {}, {}, /*elastic=*/true);
+                ir.slip_checked = false;
+                const auto& props = (is.order == 15) ? in.structures->interfaces5[is.begin].props
+                                                     : in.structures->interfaces[is.begin].props;
+                int over_st = 0;
+                for (auto& st : ir.stations) {
+                    const double tmax = std::fmax(0.0, props.c_i - st.sigma_n * std::tan(props.phi_i));
+                    st.utilisation = tmax > 1e-12 ? std::fabs(st.tau) / tmax
+                                                  : (std::fabs(st.tau) > 1e-12 ? 100.0 : 0.0);
+                    ir.max_utilisation = std::fmax(ir.max_utilisation, st.utilisation);
+                    if (st.utilisation > 1.0) ++over_st;
+                    ir.max_abs_tau = std::fmax(ir.max_abs_tau, std::fabs(st.tau));
+                    ir.max_abs_sigma_n = std::fmax(ir.max_abs_sigma_n, std::fabs(st.sigma_n));
+                    ir.max_abs_slip = std::fmax(ir.max_abs_slip, std::fabs(st.slip));
+                }
+                if (!ir.stations.empty())
+                    ir.over_fraction = (double)over_st / (double)ir.stations.size();
+                if (ir.max_utilisation > 1.0) {
+                    iface_util = std::fmax(iface_util, ir.max_utilisation);
+                    char b[200];
+                    std::snprintf(b, sizeof(b), "%s\"%s\" at %.2fx over %.0f%% of its length",
+                                  iface_note.empty() ? "" : ", ", ir.name.c_str(),
+                                  ir.max_utilisation, 100.0 * ir.over_fraction);
+                    iface_note += b;
+                }
+                R.interface_forces.push_back(std::move(ir));
+            }
+        if (iface_util > 1.0)
+            add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A016", "interfaces",
+                           "an interface in this phase passed its Coulomb capacity: " + iface_note +
+                           ". The structural branch of a consolidation phase is ELASTIC, so the "
+                           "joint could not slip -- it carried the shear instead. A joint that "
+                           "cannot slip is STIFFER than the real one, so the wall it holds "
+                           "deflects less and attracts more load than it would: the error is on "
+                           "the unsafe side. Check the stage in a Plastic phase, where the "
+                           "Coulomb return actually runs.");
         if (over > 0)
             add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A014", "structures",
                            "the structural elements in a consolidation phase are solved ELASTIC: "

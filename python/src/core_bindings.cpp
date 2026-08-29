@@ -761,6 +761,9 @@ NB_MODULE(_core, m) {
                      [](const api::SolveResult& r) { return r.consol_settlement; })
         .def_prop_ro("consol_excess_pore",
                      [](const api::SolveResult& r) { return r.consol_excess_pore; })
+        // The excess pore pressure FIELD at the end of the phase, node by node -- `pore` is the
+        // hydrostatic pressure the phase was set up in, which is a different quantity.
+        .def_prop_ro("excess_pore", [](const api::SolveResult& r) { return r.excess_pore; })
         // What the phase was asked to end on, and what it reached. `consol_degree_reached` is the
         // PRESSURE ratio 1 - |p|max(end) / consol_pore_reference (PLAXIS Ref sec. 7.5), so it is
         // NOT the settlement ratio; on the verified column the two differ by 21% in time.

@@ -6,6 +6,49 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### The wall may keep its interfaces while the ground consolidates
+
+The previous increment let plates, anchors and geogrids into a consolidation phase and refused
+interfaces, on the grounds that the split seam "would silently make the joint impermeable, which is
+a modelling claim". That was right about the danger and wrong about the remedy: the model already
+carries the interface's cross permeability, quoted from the manual, and **its default is fully
+permeable** — the flow net runs through the line. The fix was to read the input that was already
+there, not to keep refusing.
+
+So a joint now carries what its own flag says. **Fully permeable** ties the two sides of the seam
+to *one* pore equation, which makes continuity and the flux balance across the joint hold by
+construction rather than by a constraint that could be assembled slightly wrong.  **Impermeable**
+leaves the two pressures the split produced. **Semi-permeable** is refused, and the message says
+what it is — a conductance q = dh/R — rather than that it is unsupported, because rounding it to
+either neighbour would be silent and directional.
+
+The flag is what the test measures, early in the dissipation where there is a difference to see:
+across the seam, `|p_left − p_right|` is **0.000e+00** with a permeable joint and **12.83 kPa** (of
+a 50 kPa surcharge) with an impermeable one. Measuring at the *end* of the phase, where everything
+has drained, would have passed for a build that ignored the flag entirely — which is how the first
+version of the test was written, and why it did not stay that way.
+
+Mechanically the joint comes with the same limit as the rest of this phase's structural branch —
+it is elastic and cannot slip — and the same treatment: measured, not declared. One below its
+capacity reproduces the drained Plastic phase in both the settlement (**−0.0042%**) and the shear
+the joint carries (**53.2745 vs 53.2745 kPa**). One above it raises **`K2D-A016`** naming the joint
+and its exceedance, and says which way the error runs: a joint that cannot slip is stiffer than the
+real one, so the wall deflects less and attracts more load (`KV-STR-007`).
+
+Two things the work turned up on its own:
+
+- **the excess pore pressure field was never reported.** `pore` on a result is the *hydrostatic*
+  pressure the phase was set up in; the pressure a consolidation phase computes existed only as a
+  maximum per time step, so an engineer could see that something was still draining but not where.
+  It is now on the result as `excess_pore`, node by node, and readable from Python;
+- **the drained-limit comparison is only clean on an elastic soil.** With Mohr-Coulomb the same
+  pair differs by 0.15%, and it is not the joint — the drained reference does not slip either way.
+  It is the soil's stress path: the coupled phase loads it undrained and the Plastic phase drained,
+  and a yield surface remembers the difference. That number is measured and printed beside the
+  assertion rather than folded into a band wide enough to hold it, because such a band would also
+  be wide enough to hide a joint that was not in the system at all.
+
+
 ### Axisymmetric ground may now have water in it
 
 An axisymmetric model with a water table was refused — *use plane strain, or remove the water

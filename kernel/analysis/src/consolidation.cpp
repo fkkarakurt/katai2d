@@ -8,6 +8,23 @@ namespace katai::core {
 
 namespace detail {
 
+// Pore-equation numbering, with the seam ties of the header applied. Representatives are numbered
+// first so a tied node always finds its own equation already assigned, whichever order the mesh
+// splitter appended the duplicates in. Returns the equation count.
+inline int number_pore_equations(int node_count, const std::vector<char>& drained_node,
+                                 const std::vector<int>* tie, std::vector<int>& pore_eq) {
+    pore_eq.assign(node_count, -1);
+    const auto rep_of = [&](int n) {
+        return (tie && (*tie)[n] >= 0 && (*tie)[n] < node_count) ? (*tie)[n] : n;
+    };
+    int npore = 0;
+    for (int n = 0; n < node_count; ++n)
+        if (!drained_node[n] && rep_of(n) == n) pore_eq[n] = npore++;
+    for (int n = 0; n < node_count; ++n)
+        if (!drained_node[n] && rep_of(n) != n) pore_eq[n] = pore_eq[rep_of(n)];
+    return npore;
+}
+
 // Add a caller-supplied stiffness contribution to the MECHANICAL block of a coupled builder.
 // The pore equations are offset past it, so the row/column indices of `k` land where they mean.
 inline void add_structural_block(math::SparseMatrixBuilder& b, const math::CsrMatrix* k) {
@@ -29,16 +46,15 @@ ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dof
                                        const std::vector<char>& active,
                                        const Eigen::VectorXd* load_increment,
                                        const ConsolidationSolveFactory& solve_factory,
-                                       const math::CsrMatrix* struct_k) {
+                                       const math::CsrMatrix* struct_k,
+                                       const std::vector<int>* pore_tie) {
     constexpr int N = E::kNodeCount;
     constexpr int ND = 2 * N;
     const int ndisp = dofs.equation_count();
 
-    // Pore DOF numbering (drained node = fixed p=0 -> -1).
-    std::vector<int> pore_eq(mesh.node_count, -1);
-    int npore = 0;
-    for (int n = 0; n < mesh.node_count; ++n)
-        if (!drained_node[n]) pore_eq[n] = npore++;
+    // Pore DOF numbering (drained node = fixed p=0 -> -1; tied seam nodes share one equation).
+    std::vector<int> pore_eq;
+    const int npore = number_pore_equations(mesh.node_count, drained_node, pore_tie, pore_eq);
 
     // The combined (saddle-point) system A = [K  L; L'  -(dt.H+S)] -- FULL, symmetric. Pore
     // equations are offset by ndisp. dt is fixed -> pattern+values built once, A factorized once.
@@ -194,16 +210,14 @@ ConsolidationPlasticResult consolidation_plastic_impl(
     const std::vector<double>& initial_pore,
     double dt, int nsteps, const std::vector<char>& active, const Eigen::VectorXd* load_increment,
     const ConsolidationSolveFactory& solve_factory, int max_newton, double newton_tol,
-    const math::CsrMatrix* struct_k) {
+    const math::CsrMatrix* struct_k, const std::vector<int>* pore_tie) {
     constexpr int N = E::kNodeCount;
     constexpr int ND = 2 * N;
     const int ndisp = dofs.equation_count();
     const int ngp = E::kGaussCount;
 
-    std::vector<int> pore_eq(mesh.node_count, -1);
-    int npore = 0;
-    for (int n = 0; n < mesh.node_count; ++n)
-        if (!drained_node[n]) pore_eq[n] = npore++;
+    std::vector<int> pore_eq;
+    const int npore = number_pore_equations(mesh.node_count, drained_node, pore_tie, pore_eq);
     const int NT = ndisp + npore;
 
     std::vector<GaussState> committed = initial_state;
@@ -399,14 +413,17 @@ ConsolidationResult solve_consolidation(const mesh::Mesh& mesh, const DofMap& do
                                                const Eigen::VectorXd* load_increment,
                                                const ConsolidationSolveFactory& solve_factory,
                                                const std::vector<MaterialProfile>& profile,
-                                               const math::CsrMatrix* struct_k) {
+                                               const math::CsrMatrix* struct_k,
+                                               const std::vector<int>* pore_tie) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::consolidation_impl<Tri15Element>(mesh, dofs, materials, profile, perm, gamma_w,
                                                         kw_over_n, drained_node, initial_pore, dt, nsteps,
-                                                        active, load_increment, solve_factory, struct_k);
+                                                        active, load_increment, solve_factory, struct_k,
+                                                        pore_tie);
     return detail::consolidation_impl<Tri6Element>(mesh, dofs, materials, profile, perm, gamma_w,
                                                    kw_over_n, drained_node, initial_pore, dt, nsteps,
-                                                   active, load_increment, solve_factory, struct_k);
+                                                   active, load_increment, solve_factory, struct_k,
+                                                   pore_tie);
 }
 
 ConsolidationPlasticResult solve_consolidation_plastic(
@@ -416,16 +433,17 @@ ConsolidationPlasticResult solve_consolidation_plastic(
     const std::vector<double>& initial_pore, double dt, int nsteps, const std::vector<char>& active,
     const Eigen::VectorXd* load_increment, const ConsolidationSolveFactory& solve_factory,
     int max_newton, double newton_tol,
-    const std::vector<MaterialProfile>& profile, const math::CsrMatrix* struct_k) {
+    const std::vector<MaterialProfile>& profile, const math::CsrMatrix* struct_k,
+    const std::vector<int>* pore_tie) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::consolidation_plastic_impl<Tri15Element>(
             mesh, dofs, materials, profile, perm, gamma_w, kw_over_n, drained_node, initial_state,
             initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol,
-            struct_k);
+            struct_k, pore_tie);
     return detail::consolidation_plastic_impl<Tri6Element>(
         mesh, dofs, materials, profile, perm, gamma_w, kw_over_n, drained_node, initial_state,
         initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol,
-        struct_k);
+        struct_k, pore_tie);
 }
 
 }  // namespace katai::core

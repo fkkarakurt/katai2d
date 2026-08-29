@@ -216,6 +216,11 @@ inline bool solve_fully_coupled_phase(
         R.consol_settlement.push_back(smax);
         R.consol_excess_pore.push_back(pmax);
     }
+    // The excess pore field this phase computed, node by node (results.hpp): `pore` carries the
+    // hydrostatic pressure the phase was set up in, so without this one the computed pressure
+    // existed only as a maximum per step.
+    R.excess_pore.assign(mesh.node_count, 0.0);
+    for (int n = 0; n < mesh.node_count; ++n) R.excess_pore[n] = series->pore.back()(n);
     R.disp = series->displacement.back().head(mesh.node_count * 2);
     R.stress = recover_nodal_stresses_from_gauss(mesh, committed, in.active);
     if (sat_series && !sat_series->empty()) {

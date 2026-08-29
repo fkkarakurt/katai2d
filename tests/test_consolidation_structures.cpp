@@ -318,17 +318,36 @@ void test_tie_and_geogrid() {
     }
 }
 
-void test_split_structures_still_refused() {
-    std::printf("\n-- (4) what is NOT allowed says why, and it is not effort --\n");
+// The limit this section used to pin has been LIFTED, and the test says so rather than being
+// deleted. It asserted that a wall -- a plate with interfaces, which splits the mesh -- was refused
+// in a consolidation phase, on the grounds that the seam would silently become impermeable. The
+// grounds were right about the danger and wrong about the remedy: the interface's cross
+// permeability was already an input with a documented default, and a later increment read it
+// (KV-STR-007). So what is asserted here now is that the wall RUNS and that its joints are
+// reported -- and what is still refused is the one thing that has not been answered.
+void test_what_is_and_is_not_carried() {
+    std::printf("\n-- (4) a wall with interfaces now runs; the embedded beam still does not --\n");
     m::Project pr = block(/*with_plate=*/true, /*plastic_phase=*/false);
-    pr.structs.front().iface_pos = true;    // a plate WITH an interface is an embedded wall:
+    pr.structs.front().iface_pos = true;    // a plate WITH interfaces is an embedded wall:
     pr.structs.front().iface_neg = true;    // the mesh is split along it
-    const Answer a = run(pr);
-    check(!a.ok, "a wall (plate + interface) in a consolidation phase is refused");
-    if (!a.ok) {
-        std::printf("   (%s)\n", a.msg.c_str());
-        check(a.msg.find("impermeable") != std::string::npos,
-              "and the message names the reason: the split seam would silently become a barrier");
+    const Answer wall = run(pr);
+    check(wall.ok, "a wall (plate + interfaces) in a consolidation phase solves");
+    if (!wall.ok) { std::printf("   (%s)\n", wall.msg.c_str()); }
+
+    // The embedded beam is the remaining refusal, and its reason is not effort either.
+    m::Project pb = block(/*with_plate=*/false, /*plastic_phase=*/false);
+    m::EmbeddedBeamMaterial em; em.name = "Pile";
+    pb.embedded.push_back(em);
+    m::StructElement e; e.kind = m::StructKind::EmbeddedBeam; e.name = "Pile";
+    e.x1 = 10.0; e.y1 = 2.0; e.x2 = 10.0; e.y2 = kH; e.material = 0;
+    pb.structs.push_back(e);
+    const Answer beam = run(pb);
+    check(!beam.ok, "an embedded beam in a consolidation phase is refused");
+    if (!beam.ok) {
+        std::printf("   (%s)\n", beam.msg.c_str());
+        check(beam.msg.find("EFFECTIVE stress") != std::string::npos,
+              "and the message names the reason: its skin resistance follows the stress "
+              "consolidation is changing");
     }
 }
 
@@ -339,7 +358,7 @@ int main() {
     test_drained_limit();
     test_tie_and_geogrid();
     test_elastic_limit_is_not_silent();
-    test_split_structures_still_refused();
+    test_what_is_and_is_not_carried();
     if (g_failures == 0) {
         std::printf("\nOK: the coupled phase carries the structure, and walks into the drained answer\n");
         return 0;

@@ -100,6 +100,19 @@ struct ConsolidationPlasticResult {
 };
 
 
+// TIED PORE DEGREES OF FREEDOM ACROSS A SPLIT SEAM. `pore_tie` (optional, node_count) maps a node
+// to the node whose pore equation it SHARES, or -1 for a node that owns its own. It exists because
+// an interface splits the mesh: the two sides of the joint are two node sets at the same place, and
+// what the water does between them is an INPUT, not a consequence of the splitting.
+//   fully permeable (the default, and what every model written before the field said) -- one
+//     pressure at the joint: the two nodes share an equation, so continuity and the flux balance
+//     across the seam both hold by construction rather than by a constraint equation;
+//   impermeable -- two pressures: no tie, which is what the bare split already gives.
+// PLAXIS states the same two in the same words (Reference Table 5-2, Scientific Manual sec. 3.4).
+// Semi-permeable is a third thing -- a conductance dh/R between the two -- and is not this
+// parameter; the phase strategy refuses it rather than rounding it to one of the two neighbours.
+// null = every node owns its pore equation, and the numbering is BIT-FOR-BIT what it was.
+//
 // STRUCTURAL STIFFNESS IN A COUPLED SOLVE. `struct_k` (optional, equation_count square) is added
 // to the MECHANICAL block of the coupled system: A = [K + K_s   L; Lt  -(dt H + S)]. It arrives as a
 // MATRIX rather than as a structural system on purpose -- this core knows soil, water and time, and
@@ -137,7 +150,8 @@ ConsolidationResult solve_consolidation(const mesh::Mesh& mesh, const DofMap& do
                                         const Eigen::VectorXd* load_increment = nullptr,
                                         const ConsolidationSolveFactory& solve_factory = {},
                                         const std::vector<MaterialProfile>& profile = {},
-                                        const math::CsrMatrix* struct_k = nullptr);
+                                        const math::CsrMatrix* struct_k = nullptr,
+                                        const std::vector<int>* pore_tie = nullptr);
 
 // Elastoplastic (MC/HS) Biot consolidation -- monolithic coupled Newton (described above).
 // `initial_state`: committed EFFECTIVE Gauss states (K0/previous phase; size elem*ngp; empty =
@@ -154,6 +168,7 @@ ConsolidationPlasticResult solve_consolidation_plastic(
     const Eigen::VectorXd* load_increment, const ConsolidationSolveFactory& solve_factory,
     int max_newton = 40, double newton_tol = 1e-6,
     const std::vector<MaterialProfile>& profile = {},
-    const math::CsrMatrix* struct_k = nullptr);
+    const math::CsrMatrix* struct_k = nullptr,
+    const std::vector<int>* pore_tie = nullptr);
 
 }  // namespace katai::core

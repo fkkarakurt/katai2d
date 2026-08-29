@@ -630,6 +630,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         int order;               // 6 or 15 (element order -> build_embedded_wall vs _wall5)
         int soil_mat;
         std::string name;        // drawn element name (for the force-diagram output)
+        int flow_barrier = 0;    // 0 permeable / 1 impermeable / 2 semi-permeable (model vocabulary)
     };
     std::vector<WallSpec> walls;
     std::vector<char> plate_is_wall(pr.structs.size(), 0);
@@ -654,6 +655,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             WallSpec w;
             w.name = s.name;
             w.order = order;
+            w.flow_barrier = s.flow_barrier;
             // Toe = the DEEPER endpoint (min y; horizontal -> min x); the plate hangs from it (shared node).
             const bool a_is_toe = std::fabs(dy) > 1e-9 ? (s.y1 <= s.y2) : (s.x1 <= s.x2);
             const double tx = a_is_toe ? s.x1 : s.x2, ty = a_is_toe ? s.y1 : s.y2;   // toe end
@@ -745,6 +747,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         double nx, ny;          // unit normal (orientation-aware K0 seed)
         int soil_mat;
         std::string name;
+        int flow_barrier = 0;   // 0 permeable / 1 impermeable / 2 semi-permeable (model vocabulary)
     };
     std::vector<IfaceSpec> soil_ifaces;
     std::vector<char> bc_released;   // nodes the domain boundary must NOT fix (filled by the seam pass)
@@ -768,6 +771,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             if (len < 1e-9) continue;
             IfaceSpec sp;
             sp.name = s.name.empty() ? "Interface" : s.name;
+            sp.flow_barrier = s.flow_barrier;
             sp.nx = dy / len; sp.ny = -dx / len;   // unit normal (matches split_mesh_at_segment frame)
             sp.seam = katai::core::split_mesh_at_segment(mesh, s.x1, s.y1, s.x2, s.y2, -1e-6, len + 1e-6);
             const int per_edge = order == 15 ? 4 : 2;
@@ -2059,11 +2063,38 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // not, and the phase says why. The structural system, the lines to report and the
             // parent's displacement datum go in together: a wall installed in an earlier phase
             // carries its force at that datum, and this phase solves the increment from there.
-            cin.has_split_structures = has_interfaces;
             cin.has_embedded_beams = has_embedded;
             cin.structures = &structures;
             cin.diagrams = &diag_specs;
+            cin.iface_diagrams = &iface_diags;
             cin.carry_full = static_carry ? &carry_src->full_disp : nullptr;
+            // WHAT THE WATER DOES ACROSS EVERY SPLIT SEAM, read from the interface's own cross
+            // permeability rather than inherited from the fact that the mesh was split. Fully
+            // permeable (the default, and what every model written before that field said) ties
+            // the two sides to ONE pore equation; impermeable leaves the two the split produced.
+            // The seams are the mesh splitter's own pairs, so nothing here has to re-find them.
+            std::vector<int> pore_tie(mesh.node_count, -1);
+            bool semi_permeable = false;
+            const auto tie = [&](int dup, int orig) {
+                if (dup >= 0 && dup < mesh.node_count && orig >= 0 && orig < mesh.node_count)
+                    pore_tie[dup] = orig;
+            };
+            for (const auto& w : walls) {
+                // silent-drop-ok: nothing is skipped here -- a semi-permeable joint is RECORDED
+                // and the phase refuses on it a few lines below (the engine owns that message,
+                // which is why it is not raised at this seam).
+                if (w.flow_barrier == 2) { semi_permeable = true; continue; }
+                if (w.flow_barrier == 0)
+                    for (const auto& sp : w.seam) tie(sp.left, sp.right);
+            }
+            for (const auto& si : soil_ifaces) {
+                // silent-drop-ok: as above -- recorded, then refused by the phase strategy.
+                if (si.flow_barrier == 2) { semi_permeable = true; continue; }
+                if (si.flow_barrier == 0)
+                    for (const auto& sg : si.seam) tie(sg.dup, sg.orig);
+            }
+            cin.has_semi_permeable_interface = semi_permeable;
+            cin.pore_tie = &pore_tie;
             if (io.config) {
                 cin.duration_day = io.config->duration; cin.time_steps = io.config->time_steps;
                 // How the phase ends (PLAXIS Ref sec. 7.5). With a state criterion the two above
