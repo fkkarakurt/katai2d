@@ -198,9 +198,28 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     // more expensive in the easy regime). Active only when an HS material is present →
     // the LE/MC path is the old behaviour EXACTLY (TangentMode does not affect them, the
     // retry branch never opens).
-    bool has_hs = false;
+    //
+    // WHICH MODELS QUALIFY is the question this flag actually asks: not "is Hardening Soil
+    // here" but "is there a material whose integrator can be asked for a STRONGER tangent than
+    // the one it just gave". It was written when Hardening Soil was the only such model and it
+    // kept that name and that test afterwards, so a model added later got the retry only if
+    // somebody remembered this line. Hoek-Brown did not: its integrator grew a finite-difference
+    // consistent tangent and the retry never opened, so the tangent existed and was never
+    // reached -- measured on a tunnel unloaded into a rock mass, where the phase stalled at
+    // exactly the same load factor with the tangent as without it, and at 40 steps as at 150.
+    //
+    // NOT ENROLLED, and deliberately: Soft Soil and Soft Soil Creep also build a consistent
+    // tangent by finite difference. Enrolling them is not a free improvement -- the retry
+    // LATCHES for the rest of the phase, so it changes the iteration path of runs that would
+    // have recovered anyway, and at a fixed tolerance a changed path can move a converged
+    // answer. There is no failing soft-soil case in front of this line to measure that against,
+    // and a speculative change to two verified models is not worth making blind.
+    bool has_fd_tangent = false;
     for (const auto& mm : materials)
-        if (mm.type == MaterialType::HardeningSoil) { has_hs = true; break; }
+        if (mm.type == MaterialType::HardeningSoil || mm.type == MaterialType::HoekBrown) {
+            has_fd_tangent = true;
+            break;
+        }
     bool hs_consistent_mode = false;
     // Once an increment has been abandoned for a stalled line search, the phase judges every
     // attempt from then on against the worst of the last few residuals instead of the latest.
@@ -509,7 +528,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             lambda = target_lambda;
             result.load_factor = lambda;
             dlam = std::min(init_dlam, dlam * 1.5);  // allow recovery
-        } else if (has_hs && !hs_consistent_mode) {
+        } else if (has_fd_tangent && !hs_consistent_mode) {
             // Hybrid tangent: continuum failed to converge this increment → retry the SAME
             // increment with the consistent (FD) tangent without touching dlam; the
             // remaining increments stay consistent too.

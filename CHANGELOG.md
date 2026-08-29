@@ -6,6 +6,79 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### The rock model meets a boundary value problem, and three things break
+
+A model verified at the material point is not a model that works. Hoek-Brown had been checked twice
+against the manual's closed forms and once through the whole FE path from a `.k2d` file, and all
+three of those tests are PLANE STRAIN and all three are element tests. Putting it in an
+axisymmetric boundary value problem instead — a circular tunnel unloaded into a rock mass, against
+the closed-form ground reaction curve — broke it three separate ways.
+
+**One: the model was never integrated in axisymmetry at all.** `integrate_point_axisym` dispatches
+on a closed enum, its Hoek-Brown branch had simply not been written, and the switch has no
+`default:`. So a rock material in axisymmetry left `trial` and `tangent` EXACTLY as the caller
+passed them — the previous iterate, handed back as though it had been integrated. Nothing failed
+loudly; the equilibrium iteration merely never converged and the run reported a stalled Newton
+search, which is also what a genuinely difficult problem looks like.
+
+The branch is one paragraph. The lasting fix is `test_material_axisym_coverage`, which walks the
+model REGISTRY — not a list maintained beside it — and pushes every registered model through both
+integrators with the outputs **poisoned with NaN first**, so a branch that does not exist cannot
+pass by handing back the caller's own values. It also asserts that the axisymmetric branch MOVES
+the hoop stress, which a branch that quietly forwarded the committed value would fail. The gate was
+checked by removing the new branch again and confirming it goes red.
+
+**Two: the tangent was not strong enough for a boundary value problem.** The model handed the
+solver the elastic operator rather than a consistent one. That integrates the material correctly —
+every material-point test passes with it, because those tests ask what stress comes back — but it
+does not iterate an ill-conditioned boundary value problem to equilibrium. The tunnel stalled as
+soon as the plastic annulus passed about 4% of the radius, and load steps did not buy it back: 150
+steps per stage reached exactly the same wall as 40. Newton with a wrong-but-symmetric operator
+converges linearly, and linearly is not always convergent. The fix is a finite-difference
+consistent tangent in both integrators, the same device the Hardening Soil and Soft Soil branches
+already use, and cheap here because this return is a bisection on one scalar rather than a
+substepped walk.
+
+**Three: the retry that uses that tangent never reached the rock.** The solver's hybrid strategy —
+when an increment fails with the cheap tangent, re-enter THAT increment with the stronger one — was
+armed by a flag that tested for one model **by name**. So the tangent added above existed and was
+never called. The evidence was itself the diagnosis: after adding it the run stalled at the
+IDENTICAL load factor as before, 0.750, and at 40 steps as at 150. By the solver's own reasoning
+("a limit load does not move with the load-step count, and a stall does"), a number that does not
+move at all means the new code is not on the path. The flag's name was the tell — it asked "is
+Hardening Soil present?" where the question is "is there a material here that can be asked for a
+stronger tangent?", and a predicate that tests for an INSTANCE where it means a PROPERTY is wrong
+the first time somebody adds a second instance. It is now `has_fd_tangent` and reads the question
+it asks. Soft Soil and Soft Soil Creep also build a consistent tangent by finite difference and are
+deliberately NOT enrolled: the retry latches for the rest of the phase, so it would change the
+iteration path of runs that recover anyway, and there is no failing soft-soil case to measure that
+against.
+
+**The verification the repair earned** is `KV-CST-016`: a circular tunnel in a Hoek-Brown rock mass
+under 28 MPa of hydrostatic ground, unloaded in stages, against the closed-form elasto-plastic
+solution. The radial stress lands on the closed form to **0.59% inside the plastic annulus and
+0.72% outside it**, and the case asserts two things on purpose — that the unloading CONVERGES
+(the guard for defects two and three) and that where it converges it is right (the verification).
+Either alone would have passed at some point during the repair.
+
+The oracle is derived in the test from radial equilibrium rather than quoted, and checked by
+reducing it at `a = 1/2` to the scaled forms of Carranza-Torres & Fairhurst (1999) — two
+independent routes to the same expressions, so neither is a transcription of the other. The rock
+mass and stress state are case D1 of Table A1.1 in Hoek, Carranza-Torres, Diederichs & Corkum
+(2008); computing the rock-mass constants from GSI and D reproduces that table's printed
+`m_b = 1.093`, `s = 0.0031`, `a = 0.507`.
+
+Two of this test's own defects are recorded in it rather than quietly fixed. The relief loads
+summed to less than the in-situ stress, so the tunnel started under-supported and the last stage
+was taking the wall to zero rather than to the pressure it was compared against — which looked
+exactly like a convergence problem. And the band on the plastic annulus was, for one revision,
+**an assertion that could not fail**: the last stage stopped where the annulus reached 1.427 R
+while the nearest interior node sat at 1.50 R, so the worst deviation inside it was zero by vacuum.
+The test now checks that it samples the region it is asserting about.
+
+`python/examples/rock_tunnel_ground_reaction.py` runs the same problem as a published ground
+reaction curve — nineteen converged support-pressure stages with the closed form beside them.
+
 ### Rock, from the file to the answer
 
 The rock model reached the ground. The previous increment built the Hoek-Brown criterion at the

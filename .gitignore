@@ -36,3 +36,8 @@ __pycache__/
 # OS
 Thumbs.db
 .DS_Store
+
+# Articles written for outside publication (LinkedIn, blog): prose about the
+# program rather than part of it, and revised on a different clock from the
+# code. They cite the tracked verification material instead of duplicating it.
+/articles/

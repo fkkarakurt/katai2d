@@ -34,10 +34,18 @@
 //
 // SCOPE OF THIS VERSION, stated rather than discovered: the return covers the MAIN surface
 // (f_13), the EDGE where the manual's second function f_12 becomes active, and the tensile APEX
-// where the criterion's own bracket closes. What is NOT here: the algorithmic tangent (the caller
-// uses the elastic operator, as the Hardening Soil branch does for its own reasons), strength
-// factorisation for Safety phases, and the anisotropic Jointed Rock model -- the manual keeps that
-// one apart too.
+// where the criterion's own bracket closes. What is NOT here: strength factorisation for Safety
+// phases (refused at both seams, with the reason), and the anisotropic Jointed Rock model -- the
+// manual keeps that one apart too.
+//
+// The TANGENT the caller uses is not written here either, but it is no longer the elastic
+// operator: material_model.hpp differentiates this return by finite difference when the step is
+// plastic, the way the Hardening Soil and Soft Soil branches differentiate theirs. That changed
+// after the elastic operator was measured against a boundary value problem rather than a stress
+// point -- a tunnel unloaded into a rock mass -- where it stalled the equilibrium iteration as
+// soon as the plastic annulus passed a few percent of the opening radius. The return itself is
+// cheap enough to differentiate (a bisection on one scalar), which is why the FD is affordable
+// here where it is a real cost for the substepped models.
 
 #include <algorithm>
 #include <cmath>

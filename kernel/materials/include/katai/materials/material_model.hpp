@@ -855,6 +855,29 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
                 report->plastic = r.plastic;
                 report->elastic = m.elastic_plane_strain();
             }
+            // THE CONSISTENT TANGENT, BY FINITE DIFFERENCE -- the same device the Hardening
+            // Soil and Soft Soil branches use, for the same reason and at a smaller cost (this
+            // return is a bisection on one scalar, not a substepped walk). The elastic operator
+            // alone was enough to integrate the material correctly, and every material-point
+            // test passes with it, because those tests ask what stress comes back. It is NOT
+            // enough to iterate an ill-conditioned boundary value problem to equilibrium:
+            // measured on a circular tunnel unloaded into a Hoek-Brown rock mass, the elastic
+            // tangent stalled as soon as the plastic annulus passed about 4% of the tunnel
+            // radius, and no number of load steps bought more than a little (150 steps per
+            // stage reached the same wall as 40). Newton with a wrong-but-symmetric operator
+            // converges linearly, and linearly is not always convergent.
+            if (mode == TangentMode::kConsistent && r.plastic) {
+                for (int j = 0; j < 3; ++j) {
+                    Eigen::Vector3d dep = strain_increment;
+                    const double h = hs_fd_step(strain_increment(j));
+                    dep(j) += h;
+                    const PlaneStrainStress pp = elastic_predictor(previous, dep, lame);
+                    const hoekbrown::PlaneReturn rp = hoekbrown::plane_return(pp, hp, hc);
+                    tangent(0, j) = (rp.stress.in_plane(0) - r.stress.in_plane(0)) / h;
+                    tangent(1, j) = (rp.stress.in_plane(1) - r.stress.in_plane(1)) / h;
+                    tangent(2, j) = (rp.stress.in_plane(2) - r.stress.in_plane(2)) / h;
+                }
+            }
             break;
         }
         case MaterialType::HardeningSoil: {
@@ -983,6 +1006,52 @@ inline void integrate_point_axisym(const MaterialModel& m,
             trial.stress_zz = base.stress.zz;
             tangent = base.plastic ? (base.algo_jacobian * De) : De;
             if (report) { report->plastic = base.plastic; report->elastic = De; }
+            break;
+        }
+        case MaterialType::HoekBrown: {
+            // Axisymmetric Hoek-Brown. The (r,z) block is the in-plane Mohr circle and the hoop
+            // sigma_theta is the third principal -- shear on the theta planes vanishes in
+            // axisymmetry, exactly as sigma_zz is the third principal in plane strain -- so
+            // plane_return is reused verbatim and only the elastic predictor differs: it uses
+            // the AXISYMMETRIC operator, because the hoop strain is a real strain here and not
+            // a constraint. This is the same argument the Hardening Soil block below makes.
+            //
+            // THIS CASE WAS MISSING when the model shipped, and the switch has no default, so a
+            // Hoek-Brown material in axisymmetry left `trial` and `tangent` exactly as the
+            // caller passed them -- the previous iterate, returned as if it had been integrated.
+            // Nothing failed loudly: the equilibrium iteration simply never converged, and the
+            // run reported a stalled search. A missing branch in a switch over a closed enum is
+            // the cheapest silent-wrong there is, which is why test_material_axisym_coverage now
+            // walks the registry and poisons the outputs first.
+            hoekbrown::Params hp = m.hb;
+            hp.E = m.youngs_modulus; hp.nu = m.poisson_ratio;
+            const hoekbrown::Constants hc = hoekbrown::constants_of(hp);
+            PlaneStrainStress predictor;
+            predictor.in_plane = s_tr.head<3>();
+            predictor.zz = s_tr(3);
+            const hoekbrown::PlaneReturn r = hoekbrown::plane_return(predictor, hp, hc);
+            trial.stress = r.stress.in_plane;
+            trial.stress_zz = r.stress.zz;
+            tangent = De;
+            if (report) { report->plastic = r.plastic; report->elastic = De; }
+            // The consistent 4x4 by finite difference, as in the plane-strain branch; the
+            // fourth column and row are the HOOP, which is a real strain here.
+            if (mode == TangentMode::kConsistent && r.plastic) {
+                for (int j = 0; j < 4; ++j) {
+                    Eigen::Vector4d dep = strain_increment;
+                    const double h = hs_fd_step(strain_increment(j));
+                    dep(j) += h;
+                    const Eigen::Vector4d s_tr_p = s_n + De * dep;
+                    PlaneStrainStress pp;
+                    pp.in_plane = s_tr_p.head<3>();
+                    pp.zz = s_tr_p(3);
+                    const hoekbrown::PlaneReturn rp = hoekbrown::plane_return(pp, hp, hc);
+                    tangent(0, j) = (rp.stress.in_plane(0) - r.stress.in_plane(0)) / h;
+                    tangent(1, j) = (rp.stress.in_plane(1) - r.stress.in_plane(1)) / h;
+                    tangent(2, j) = (rp.stress.in_plane(2) - r.stress.in_plane(2)) / h;
+                    tangent(3, j) = (rp.stress.zz - r.stress.zz) / h;
+                }
+            }
             break;
         }
         case MaterialType::HardeningSoil: {

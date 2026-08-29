@@ -154,3 +154,15 @@ foreach(example slope_stability consolidation_terzaghi staged_excavation anchore
     LABELS "python;api"
     ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
 endforeach()
+
+# The rock tunnel runs with --quick: the same problem on a coarser mesh and a shorter list of
+# support pressures, 8 s instead of 5 minutes. Its published form is what the article and the
+# docstring quote; what the suite has to protect is that the example still RUNS and still lands
+# on the closed form, and the coarse run asserts both -- including that it sampled the plastic
+# annulus at all, which is the check that keeps its own band from being unfailable.
+add_test(NAME test_python_example_rock_tunnel
+         COMMAND ${Python_EXECUTABLE}
+                 ${CMAKE_CURRENT_SOURCE_DIR}/examples/rock_tunnel_ground_reaction.py --quick)
+set_tests_properties(test_python_example_rock_tunnel PROPERTIES
+  LABELS "python;api"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
