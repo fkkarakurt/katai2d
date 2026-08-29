@@ -103,6 +103,15 @@ namespace katai::model {
 // reset -- typically a surcharge placed and removed to leave a preconsolidation pressure, whose
 // strain history ageing would long since have erased -- is invisible to that older build, so
 // the phase it runs is a different problem with the same drawing.
+// v18 (2026-08): THE HOEK-BROWN ROCK MODEL (`materials[i].model` = 6, and its five parameters
+// `sigci`, `mi`, `gsi`, `hbD`, `sigpsi`). Rock had to be entered as a Mohr-Coulomb fit before
+// this: a straight line through a curve, which can be made to match over a narrow band of
+// confining stress and is wrong outside it in both directions. The version is the FILE's, not the
+// feature's: every file this build writes says 18, and an older build refuses all of them at the
+// version gate rather than reading model = 6 as an unknown enum and substituting whatever it
+// makes of it. What the conditional writing buys is not compatibility but SILENCE -- the five
+// keys are written only by a material that uses the model, so a project that never touches rock
+// produces the same bytes it did yesterday and its diff stays about what actually changed.
 // v17 (2026-08): THE CONSOLIDATION STOP CRITERION (`phases[].cstop`, `cminp`, `cdeg`, `cfirst`,
 // `cmaxstep`). Until this a consolidation phase could only be told a DURATION, so the design
 // question -- how long until the excess pore pressure has largely gone -- had to be answered by
@@ -128,7 +137,7 @@ namespace katai::model {
 // material law and, measured on the oedometer, often in FEWER Newton iterations rather than more,
 // because the equilibrium iteration stops grinding against integration noise. Either way the
 // older build silently substitutes its own number for the one the file names.
-inline constexpr int kProjectFileVersion = 17;
+inline constexpr int kProjectFileVersion = 18;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -493,6 +502,16 @@ inline std::string project_to_json(const Project& p) {
         wfield(o, "G0ref", m.G0ref); wfield(o, "gamma07", m.gamma07);
         wfield(o, "lamstar", m.lam_star); wfield(o, "kapstar", m.kap_star);
         wfield(o, "mustar", m.mu_star);
+        // Hoek-Brown, written only by a material that uses it: five keys that mean nothing to any
+        // other model, and a file full of them would say so in more bytes while making every
+        // project that never touches rock differ from the one it was yesterday.
+        if (m.model == SoilModel::HoekBrown) {
+            wfield(o, "sigci", m.sig_ci);
+            wfield(o, "mi", m.mi);
+            wfield(o, "gsi", m.gsi);
+            wfield(o, "hbD", m.hb_D);
+            wfield(o, "sigpsi", m.sig_psi);
+        }
         wfield(o, "kx", m.kx); wfield(o, "ky", m.ky);
         wfield(o, "und_mode", (double)m.und_mode);
         wfield(o, "nu_u", m.nu_u); wfield(o, "skempton_B", m.skempton_B);
@@ -766,6 +785,11 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             m.G0ref = j.num("G0ref", m.G0ref); m.gamma07 = j.num("gamma07", m.gamma07);
             m.lam_star = j.num("lamstar", m.lam_star); m.kap_star = j.num("kapstar", m.kap_star);
             m.mu_star = j.num("mustar", m.mu_star);
+            m.sig_ci = j.num("sigci", m.sig_ci);
+            m.mi = j.num("mi", m.mi);
+            m.gsi = j.num("gsi", m.gsi);
+            m.hb_D = j.num("hbD", m.hb_D);
+            m.sig_psi = j.num("sigpsi", m.sig_psi);
             m.kx = j.num("kx", m.kx); m.ky = j.num("ky", m.ky);
             // Undrained stiffness definition: 0 = nu_u direct, 1 = Skempton-B based. An
             // unrecognised value must not land on 0 in silence -- that is the reading that

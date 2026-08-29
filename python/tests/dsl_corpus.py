@@ -248,7 +248,7 @@ text = katai.project_to_json(built)
 check('"edge_flow":[1,0,3,0]' in text, "the DSL writes the flux edge kind (3)")
 check(list(built.polygons[0].edge_flux) == [0.0, 0.0, 0.05, 0.0],
       "and the rate beside it, on that edge only")
-check(katai.validate_project(built).ok, "the flux model validates")
+check(katai.validate_project(built).ok(), "the flux model validates")
 check('"edge_flux":[]' in katai.project_to_json(build_slope().build()),
       "a model with no flux edge still writes the empty array the corpus pins")
 try:
@@ -294,7 +294,7 @@ check('"und_mode":1' in katai.project_to_json(built)
       and '"skempton_B":0.9' in katai.project_to_json(built)
       and '"nu_u":0.498' in katai.project_to_json(built),
       "all three reach the file, per material")
-check(katai.validate_project(built).ok, "two differently-watered clays validate")
+check(katai.validate_project(built).ok(), "two differently-watered clays validate")
 
 # ---------------------------------- Undrained (C): the total-stress drainage type --
 # KV-CST-007 verifies what it DOES; this is the one word that asks for it.
@@ -308,7 +308,7 @@ built = prj.build()
 check(built.materials[0].drainage == katai._core.Drainage.UndrainedC,
       "the DSL asks for a total-stress analysis by name")
 check('"drainage":4' in katai.project_to_json(built), "and it reaches the file as drainage 4")
-check(katai.validate_project(built).ok, "an undrained total-stress clay validates")
+check(katai.validate_project(built).ok(), "an undrained total-stress clay validates")
 
 # --------------------------------- wells and drains, from the easy surface --
 # KV-FLW-003 verifies what they DO; this is the sentence an engineer writes to dewater
@@ -333,7 +333,7 @@ check(list(built.initial.hydro_active) == [0, 1] and
       "and switches the well on in the phase that pumps, like any other object")
 check('"hydros":[' in katai.project_to_json(built) and '"hydro":[0,1]' in katai.project_to_json(built),
       "both reach the file, with their per-phase activity")
-check(katai.validate_project(built).ok, "the dewatered model validates")
+check(katai.validate_project(built).ok(), "the dewatered model validates")
 
 # ------------------------------------------- staged water, from the easy surface --
 # The schema's phase water is a POLYLINE and needs two points; the documented scalar
@@ -355,8 +355,35 @@ check(list(built.phases[1].wx) == [0.0, 30.0] and list(built.phases[1].wy) == [6
       "and an explicit phreatic line reaches the phase point for point")
 check(built.phases[0].water_override and built.phases[1].water_override,
       "both phases say they override the project's water")
-check(katai.validate_project(built).ok,
+check(katai.validate_project(built).ok(),
       "a staged-dewatering model built from the easy surface validates")
+
+# ------------------------------------------------------ rock, on the easy surface --
+# A factory whose name exists but whose parameters never reach the file is the trap this
+# project has already been caught by once (a geogrid Np that was accepted and applied only
+# under one flag). So the rock model is checked where it can actually be wrong: through
+# katai.project_to_json, which is the .k2d text.
+prj = katai.Project("Rock")
+rock = prj.materials.hoek_brown("Sandstone", E=4.5e6, nu=0.22, sigma_ci=47500.0, mi=17.0,
+                                gsi=62.0, D=0.35, psi=3.0, sigma_psi=1750.0, gamma=25.0)
+prj.geometry.rectangle(0.0, 0.0, 20.0, 10.0, material=rock, name="Rock mass")
+prj.phases.plastic("Rest")
+built = prj.build()
+back, _ = katai.project_from_json(katai.project_to_json(built))
+rm = back.materials[0]
+check(rm.model == katai._core.SoilModel.HoekBrown and rm.sig_ci == 47500.0 and rm.mi == 17.0
+      and rm.gsi == 62.0 and rm.hb_D == 0.35 and rm.sig_psi == 1750.0 and rm.psi == 3.0,
+      "the five Hoek-Brown parameters survive the .k2d round trip from the easy surface")
+check(katai.validate_project(built).ok(),
+      "and a rock model built that way validates")
+# The refusal, from the same surface: undrained (B) puts su into c', which this model has not.
+prj_b = katai.Project("Rock undrained")
+rock_b = prj_b.materials.hoek_brown("Sandstone", E=4.5e6, nu=0.22, sigma_ci=47500.0, mi=17.0,
+                                    gsi=62.0, drainage="undrained_b", gamma=25.0)
+prj_b.geometry.rectangle(0.0, 0.0, 20.0, 10.0, material=rock_b, name="Rock mass")
+prj_b.phases.plastic("Rest")
+rep = katai.validate_project(prj_b.build())
+check(not rep.ok(), "Hoek-Brown with Undrained (B) is refused, not accepted and ignored")
 
 # ------------------------------------------------- end to end: the slope RUNS --
 job_dsl = build_slope().run()

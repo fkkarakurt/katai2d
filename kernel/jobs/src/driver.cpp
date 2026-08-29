@@ -344,6 +344,11 @@ katai::core::MaterialParams to_material_params(const model::Material& m) {
     p.c = m.c;
     p.phi_rad = m.phi * kPi / 180.0;
     p.psi_rad = m.psi * kPi / 180.0;
+    p.sig_ci = m.sig_ci;
+    p.mi = m.mi;
+    p.gsi = m.gsi;
+    p.hb_D = m.hb_D;
+    p.sig_psi = m.sig_psi;
     p.tension_cutoff = m.tension_cutoff;
     p.dilatancy_cutoff = m.dilatancy_cutoff;
     p.e_init = m.e_init;
@@ -560,6 +565,21 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             k0 = katai::core::k0_overconsolidated(k0, m.OCR, adv ? m.nu_ur : m.nu,
                                                   std::sin(m.phi * kPi / 180.0));
         }
+        // JAKY'S FORMULA NEEDS A FRICTION ANGLE. Hoek-Brown has none, so 1 - sin(phi') reads the
+        // schema's unused default and lands on a number by accident. It is not refused: the
+        // value it lands on, K0 = 1.00 at phi' = 0, is the lithostatic state a competent rock
+        // mass is usually assumed to be in, so the default is defensible -- but it must not be
+        // arrived at silently, because the user could equally have meant the 0.3 a jointed,
+        // relaxed mass shows. This is the one place in the run that can say so.
+        if (m.model == model::SoilModel::HoekBrown && m.k0_auto)
+            warn(R, "K2D-A017", m.name,
+                 "\"" + m.name + "\" uses the Hoek-Brown model, which has no phi', so the "
+                 "automatic K0 = 1 - sin(phi') falls back on this material's unused friction box "
+                 "and gives K0 = " + dnum(k0) +
+                     ". That is not a measurement of anything. A competent rock mass is often "
+                     "taken as lithostatic (K0 = 1), but a jointed or relaxed one can be far "
+                     "lower -- switch the automatic K0 off and enter the value your site "
+                     "investigation supports.");
         k0_by_mat.push_back(k0);
     }
     // Staged construction: active objects of THIS phase (null config = everything active).
@@ -723,6 +743,28 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             const double G = sm.E / (2.0 * (1.0 + sm.nu));
             const double avg = len / std::max<size_t>(1, w.seam.size() / (order == 15 ? 4 : 2));
             katai::core::iface::interface_stiffness(Rinter, G, avg, 0.1, w.ip.kn, w.ip.ks);
+            // A JOINT AGAINST ROCK CANNOT BORROW A STRENGTH THE ROCK DOES NOT HAVE. The two
+            // lines below read the material's c' and phi', and a Hoek-Brown material's are the
+            // schema DEFAULTS -- 1 kPa and 30 degrees -- because that model never reads them.
+            // The joint would then be given a leftover Mohr-Coulomb strength that has nothing
+            // to do with the rock it is cut into, and nothing would say so. The schema already
+            // carries the remedy: `iface_material` points the interface at a DIFFERENT soil
+            // material for its strength, so a rock joint is modelled by naming a Mohr-Coulomb
+            // material whose c'/phi' IS the joint strength intended -- which is also how the
+            // manual has it, the interface being Mohr-Coulomb whatever the surrounding model.
+            if (sm.model == model::SoilModel::HoekBrown) {
+                refuse(R, "K2D-G014", s.name,
+                    "The interface on \"" + s.name +
+                    "\" takes its strength from the adjacent material \"" + sm.name +
+                    "\", which uses the Hoek-Brown model -- and that model has no c' or phi' for "
+                    "a joint to be reduced from: the interface would silently be given this "
+                    "material's unused c'/phi' boxes instead. An interface is Mohr-Coulomb "
+                    "whatever the surrounding model, so set the interface's soil material "
+                    "(iface_material) to a Mohr-Coulomb material whose c' and phi' are the joint "
+                    "strength you intend -- for a rock joint, typically the discontinuity's own "
+                    "friction and cohesion, not the rock mass's.");
+                return R;
+            }
             w.ip.c_i = Rinter * sm.c;
             w.ip.phi_i = std::atan(Rinter * std::tan(sm.phi * kPi / 180.0));
             // Interface tensile strength = R * sigma_t (the PLAXIS rule) -- only while the
@@ -817,6 +859,28 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             const double G = sm.E / (2.0 * (1.0 + sm.nu));
             const int nedges = std::max<int>(1, ((int)sp.seam.size() - 1) / per_edge);
             katai::core::iface::interface_stiffness(Rinter, G, len / nedges, 0.1, sp.ip.kn, sp.ip.ks);
+            // A JOINT AGAINST ROCK CANNOT BORROW A STRENGTH THE ROCK DOES NOT HAVE. The two
+            // lines below read the material's c' and phi', and a Hoek-Brown material's are the
+            // schema DEFAULTS -- 1 kPa and 30 degrees -- because that model never reads them.
+            // The joint would then be given a leftover Mohr-Coulomb strength that has nothing
+            // to do with the rock it is cut into, and nothing would say so. The schema already
+            // carries the remedy: `iface_material` points the interface at a DIFFERENT soil
+            // material for its strength, so a rock joint is modelled by naming a Mohr-Coulomb
+            // material whose c'/phi' IS the joint strength intended -- which is also how the
+            // manual has it, the interface being Mohr-Coulomb whatever the surrounding model.
+            if (sm.model == model::SoilModel::HoekBrown) {
+                refuse(R, "K2D-G014", s.name,
+                    "The interface on \"" + s.name +
+                    "\" takes its strength from the adjacent material \"" + sm.name +
+                    "\", which uses the Hoek-Brown model -- and that model has no c' or phi' for "
+                    "a joint to be reduced from: the interface would silently be given this "
+                    "material's unused c'/phi' boxes instead. An interface is Mohr-Coulomb "
+                    "whatever the surrounding model, so set the interface's soil material "
+                    "(iface_material) to a Mohr-Coulomb material whose c' and phi' are the joint "
+                    "strength you intend -- for a rock joint, typically the discontinuity's own "
+                    "friction and cohesion, not the rock mass's.");
+                return R;
+            }
             sp.ip.c_i = Rinter * sm.c;
             sp.ip.phi_i = std::atan(Rinter * std::tan(sm.phi * kPi / 180.0));
             sp.ip.sigma_t = sm.tension_cutoff ? Rinter * std::max(0.0, sm.tensile_strength) : 0.0;
@@ -1693,6 +1757,30 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     if (io.config && io.config->design_approach != model::DesignApproach::None) {
         const katai::core::DesignApproach da = to_core_design_approach(io.config->design_approach);
         if (katai::core::factors_material(da)) {
+            // A MATERIAL FACTOR NEEDS A MATERIAL PARAMETER TO DIVIDE. factor_material_strength
+            // divides c' and raises tan(phi'), and Hoek-Brown has neither: the factoring would
+            // touch nothing, the rock would run at its CHARACTERISTIC strength, and the report
+            // would say the design approach had been applied. A design verification that
+            // silently used unfactored strength is the worst outcome this seam can produce, so
+            // it is refused. EN 1997-1 factors c' and tan(phi') by name and gives no M-set for a
+            // Hoek-Brown envelope; deriving one -- factoring sigma_ci, or m_b, or the equivalent
+            // c'/phi' of MMM Eq 4-15/4-16 -- would be this program inventing a design rule, and
+            // the three choices do not agree with each other.
+            for (const auto& mm : models)
+                if (mm.type == katai::core::MaterialType::HoekBrown) {
+                    refuse(R, "K2D-G015", "design approach",
+                        "A material-factored design approach (EC7 DA1-C2 / DA3) cannot be applied "
+                        "to a Hoek-Brown material: the partial factors divide c' and tan(phi'), "
+                        "and this model has neither -- the rock would be solved at its full "
+                        "CHARACTERISTIC strength while the report said the design approach had "
+                        "been applied. EN 1997-1 gives no partial factor for a Hoek-Brown "
+                        "envelope. Convert the envelope to an equivalent c' and phi' over the "
+                        "confining range the problem spans (PLAXIS 2D Material Models Manual sec "
+                        "4.2, Eq 4-15/4-16), apply the factors to those, and run the design phase "
+                        "on a Mohr-Coulomb material -- or use a resistance-factored approach "
+                        "(EC7 DA2, TBDY 2018), which does not touch the material at all.");
+                    return R;
+                }
             const katai::core::PartialFactors pf = katai::core::design_factors(da);
             for (auto& mm : models) katai::core::factor_material_strength(mm, pf);
             if (pf.gamma_Q_unfav != 1.0) f += (pf.gamma_Q_unfav - 1.0) * f_loads;  // variable loads x gamma_Q

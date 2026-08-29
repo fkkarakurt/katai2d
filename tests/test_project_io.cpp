@@ -48,6 +48,14 @@ m::Project build_full() {
     m::Material sc; sc.name = "Creep clay"; sc.model = m::SoilModel::SoftSoilCreep;
     sc.lam_star = 0.09; sc.kap_star = 0.018; sc.mu_star = 0.004;
     p.materials.push_back(sc);
+    // Enum value 6 (HoekBrown, appended file-stable) and its five rock inputs. They are written
+    // only by a material that uses the model, so a material that does NOT is the other half of
+    // the check: `a` above keeps them at their defaults and must read back the same.
+    m::Material rk; rk.name = "Sandstone"; rk.model = m::SoilModel::HoekBrown;
+    rk.E = 4.5e6; rk.nu = 0.22;
+    rk.sig_ci = 47500.0; rk.mi = 17.25; rk.gsi = 62.5; rk.hb_D = 0.35; rk.sig_psi = 1750.0;
+    rk.psi = 3.5;
+    p.materials.push_back(rk);
 
     m::PlateMaterial pm; pm.name = "Sheet pile"; pm.elastoplastic = true;
     pm.EA = 4.9e6; pm.EI = 8.4e3; pm.w = 1.2; pm.nu = 0.15; pm.Mp = 120; pm.Np = 900;
@@ -122,6 +130,8 @@ void compare(const m::Project& A, const m::Project& B) {
                eq(x.G0ref, y.G0ref) && eq(x.gamma07, y.gamma07) &&
                eq(x.lam_star, y.lam_star) && eq(x.kap_star, y.kap_star) &&
                eq(x.mu_star, y.mu_star) &&
+               eq(x.sig_ci, y.sig_ci) && eq(x.mi, y.mi) && eq(x.gsi, y.gsi) &&
+               eq(x.hb_D, y.hb_D) && eq(x.sig_psi, y.sig_psi) &&
                eq(x.kx, y.kx) && eq(x.ky, y.ky) &&
                x.rinter_rigid == y.rinter_rigid && eq(x.Rinter, y.Rinter) &&
                x.k0_auto == y.k0_auto && eq(x.k0, y.k0) &&

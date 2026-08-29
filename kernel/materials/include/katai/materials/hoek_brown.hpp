@@ -58,6 +58,14 @@ struct Params {
     double D = 0.0;        // disturbance factor [-] (0..1)
     double psi = 0.0;      // dilatancy angle at sigma'_3 = 0 [rad]
     double sig_psi = 0.0;  // confining stress at which the dilatancy has died out [kPa, >= 0]
+    // OPTIONAL TENSION CUT-OFF (manual sec 4.3.7). The criterion already has a tensile strength of
+    // its own -- sigma_t of Eq 4-6, where the bracket closes -- and that one is a CONSEQUENCE of
+    // sigma_ci, s and m_b rather than an input. The manual lets the user cap it lower: "users can
+    // put a tensile strength value, and if that value is lower than sigma_t, the tensile capacity
+    // will be cut-off at that value". Lower only: a value above sigma_t would claim a tensile
+    // strength the criterion does not have, and is ignored (the min below).
+    bool tension_cutoff = false;
+    double sigt_user = 0.0;   // [kPa, >= 0] magnitude; read only when tension_cutoff
 };
 
 // The rock-mass constants derived from GSI and D (manual Eq 4-2, 4-3, 4-4).
@@ -74,6 +82,10 @@ inline Constants constants_of(const Params& P) {
     C.a = 0.5 + (std::exp(-P.gsi / 15.0) - std::exp(-20.0 / 3.0)) / 6.0;      // Eq 4-4
     C.sigc = -std::fabs(P.sigci) * std::pow(C.s, C.a);                        // Eq 4-5 (compression)
     C.sigt = C.mb > 0.0 ? C.s * std::fabs(P.sigci) / C.mb : 0.0;              // Eq 4-6 (tension)
+    // The user's cut-off, sec 4.3.7. Everything downstream -- the yield functions' second branch,
+    // the apex return region, the tensile branch of the mobilised dilatancy -- is written in terms
+    // of C.sigt, so capping it HERE is the whole implementation and no path can miss it.
+    if (P.tension_cutoff) C.sigt = std::min(C.sigt, std::fabs(P.sigt_user));
     return C;
 }
 
@@ -259,6 +271,55 @@ inline Return return_mapping(double s1t, double s2t, double s3t, const Params& P
         R.s3 = s3t - la * d3 - lb * e3;
     }
     return R;
+}
+
+
+// ------------------------------------------------------------------------------------------
+// The FE-facing entry: a plane-strain stress in, an admissible plane-strain stress out.
+//
+// The decomposition and the reconstruction are the same ones the Mohr-Coulomb return uses --
+// sigma_zz is itself a principal stress because tau_xz = tau_yz = 0 in plane strain, so the
+// triplet is {the two in-plane principals, sigma_zz} and the returned triplet goes back onto the
+// SAME eigenframe (the return is coaxial: the corrector is a combination of principal directions,
+// so it cannot rotate them). What is deliberately NOT here is the algorithmic tangent: the caller
+// uses the elastic operator, which is what the Hardening Soil branch does for its own reasons --
+// a robust tangent, and one that costs iterations rather than accuracy.
+struct PlaneReturn {
+    PlaneStrainStress stress;
+    bool plastic = false, apex = false, edge = false;
+};
+
+inline PlaneReturn plane_return(const PlaneStrainStress& trial, const Params& P,
+                                const Constants& C) {
+    enum { kA = 0, kB = 1, kZ = 2 };
+    const double sxx = trial.in_plane(0), syy = trial.in_plane(1), sxy = trial.in_plane(2);
+    const double mean = 0.5 * (sxx + syy), half = 0.5 * (sxx - syy);
+    const double radius = std::sqrt(half * half + sxy * sxy);
+    double cos2t = 1.0, sin2t = 0.0;
+    if (radius > 0.0) { cos2t = half / radius; sin2t = sxy / radius; }
+
+    struct PV { double v; int src; };
+    PV pv[3] = {{mean + radius, kA}, {mean - radius, kB}, {trial.zz, kZ}};
+    std::sort(pv, pv + 3, [](const PV& x, const PV& y) { return x.v > y.v; });
+
+    const Return R = return_mapping(pv[0].v, pv[1].v, pv[2].v, P, C);
+    PlaneReturn out;
+    out.plastic = R.plastic; out.apex = R.apex; out.edge = R.edge;
+    if (!R.plastic) { out.stress = trial; return out; }
+
+    const double ret[3] = {R.s1, R.s2, R.s3};
+    double pa = 0.0, pb = 0.0, pz = 0.0;
+    for (int i = 0; i < 3; ++i) {
+        if (pv[i].src == kA) pa = ret[i];
+        else if (pv[i].src == kB) pb = ret[i];
+        else pz = ret[i];
+    }
+    const double m = 0.5 * (pa + pb), r = 0.5 * (pa - pb);
+    out.stress.in_plane(0) = m + r * cos2t;
+    out.stress.in_plane(1) = m - r * cos2t;
+    out.stress.in_plane(2) = r * sin2t;
+    out.stress.zz = pz;
+    return out;
 }
 
 } // namespace katai::core::hoekbrown

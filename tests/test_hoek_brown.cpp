@@ -30,9 +30,9 @@
 //   oracle:   closed_form
 //   source:   PLAXIS 2D Material Models Manual (2025.1) §4, the generalised Hoek-Brown criterion of Hoek, Carranza-Torres & Corkum (2002): yield Eq 4-1 and 4-8, the rock-mass constants m_b (Eq 4-2), s (Eq 4-3) and a (Eq 4-4), the rock-mass compressive strength Eq 4-5 and tensile strength Eq 4-6, the non-associated flow of Eq 4-10/4-12 and the mobilised dilatancy of Eq 4-13/4-14. The Tresca degeneration is checked against this tree's own verified Mohr-Coulomb return (mohr_coulomb.cpp, P1.2b)
 //   locator:  f = s3 - s1 + |sigma_ci| (m_b (-s1/|sigma_ci|) + s)^a with s1 >= s2 >= s3 tension-positive (the manual's sigma'_3 and sigma'_1 respectively); m_b = m_i exp((GSI-100)/(28-14D)); s = exp((GSI-100)/(9-3D)); a = 1/2 + (exp(-GSI/15) - exp(-20/3))/6; sigma_c = -|sigma_ci| s^a; sigma_t = s |sigma_ci| / m_b
-//   quantity: the yield function at the closed-form uni-axial and isotropic-tensile states [kPa]; the failure sigma_1 at four confining stresses against Eq 4-1 [kPa]; the yield function after a return from an inadmissible trial [kPa]; and the returned principal stresses of the Tresca degeneration against this tree's Mohr-Coulomb return [kPa]
+//   quantity: the yield function at the closed-form uni-axial and isotropic-tensile states [kPa]; the failure sigma_1 at four confining stresses against Eq 4-1 [kPa]; the yield function after a return from an inadmissible trial [kPa]; and the returned principal stresses of the Tresca degeneration against this tree's Mohr-Coulomb return [kPa]; and the tensile limit the criterion admits with and without the optional cut-off of sec 4.3.7 [kPa]
 //   expected: zero at the two closed-form states, the Eq 4-1 envelope at the four confining stresses, zero after every return, and the Mohr-Coulomb answer in the degeneration
-//   band:     1e-9 relative on the constants, the two strengths and the envelope -- they are the same arithmetic evaluated two ways, so anything larger would be a transcription error rather than a discretisation, and all of them came out at 0.000e+00. 1e-6 kPa absolute on the yield function after a return (nine trials, all on the surface and still ordered) and on the apex. For the Tresca degeneration the band is on the LIMIT rather than on a number: at m_b = 1e-6 the two returns differ by 1.803e-04 kPa and at m_b = 1e-10 by 1.803e-08, a factor of 1e4 for a factor of 1e4 -- the difference is the criterion linearising towards Tresca, not the corrector, and a floor there would have meant the opposite. The edge return is what made that possible: clamping the intermediate stress instead left 2.5e+01 kPa on a material of cohesion 50
+//   band:     1e-9 relative on the constants, the two strengths and the envelope -- they are the same arithmetic evaluated two ways, so anything larger would be a transcription error rather than a discretisation, and all of them came out at 0.000e+00. 1e-6 kPa absolute on the yield function after a return (nine trials, all on the surface and still ordered) and on the apex. For the Tresca degeneration the band is on the LIMIT rather than on a number: at m_b = 1e-6 the two returns differ by 1.803e-04 kPa and at m_b = 1e-10 by 1.803e-08, a factor of 1e4 for a factor of 1e4 -- the difference is the criterion linearising towards Tresca, not the corrector, and a floor there would have meant the opposite. The edge return is what made that possible: clamping the intermediate stress instead left 2.5e+01 kPa on a material of cohesion 50. The tension cut-off is checked on the ADMISSIBILITY of an isotropic tensile state at 0.99 and 1.01 times the cap rather than on the constant, because a cap stored and never read would pass the constant; the uncapped rock admits both, which is what says the cut-off is doing the binding
 #include <katai/materials/hoek_brown.hpp>
 #include <katai/materials/mohr_coulomb.hpp>
 
@@ -222,6 +222,43 @@ void test_mobilised_dilatancy() {
 
 }  // namespace
 
+// (6) The optional tension cut-off of sec 4.3.7: it caps the criterion's OWN sigma_t and can only
+// lower it. Checked on the thing the cap is for -- the isotropic tensile state the criterion admits
+// -- rather than on the constant, because a cap that were stored and not read would pass the latter.
+void test_tension_cutoff() {
+    std::printf("\n-- (6) the optional tension cut-off caps sigma_t, downwards only (sec 4.3.7) --\n");
+    const hb::Params P0 = rock();
+    const double sigt0 = hb::constants_of(P0).sigt;
+    std::printf("   the criterion's own sigma_t = %.4f kPa\n", sigt0);
+
+    // A cap BELOW it binds: the isotropic tensile state just past the cap must be inadmissible,
+    // and the one just inside it admissible. That is what a tensile strength MEANS.
+    hb::Params Pc = rock();
+    Pc.tension_cutoff = true; Pc.sigt_user = 0.4 * sigt0;
+    const hb::Constants Cc = hb::constants_of(Pc);
+    check(std::fabs(Cc.sigt - 0.4 * sigt0) < 1e-9 * sigt0,
+          "a cut-off below sigma_t becomes the tensile limit");
+    const double in = 0.99 * Cc.sigt, out = 1.01 * Cc.sigt;
+    check(hb::yield(in, in, Pc, Cc) < 0.0, "an isotropic tension just inside the cap is admissible");
+    check(hb::yield(out, out, Pc, Cc) > 0.0, "and just outside it is not");
+    // The same two states against the UNCAPPED rock: both admissible, so the cap is what moved
+    // the answer and not the states.
+    const hb::Constants C0 = hb::constants_of(P0);
+    check(hb::yield(out, out, P0, C0) < 0.0,
+          "and the uncapped rock admits both, so it is the cut-off that bound");
+
+    // A cap ABOVE sigma_t claims a strength the criterion has not got, and is ignored.
+    hb::Params Pa = rock();
+    Pa.tension_cutoff = true; Pa.sigt_user = 5.0 * sigt0;
+    check(std::fabs(hb::constants_of(Pa).sigt - sigt0) < 1e-12 * sigt0,
+          "a cut-off above sigma_t does nothing: the criterion's own limit governs");
+    // And off is off.
+    hb::Params Pn = rock();
+    Pn.tension_cutoff = false; Pn.sigt_user = 0.1 * sigt0;
+    check(std::fabs(hb::constants_of(Pn).sigt - sigt0) < 1e-12 * sigt0,
+          "with the cut-off off, the entered value is not read at all");
+}
+
 int main() {
     std::printf("Hoek-Brown (rock behaviour) at the material point\n\n");
     test_constants_and_closed_forms();
@@ -229,6 +266,7 @@ int main() {
     test_return_lands_on_the_surface();
     test_tresca_identity();
     test_mobilised_dilatancy();
+    test_tension_cutoff();
     if (g_failures == 0) {
         std::printf("\nOK: the criterion is the manual's, and its degeneration is this tree's own Tresca\n");
         return 0;

@@ -105,6 +105,7 @@ katai_add_test(test_gui_solve katai::jobs katai::mesh katai::analysis katai::mod
 katai_add_test(test_anchor_mesh_repro katai::jobs katai::mesh katai::analysis katai::model)  # regression: an anchor does not corrupt the mesh (nearest node)
 katai_add_test(test_constitutive katai::jobs katai::mesh katai::analysis katai::model)  # the GUI constitutive model is genuinely in effect, LE/MC/HS
 katai_add_test(test_hoek_brown katai::materials)   # Hoek-Brown (rock): the manual closed forms, the envelope, and the Tresca degeneration against the verified MC return (KV-CST-014)
+katai_add_test(test_hoek_brown_gui katai::jobs katai::mesh katai::analysis katai::model)  # Hoek-Brown from a .k2d: a confined specimen fails ON the Eq 4-1 envelope, at two confinements (KV-CST-015)
 katai_add_test(test_axisym_gui katai::jobs katai::mesh katai::analysis katai::model)  # Axisymmetric GUI path: K0 + r-weighted gravity/traction + radial hoop
 katai_add_test(test_axisym_water katai::jobs katai::mesh katai::analysis katai::model katai::fem katai::geometry)  # Water table in axisymmetric mode: the K0 equilibrium identity and the HOOP pore term (KV-CST-013)
 katai_add_test(test_gui_matrix katai::jobs katai::mesh katai::analysis katai::model)  # Systematic: structures x load x water x model x tri6/tri15 invariants

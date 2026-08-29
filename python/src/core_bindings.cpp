@@ -61,7 +61,8 @@ NB_MODULE(_core, m) {
         .value("HardeningSoil", api::SoilModel::HardeningSoil)
         .value("HSsmall", api::SoilModel::HSsmall)
         .value("SoftSoil", api::SoilModel::SoftSoil)
-        .value("SoftSoilCreep", api::SoilModel::SoftSoilCreep);
+        .value("SoftSoilCreep", api::SoilModel::SoftSoilCreep)
+        .value("HoekBrown", api::SoilModel::HoekBrown);
     nb::enum_<api::Drainage>(m, "Drainage", nb::is_arithmetic())
         .value("Drained", api::Drainage::Drained)
         .value("Undrained", api::Drainage::Undrained)
@@ -166,6 +167,17 @@ NB_MODULE(_core, m) {
         .def_rw("gamma07", &api::Material::gamma07)
         .def_rw("lam_star", &api::Material::lam_star)
         .def_rw("kap_star", &api::Material::kap_star)
+        .def_rw("sig_ci", &api::Material::sig_ci,
+                "[kPa] Hoek-Brown: uni-axial compressive strength of the INTACT rock, a magnitude")
+        .def_rw("mi", &api::Material::mi,
+                "Hoek-Brown: intact rock parameter m_i (~4 claystone, ~33 granite)")
+        .def_rw("gsi", &api::Material::gsi,
+                "Hoek-Brown: Geological Strength Index, 0..100 (100 = intact rock)")
+        .def_rw("hb_D", &api::Material::hb_D,
+                "Hoek-Brown: disturbance factor, 0..1 (0 undisturbed, 1 heavily blasted)")
+        .def_rw("sig_psi", &api::Material::sig_psi,
+                "[kPa] Hoek-Brown: the confining stress at which dilatancy has died out; the "
+                "dilatancy angle itself is `psi`, its value at sigma'_3 = 0")
         .def_rw("mu_star", &api::Material::mu_star)
         .def_rw("kx", &api::Material::kx, "permeability x [m/day]")
         .def_rw("ky", &api::Material::ky, "permeability y [m/day]")

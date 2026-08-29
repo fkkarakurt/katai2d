@@ -230,6 +230,52 @@ int main() {
           "materials[2].kapstar", E, "swelling index not below compression index");
     probe(base, [](m::Project& p) { p.materials[3].mu_star = 0.0; }, "materials[3].mustar", E,
           "zero creep index");
+    // -- Hoek-Brown. The rock material is added by each probe rather than kept in the baseline,
+    // because the baseline carries a SAFETY phase and a Safety phase with rock in it is itself
+    // one of the rules below. `add_rock` appends it at index 4 with its defaults, which are a
+    // real rock; the probe then breaks exactly one field.
+    const auto add_rock = [](m::Project& p) -> m::Material& {
+        m::Material rk;
+        rk.name = "Sandstone";
+        rk.model = m::SoilModel::HoekBrown;
+        p.materials.push_back(rk);
+        return p.materials.back();
+    };
+    probe(base, [&](m::Project& p) { add_rock(p).gsi = 120.0; }, "materials[4].gsi", E,
+          "Geological Strength Index above its 0..100 scale");
+    probe(base, [&](m::Project& p) { add_rock(p).hb_D = 1.5; }, "materials[4].hbD", E,
+          "disturbance factor above its 0..1 scale");
+    probe(base, [&](m::Project& p) { add_rock(p).sig_ci = 0.0; }, "materials[4].sigci", E,
+          "zero intact rock compressive strength");
+    // The refusal that keeps an undrained shear strength from being entered where nothing reads
+    // it: Hoek-Brown has no c' or phi', so Undrained (B) would run the FULL drained rock
+    // envelope while the user believed su was in force.
+    probe(base, [&](m::Project& p) { add_rock(p).drainage = m::Drainage::UndrainedB; },
+          "materials[4].drainage", E, "Hoek-Brown asked for an undrained shear strength");
+    // And the one that costs a whole analysis type: phi-c reduction has nothing to reduce in a
+    // Hoek-Brown material, so the factor of safety would come out too HIGH rather than merely
+    // imprecise. The baseline's own Safety phase is what this fires on.
+    probe(base, [&](m::Project& p) { add_rock(p); }, "phases[3].type", E,
+          "a Safety phase in a model that contains rock");
+    // Same defect, the other seam: EC7's material-factored approaches divide c' and tan(phi'),
+    // which this model has not, so the rock would be solved at CHARACTERISTIC strength under a
+    // report that says the design approach was applied.
+    probe(base, [&](m::Project& p) {
+        p.phases.erase(p.phases.begin() + 3);          // drop the Safety phase; one rule at a time
+        p.phases[0].design_approach = m::DesignApproach::EC7_DA3;
+        add_rock(p);
+    }, "phases[0].design", E, "a material-factored design approach on rock");
+    // ... and the resistance-factored ones, which never touch the material, are accepted.
+    probe_accepts(base, [&](m::Project& p) {
+        p.phases.erase(p.phases.begin() + 3);
+        p.phases[0].design_approach = m::DesignApproach::EC7_DA2;
+        add_rock(p);
+    }, "phases[0].design", "a resistance-factored design approach on rock is not refused");
+    // The mirror: rock with no Safety phase anywhere is a perfectly ordinary project.
+    probe_accepts(base, [&](m::Project& p) {
+        p.phases.erase(p.phases.begin() + 3);
+        add_rock(p);
+    }, "phases[3].type", "rock without a Safety phase is not refused");
     probe(base, [](m::Project& p) { p.materials[0].kx = -1.0; }, "materials[0].kx", E,
           "negative permeability");
     probe(base, [](m::Project& p) { p.materials[0].gw_gn = 1.0; }, "materials[0].gw_gn", E,

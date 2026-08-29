@@ -79,6 +79,36 @@ inline bool solve_safety_phase(
                     "phi' -- the standard strength-reduction model.";
         return false;
     }
+    // HOEK-BROWN HAS NOTHING FOR phi-c REDUCTION TO HOLD, and the failure is silent in the
+    // dangerous direction. factor_strength divides c and phi -- fields this model never reads --
+    // so every trial would run the rock at FULL strength, no reduction would ever bring it down,
+    // and the search would walk to its cap and report the cap itself -- "FoS > 3.0", for any
+    // rock mass whatever, however weak. Nothing here would say so.
+    //
+    // It is refused rather than approximated because the manual does not give the rule. MMM
+    // sec 4.3.7 defines exactly one thing Safety does to this model -- "this tension cut-off
+    // value (but not the sigma_t parameter) is reduced with the safety factor" -- and says
+    // nothing about the shear strength. The conversion to an equivalent Mohr-Coulomb pair does
+    // exist (Eq 4-15/4-16, the balanced fit of Hoek, Carranza-Torres & Corkum 2002), and
+    // reducing THAT pair would be the natural construction, but it is a fit over a confining
+    // range whose upper limit sigma'_3max the manual leaves to the caller: "The upper limit of
+    // the confining stress depends on the application". A factor of safety would then be a
+    // function of a number nobody entered, and it would look like a measurement.
+    for (const auto& m : models)
+        if (m.type == MaterialType::HoekBrown) {
+            R.message =
+                "Safety analysis (phi-c reduction) is not available for the Hoek-Brown model: its "
+                "strength is the Hoek-Brown curve, not a c'/phi' pair, so there is nothing for the "
+                "reduction to act on -- the rock would keep full strength through every trial and "
+                "the factor of safety reported would be too HIGH, not merely imprecise. The "
+                "manual defines only the tension cut-off's reduction for this model (MMM sec "
+                "4.3.7). To get a factor of safety for a rock mass in this build, convert the "
+                "envelope to an equivalent c' and phi' over the confining range your problem "
+                "actually spans (MMM Eq 4-15/4-16) and run the Safety phase on a Mohr-Coulomb "
+                "material -- the conversion is then YOURS, stated with the range it was made "
+                "over, instead of hidden inside a number.";
+            return false;
+        }
     StrengthReductionOptions sopt;
     sopt.srf_min = 0.4; sopt.srf_max = 3.0; sopt.bisection_iterations = 12;
     sopt.newton = NewtonOptions{in.load_steps > 0 ? in.load_steps : 8,

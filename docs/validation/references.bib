@@ -97,6 +97,11 @@
 }
 
 @misc{plaxis2025f,
+  title = {PLAXIS 2D Material Models Manual (2025.1) §4, Eq 4-1 with the rock-mass constants of Eq 4-2/4-3/4-4 -- the same criterion KV-CST-014 checks at the material point, asked here of the assembled FE path from a project file},
+  note  = {cited by KV-CST-015},
+}
+
+@misc{plaxis2025g,
   title = {PLAXIS 2D Material Models Manual (2025.1) §4, the generalised Hoek-Brown criterion of Hoek, Carranza-Torres & Corkum (2002): yield Eq 4-1 and 4-8, the rock-mass constants m_b (Eq 4-2), s (Eq 4-3) and a (Eq 4-4), the rock-mass compressive strength Eq 4-5 and tensile strength Eq 4-6, the non-associated flow of Eq 4-10/4-12 and the mobilised dilatancy of Eq 4-13/4-14. The Tresca degeneration is checked against this tree's own verified Mohr-Coulomb return (mohr_coulomb.cpp, P1.2b)},
   note  = {cited by KV-CST-014},
 }
@@ -111,7 +116,7 @@
   note  = {cited by KV-STR-007},
 }
 
-@misc{plaxis2025g,
+@misc{plaxis2025h,
   title = {PLAXIS 2D Scientific Manual 2025.1 sec 9.1 -- the deformation convergence criteria as a FAMILY: Eq. 9-1 the CSP-normalised global force error, Eq. 9-3/9-4 the moment residual, Eq. 9-5 the local error at a plastic soil stress point and Eq. 9-7 at a non-linear elastic one, with the equilibrium/constitutive stress pair of Fig. 9-1 and Eq. 9-6; and PLAXIS 2D Reference Manual 2025.1 sec 7.13.8, Eq. 7-21/7-22 for the same global check and for CSP itself. THE TWO MANUALS PRINT CSP AS RECIPROCALS OF EACH OTHER: Scientific Eq. 9-2 gives elastic energy over total, Reference Eq. 7-22 gives total over elastic. Only the Reference orientation matches the behaviour BOTH manuals state in words -- "when the solution is fully elastic the Stiffness is equal to unity, whereas at failure the Stiffness approaches zero" -- and the uses built on it there (arc-length engages below CSP 0.5, collapse is reported below 0.015). The inverted form is >= 1 and GROWS without bound as a mechanism forms, which would make Eq. 9-1 loosen towards failure instead of tightening. Implemented from Eq. 7-22, deliberately, and this case is what holds it there},
   note  = {cited by KV-NUM-013},
 }

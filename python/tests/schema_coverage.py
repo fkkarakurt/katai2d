@@ -72,6 +72,9 @@ KEY_TO_ATTR = {
     "loadsteps": "load_steps",
     "maxiter": "max_iterations",
     "substol": "substep_tolerance",
+    "sigci": "sig_ci",
+    "hbD": "hb_D",
+    "sigpsi": "sig_psi",
     "cstop": "consol_stop",
     "cminp": "consol_min_pore",
     "cdeg": "consol_degree",
@@ -103,7 +106,17 @@ def coverage_project():
 
     soil = core.Material()
     soil.name = "Soil"
-    pr.materials = [soil]
+    # A second material carrying the Hoek-Brown model: its five keys are written only by a
+    # material that uses it, so without one in the coverage project they would never appear.
+    rock = core.Material()
+    rock.name = "Rock"
+    rock.model = core.SoilModel.HoekBrown
+    rock.sig_ci = 45000.0
+    rock.mi = 12.0
+    rock.gsi = 55.0
+    rock.hb_D = 0.25
+    rock.sig_psi = 1500.0
+    pr.materials = [soil, rock]
     plate = core.PlateMaterial()
     plate.name = "Wall"
     pr.plates = [plate]

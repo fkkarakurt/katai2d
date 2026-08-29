@@ -220,6 +220,60 @@ MaterialModel build_ssc(const MaterialParams& p) {
     return mm;
 }
 
+MaterialModel build_hb(const MaterialParams& p) {
+    // Hoek-Brown (MMM §4). Hooke's law for the elastic part -- so E and nu are read like the
+    // linear-elastic model's -- and the strength is the five rock inputs. Nothing here is fitted:
+    // m_b, s and a come out of GSI and the disturbance factor by the manual's own equations, in
+    // the core (hoek_brown.hpp constants_of), so this seam only ferries.
+    MaterialModel mm = common_fields(p);
+    mm.type = MaterialType::HoekBrown;
+    auto& h = mm.hb;
+    h.E = p.E; h.nu = p.nu;
+    h.sigci = p.sig_ci;
+    h.mi = p.mi;
+    h.gsi = p.gsi;
+    h.D = p.hb_D;
+    h.psi = p.psi_rad;
+    h.sig_psi = p.sig_psi;
+    // The optional cut-off of MMM sec 4.3.7, taken from the SAME two schema fields every other
+    // model's Rankine cap uses. It caps the criterion's own sigma_t and can only lower it -- so a
+    // rock material left with the schema's default (cut-off on, tensile strength 0) is capped at
+    // zero tension, which is the conservative reading of that default and the same thing it means
+    // everywhere else in this program.
+    h.tension_cutoff = p.tension_cutoff;
+    h.sigt_user = p.tensile_strength;
+    return mm;
+}
+
+std::string validate_hb(const MaterialParams& p) {
+    // THE UNDRAINED SHEAR STRENGTH HAS NOWHERE TO GO. Undrained (B) and (C) both work by
+    // substituting a Tresca envelope for the drained one -- c = su with phi = psi = 0 -- and
+    // this model reads neither c nor phi: its strength is the Eq 4-1 curve alone. The
+    // substitution would therefore be accepted and then ignored, and the run would quietly use
+    // the FULL drained rock envelope while the user believed they had entered su. That is the
+    // silent-wrong class, so it is refused here instead. Undrained (A) is a different matter and
+    // stays allowed: it changes no strength, it adds the pore fluid's Kw/n (derived from E,
+    // which this model has) and lets the criterion act on effective stress, which is what it is
+    // written in.
+    if (p.drainage == DrainageClass::UndrainedB || p.drainage == DrainageClass::UndrainedC)
+        return "Hoek-Brown with Undrained (B) or (C) is not a supported combination: both enter "
+               "the strength as an undrained shear strength su, and this model has no c' or phi' "
+               "to put it in -- its strength is the Hoek-Brown curve, which is written for "
+               "effective stress. Use Drained or Undrained (A) with this model, or Mohr-Coulomb "
+               "with su for a Tresca analysis.";
+    if (!(p.E > 0.0)) return "Hoek-Brown needs a rock-mass Young's modulus E > 0";
+    if (!(p.sig_ci > 0.0))
+        return "Hoek-Brown needs the intact rock's uni-axial compressive strength |sigma_ci| > 0";
+    if (!(p.mi > 0.0)) return "Hoek-Brown needs the intact rock parameter m_i > 0";
+    if (p.gsi < 0.0 || p.gsi > 100.0)
+        return "the Geological Strength Index is a 0..100 scale (MMM Fig 4-6)";
+    if (p.hb_D < 0.0 || p.hb_D > 1.0)
+        return "the disturbance factor is a 0..1 scale (MMM Fig 4-7: 0 undisturbed, 1 heavily blasted)";
+    if (p.sig_psi < 0.0)
+        return "the confining stress at which dilatancy dies out cannot be negative";
+    return {};
+}
+
 // A deque so registration never moves an existing entry: find_model hands out
 // pointers, and they stay valid for the life of the process.
 std::deque<ModelEntry>& table() {
@@ -230,6 +284,10 @@ std::deque<ModelEntry>& table() {
         {"HSsmall", MaterialType::HardeningSoil, true, true, false, false, false, validate_hs, build_hss},
         {"SoftSoil", MaterialType::SoftSoil, true, false, true, false, false, validate_ss, build_ss},
         {"SoftSoilCreep", MaterialType::SoftSoilCreep, true, false, true, false, false, validate_ss, build_ssc},
+        // Rock: non-linear (it has a yield surface), no hardening, no soft-soil step family, and
+        // it reads NEITHER depth gradient -- E'_inc would contradict "the stiffness of a rock mass
+        // is constant", and c'_inc is a Mohr-Coulomb input this model does not have.
+        {"HoekBrown", MaterialType::HoekBrown, true, false, false, false, false, validate_hb, build_hb},
     };
     return entries;
 }

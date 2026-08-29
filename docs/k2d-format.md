@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **17** · Current `.res` version: **9**
+Current `.k2d` version: **18** · Current `.res` version: **9**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -40,6 +40,10 @@ and **v17** the consolidation stop criterion (`phases[i].cstop`, `cminp`, `cdeg`
 rather than after a duration guessed in advance. An older build reads no `cstop` and runs the
 `duration` / `steps` that are still in the file, so it answers a different question -- a fixed span
 of time -- and reports the answer as an ordinary consolidation result.
+, and **v18** the Hoek-Brown rock model
+(`materials[i].model` = 6 and its five parameters `sigci`, `mi`, `gsi`, `hbD`, `sigpsi`), which an
+older build cannot read as anything: the model index is beyond the enum it knows, so the material
+falls back to a placeholder and the rock is analysed as something else entirely.
 Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
@@ -159,7 +163,7 @@ flagged places differs from the in-memory default of a freshly created object.
 | `E_inc` | num | kN/m²/m | `0` | Stiffness increase per metre depth below `y_ref` |
 | `c_inc` | num | kN/m²/m | `0` | Cohesion increase per metre depth below `y_ref` |
 | `y_ref` | num | m | `0` | Reference level for the increments |
-| `tension_cutoff` | bool | — | `true` | Rankine tension cut-off active |
+| `tension_cutoff` | bool | — | `true` | Rankine tension cut-off active. For a **Hoek-Brown** material it is not Rankine but the criterion's own tensile limit σ_t (MMM §4.3.7): the pair below caps σ_t and can only LOWER it, so the schema default (on, σ_t = 0) gives a rock that carries no tension — switch it off to keep the σ_t the criterion derives from σ_ci, s and m_b |
 | `dilatancy_cutoff` | bool | — | `false` | Stop dilatancy at the critical void ratio (PLAXIS MMM Eq. 5.16b) |
 | `e_max` | num | — | `1` | Critical (maximum) void ratio; read when `dilatancy_cutoff` is set |
 | `tensile_strength` | num | kN/m² | `0` | Allowed tensile strength σ_t |
@@ -177,6 +181,11 @@ flagged places differs from the in-memory default of a freshly created object.
 | `lamstar` | num | — | `0.10` | Soft Soil: modified compression index λ* |
 | `kapstar` | num | — | `0.02` | Soft Soil: modified swelling index κ* |
 | `mustar` | num | — | `0.005` | Soft Soil Creep: modified creep index μ* |
+| `sigci` | num | kPa | `50000` | Hoek-Brown: uni-axial compressive strength of the INTACT rock, |σ_ci| > 0 (MMM §4.3.3). Written only by a Hoek-Brown material |
+| `mi` | num | — | `10` | Hoek-Brown: intact rock parameter m_i (MMM Fig 4-5: ~4 claystone, ~33 granite). Written only by a Hoek-Brown material |
+| `gsi` | num | — | `50` | Hoek-Brown: Geological Strength Index, 0–100 (MMM Fig 4-6; 100 = intact rock). Written only by a Hoek-Brown material |
+| `hbD` | num | — | `0` | Hoek-Brown: disturbance factor, 0–1 (MMM Fig 4-7; 0 undisturbed, 1 heavily blasted). Written only by a Hoek-Brown material |
+| `sigpsi` | num | kPa | `0` | Hoek-Brown: the confining stress at which dilatancy has died out (MMM Eq 4-13). The dilatancy angle itself is the shared `psi`, its value at σ′₃ = 0. Written only by a Hoek-Brown material |
 | `kx` | num | m/day | `1` | Horizontal permeability |
 | `ky` | num | m/day | `1` | Vertical permeability |
 | `und_mode` | int | — | `0` | How the pore fluid's stiffness is defined for Undrained (A)/(B): 0 = `nu_u` entered, 1 = Skempton's `skempton_B` (PLAXIS MMM §2.4) |

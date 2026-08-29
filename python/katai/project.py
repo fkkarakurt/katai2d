@@ -194,6 +194,21 @@ class _Materials:
         return self._add(name, _core.SoilModel.SoftSoilCreep, c=c, phi=phi, psi=psi,
                          lam_star=lam_star, kap_star=kap_star, mu_star=mu_star, **kw)
 
+    def hoek_brown(self, name, *, E, nu, sigma_ci, mi, gsi, D=0.0, psi=0.0,
+                   sigma_psi=0.0, **kw):
+        """Hoek-Brown rock. There is no c/phi here and that is the point: the strength is
+        the curve, not a straight line fitted to it at one confining stress.
+
+        ``E`` is the ROCK MASS modulus [kN/m2], not the intact core's; ``sigma_ci`` the
+        intact rock's uni-axial compressive strength [kN/m2] as a magnitude; ``mi`` the
+        intact rock parameter (~4 claystone, ~33 granite); ``gsi`` the Geological Strength
+        Index 0..100; ``D`` the disturbance factor 0..1 (0 undisturbed, 1 heavily blasted).
+        ``psi`` is the dilatancy angle [deg] at zero confinement and ``sigma_psi`` [kN/m2]
+        the confining stress at which it has died out (0 = no decay).
+        """
+        return self._add(name, _core.SoilModel.HoekBrown, E=E, nu=nu, psi=psi,
+                         sig_ci=sigma_ci, mi=mi, gsi=gsi, hb_D=D, sig_psi=sigma_psi, **kw)
+
 
 class _Geometry:
     """``prj.geometry`` -- soil regions. Fixities use plain names:

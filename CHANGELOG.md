@@ -6,6 +6,105 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### Rock, from the file to the answer
+
+The rock model reached the ground. The previous increment built the Hoek-Brown criterion at the
+material point; a criterion nothing can select is a header, so this one puts it in the schema
+(`.k2d` v18: `sigci`, `mi`, `gsi`, `hbD`, `sigpsi`, written only by a material that uses the
+model), in the material registry, in the Python surface, and in the Studio's material editor,
+which asks for it in the geologist's own vocabulary and shows the manual's derived m_b, s, a and
+the resulting rock-mass strengths next to the four inputs.
+
+**The verification is a triaxial test run by the program itself** (`KV-CST-015`): a `.k2d` file
+naming Hoek-Brown, meshed, brought to an isotropic cell pressure and squeezed past yield, twice, at
+1 and 8 MPa. The stress the block carries on the plateau is the Eq 4-1 envelope at the confinement
+it is actually under, to **−0.0000%** at both, with the specimen 0.05% from homogeneous. Two cell
+pressures rather than one because the envelope is CURVED: their ratio is **3.231** where a straight
+line through the origin would give 8.000, so a build that had quietly fallen back to Mohr-Coulomb
+would miss the second point even if it had been tuned to hit the first.
+
+**The fixture is the finding.** Driven by LOAD it reproduced the envelope to −0.99% at the high
+cell pressure and only −5.72% at the low one, and the obvious suspect was the load step. It was
+not: halving the increment from 395 to 182 kPa moved the error from −5.65% to −5.72%, which is to
+say not at all. A homogeneous specimen of a perfectly plastic material reaches the envelope
+everywhere at once and has no reserve anywhere to redistribute into, so a load-controlled Newton
+can only approach that limit from below and stops at whichever increment it last equilibrated.
+Under displacement control the same state is an equilibrium the solver can stand on, and the answer
+is read from the stress field instead of inferred from a load factor. The band went from 3%, all of
+it used, to 0.1% with none of it used.
+
+**FIVE PLACES WERE ABOUT TO DIVIDE A STRENGTH THAT IS NOT THERE.** Making a model reachable means
+every surface that assumed `c'` and `phi'` now meets one that has neither, and the failure mode is
+always the same shape: the surface goes on working, touches nothing, and reports as though it had.
+Four of them are refused and one is warned about, each where it happens and each saying what to do
+instead.
+
+  * **Undrained (B) and (C)** enter the strength as an undrained shear strength su and put it in
+    `c'`. The entry would have been taken and then ignored, and the run would have used the FULL
+    drained rock envelope while the engineer believed su was in force. Undrained (A) stays: it
+    changes no strength, adds the pore fluid's stiffness and lets the criterion act on effective
+    stress, which is what it is written in.
+
+  * **A Safety phase** reduces strength by dividing `c'` and raising `tan(phi')`. The rock would
+    have kept full strength through every trial of the strength-reduction search, and the search
+    would have walked to its cap and reported the cap itself — **"FoS > 3.0", for any rock mass
+    whatever, however weak** — a wrong number in the safe-looking direction, which is the worst
+    kind this program can produce. It is refused rather than approximated because the manual does
+    not give the rule: MMM sec 4.3.7 defines exactly one thing Safety does to this model, reducing
+    the tension cut-off value, and says nothing about the shear strength. The conversion to an
+    equivalent Mohr-Coulomb pair does exist (Eq 4-15/4-16), and reducing THAT pair would be the
+    natural construction, but it is a fit over a confining range whose upper limit the manual
+    leaves to the caller — "the upper limit of the confining stress depends on the application" —
+    so a factor of safety built on it would be a function of a number nobody entered, wearing the
+    clothes of a measurement.
+
+  * **A material-factored design approach** (EC7 DA1-C2, DA3) is the same defect at a worse seam:
+    the partial factors divide `c'` and `tan(phi')`, so the rock would have been solved at its
+    CHARACTERISTIC strength under a report saying the design approach had been applied. A design
+    verification that quietly used unfactored strength is not a conservative approximation, it is
+    a wrong verdict. EN 1997-1 gives no partial factor for a Hoek-Brown envelope. The
+    resistance-factored approaches (EC7 DA2, TBDY 2018) never touch the material and still run —
+    which the test checks, because a refusal that also blocks the working path is a different bug
+    (`K2D-G015`).
+
+  * **An interface** takes `c_i = R·c'` and `phi_i` from the material beside it. Beside rock those
+    boxes hold the schema DEFAULTS — 1 kPa and 30 degrees — so the joint would have been given a
+    Mohr-Coulomb strength with no relation to the rock it is cut into. The remedy already existed
+    in the schema and is what the refusal names: point the interface at a Mohr-Coulomb material
+    (`iface_material`) whose `c'` and `phi'` ARE the joint strength intended, which is also how the
+    manual has it — an interface is Mohr-Coulomb whatever the surrounding model. For a rock joint
+    that is the discontinuity's own friction, not the rock mass's envelope (`K2D-G014`).
+
+  * **The automatic K0** is Jaky's 1 − sin(phi'), and with no phi' it reads the unused box and
+    lands on K0 = 1.00. That one is NOT refused: lithostatic is what a competent rock mass is
+    usually assumed to be in, so the value is defensible — but it is arrived at by accident, and a
+    jointed or stress-relieved mass can be far lower. The run now says so (`K2D-A017`).
+
+And one that is neither refused nor warned but simply **fixed**: the local convergence criteria
+normalise a stress difference by the material's cohesion, and `cohesion_of` would have returned
+ZERO for rock. Its own comment already names that failure — "a normaliser that is quietly a factor
+too small makes every point look accurate, which is the one failure mode a convergence check must
+not have" — and it was about to happen on a material whose strengths are megapascals. Rock now
+returns the criterion's own strength at zero confinement on a cohesion scale, sigma_c/2, the Tresca
+relation the model's degeneration was already verified against.
+
+**One thing the manual offers was implemented rather than refused.** MMM sec 4.3.7 lets the user cap
+the criterion's own tensile strength: "if that value is lower than σ_t, the tensile capacity will be
+cut-off at that value". The tree already has the two schema fields every other model's Rankine cap
+uses, so the whole implementation is one line — the cap is applied to `Constants::sigt`, and every
+path that reads a tensile limit (the yield functions' second branch, the apex return region, the
+tensile branch of the mobilised dilatancy) is written in terms of it, so none can miss it. It only
+lowers: a value above σ_t would claim a strength the criterion has not got and is ignored. The
+consequence is stated where it is visible rather than left to be discovered — this schema's default
+for that field is ON with σ_t = 0, so a rock material carries no tension unless the box is
+unticked, and the Studio shows the control for rock instead of hiding it, next to the σ_t the
+criterion would otherwise have. Hiding it would have been the neater panel and the worse one: a
+control that is absent still acts.
+
+For the same reason the text report, the HTML report and the model summary print the four rock
+inputs where they used to print `c'` and `phi'` — numbers the calculation never read.
+
+
 ### The last coupled family carries the structure too
 
 A wall could stand in the ground while the pore pressure dissipated, but not while the water table

@@ -311,6 +311,51 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
     const bool le = m.model == SoilModel::LinearElastic;
     const bool mc = m.model == SoilModel::MohrCoulomb;
     const bool hs = m.model == SoilModel::HardeningSoil || m.model == SoilModel::HSsmall;
+    // Hoek-Brown (MMM §4). Every one of these is a scale a geologist reads off a chart, so a
+    // value outside it is not a preference but a misreading -- GSI is 0..100 and D is 0..1, and
+    // the manual's own figures have no room on either side of them.
+    if (m.model == SoilModel::HoekBrown) {
+        if (!(m.E > 0.0))
+            r.add(Severity::Error, path("E"),
+                  "Hoek-Brown keeps Hooke's law, so it needs the ROCK MASS Young's modulus E_rm "
+                  "> 0 (got " + num(m.E) + " kPa)");
+        if (!(m.sig_ci > 0.0))
+            r.add(Severity::Error, path("sigci"),
+                  "the uni-axial compressive strength of the INTACT rock must be positive (got " +
+                      num(m.sig_ci) + " kPa); it is entered as a magnitude, not as a compression");
+        if (!(m.mi > 0.0))
+            r.add(Severity::Error, path("mi"),
+                  "the intact rock parameter m_i must be positive (got " + num(m.mi) +
+                      "); MMM Fig 4-5 ranges from about 4 for claystone to about 33 for granite");
+        if (m.gsi < 0.0 || m.gsi > 100.0)
+            r.add(Severity::Error, path("gsi"),
+                  "the Geological Strength Index is a 0..100 scale (got " + num(m.gsi) +
+                      "); 100 is intact rock and about 10 a crushed mass (MMM Fig 4-6)");
+        if (m.hb_D < 0.0 || m.hb_D > 1.0)
+            r.add(Severity::Error, path("hbD"),
+                  "the disturbance factor is a 0..1 scale (got " + num(m.hb_D) +
+                      "); 0 is undisturbed and 1 heavily blasted (MMM Fig 4-7)");
+        if (m.sig_psi < 0.0)
+            r.add(Severity::Error, path("sigpsi"),
+                  "the confining stress at which dilatancy dies out cannot be negative (got " +
+                      num(m.sig_psi) + " kPa)");
+        // Undrained (C) is already refused below for everything but Linear elastic and
+        // Mohr-Coulomb. Undrained (B) is not, and it has the same defect here: both types enter
+        // the strength as su and put it in c, which this model does not read at all. Left to run
+        // it would use the full drained rock envelope while the user believed su was in force.
+        if (m.drainage == Drainage::UndrainedB)
+            r.add(Severity::Error, path("drainage"),
+                  "Undrained (B) enters the strength as an undrained shear strength su, and "
+                  "Hoek-Brown has no c' or phi' to hold it -- its strength is the Hoek-Brown "
+                  "curve, written for effective stress. Use Drained or Undrained (A) here, or "
+                  "Mohr-Coulomb with su for a Tresca analysis");
+        if (m.gsi > 0.0 && m.gsi < 25.0 && m.hb_D > 0.0)
+            r.add(Severity::Warning, path("hbD"),
+                  "a disturbance factor above 0 on a mass whose GSI is already " + num(m.gsi) +
+                      " reduces an already weak rock further; the manual warns that D should be "
+                      "applied to the blast-damaged zone only, not to the whole mass");
+    }
+
     const bool ss = m.model == SoilModel::SoftSoil || m.model == SoilModel::SoftSoilCreep;
 
     if ((le || mc) && !(m.E > 0.0))
@@ -608,6 +653,51 @@ inline ValidationReport validate_project(const model::Project& p) {
               "Safety as the initial procedure computes the factor of safety of the initial "
               "state only; with staged phases present, add a Safety phase at the point of "
               "interest instead");
+
+    // TWO WAYS OF DIVIDING A STRENGTH THAT IS NOT THERE. Both phi-c reduction and the
+    // material-factored design approaches work on c' and tan(phi'), and Hoek-Brown has neither:
+    // its strength is the curve. Left to run, each would touch nothing, the rock would be solved
+    // at FULL strength, and the result would be reported as though the reduction or the design
+    // factors had been applied -- wrong in the safe-looking direction, which is the direction
+    // that gets built. The engine refuses both (safety.hpp and the driver's design-code seam say
+    // why and what to do instead); saying it here refuses the project before a mesh is built.
+    {
+        bool rock = false;
+        for (const auto& m : p.materials) rock |= m.model == model::SoilModel::HoekBrown;
+        if (rock) {
+            bool safety_phase = p.initial_procedure == model::InitialProcedure::Safety;
+            std::string where = "initial_procedure";
+            for (size_t i = 0; i < p.phases.size() && !safety_phase; ++i)
+                if (p.phases[i].type == model::PhaseType::Safety) {
+                    safety_phase = true;
+                    where = "phases[" + std::to_string(i) + "].type";
+                }
+            if (safety_phase)
+                r.add(Severity::Error, where,
+                      "a Safety analysis (phi-c reduction) cannot be run on a model that contains "
+                      "a Hoek-Brown material: that model has no c' or phi' for the reduction to "
+                      "act on, so the rock would keep full strength through every trial and the "
+                      "factor of safety would come out too HIGH. Convert the envelope to an "
+                      "equivalent c' and phi' over the confining range the problem spans (MMM Eq "
+                      "4-15/4-16) and run the Safety phase on a Mohr-Coulomb material instead");
+            for (size_t i = 0; i < p.phases.size(); ++i) {
+                const auto da = p.phases[i].design_approach;
+                if (da != model::DesignApproach::EC7_DA1_C2 &&
+                    da != model::DesignApproach::EC7_DA3)
+                    continue;   // silent-drop-ok: only the MATERIAL-factored approaches divide c'
+                r.add(Severity::Error, "phases[" + std::to_string(i) + "].design",
+                      std::string("the material-factored design approach ") +
+                          model::design_approach_names()[(int)da] +
+                          " divides c' and tan(phi'), and the Hoek-Brown material in this model "
+                          "has neither -- the rock would be solved at its CHARACTERISTIC strength "
+                          "while the report said the design approach had been applied. EN 1997-1 "
+                          "gives no partial factor for a Hoek-Brown envelope. Apply the factors to "
+                          "an equivalent c'/phi' (MMM Eq 4-15/4-16) on a Mohr-Coulomb material, or "
+                          "use a resistance-factored approach (EC7 DA2, TBDY 2018), which does not "
+                          "touch the material at all");
+            }
+        }
+    }
 
     // -- Water -----------------------------------------------------------------
     if (p.has_water && p.wx.size() != p.wy.size())

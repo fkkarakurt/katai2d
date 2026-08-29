@@ -61,6 +61,10 @@ struct MaterialParams {
 
     // Soft Soil (Creep) modified indices (MMM sections 10-11).
     double lam_star = 0.0, kap_star = 0.0, mu_star = 0.0;
+    // Hoek-Brown (MMM §4): the geologist's own vocabulary rather than a fitted c'/phi'.
+    // The elastic pair is E / nu above -- rock keeps Hooke's law -- and the dilatancy angle
+    // is psi_rad, its value at sigma'_3 = 0.
+    double sig_ci = 0.0, mi = 0.0, gsi = 0.0, hb_D = 0.0, sig_psi = 0.0;
 
     // K0^NC memory shared by the HS cap and the SS/SSC preconsolidation law:
     // auto = Jaky 1 - sin(phi'), otherwise the given value.

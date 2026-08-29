@@ -16,6 +16,7 @@
 #include <Eigen/Core>
 
 #include <katai/materials/hardening_soil_plastic.hpp>
+#include <katai/materials/hoek_brown.hpp>
 #include <katai/materials/mohr_coulomb.hpp>
 #include <katai/materials/soft_soil.hpp>
 #include <katai/materials/soft_soil_creep.hpp>
@@ -53,6 +54,7 @@ enum class MaterialType {
     HardeningSoil,
     SoftSoil,
     SoftSoilCreep,
+    HoekBrown,
 };
 
 // State of an integration (Gauss) point. Besides the in-plane Voigt stress we
@@ -200,6 +202,12 @@ struct MaterialModel {
     // via integrate_point's trailing parameter dt_day (0 = no creep — in PLAXIS too, SSC in
     // a phase without a time interval gives only elastic+MC). Undrained/Safety limits as SS.
     softsoilcreep::Params ssc;
+
+    // Hoek-Brown parameters (type == HoekBrown; PLAXIS MMM §4, hoek_brown.hpp). The elastic part
+    // IS youngs_modulus / poisson_ratio -- rock keeps Hooke's law, which is the whole reason the
+    // model is only a strength criterion. hb.E / hb.nu are filled from those two at the seam so
+    // the core stays self-contained.
+    hoekbrown::Params hb;
 
     // Plane-strain elastic constitutive matrix (3x3 SPD, v < 0.5).
     Eigen::Matrix3d elastic_plane_strain() const {
@@ -709,6 +717,18 @@ inline double cohesion_of(const MaterialModel& m) {
         case MaterialType::HardeningSoil: return m.hs.cohesion;
         case MaterialType::SoftSoil:      return m.ssoil.c;
         case MaterialType::SoftSoilCreep: return m.ssc.c;
+        // Rock keeps no cohesion at all -- its strength IS the curve -- so the default below
+        // would hand the normaliser a zero, which is precisely the failure the paragraph above
+        // describes, on a material whose strengths are megapascals. What the criterion has at
+        // zero confinement is the rock mass's uni-axial compressive strength sigma_c (Eq 4-5),
+        // and a compressive strength sits on a cohesion scale at half of it -- the Tresca
+        // relation c = sigma_c / 2, which is the same degeneration KV-CST-014 checks this model
+        // against. It is a SCALE for a convergence check, not a parameter: nothing else reads it.
+        case MaterialType::HoekBrown: {
+            hoekbrown::Params hp = m.hb;
+            hp.E = m.youngs_modulus; hp.nu = m.poisson_ratio;
+            return 0.5 * std::fabs(hoekbrown::constants_of(hp).sigc);
+        }
         default:                          return m.cohesion;
     }
 }
@@ -814,6 +834,25 @@ inline void integrate_point(const MaterialModel& m, const GaussState& committed,
             tangent = base.plastic ? base.tangent : m.elastic_plane_strain();
             if (report) {
                 report->plastic = base.plastic;
+                report->elastic = m.elastic_plane_strain();
+            }
+            break;
+        }
+        case MaterialType::HoekBrown: {
+            // Rock: Hooke plus a non-linear strength criterion, so the trial IS the elastic
+            // predictor the caller already built and the only work is the return. The tangent is
+            // the elastic operator (hoek_brown.hpp says why); the equilibrium iteration pays for
+            // that in steps rather than in accuracy, which is the trade the Hardening Soil branch
+            // makes for its own reasons.
+            hoekbrown::Params hp = m.hb;
+            hp.E = m.youngs_modulus; hp.nu = m.poisson_ratio;
+            const hoekbrown::Constants hc = hoekbrown::constants_of(hp);
+            const hoekbrown::PlaneReturn r = hoekbrown::plane_return(predictor, hp, hc);
+            trial.stress = r.stress.in_plane;
+            trial.stress_zz = r.stress.zz;
+            tangent = m.elastic_plane_strain();
+            if (report) {
+                report->plastic = r.plastic;
                 report->elastic = m.elastic_plane_strain();
             }
             break;

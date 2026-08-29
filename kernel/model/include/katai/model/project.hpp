@@ -13,7 +13,8 @@
 namespace katai::model {
 
 // Enum VALUES are file-stable (written as int in the project file) — a new model is appended at the END.
-enum class SoilModel { LinearElastic, MohrCoulomb, HardeningSoil, HSsmall, SoftSoil, SoftSoilCreep };
+enum class SoilModel { LinearElastic, MohrCoulomb, HardeningSoil, HSsmall, SoftSoil, SoftSoilCreep,
+                      HoekBrown };   // values are FILE-STABLE: append only
 // Drainage type (PLAXIS Material > General). Undrained (A): EFFECTIVE strength c', phi' + the pore-
 // fluid bulk stiffness Kw/n (excess pore pressure generated, effective stress path; su is PREDICTED).
 // Undrained (B): the same Kw/n machinery but the UNDRAINED strength is entered directly -- c = su,
@@ -29,10 +30,10 @@ enum class Drainage { Drained = 0, Undrained = 1, NonPorous = 2, UndrainedB = 3,
 
 inline const char* const* soil_model_names() {
     static const char* n[] = {"Linear elastic", "Mohr-Coulomb", "Hardening Soil", "HS small",
-                              "Soft Soil", "Soft Soil Creep"};
+                              "Soft Soil", "Soft Soil Creep", "Hoek-Brown (rock)"};
     return n;
 }
-inline constexpr int kSoilModelCount = 6;   // combo count — updated together with the enum
+inline constexpr int kSoilModelCount = 7;   // combo count — updated together with the enum
 // BOUNDS-CHECKED display name: the enum int comes from a file (a forward-version project
 // can carry an out-of-range value) — raw `names()[i]` or a `& 3` mask silently prints the
 // WRONG model name (measured: with the 5th model added, `& 3` showed "Linear elastic").
@@ -122,6 +123,23 @@ struct Material {
     // typically 15-25. Reference time τ = 1 day (a PLAXIS constant; the 24-hour definition
     // of the NC line) — not an input.
     double mu_star = 0.005;
+
+    // Hoek-Brown (PLAXIS MMM §4; the 2002 criterion). Rock keeps Hooke's law, so the elastic pair
+    // is the shared E / nu above -- E is the ROCK MASS modulus E_rm there, not the intact rock's.
+    // The strength is these five, and they are the geologist's own vocabulary rather than a fitted
+    // c' and phi': the intact rock's uni-axial compressive strength, its material constant, how
+    // jointed the mass is, how much the excavation disturbed it, and how it dilates.
+    //   sig_ci  |sigma_ci|, uni-axial compressive strength of the INTACT rock [kPa, > 0]
+    //   mi      intact rock parameter [-] (MMM Fig 4-5: 4 for claystone, ~33 for granite)
+    //   gsi     Geological Strength Index [-] (MMM Fig 4-6; 100 = intact, ~10 = crushed)
+    //   hb_D    disturbance factor [-] (MMM Fig 4-7; 0 undisturbed, 1 heavily blasted)
+    //   sig_psi the confining stress at which dilatancy has died out [kPa] (MMM Eq 4-13; the
+    //           dilatancy angle itself is the shared psi, its value at sigma'_3 = 0)
+    double sig_ci = 50000.0;
+    double mi = 10.0;
+    double gsi = 50.0;
+    double hb_D = 0.0;
+    double sig_psi = 0.0;
 
     // Groundwater — permeability (PLAXIS Groundwater tab; used by seepage/consolidation/flow).
     // Default ≈ a fine-medium sand, ~1 m/day ≈ 1.2e-5 m/s (Das, Principles of Geotech. Eng., Table 7.1).
