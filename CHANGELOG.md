@@ -6,6 +6,48 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### Axisymmetric ground may now have water in it
+
+An axisymmetric model with a water table was refused — *use plane strain, or remove the water
+table* — which closed every circular problem that has groundwater in it: the tank, the silo, the
+shaft, the circular footing, the pile load test. It now runs.
+
+What was missing was two assemblies and **one term inside one of them**. The K0 seed was already
+effective-stress and already set the hoop; the phreatic body force only needed its r weight. The
+pore-pressure load needed something the plane-strain version has no place for: in plane strain the
+load is ∫Bᵀ(u·m)dA with m = [1, 1, 0] and the out-of-plane direction carries no equation, but in
+axisymmetry the strain has four components, the hoop is a real strain with a real equation, and
+pore pressure is isotropic — so **m = [1, 1, 0, 1]**, and the hoop term lands on the *radial*
+degree of freedom beside ∂N/∂r. A careful-looking copy of the plane-strain function would drop it,
+and dropping it produces no error message and no obviously wrong picture.
+
+So the test is built on the identity it breaks. A K0 state is a state of equilibrium, so the
+internal force of the seeded stresses must equal the phreatic body force plus the pore load — and
+that is algebra, not a solution. Measured on the assembled vectors:
+
+| | residual | without the hoop term |
+|---|---|---|
+| 6-noded | 5.26e-03 | 3.04e-01 (58×) |
+| 15-noded | **8.13e-13** | 3.07e-01 (4e+11×) |
+
+The identity returns to round-off the moment the quadrature can integrate it — the r weight makes
+the radial integrand a degree higher than the plane-strain one, and the 3-point rule of the
+6-noded triangle cannot take a cubic exactly, which the driver already knew and is why it refuses
+to read a nil-step from an assembled axisymmetric imbalance. That is what tells the tri6 residue
+apart from an imbalance, and it is what makes the hoop term worth eleven orders rather than a
+correction.
+
+End to end, the same cylinder gives the buoyant effective stresses and the hydrostatic pore
+pressure at every depth, and **lowering its water table by 3 m settles it 4.171531e-03 m against a
+closed form of 4.173557e-03 m (−0.05%)** while moving radially by 0.08% of that. The K0 phase's own
+displacement is deliberately *not* asserted: on level ground with a level table nothing is ramped,
+so a zero there is arithmetic rather than evidence (`KV-CST-013`).
+
+Structural elements in axisymmetry are still refused, and the message now says why it is not a
+matter of effort: a plate in axisymmetry is a shell with a hoop membrane force and an anchor is a
+ring, so they are different elements rather than the same ones integrated differently.
+
+
 ### The wall can stay in the ground while the ground consolidates
 
 A consolidation phase used to be soil-only: any structural element made it refuse, so the analysis

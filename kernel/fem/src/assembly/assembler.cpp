@@ -354,6 +354,71 @@ void assemble_axisym_gravity_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     }
 }
 
+// Axisymmetric phreatic gravity: assemble_gravity_phreatic_impl with the r weight (the only
+// difference; see the header).
+template <class E>
+void assemble_axisym_gravity_phreatic_impl(const mesh::Mesh& mesh, const DofMap& dofs,
+                                           const std::vector<double>& gamma_unsat,
+                                           const std::vector<double>& gamma_sat,
+                                           const std::function<double(double)>& water_table_y,
+                                           Eigen::VectorXd& rhs,
+                                           const std::vector<char>& active_element) {
+    typename E::NodeCoords coords;
+    std::array<int, E::kDofCount> element_dofs;
+    for (int e = 0; e < mesh.element_count; ++e) {
+        if (!active_element.empty() && !active_element[e]) continue;
+        const int mat = mesh.element_material[e];
+        const double g_unsat = gamma_unsat[mat], g_sat = gamma_sat[mat];
+        if (g_unsat == 0.0 && g_sat == 0.0) continue;
+        gather_element<E>(mesh, dofs, e, coords, element_dofs);
+        for (const auto& gp : E::gauss_points()) {
+            const typename E::ShapeValues n = E::shape_functions(gp.xi, gp.eta);
+            const auto dn = E::shape_derivatives_natural(gp.xi, gp.eta);
+            const Eigen::Matrix2d jacobian = dn.transpose() * coords;
+            double r = 0.0, z = 0.0;
+            for (int i = 0; i < E::kNodeCount; ++i) { r += n(i) * coords(i, 0); z += n(i) * coords(i, 1); }
+            const double gamma = (z <= water_table_y(r)) ? g_sat : g_unsat;
+            if (gamma == 0.0) continue;
+            const double w_det_r = gp.weight * jacobian.determinant() * r;
+            for (int i = 0; i < E::kNodeCount; ++i) {
+                const int eq = dofs.equation(element_dofs[2 * i + 1]);  // u_z
+                if (eq >= 0) rhs[eq] += -gamma * w_det_r * n(i);
+            }
+        }
+    }
+}
+
+// Axisymmetric pore-pressure load: f += integral B^T (u m) r dA, m = [1, 1, 0, 1]. The hoop row
+// of B is N_i/r, so its contribution to the RADIAL dof is u N_i (w detJ) -- the r cancels. See
+// the header for why leaving it out is the trap this function exists to avoid.
+template <class E>
+void assemble_axisym_pore_load_impl(const mesh::Mesh& mesh, const DofMap& dofs,
+                                    const std::function<double(double, double)>& pore,
+                                    Eigen::VectorXd& rhs,
+                                    const std::vector<char>& active_element) {
+    typename E::NodeCoords coords;
+    std::array<int, E::kDofCount> element_dofs;
+    for (int e = 0; e < mesh.element_count; ++e) {
+        if (!active_element.empty() && !active_element[e]) continue;
+        gather_element<E>(mesh, dofs, e, coords, element_dofs);
+        for (const auto& gp : E::gauss_points()) {
+            const auto g = axisym::strain_displacement<E>(coords, gp.xi, gp.eta);
+            const typename E::ShapeValues n = E::shape_functions(gp.xi, gp.eta);
+            double r = 0.0, z = 0.0;
+            for (int i = 0; i < E::kNodeCount; ++i) { r += n(i) * coords(i, 0); z += n(i) * coords(i, 1); }
+            const double u = pore(r, z);
+            if (u == 0.0) continue;
+            const double w = gp.weight * g.det_jacobian * g.radius * u;
+            for (int i = 0; i < E::kNodeCount; ++i) {
+                const int er = dofs.equation(element_dofs[2 * i]);
+                const int ez = dofs.equation(element_dofs[2 * i + 1]);
+                if (er >= 0) rhs[er] += w * (g.B(0, 2 * i) + g.B(3, 2 * i));   // eps_r AND eps_theta
+                if (ez >= 0) rhs[ez] += w * g.B(1, 2 * i + 1);                 // eps_z
+            }
+        }
+    }
+}
+
 // Axisymmetric consistent nodal internal force F = integral B^T sigma * (w detJ r); sigma carries the
 // hoop component sigma_theta = GaussState::stress_zz (B's 4th row couples it to the radial DOF).
 template <class E>
@@ -466,6 +531,30 @@ void assemble_axisym_stiffness(const mesh::Mesh& mesh, const DofMap& dofs,
         assemble_axisym_stiffness_impl<Tri15Element>(mesh, dofs, materials, builder);
     else
         assemble_axisym_stiffness_impl<Tri6Element>(mesh, dofs, materials, builder);
+}
+
+void assemble_axisym_gravity_phreatic(const mesh::Mesh& mesh, const DofMap& dofs,
+                                      const std::vector<double>& gamma_unsat,
+                                      const std::vector<double>& gamma_sat,
+                                      const std::function<double(double)>& water_table_y,
+                                      Eigen::VectorXd& rhs,
+                                      const std::vector<char>& active_element) {
+    if (mesh.nodes_per_element == Tri15Element::kNodeCount)
+        assemble_axisym_gravity_phreatic_impl<Tri15Element>(mesh, dofs, gamma_unsat, gamma_sat,
+                                                            water_table_y, rhs, active_element);
+    else
+        assemble_axisym_gravity_phreatic_impl<Tri6Element>(mesh, dofs, gamma_unsat, gamma_sat,
+                                                           water_table_y, rhs, active_element);
+}
+
+void assemble_axisym_pore_pressure_load(const mesh::Mesh& mesh, const DofMap& dofs,
+                                        const std::function<double(double, double)>& pore,
+                                        Eigen::VectorXd& rhs,
+                                        const std::vector<char>& active_element) {
+    if (mesh.nodes_per_element == Tri15Element::kNodeCount)
+        assemble_axisym_pore_load_impl<Tri15Element>(mesh, dofs, pore, rhs, active_element);
+    else
+        assemble_axisym_pore_load_impl<Tri6Element>(mesh, dofs, pore, rhs, active_element);
 }
 
 void assemble_pore_pressure_load(const mesh::Mesh& mesh, const DofMap& dofs,

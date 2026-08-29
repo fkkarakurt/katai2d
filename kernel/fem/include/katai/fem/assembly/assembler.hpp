@@ -142,6 +142,32 @@ void assemble_axisym_gravity(const mesh::Mesh& mesh, const DofMap& dofs,
                              const std::vector<double>& unit_weight, Eigen::VectorXd& rhs,
                              const std::vector<char>& active_element = {});
 
+// Axisymmetric phreatic (water-table-aware) body force: the r-weighted twin of
+// assemble_gravity_phreatic -- γ_sat below the water table, γ_unsat above, f_z += -γ ∫ N_i r dA.
+// The ONLY difference from the plane-strain function is the r in the weight; everything the
+// water table decides is decided identically, so a model that is dry gives the same answer as
+// assemble_axisym_gravity to round-off.
+void assemble_axisym_gravity_phreatic(const mesh::Mesh& mesh, const DofMap& dofs,
+                                      const std::vector<double>& gamma_unsat,
+                                      const std::vector<double>& gamma_sat,
+                                      const std::function<double(double)>& water_table_y,
+                                      Eigen::VectorXd& rhs,
+                                      const std::vector<char>& active_element = {});
+
+// Axisymmetric predefined pore-pressure load: f += ∫ Bᵀ (u·m) r dA.
+//
+// THE ONE THING THAT IS NOT A COPY. In plane strain m = [1, 1, 0]: the pore pressure acts on
+// ε_r and ε_z and the out-of-plane direction carries no equation. In axisymmetry the strain has
+// FOUR components, [ε_r, ε_z, γ_rz, ε_θ], and the hoop is a real strain with a real equation --
+// pore pressure is isotropic, so m = [1, 1, 0, 1] and the hoop term ∫ u (N_i/r) r dA = ∫ u N_i dA
+// lands on the RADIAL degree of freedom alongside ∂N/∂r. Dropping it is not a small error and it
+// is not a visible one: the K0 state stops being in equilibrium and the ground moves radially
+// under its own water (pinned as an identity in KV-CST-013).
+void assemble_axisym_pore_pressure_load(const mesh::Mesh& mesh, const DofMap& dofs,
+                                        const std::function<double(double, double)>& pore,
+                                        Eigen::VectorXd& rhs,
+                                        const std::vector<char>& active_element = {});
+
 // Axisymmetric consistent nodal internal force: F += ∫ Bᵀ σ r dA (σ including the hoop =
 // GaussState::stress_zz). For the K0 procedure's geostatic baseline (constant_force). The
 // r-weighted/4-component counterpart of the plane-strain assemble_internal_force.

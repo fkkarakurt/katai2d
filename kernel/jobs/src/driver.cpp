@@ -1455,17 +1455,22 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         if (katai::core::build_structural_init(ps, structures, dofs, carry_init)) carry_src = &ps;
     }
 
-    // Axisymmetric (v1) scope: soil-only, dry, no structural elements. Guard the unsupported
-    // combinations honestly rather than silently producing a wrong (plane-strain) result for them.
+    // Axisymmetric scope: soil-only. A WATER TABLE is now carried -- the r-weighted phreatic
+    // body force and the pore-pressure load with its hoop term (assembler.hpp), on top of a K0
+    // seed that was already effective-stress and already set the hoop -- so the tank, the silo
+    // and the circular footing on saturated ground are reachable. What is still missing is
+    // refused rather than silently integrated as plane strain.
     if (axi) {
         const bool has_structs =
             !structures.plates.empty() || !structures.plates5.empty() || !structures.anchors.empty() ||
             !structures.geogrids.empty() || !structures.interfaces.empty() ||
             !structures.interfaces5.empty() || !structures.embedded_beams.empty();
-        if (water) { R.message = "Axisymmetric analysis with a water table is not supported yet "
-                                 "(use plane strain, or remove the water table)."; return R; }
         if (has_structs) { R.message = "Structural elements are not supported in axisymmetric mode yet "
-                                       "(soil-only). Use plane strain for walls/anchors/plates."; return R; }
+                                       "(soil-only). A plate in axisymmetry is a shell with a HOOP "
+                                       "membrane force and an anchor is a ring, so they are different "
+                                       "elements rather than the same ones integrated differently -- "
+                                       "which is why this is refused instead of approximated. Use "
+                                       "plane strain for walls/anchors/plates."; return R; }
     }
 
     // Staged-phase scope guards: the static path below is axisymmetric-aware end to end
@@ -1545,13 +1550,22 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     } else if (water) {
         // Total-stress equilibrium: saturated weight below the phreatic surface, moist above.
         const auto wt = [&pr, &io](double x) { return water_table_at(pr, x, io.config); };
-        katai::core::assemble_gravity_phreatic(mesh, dofs, gamma, gamma_sat, wt, f, act);
         // Hydrostatic pore-pressure load -> recovered stress is EFFECTIVE (Terzaghi; buoyancy
         // gamma' = gamma_sat - gamma_w emerges naturally). docs/references/effective-stress-formulation.md.
         const auto pore = [&pr, &io](double x, double y) {
             return kGammaWater * std::fmax(0.0, water_table_at(pr, x, io.config) - y);
         };
-        katai::core::assemble_pore_pressure_load(mesh, dofs, pore, f, pore_mask);
+        if (axi) {
+            // The same two terms, r-weighted, and the pore load carrying the HOOP component the
+            // plane-strain one has no equation for (assembler.hpp). Everything the water table
+            // decides is decided by the same lambdas, so the two modes cannot drift apart in
+            // where the water is -- only in how the integral is weighted.
+            katai::core::assemble_axisym_gravity_phreatic(mesh, dofs, gamma, gamma_sat, wt, f, act);
+            katai::core::assemble_axisym_pore_pressure_load(mesh, dofs, pore, f, pore_mask);
+        } else {
+            katai::core::assemble_gravity_phreatic(mesh, dofs, gamma, gamma_sat, wt, f, act);
+            katai::core::assemble_pore_pressure_load(mesh, dofs, pore, f, pore_mask);
+        }
     } else if (axi) {
         katai::core::assemble_axisym_gravity(mesh, dofs, gamma, f);   // r-weighted body force
     } else {

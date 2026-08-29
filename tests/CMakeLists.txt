@@ -105,6 +105,7 @@ katai_add_test(test_gui_solve katai::jobs katai::mesh katai::analysis katai::mod
 katai_add_test(test_anchor_mesh_repro katai::jobs katai::mesh katai::analysis katai::model)  # regression: an anchor does not corrupt the mesh (nearest node)
 katai_add_test(test_constitutive katai::jobs katai::mesh katai::analysis katai::model)  # the GUI constitutive model is genuinely in effect, LE/MC/HS
 katai_add_test(test_axisym_gui katai::jobs katai::mesh katai::analysis katai::model)  # Axisymmetric GUI path: K0 + r-weighted gravity/traction + radial hoop
+katai_add_test(test_axisym_water katai::jobs katai::mesh katai::analysis katai::model katai::fem katai::geometry)  # Water table in axisymmetric mode: the K0 equilibrium identity and the HOOP pore term (KV-CST-013)
 katai_add_test(test_gui_matrix katai::jobs katai::mesh katai::analysis katai::model)  # Systematic: structures x load x water x model x tri6/tri15 invariants
 katai_add_test(test_safety_gui katai::jobs katai::mesh katai::analysis katai::model)  # Safety (phi-c reduction) GUI path: slope FoS + collapse mechanism
 katai_add_test(test_k0_slope katai::jobs katai::mesh katai::analysis katai::model)    # K0 nil-step equilibrium on a sloping surface (horizontal = exact u0; a real redistribution on the slope)
