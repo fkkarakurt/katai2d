@@ -25,6 +25,7 @@
 #include <katai/analysis/hydraulic_boundary.hpp>
 #include <katai/analysis/post/consolidation_recovery.hpp>
 #include <katai/analysis/post/stress_recovery.hpp>
+#include <katai/analysis/phase_solver/coupled_structures.hpp>  // the shared structural report
 #include <katai/analysis/results.hpp>
 #include <katai/fem/assembly/dof_map.hpp>
 #include <katai/materials/material_model.hpp>
@@ -56,6 +57,16 @@ struct FullyCoupledPhase {
     // which is exactly what this solver's drained-node mask means, so a drain enters here rather
     // than as a new kind of boundary condition.
     std::vector<int> drain_nodes;
+    // The same three things the consolidation twin takes, and for the same reasons
+    // (phase_solver/consolidation.hpp): the structural system, the joints to report, the parent's
+    // displacement datum, plus what the water does at a split seam.
+    bool has_embedded_beams = false;
+    bool has_semi_permeable_interface = false;
+    const Structures* structures = nullptr;
+    const std::vector<DiagSpec>* diagrams = nullptr;
+    const std::vector<IfaceDiag>* iface_diagrams = nullptr;
+    const Eigen::VectorXd* carry_full = nullptr;
+    const std::vector<int>* pore_tie = nullptr;
     bool has_structural_elements = false;               // plates/anchors/geogrids/walls/embedded present
     double duration_day = 1.0;                          // <= 0 falls back to 1 day
     int time_steps = 25;                                // clamped to [1, 2000]
@@ -74,12 +85,24 @@ inline bool solve_fully_coupled_phase(
     const FullyCoupledPhase& in,
     const ConsolidationSolveFactory& le_factory, const ConsolidationSolveFactory& plastic_factory,
     SolveResult& R, std::vector<GaussState>& committed_out) {
-    if (in.has_structural_elements) {
-        R.message = "Fully-coupled flow-deformation is soil-only: structural elements do not "
-                    "take part in this phase yet. A CONSOLIDATION phase does carry plates, "
-                    "anchors and geogrids (the same coupled system, without the unsaturated "
-                    "retention this phase adds), so a staged excavation whose water table is not "
-                    "changing can be run there; otherwise use a Plastic phase for the structure.";
+    // The same three cases as the consolidation twin, refused for the same reasons -- the
+    // arguments are written out there (phase_solver/consolidation.hpp) and are not repeated here,
+    // because they are the same arguments and not two.
+    if (in.has_semi_permeable_interface) {
+        R.message = "A semi-permeable interface (cross permeability with a hydraulic resistance) "
+                    "is in this fully-coupled phase. That is a conductance across the joint -- it "
+                    "passes q = dh / R per unit area -- and this solver carries only the two ends "
+                    "of that scale, fully permeable and impermeable. Set the interface to one of "
+                    "those, or run the stage as a Plastic phase with a groundwater-flow field, "
+                    "which does read the resistance.";
+        return false;
+    }
+    if (in.has_embedded_beams) {
+        R.message = "This fully-coupled phase contains an embedded beam (pile row). Its skin and "
+                    "foot resistance follow the EFFECTIVE stress around the pile, which this "
+                    "phase is changing throughout, so the elastic springs it would use are not "
+                    "the pile's behaviour here. Use a Plastic phase for the pile, or remove it "
+                    "from the stage.";
         return false;
     }
     const size_t nmat = in.materials.size();
@@ -160,6 +183,27 @@ inline bool solve_fully_coupled_phase(
         flow_drained_nodes(in.flow_edges, in.have_flow_bcs, mesh, in.active, in.yscale);
     for (int n : in.drain_nodes)
         if (n >= 0 && n < mesh.node_count) drained[n] = 1;
+    // Two nodes that share a pore pressure share its boundary condition (see the consolidation
+    // twin: a permeable joint is one pressure, so it is one condition).
+    if (in.pore_tie)
+        for (int n = 0; n < mesh.node_count; ++n) {
+            const int rep = (*in.pore_tie)[n];
+            if (rep >= 0 && rep < mesh.node_count && (drained[n] || drained[rep]))
+                drained[n] = drained[rep] = 1;
+        }
+
+    // The structural elements' elastic stiffness, assembled once with the shared assembler -- the
+    // same function, the same element matrices and the same DOF mapping the static path uses.
+    math::CsrMatrix struct_k_storage;
+    const math::CsrMatrix* struct_k = nullptr;
+    if (in.structures && (!in.structures->plates.empty() || !in.structures->plates5.empty() ||
+                          !in.structures->anchors.empty() || !in.structures->geogrids.empty() ||
+                          !in.structures->interfaces.empty() || !in.structures->interfaces5.empty())) {
+        math::SparseMatrixBuilder kb(dofs.equation_count());
+        assemble_structural_stiffness(mesh, dofs, *in.structures, kb);
+        struct_k_storage = kb.build();
+        struct_k = &struct_k_storage;
+    }
 
     // Time stepping from the phase duration / step count.
     const double duration = in.duration_day > 0.0 ? in.duration_day : 1.0;
@@ -182,7 +226,7 @@ inline bool solve_fully_coupled_phase(
         // committed effective stresses (`init`) seed the state; dF drives it.
         cfp = solve_coupled_flow_deformation_plastic(mesh, dofs, models, cperm, ret,
             poros, kGammaWater, kw_over_n, drained, init, p0, dt, nsteps, in.active, &dF,
-            plastic_factory, 40, 1e-6, profiles);
+            plastic_factory, 40, 1e-6, profiles, struct_k, in.pore_tie);
         if (!cfp.converged || cfp.series.displacement.empty()) {
             R.message = "Fully-coupled flow-deformation did not converge in a time step (the load "
                         "increment may exceed the soil capacity, or the time step is too large -- "
@@ -194,7 +238,7 @@ inline bool solve_fully_coupled_phase(
     } else {
         cfr = solve_coupled_flow_deformation(mesh, dofs, models, cperm, ret, poros,
             kGammaWater, kw_over_n, drained, p0, dt, nsteps, in.active, &dF, le_factory,
-            /*max_picard=*/40, /*picard_tol=*/1e-7, profiles);
+            /*max_picard=*/40, /*picard_tol=*/1e-7, profiles, struct_k, in.pore_tie);
         if (!cfr.converged || cfr.series.displacement.empty()) {
             R.message = "Fully-coupled flow-deformation did not converge in a time step (reduce the "
                         "load increment or use more, smaller time steps).";
@@ -221,6 +265,14 @@ inline bool solve_fully_coupled_phase(
     // existed only as a maximum per step.
     R.excess_pore.assign(mesh.node_count, 0.0);
     for (int n = 0; n < mesh.node_count; ++n) R.excess_pore[n] = series->pore.back()(n);
+    // The structures, through the one function that reports them for both coupled phases.
+    if (in.structures) {
+        Eigen::VectorXd disp_total = series->displacement.back();
+        if (in.carry_full && in.carry_full->size() == disp_total.size())
+            disp_total += *in.carry_full;
+        report_coupled_structures(*in.structures, in.diagrams, in.iface_diagrams, mesh, dofs,
+                                  disp_total, R);
+    }
     R.disp = series->displacement.back().head(mesh.node_count * 2);
     R.stress = recover_nodal_stresses_from_gauss(mesh, committed, in.active);
     if (sat_series && !sat_series->empty()) {

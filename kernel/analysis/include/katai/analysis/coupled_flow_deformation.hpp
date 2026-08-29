@@ -54,6 +54,13 @@ struct CoupledFlowResult {
 // t=0+; `active` staged mask; `solve_factory` sym-indefinite (mtype=-2) factor-once-solve-many,
 // empty = dense LU (reference). In the saturated limit reduces to solve_consolidation
 // BIT-FOR-BIT. Definition in kernel/analysis/src/coupled_flow_deformation.cpp (section 5.2).
+// STRUCTURAL STIFFNESS AND TIED SEAM PORE DOFs. `struct_k` and `pore_tie` mean exactly what they
+// mean in katai/analysis/consolidation.hpp, and are handled here the same way: a structure enters
+// the mechanical block as a matrix (this core knows soil, water, suction and time, and nothing
+// about plates), and an interface's split seam carries one pore equation or two according to its
+// cross permeability. Both null = no structures, and every arithmetic operation is BIT-FOR-BIT
+// what it was. What differs from the consolidation twin is only what this phase adds on its own:
+// the retention curve and Bishop's chi, which the structure does not see and which do not see it.
 CoupledFlowResult solve_coupled_flow_deformation(
     const mesh::Mesh& mesh, const DofMap& dofs, const std::vector<MaterialModel>& materials,
     const std::vector<Permeability>& perm, const std::vector<WaterRetention>& retention,
@@ -63,7 +70,9 @@ CoupledFlowResult solve_coupled_flow_deformation(
     const Eigen::VectorXd* load_increment = nullptr,
     const ConsolidationSolveFactory& solve_factory = {},
     int max_picard = 50, double picard_tol = 1e-10,
-    const std::vector<MaterialProfile>& profile = {});
+    const std::vector<MaterialProfile>& profile = {},
+    const math::CsrMatrix* struct_k = nullptr,
+    const std::vector<int>* pore_tie = nullptr);
 
 // --- ELASTOPLASTIC (MC/HS) FULLY-COUPLED FLOW-DEFORMATION (W3 follow-up) ------------------------
 // The UNION of W3 (LE coupled, above) and elastoplastic consolidation (consolidation_plastic) =
@@ -109,6 +118,8 @@ CoupledFlowPlasticResult solve_coupled_flow_deformation_plastic(
     const std::vector<char>& active = {}, const Eigen::VectorXd* load_increment = nullptr,
     const ConsolidationSolveFactory& solve_factory = {},
     int max_newton = 40, double newton_tol = 1e-6,
-    const std::vector<MaterialProfile>& profile = {});
+    const std::vector<MaterialProfile>& profile = {},
+    const math::CsrMatrix* struct_k = nullptr,
+    const std::vector<int>* pore_tie = nullptr);
 
 }  // namespace katai::core

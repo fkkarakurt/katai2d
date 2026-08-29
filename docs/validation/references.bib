@@ -277,6 +277,11 @@
 }
 
 @misc{theg,
+  title = {the saturated limit of the fully-coupled (unsaturated Biot + Bishop) formulation is the consolidation (saturated Biot) formulation -- kernel/analysis/coupled_flow_deformation.hpp states the reduction and test_coupled_flow measures it for soil alone; here the same reduction is asked for with a structure in the system. The drained limit is the one KV-STR-006 uses: once the excess pore pressure is gone, the coupled problem IS the drained problem, which solve_nonlinear solves by a different path},
+  note  = {cited by KV-STR-008},
+}
+
+@misc{theh,
   title = {the tension cut-off as specified in the PLAXIS 2D Material Models Manual sec 3.2 (Eq. 3-11) and sec 3.3.10: three additional yield functions f4 = sigma'1 - sigma_t <= 0, f5 = sigma'2 - sigma_t <= 0, f6 = sigma'3 - sigma_t <= 0, for which "an associated flow rule is adopted", with sigma_t taken equal to zero by default. That the Hardening Soil family carries it too is the manual's own statement: its parameter table lists "sigma_t Tension cut-off and tensile strength" under "failure parameters as in Mohr-Coulomb model", and the models that genuinely lack one (NGI-ADP, UDCAM-S) are named as lacking it},
   note  = {cited by KV-CST-011},
 }

@@ -6,6 +6,29 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### The last coupled family carries the structure too
+
+A wall could stand in the ground while the pore pressure dissipated, but not while the water table
+moved: the consolidation phase carried plates, anchors, geogrids and interfaces, and the
+fully-coupled phase refused all of it. That is not a distinction the physics makes, and it is not
+one the two solvers make either — they take the same structural stiffness and the same tied seam
+pore equations, and differ only in what the fully-coupled phase adds on its own (the retention
+curve and Bishop's chi, which the structure neither sees nor is seen by).
+
+**The oracle is that sameness, measured.** The fully-coupled core reduces to the consolidation core
+in the saturated limit, so the same model with the same raft, run once each way, must give one
+answer: settlement **4.50097547e-02 m from both (+0.00000%)** and a raft moment of **21.621032
+kNm/m from both** — and from the drained Plastic phase they both end in. That is what a reduction
+should look like: the two solvers are running the same system, and what separates them is their own
+iteration, a Picard fixed point against a Newton one, which here separates them by nothing
+measurable (`KV-STR-008`).
+
+The three findings the elastic structural branch owes the reader — a plate or anchor past its
+capacity, a geogrid pushed into compression, an interface past its Coulomb capacity — are now
+written **once** and called by both phases rather than copied into the second one. Two copies of a
+statement are two statements, and one of them decays first.
+
+
 ### The wall may keep its interfaces while the ground consolidates
 
 The previous increment let plates, anchors and geogrids into a consolidation phase and refused

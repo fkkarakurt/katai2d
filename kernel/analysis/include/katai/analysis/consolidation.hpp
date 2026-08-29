@@ -68,6 +68,36 @@ inline double consolidation_eta(const mesh::Mesh& mesh) {
     return mesh.nodes_per_element == 15 ? 80.0 : 40.0;
 }
 
+namespace detail {
+
+// Pore-equation numbering, with the seam ties of the header applied. Representatives are numbered
+// first so a tied node always finds its own equation already assigned, whichever order the mesh
+// splitter appended the duplicates in. Returns the equation count.
+inline int number_pore_equations(int node_count, const std::vector<char>& drained_node,
+                                 const std::vector<int>* tie, std::vector<int>& pore_eq) {
+    pore_eq.assign(node_count, -1);
+    const auto rep_of = [&](int n) {
+        return (tie && (*tie)[n] >= 0 && (*tie)[n] < node_count) ? (*tie)[n] : n;
+    };
+    int npore = 0;
+    for (int n = 0; n < node_count; ++n)
+        if (!drained_node[n] && rep_of(n) == n) pore_eq[n] = npore++;
+    for (int n = 0; n < node_count; ++n)
+        if (!drained_node[n] && rep_of(n) != n) pore_eq[n] = pore_eq[rep_of(n)];
+    return npore;
+}
+
+// Add a caller-supplied stiffness contribution to the MECHANICAL block of a coupled builder.
+// The pore equations are offset past it, so the row/column indices of `k` land where they mean.
+inline void add_structural_block(math::SparseMatrixBuilder& b, const math::CsrMatrix* k) {
+    if (!k) return;
+    for (math::Index r = 0; r < k->rows; ++r)
+        for (math::Index i = k->row_ptr[r]; i < k->row_ptr[r + 1]; ++i)
+            b.add_entry((int)r, (int)k->col_indices[i], k->values[i]);
+}
+
+}  // namespace detail
+
 struct ConsolidationResult {
     std::vector<double> times;                 // time of every step
     std::vector<Eigen::VectorXd> displacement; // full DOF displacement per step (total_dofs)

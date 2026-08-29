@@ -15,15 +15,14 @@ CoupledFlowResult coupled_flow_impl(
     const std::vector<double>& porosity, double gamma_w, double kw_over_n,
     const std::vector<char>& drained_node, const std::vector<double>& initial_pore,
     double dt, int nsteps, const std::vector<char>& active, const Eigen::VectorXd* load_increment,
-    const ConsolidationSolveFactory& solve_factory, int max_picard, double picard_tol) {
+    const ConsolidationSolveFactory& solve_factory, int max_picard, double picard_tol,
+    const math::CsrMatrix* struct_k, const std::vector<int>* pore_tie) {
     constexpr int N = E::kNodeCount;
     constexpr int ND = 2 * N;
     const int ndisp = dofs.equation_count();
 
-    std::vector<int> pore_eq(mesh.node_count, -1);
-    int npore = 0;
-    for (int n = 0; n < mesh.node_count; ++n)
-        if (!drained_node[n]) pore_eq[n] = npore++;
+    std::vector<int> pore_eq;
+    const int npore = number_pore_equations(mesh.node_count, drained_node, pore_tie, pore_eq);
     const int NT = ndisp + npore;
     const auto gp = E::gauss_points();
     const Eigen::Vector3d mvec(1.0, 1.0, 0.0);
@@ -153,6 +152,9 @@ CoupledFlowResult coupled_flow_impl(
             math::SparseMatrixBuilder Ab(NT), Hb(std::max(1, npore));
             Ab.reserve((std::size_t)mesh.element_count * (3 * N) * (3 * N));
             assemble(to_full_pore(p_new), Ab, Hb);
+            // The structural elements' elastic stiffness into the SAME mechanical block as the
+            // soil's (consolidation.hpp: it arrives as a matrix, not as a system).
+            add_structural_block(Ab, struct_k);
             const math::CsrMatrix A = Ab.build();
             const math::CsrMatrix Hc = Hb.build();
             Eigen::VectorXd rhs = Eigen::VectorXd::Zero(NT);
@@ -198,14 +200,15 @@ CoupledFlowResult solve_coupled_flow_deformation(
     const Eigen::VectorXd* load_increment,
     const ConsolidationSolveFactory& solve_factory,
     int max_picard, double picard_tol,
-    const std::vector<MaterialProfile>& profile) {
+    const std::vector<MaterialProfile>& profile, const math::CsrMatrix* struct_k,
+    const std::vector<int>* pore_tie) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::coupled_flow_impl<Tri15Element>(mesh, dofs, materials, profile, perm, retention,
             porosity, gamma_w, kw_over_n, drained_node, initial_pore, dt, nsteps, active, load_increment,
-            solve_factory, max_picard, picard_tol);
+            solve_factory, max_picard, picard_tol, struct_k, pore_tie);
     return detail::coupled_flow_impl<Tri6Element>(mesh, dofs, materials, profile, perm, retention,
         porosity, gamma_w, kw_over_n, drained_node, initial_pore, dt, nsteps, active, load_increment,
-        solve_factory, max_picard, picard_tol);
+        solve_factory, max_picard, picard_tol, struct_k, pore_tie);
 }
 
 namespace detail {
@@ -218,16 +221,15 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
     const std::vector<char>& drained_node, const std::vector<GaussState>& initial_state,
     const std::vector<double>& initial_pore, double dt, int nsteps, const std::vector<char>& active,
     const Eigen::VectorXd* load_increment, const ConsolidationSolveFactory& solve_factory,
-    int max_newton, double newton_tol) {
+    int max_newton, double newton_tol,
+    const math::CsrMatrix* struct_k, const std::vector<int>* pore_tie) {
     constexpr int N = E::kNodeCount;
     constexpr int ND = 2 * N;
     const int ndisp = dofs.equation_count();
     const int ngp = E::kGaussCount;
 
-    std::vector<int> pore_eq(mesh.node_count, -1);
-    int npore = 0;
-    for (int n = 0; n < mesh.node_count; ++n)
-        if (!drained_node[n]) pore_eq[n] = npore++;
+    std::vector<int> pore_eq;
+    const int npore = number_pore_equations(mesh.node_count, drained_node, pore_tie, pore_eq);
     const int NT = ndisp + npore;
 
     std::vector<GaussState> committed = initial_state;
@@ -391,6 +393,10 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
             Ab.reserve((std::size_t)mesh.element_count * (3 * N) * (3 * N));
             Eigen::VectorXd f_int;
             assemble(dv, to_full_pore(p + dpv), Ab, Hb, Lb, f_int, tmode);   // coefficients at p+dp (Picard lag)
+            // Linear structures: their internal force is K_s.dv exactly, so it goes into BOTH the
+            // tangent and f_int -- the same argument as the consolidation twin.
+            add_structural_block(Ab, struct_k);
+            if (struct_k) f_int.noalias() += (*struct_k) * dv;
             const math::CsrMatrix A = Ab.build();
             Eigen::VectorXd r = Eigen::VectorXd::Zero(NT);
             r.head(ndisp) = df - (f_int - Bbase);
@@ -436,14 +442,15 @@ CoupledFlowPlasticResult solve_coupled_flow_deformation_plastic(
     const std::vector<char>& active, const Eigen::VectorXd* load_increment,
     const ConsolidationSolveFactory& solve_factory,
     int max_newton, double newton_tol,
-    const std::vector<MaterialProfile>& profile) {
+    const std::vector<MaterialProfile>& profile, const math::CsrMatrix* struct_k,
+    const std::vector<int>* pore_tie) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::coupled_flow_plastic_impl<Tri15Element>(mesh, dofs, materials, profile, perm,
             retention, porosity, gamma_w, kw_over_n, drained_node, initial_state, initial_pore, dt,
-            nsteps, active, load_increment, solve_factory, max_newton, newton_tol);
+            nsteps, active, load_increment, solve_factory, max_newton, newton_tol, struct_k, pore_tie);
     return detail::coupled_flow_plastic_impl<Tri6Element>(mesh, dofs, materials, profile, perm,
         retention, porosity, gamma_w, kw_over_n, drained_node, initial_state, initial_pore, dt,
-        nsteps, active, load_increment, solve_factory, max_newton, newton_tol);
+        nsteps, active, load_increment, solve_factory, max_newton, newton_tol, struct_k, pore_tie);
 }
 
 }  // namespace katai::core

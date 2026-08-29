@@ -28,7 +28,7 @@
 #include <katai/analysis/post/consolidation_recovery.hpp>
 #include <katai/analysis/post/stress_recovery.hpp>
 #include <katai/analysis/results.hpp>
-#include <katai/analysis/structural_diagrams.hpp>   // force_diagram / DiagSpec (the validated recoveries)
+#include <katai/analysis/phase_solver/coupled_structures.hpp>  // the shared structural report
 #include <katai/analysis/structural_dynamics.hpp>   // assemble_structural_stiffness (the shared assembler)
 #include <katai/fem/assembly/dof_map.hpp>
 #include <katai/materials/material_model.hpp>
@@ -541,148 +541,15 @@ inline bool solve_consolidation_phase(
     R.load_factor = 1.0;
     R.iterations = steps_done;
 
-    // Structural force diagrams, from the TOTAL displacement (the parent's datum plus this
-    // phase's increment) through the same validated recoveries the static phase uses. `elastic`
-    // is true because that is what this phase solved: the structural branch here carries no
-    // plastic state, so recovering it as if it did would report a cap that was never applied.
-    if (in.structures && ((in.diagrams && !in.diagrams->empty()) ||
-                          (in.iface_diagrams && !in.iface_diagrams->empty()))) {
+    // The structures, reported by the one function that reports them for both coupled phases
+    // (phase_solver/coupled_structures.hpp): the diagrams from the TOTAL displacement -- this
+    // phase's increment plus the parent's datum, because structural elements are
+    // total-displacement formulated -- and the three findings the elastic branch owes the reader.
+    if (in.structures) {
         Eigen::VectorXd disp_total = v_total;
         if (in.carry_full && in.carry_full->size() == v_total.size()) disp_total += *in.carry_full;
-        int over = 0;
-        std::string over_note;
-        int slack = 0;
-        std::string slack_note;
-        for (const auto& sp : (in.diagrams ? *in.diagrams : std::vector<DiagSpec>{})) {
-            StructForce d = force_diagram(sp, *in.structures, mesh, dofs, disp_total, {}, {},
-                                          /*elastic=*/true);
-            const auto env = force_envelope(d.stations);
-            d.max_N = env.max_abs_N; d.max_Q = env.max_abs_Q; d.max_M = env.max_abs_M;
-            // THE COST OF AN ELASTIC BRANCH, MADE VISIBLE. Nothing here capped the force at the
-            // capacity the engineer entered, so a line that has passed it is reporting a force
-            // the element could not carry -- and the redistribution that yielding would have
-            // caused did not happen anywhere else either. That is exactly the kind of limit that
-            // must not be reachable in silence, so the run says which line and by how much.
-            double util = 0.0;
-            if ((sp.kind == 0 || sp.kind == 5) && sp.begin < in.structures->plates.size() &&
-                sp.kind == 0) {
-                const auto& pp = in.structures->plates[sp.begin].props;
-                const double iN = pp.Np > 0.0 ? 1.0 / pp.Np : 0.0;
-                const double iM = pp.Mp > 0.0 ? 1.0 / pp.Mp : 0.0;
-                for (const auto& st : d.stations)
-                    util = std::fmax(util, std::fabs(st.N) * iN + std::fabs(st.M) * iM);
-            } else if (sp.kind == 1 && sp.begin < in.structures->anchors.size()) {
-                const auto& an = in.structures->anchors[sp.begin];
-                // The element's cap is per metre of wall and the diagram is per anchor, so the
-                // comparison is made in the diagram's units (the audit finding behind DiagSpec).
-                const double ft = an.Fmax_tens > 0.0 ? an.Fmax_tens * sp.anchor_spacing : 0.0;
-                const double fc = an.Fmax_comp > 0.0 ? an.Fmax_comp * sp.anchor_spacing : 0.0;
-                for (const auto& st : d.stations) {
-                    if (st.N > 0.0 && ft > 0.0) util = std::fmax(util, st.N / ft);
-                    if (st.N < 0.0 && fc > 0.0) util = std::fmax(util, -st.N / fc);
-                }
-            } else if (sp.kind == 2 && sp.begin < in.structures->geogrids.size()) {
-                const double np = in.structures->geogrids[sp.begin].props.Np;
-                if (np > 0.0)
-                    for (const auto& st : d.stations) util = std::fmax(util, st.N / np);
-                // A GEOGRID IS NOT AN ELASTIC BAR, AND THE DIFFERENCE IS NOT A CAPACITY. Its
-                // defining behaviour is tension-only: in compression it goes slack and carries
-                // nothing (reversible). The elastic branch this phase solves with has no such
-                // cut, so wherever the sheet is compressed it PUSHES BACK -- it stiffens the
-                // ground where the real one would have stopped acting, which errs on the unsafe
-                // side. It is exactly measurable, so it is reported rather than declared: on the
-                // verified fixture a sheet with compressed ends came out 1.57% off the drained
-                // answer, and the same sheet kept wholly in tension came out 0.00000% off
-                // (KV-STR-006). Every station in tension = no finding at all.
-                double nmax = 0.0;
-                for (const auto& st : d.stations) nmax = std::fmax(nmax, std::fabs(st.N));
-                int comp = 0;
-                for (const auto& st : d.stations) if (st.N < -1e-6 * nmax) ++comp;
-                if (comp > 0) {
-                    ++slack;
-                    char b[160];
-                    std::snprintf(b, sizeof(b), "%s%s (%d of %d stations)",
-                                  slack > 1 ? ", " : "", d.name.c_str(), comp,
-                                  (int)d.stations.size());
-                    slack_note += b;
-                }
-            }
-            if (util > 1.0) {
-                ++over;
-                char b[160];
-                std::snprintf(b, sizeof(b), "%s%s at %.0f%% of its capacity",
-                              over > 1 ? ", " : "", d.name.c_str(), 100.0 * util);
-                over_note += b;
-                d.yielded = true;   // it would have, had this phase been able to let it
-            }
-            R.struct_forces.push_back(std::move(d));
-        }
-        // The joints, reported the way the dynamic phase reports its own elastic ones: tau,
-        // sigma_n and the Coulomb demand/capacity ratio. `slip_checked` is FALSE on purpose --
-        // this phase applied no Coulomb return, so a station marked "bonded" means "not checked",
-        // not "checked and found bonded", and a reader who cannot tell those apart will read a
-        // wall that slipped as a wall that held.
-        double iface_util = 0.0;
-        std::string iface_note;
-        if (in.iface_diagrams)
-            for (const auto& is : *in.iface_diagrams) {
-                InterfaceResult ir = force_diagram(is, *in.structures, mesh, dofs, disp_total,
-                                                   {}, {}, /*elastic=*/true);
-                ir.slip_checked = false;
-                const auto& props = (is.order == 15) ? in.structures->interfaces5[is.begin].props
-                                                     : in.structures->interfaces[is.begin].props;
-                int over_st = 0;
-                for (auto& st : ir.stations) {
-                    const double tmax = std::fmax(0.0, props.c_i - st.sigma_n * std::tan(props.phi_i));
-                    st.utilisation = tmax > 1e-12 ? std::fabs(st.tau) / tmax
-                                                  : (std::fabs(st.tau) > 1e-12 ? 100.0 : 0.0);
-                    ir.max_utilisation = std::fmax(ir.max_utilisation, st.utilisation);
-                    if (st.utilisation > 1.0) ++over_st;
-                    ir.max_abs_tau = std::fmax(ir.max_abs_tau, std::fabs(st.tau));
-                    ir.max_abs_sigma_n = std::fmax(ir.max_abs_sigma_n, std::fabs(st.sigma_n));
-                    ir.max_abs_slip = std::fmax(ir.max_abs_slip, std::fabs(st.slip));
-                }
-                if (!ir.stations.empty())
-                    ir.over_fraction = (double)over_st / (double)ir.stations.size();
-                if (ir.max_utilisation > 1.0) {
-                    iface_util = std::fmax(iface_util, ir.max_utilisation);
-                    char b[200];
-                    std::snprintf(b, sizeof(b), "%s\"%s\" at %.2fx over %.0f%% of its length",
-                                  iface_note.empty() ? "" : ", ", ir.name.c_str(),
-                                  ir.max_utilisation, 100.0 * ir.over_fraction);
-                    iface_note += b;
-                }
-                R.interface_forces.push_back(std::move(ir));
-            }
-        if (iface_util > 1.0)
-            add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A016", "interfaces",
-                           "an interface in this phase passed its Coulomb capacity: " + iface_note +
-                           ". The structural branch of a consolidation phase is ELASTIC, so the "
-                           "joint could not slip -- it carried the shear instead. A joint that "
-                           "cannot slip is STIFFER than the real one, so the wall it holds "
-                           "deflects less and attracts more load than it would: the error is on "
-                           "the unsafe side. Check the stage in a Plastic phase, where the "
-                           "Coulomb return actually runs.");
-        if (over > 0)
-            add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A014", "structures",
-                           "the structural elements in a consolidation phase are solved ELASTIC: "
-                           "no anchor yield, no geogrid tension cut-off, no plate hinge. " +
-                           over_note +
-                           " -- so those forces are larger than the elements can carry, and the "
-                           "redistribution that yielding would have caused is missing from the "
-                           "whole result, soil included. Check the capacity in a Plastic phase "
-                           "at the same stage before using these numbers.");
-        if (slack > 0)
-            add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A015", "structures",
-                           "a geogrid in this phase is in COMPRESSION over part of its length: " +
-                           slack_note +
-                           ". A geogrid carries tension only -- in compression it goes slack and "
-                           "carries nothing -- but the structural branch of a consolidation phase "
-                           "is elastic and has no such cut, so those stations pushed BACK on the "
-                           "soil instead. That stiffens the ground where the real sheet would "
-                           "have stopped acting, so the settlement here is on the unsafe side. "
-                           "Measured on the verification fixture: 1.57% on the sheet's force "
-                           "where it had compressed ends, and 0.00000% where it did not.");
+        report_coupled_structures(*in.structures, in.diagrams, in.iface_diagrams, mesh, dofs,
+                                  disp_total, R);
     }
 
     committed_out = std::move(committed);

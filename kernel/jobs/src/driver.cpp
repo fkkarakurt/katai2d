@@ -2027,6 +2027,31 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 katai::core::add_interface_sigma_n0_baseline(structures, mesh, dofs, B);
         }
 
+        // WHAT THE WATER DOES ACROSS EVERY SPLIT SEAM, read from the interface's own cross
+        // permeability rather than inherited from the fact that the mesh was split. Fully
+        // permeable (the default, and what every model written before that field said) ties
+        // the two sides to ONE pore equation; impermeable leaves the two the split produced.
+        // The seams are the mesh splitter's own pairs, so nothing here has to re-find them.
+        std::vector<int> pore_tie(mesh.node_count, -1);
+        bool semi_permeable = false;
+        const auto tie = [&](int dup, int orig) {
+            if (dup >= 0 && dup < mesh.node_count && orig >= 0 && orig < mesh.node_count)
+                pore_tie[dup] = orig;
+        };
+        for (const auto& w : walls) {
+            // silent-drop-ok: nothing is skipped here -- a semi-permeable joint is RECORDED
+            // and the phase refuses on it a few lines below (the engine owns that message,
+            // which is why it is not raised at this seam).
+            if (w.flow_barrier == 2) { semi_permeable = true; continue; }
+            if (w.flow_barrier == 0)
+                for (const auto& sp : w.seam) tie(sp.left, sp.right);
+        }
+        for (const auto& si : soil_ifaces) {
+            // silent-drop-ok: as above -- recorded, then refused by the phase strategy.
+            if (si.flow_barrier == 2) { semi_permeable = true; continue; }
+            if (si.flow_barrier == 0)
+                for (const auto& sg : si.seam) tie(sg.dup, sg.orig);
+        }
         if (phase == InitialPhase::Consolidation) {
             // --- Time-dependent (Biot) consolidation phase (PLAXIS "Consolidation") --------------
             // The strategy lives in the engine (Stage B9: katai/analysis/phase_solver/
@@ -2068,31 +2093,6 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             cin.diagrams = &diag_specs;
             cin.iface_diagrams = &iface_diags;
             cin.carry_full = static_carry ? &carry_src->full_disp : nullptr;
-            // WHAT THE WATER DOES ACROSS EVERY SPLIT SEAM, read from the interface's own cross
-            // permeability rather than inherited from the fact that the mesh was split. Fully
-            // permeable (the default, and what every model written before that field said) ties
-            // the two sides to ONE pore equation; impermeable leaves the two the split produced.
-            // The seams are the mesh splitter's own pairs, so nothing here has to re-find them.
-            std::vector<int> pore_tie(mesh.node_count, -1);
-            bool semi_permeable = false;
-            const auto tie = [&](int dup, int orig) {
-                if (dup >= 0 && dup < mesh.node_count && orig >= 0 && orig < mesh.node_count)
-                    pore_tie[dup] = orig;
-            };
-            for (const auto& w : walls) {
-                // silent-drop-ok: nothing is skipped here -- a semi-permeable joint is RECORDED
-                // and the phase refuses on it a few lines below (the engine owns that message,
-                // which is why it is not raised at this seam).
-                if (w.flow_barrier == 2) { semi_permeable = true; continue; }
-                if (w.flow_barrier == 0)
-                    for (const auto& sp : w.seam) tie(sp.left, sp.right);
-            }
-            for (const auto& si : soil_ifaces) {
-                // silent-drop-ok: as above -- recorded, then refused by the phase strategy.
-                if (si.flow_barrier == 2) { semi_permeable = true; continue; }
-                if (si.flow_barrier == 0)
-                    for (const auto& sg : si.seam) tie(sg.dup, sg.orig);
-            }
             cin.has_semi_permeable_interface = semi_permeable;
             cin.pore_tie = &pore_tie;
             if (io.config) {
@@ -2154,9 +2154,13 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                      "so the well's pumping is not applied here. Run the dewatering as a "
                      "groundwater-flow calculation, or model it with a drain at the target head.");
             fin.active = act;
-            fin.has_structural_elements = has_interfaces || has_embedded ||
-                !structures.plates.empty() || !structures.anchors.empty() ||
-                !structures.geogrids.empty();
+            fin.has_embedded_beams = has_embedded;
+            fin.has_semi_permeable_interface = semi_permeable;
+            fin.structures = &structures;
+            fin.diagrams = &diag_specs;
+            fin.iface_diagrams = &iface_diags;
+            fin.carry_full = static_carry ? &carry_src->full_disp : nullptr;
+            fin.pore_tie = &pore_tie;
             if (io.config) { fin.duration_day = io.config->duration; fin.time_steps = io.config->time_steps; }
             fin.yscale = ymax - ymin;
             const Eigen::VectorXd dF = f - B;   // configuration imbalance (SumMstage)
