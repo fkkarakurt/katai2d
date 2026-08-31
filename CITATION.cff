@@ -5,8 +5,8 @@ type: software
 authors:
   - family-names: "Kucukkarakurt"
     given-names: "Fatih"
-version: "0.8.1"
-date-released: "2026-08-19"
+version: "0.9.0"
+date-released: "2026-08-31"
 license: Apache-2.0
 repository-code: "https://github.com/fkkarakurt/katai2d"
 url: "https://kataigeo.com"

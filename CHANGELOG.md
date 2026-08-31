@@ -4,7 +4,66 @@ All notable changes to KATAI 2D. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 MAJOR.MINOR.PATCH.
 
-## [Unreleased]
+## [0.9.0] - 2026-08-31
+
+Two things this program could not be given, and one thing it could not say.
+
+It could not be given **rock**: a rock mass had to be entered as a Mohr-Coulomb fit, which is a
+straight line through a curve — matchable over a narrow band of confining stress and wrong outside
+it in both directions. It now has the Hoek-Brown 2002 criterion, entered the way a geologist writes
+it down (σci, mi, GSI, D), integrated in plane strain and axisymmetry, and verified through a
+boundary value problem rather than only at a material point.
+
+It could not be given **the ground data itself**: every geotechnical model starts from borehole
+logs, and this program could only read polygons, so the logs had to be redrawn by hand — the
+slowest step in setting a model up and the easiest place in the whole workflow to put a number in
+the wrong row, which is the one error nothing downstream can catch. Logs are now an input, and the
+polygons are generated from them.
+
+And a run could not say **what its answer had actually satisfied**. "Converged" was a single global
+force residual, and the two criteria beside it in the reference formulation — the current stiffness
+parameter that tightens the test as a mechanism forms, and the local error at the stress points,
+which asks whether the stress a point carries is the stress its own material law would return —
+had never been consulted. Both are now computed, both are reported, and a result file carries which
+of them were met.
+
+Around those: a wall may now stay in the ground while the ground consolidates and keep its
+interfaces while it does; axisymmetric ground may have water in it; a consolidation phase can be
+asked *how long until 90%* instead of being told a duration and asked to guess; the constitutive
+integration tolerance became something a file can state rather than something the reader's build
+chose; and three guards that were right but silent — the mesher's step cap, the integrator's
+substep cap, and a stalled Newton search reported as a collapse mechanism — were each given a wire
+out of them.
+
+### Upgrading from 0.8.1
+
+- **Project files are now `.k2d` version 18** (from 14), through four steps that each added keys
+  rather than changing existing ones: **v15** the constitutive integration tolerance
+  (`phases[].substol`), **v16** borehole logs (`strata[]`, `boreholes[]`), **v17** the
+  consolidation stop criterion (`phases[].cstop`, `cminp`, `cdeg`, `cfirst`, `cmaxstep`) and
+  **v18** the Hoek-Brown rock model (`materials[].model` = 6 with `sigci`, `mi`, `gsi`, `hbD`,
+  `sigpsi`). Every one of them is written **only when used**, so a project that touches none of
+  these features produces the same bytes it did under 0.8.1 and its diff stays about what actually
+  changed. This build reads every older project file. Older builds **refuse** a file written by
+  this one at the version gate — which is the point of the gate: an older build cannot read
+  `model = 6`, a stop criterion or a written-down integration tolerance, and would otherwise run a
+  different problem from the same drawing and report it as an ordinary result.
+- **Results files are now `.res` version 9** (from 6), adding which convergence criteria a run met
+  (v7 soil, v8 interfaces / coupling springs / embedded-beam foot force) and the consolidation stop
+  record (v9). Same rule as always: this build reads older result files, older builds refuse this
+  one's. Re-open a project and re-calculate, or keep the older build for older result files.
+- **`SolveResult.stopped_by` renamed one of its values.** A solve abandoned because no step along
+  the Newton direction reduced the out-of-balance force used to answer `'mechanism'`; it now
+  answers `'stalled line search'`, because that ending also happens on a well-supported model and
+  the old name was a claim rather than a description. Code that tests `stopped_by == 'mechanism'`
+  to decide whether a load factor is a capacity must be updated — read the current stiffness
+  parameter beside it, as `katai.summary()` now does.
+- **A Hardening Soil answer may move slightly** against 0.8.1 on the same file. The stress-point
+  integrator no longer holds the stress-dependent moduli at the state each increment began from
+  (measured on the oedometer: +0.41% to −0.93% against the closed form, the closed form being the
+  fixed point), and an increment abandoned for a stalled search is now retried with a non-monotone
+  window instead of being cut back. Both change the path, both were adopted against a measurement,
+  and both are recorded below.
 
 ### The rock model meets a boundary value problem, and three things break
 
@@ -177,6 +236,44 @@ control that is absent still acts.
 For the same reason the text report, the HTML report and the model summary print the four rock
 inputs where they used to print `c'` and `phi'` — numbers the calculation never read.
 
+
+### Ground data arrives as borehole logs, and until now it had to be redrawn as polygons
+
+Every geotechnical model starts from the same document: a log per borehole giving the level of each
+layer boundary and the water table at one position. This program could not read one. The engineer
+turned the logs into polygons by hand — the slowest part of setting a model up, and the easiest
+place in the whole workflow to put a number in the wrong row. A number in the wrong row *here* is
+the one error nothing downstream can catch: the mesher will mesh the wrong ground, every phase will
+converge on it, and the answer will be a correct solution to a model nobody meant.
+
+**The rules are not invented.** They are the PLAXIS 2D 2025.1 Reference Manual's, read in the
+original, because the workflow it describes is the one every user of this kind of program already
+knows: the layer list is **global** — every layer exists at every borehole, and a layer absent
+somewhere is not a missing row but two equal levels (§4.2, §4.3.1.1) — and a single log makes a
+horizontal water surface that reaches the model boundaries, while several combine into a
+non-horizontal one (§7.10.1.1). Between logs the boundaries interpolate linearly; **outside** the
+outermost log its levels are *held*, never continued on their slope, because extrapolating grows
+ground nobody logged.
+
+**Boreholes generate polygons; they do not replace them.** `polygons` remains the model — what the
+mesher meshes, what a phase activates — and the logs are the record of where that geometry came
+from, so a reviewer can see the source rather than only the drawing. Generation is therefore an
+**action the user takes**, never something a run does on the way past: a geometry with two sources
+of truth is a geometry that can disagree with itself. No solver path is touched by this; the
+generator is a pure schema-to-schema function, testable with no mesh and no solve.
+
+`KV-GEO-001` checks the *rule*, not the output: 48 assertions whose expected levels are computable
+by hand from the logs in the test — one flat log reaching both edges, two logs interpolating
+between and holding outside (20 and 18 read 20 and 18 at the edges, **not** 21 and 17), and a
+three-layer section whose middle layer pinches out to exactly 0.000 m with the layer beneath rising
+to meet the one above, so the ground has no gap. The refusals are asserted too, and a failed
+generation leaves the project untouched rather than half-applied. GEO joins DIA as a matrix class
+on DIA's own argument: it verifies what the *pre-processing* produces, and the failure it guards
+against is invisible to every other check in the suite.
+
+`.k2d` v16 adds `strata[]` and `boreholes[]`, written only when there are boreholes, so every older
+model is byte-identical to what v15 produced. The Python surface exposes both types — the
+schema-coverage gate is what insists on that, and it is right to.
 
 ### The last coupled family carries the structure too
 
@@ -391,6 +488,35 @@ than a silent preference. File formats: **.k2d v17** (`cstop`, `cminp`, `cdeg`, 
 (what the phase was asked to end on, whether it got there, and the ratio's reference).
 
 
+### The mesher's safety valve opened in silence, which is what a safety valve must not do
+
+Ruppert's refinement guarantees the minimum angle it is asked for, and this tree asks for 20°,
+under the ~20.7° the termination proof needs — so mesh quality here is **structural** rather than
+measured element by element, which is the right design: a bound that holds by construction beats a
+bound checked afterwards. The loop carries a step cap anyway, as a final safety valve, and until
+now that valve had no wire out of it. `refine()` returned void. A mesh that met 20° and a mesh that
+ran out of steps trying were the same object to every layer above — builder, driver, report, GUI —
+and mesh quality is not something an answer is indifferent to.
+
+`Triangulation::quality_met` / `refinement_steps` and `MeshResult::quality_met` carry it out, with
+the bound that was asked. A mesh that did not reach its bound now says so in the message every
+front end already shows, and says what to do about it; a mesh that did reach it says nothing extra,
+because a warning that fires on the ordinary case is a warning nobody reads.
+
+`KV-DIA-002` checks the flag **against the geometry**, not against itself: a flag that is always
+true proves nothing, so the test computes the smallest interior angle over every produced triangle
+from the vertex coordinates, with no help from the mesher, and asserts that report and measurement
+agree (128 elements, worst angle 45.0000° against a 20° bound, 73 refinement steps).
+
+**Honestly not shown:** the valve was not made to fire — 200 000 refinement steps is not a number
+an ordinary geometry approaches — so the claim rests on the guard rather than on an observed
+failure, and the test says so rather than implying a demonstration it does not contain.
+
+This is the third instance of one pattern in this tree, which is worth naming: **the guard was
+right, the silence was the defect.** `K2D-A012` fixed it for the material law, this fixes it for
+the mesher, and the abandonment classification below fixes the same shape for the solver's verdict.
+What they share is that the code already knew and had nowhere to put it.
+
 ### A run says when its material integration ran out of room
 
 The Hardening Soil integrator subdivides a load increment until its own error estimate is under the
@@ -406,6 +532,35 @@ The flag now reaches the result. A phase whose committed path contains such an i
 involved, and the count is on the result for a script to read
 (`convergence.saturated_increments`, `convergence.saturated_points`). Runs that met their tolerance
 are unchanged and say nothing, which is the point.
+
+### Half of what produced an answer could not be written down
+
+A `.k2d` has carried its numerics since v7: the tolerated force residual, the load increments, the
+iteration limit. All three govern the **equilibrium** iteration. The other half of what produces an
+answer — how accurately each stress point is walked along its material law *inside* an increment —
+could only be set through an environment variable, so a project handed to a reviewer described the
+model, described the stopping rule, and silently left the constitutive integration to whatever the
+reader's build happened to choose. That is not a small omission on this tree: the integration
+tolerance is where a first-order error was hiding that no equilibrium residual could see, and its
+1e-5 default was set by measurement rather than by taste.
+
+`phases[].substol` (`.k2d` v15), threaded the way the other three are — the jobs-layer seam wins,
+then the file, then the material class's own default, and 0 everywhere means "the class chooses".
+It reaches the material routine as an **assembly** parameter rather than a stopping rule, because
+that is what it is: it is read inside the Gauss loop, beside the creep time interval, not by the
+iteration around it. Models without an error-controlled integrator ignore it rather than reject it.
+
+It is asserted hostilely, because the failure mode is unusually quiet — a dropped integration
+tolerance produces a perfectly convergent run with a slightly wrong stress path, which no residual
+reports and no plot shows. File and seam must agree **bit for bit** (one control, two routes) and
+both must differ from the default, so that "it is read at all" is proved rather than assumed:
+0.018700624 m against 0.018643176 m, 0.3081% apart.
+
+**`KATAI_HS_STOL` now wins over the file**, which is the opposite of the precedence the file has
+over the class default, and deliberately so: the environment variable is a whole-run study
+override, and a study exists to ask what a published number owes to a numerical choice — it cannot
+ask that of the files that state the choice if the file overrides it. Same precedence and same
+reason as `KATAI_CONV_NOLOCAL` over the phase's convergence setting.
 
 ### Two convergence criteria had never been consulted; both have been now
 
@@ -551,6 +706,45 @@ signature that grew with stress level and changed sign — is **retracted**, bec
 was the frozen-modulus error. `docs/validation/numerical-uncertainty.md` §6 and §7 are rewritten
 around what is measured now.
 
+### The non-monotone line search, adopted where it is needed and nowhere else
+
+The comment beside `NewtonOptions::line_search_window` had been describing this defect since it was
+written: a monotone test reads a non-descending step as failure and halves the increment, and four
+such halvings in a row abandon it — "which is how the **load path** stops being the one the file
+asked for". It was a prediction, and the refinement ceiling measured a few commits earlier is its
+instance: every abandonment was `four consecutive iterations without descent`, at increments
+repeatedly halved, with the linear solver never once refusing and the iteration budget never
+reached (21/15/31/64/59/40 out of 500). Refining further did not help, because **size was never the
+obstruction**.
+
+The mechanism was already implemented and switched off, so this is an *adoption*, and the only
+question was where to switch it on. Three designs; two killed by measurement.
+
+1. **Make it the default.** It removes the refusal — but the suite said no: binding the local
+   convergence criteria at the shipped tolerance stopped reaching the answer (0.05% → 0.147%
+   against the four-decades-tighter run). A non-monotone rule accepts iterates a monotone one
+   rejects, so the stopping test fires further from converged, and that price is paid on every
+   increment including the overwhelming majority that never stall.
+2. **Escalate mid-iteration** — open the window on the fourth iteration without descent and carry
+   on from the iterate that stalled. Rescued nothing. The window works by changing the whole
+   trajectory, not by recovering one; by the time four steps have failed, the iterate is somewhere
+   a wider gate cannot come back from.
+3. **Adopted: retry the increment.** An increment abandoned for a stall is re-entered with the
+   window open and its size untouched — the same shape as the hybrid tangent immediately above it
+   in the same function, and for the same reason: when an increment cannot be closed the cheap way,
+   try the stronger tool on *that* increment rather than paying for it everywhere.
+
+Measured on `KV-CST-002`'s seating phase at 240 increments — refused under the monotone rule,
+`-0.923430%` with the window on throughout, `-0.923431%` with retry-on-stall (eight figures) —
+while the bound run's accuracy claim comes back to 0.0005%. `recent` now keeps the largest window
+an increment could use and consults only its tail; with only `ls_window` entries kept an escalation
+would arrive with no memory and be monotone for another five iterations, which are exactly the five
+that were failing. That was measured before the line was written.
+
+**What it costs, because it is not free.** `test_phase_numerics_009` goes from 781 s to about
+2320 s and is once again the suite's longest test; the full run goes 2141 → 2335 s. The extra time
+is real work — increments that used to be abandoned and cut back are now retried and converge.
+
 ### A stalled search was being published as a bearing capacity
 
 A run that stops below full load has to say which of three things happened, because the same
@@ -588,9 +782,10 @@ alongside it rather than trusting the label.
 
 ### Known limits
 
-- The integration tolerance is a build-time default with an environment override
-  (`KATAI_HS_STOL`); its home is the phase's numerical controls, next to the tolerated error and
-  the load-step count, so that a published run carries the accuracy it was computed with.
+- The integration tolerance reached its home in this release — `phases[].substol`, beside the
+  tolerated error and the load-step count, so a published run now carries the accuracy it was
+  computed with. What is still a build-time choice is the **default** it falls back to (1e-5 for
+  Hardening Soil), set by measurement on one case rather than derived per problem.
 - One increment's subdivision is capped at 200 substeps. Saturation is counted and reported, never
   absorbed; it is reached almost only on trial iterates whose stresses are discarded.
 - Soft Soil, Soft Soil Creep and Mohr-Coulomb keep their own substepping rules. They do **not**
@@ -611,8 +806,13 @@ alongside it rather than trusting the label.
   not refinement improving it. So the verification case asks its path-independence question at 80,
   where the answer exists in both compositions, and the ceiling itself is deliberately not
   asserted — a test that asserts a refusal is a test that fails when the program improves.
-  Choosing the increment size instead of being handed one is what the next release's automatic
-  step control is for.
+  **That ladder was measured before the retry-on-stall adopted later in this same release**, and
+  the refusals on it were the abandonments that retry now re-enters: the seating phase at 240
+  increments went from refused to converged, to eight figures of the always-on window's answer. The
+  ladder itself has not been re-measured rung by rung, so what stands is the mechanism, not the
+  numbers above 80 — and the case still asks its question at 80, where the answer existed under
+  both rules. Choosing the increment size instead of being handed one is what the next release's
+  automatic step control is for.
 
 ## [0.8.1] - 2026-08-19
 

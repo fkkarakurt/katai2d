@@ -13,14 +13,17 @@
 // printed from a development build must not carry the previous release's date, which is the same
 // traceability argument that put the identity here in the first place.
 //
-// 0.9.0's checklist is open. What is already in it is in CHANGELOG.md under [Unreleased]; what is
-// not yet done is the numerical-controls line N-3 onward (automatic step size from the iteration
-// band, then arc-length). Drop the "-dev" in the commit that closes the gate.
+// 0.9.0's checklist is CLOSED, and closed one item short of what it opened with on purpose. The
+// numerical-controls line N-3 onward -- automatic step size from the iteration band, then
+// arc-length -- is NOT in it: both change how every existing answer is reached, so they belong at
+// the head of a line rather than at the end of one, where the re-measurement they force can be
+// made deliberately (V0.9.0-FOUNDATIONS-AUDIT.md 3.2, 3.3). What the gate does close is in
+// CHANGELOG.md under [0.9.0]. The next line reopens as "-dev" with N-3 as its first item.
 
 namespace katai::api {
 
-inline constexpr const char* kVersion = "0.9.0-dev";
-inline constexpr const char* kVersionDate = "2026-08-27";
+inline constexpr const char* kVersion = "0.9.0";
+inline constexpr const char* kVersionDate = "2026-08-31";
 
 // "KATAI 2D <kVersion>" -- the canonical short identity for titles and report headers.
 inline constexpr const char* kAppName = "KATAI 2D";

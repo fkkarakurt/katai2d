@@ -12,8 +12,8 @@ driven from the command line or from Python.
 Every capability is pinned to a closed-form solution, an independent
 computation path that shares no code with the solver, or a published benchmark
 — **self-consistency does not count as verification** — and the whole record
-ships with the source: **58 declared verification cases**, **26 benchmark
-`.k2d` input files** anyone can rerun, **153 automated tests**.
+ships with the source: **69 declared verification cases**, **26 benchmark
+`.k2d` input files** anyone can rerun, **207 automated tests**.
 
 **Status: pre-release.** The engine and its validation record are under active
 development; interfaces and the file format may still change. What ships in
@@ -33,7 +33,7 @@ generated from the code and pinned to it by the test suite.
 
 ## Install
 
-Current release: **v0.8.1** (`.k2d` format v14).
+Current release: **v0.9.0** (`.k2d` format v18).
 Windows x64. Both artifacts are on the
 [Releases](https://github.com/fkkarakurt/katai2d/releases) page.
 
@@ -47,14 +47,14 @@ single self-contained file.
 irm https://raw.githubusercontent.com/fkkarakurt/katai2d/main/install.ps1 | iex
 ```
 
-Or download `katai2d-0.8.1-win64.zip` and unzip it anywhere.
+Or download `katai2d-0.9.0-win64.zip` and unzip it anywhere.
 
 ### Python
 
 One abi3 wheel serves every CPython ≥ 3.12 on Windows x64:
 
 ```powershell
-pip install katai2d-0.8.1-cp312-abi3-win_amd64.whl
+pip install katai2d-0.9.0-cp312-abi3-win_amd64.whl
 ```
 
 The wheel ships the `katai` package **and** the same `katai` command line — one
@@ -103,8 +103,8 @@ You do not have to take that on trust. Verify what you downloaded against the
 checksum published with the release:
 
 ```powershell
-(Get-FileHash .\katai2d-0.8.1-win64.zip -Algorithm SHA256).Hash.ToLower()
-# compare with katai2d-0.8.1-win64.zip.sha256 from the same release
+(Get-FileHash .\katai2d-0.9.0-win64.zip -Algorithm SHA256).Hash.ToLower()
+# compare with katai2d-0.9.0-win64.zip.sha256 from the same release
 ```
 
 and, if you want an independent opinion, upload the file to VirusTotal — it is
@@ -376,13 +376,23 @@ thing to run: every `.k2d` there is a published benchmark the suite pins.
 - **Elements** — 6- and 15-node triangles, plane-strain and axisymmetric;
   plates with elastoplastic Mp/Np hinges, embedded beam rows, node-to-node
   anchors, geogrids and Coulomb interfaces.
+- **Ground data** — borehole logs (a level per layer boundary and a water head,
+  at an x) as the input the layer geometry is generated from, so a reviewer can
+  see the logs a model was drawn from and not only the drawing.
 - **Design codes** — EC7 (EN 1997-1) and TBDY 2018 partial-factor catalogues,
   applied per phase through material factoring.
 
+**Stated rather than implied, on the unsaturated zone:** the retention curve
+(van Genuchten) and relative permeability (Mualem) are implemented, reachable
+from the file (`gw_ga`, `gw_gn`) and carried into effective stress by Bishop's
+χ = S_eff — but the verification record covers the **saturated limit** of that
+formulation (KV-STR-008), not the unsaturated regime itself. Use it knowing
+which half of it is pinned to a published solution.
+
 **Not there yet, stated rather than implied:** three-dimensional analysis (this
 is 2D by design), a graphical interface (a separate, in-development track),
-unsaturated soil mechanics and liquefaction models, operating systems other
-than Windows x64, and `pip install katai2d` from PyPI.
+liquefaction models, operating systems other than Windows x64, and
+`pip install katai2d` from PyPI.
 
 ---
 
