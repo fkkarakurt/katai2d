@@ -26,7 +26,7 @@
 //   source:   KATAI 2D input-safety property (no input may be discarded in silence): the independent path is the same problem with the object drawn where the mesh actually takes it, plus global vertical equilibrium of the support reactions
 //   locator:  each fixture changes ONE field of tests/corpus/kv-fnd-008-strip-load.k2d (a weightless elastic half-plane, 40 x 20 m, tri6, 4 m strip at q = 100 kPa) and solves it from that project; sum of the base reactions must equal the load actually applied, and a clipped object must reproduce the explicitly shortened object
 //   quantity: the diagnostic severity and code raised by each perturbation [-]; the summed base reaction of the runs that continue [kN/m]; peak displacement of a clipped plate against the explicitly shortened plate [m]
-//   expected: refusals K2D-G001 (point load off the mesh), K2D-G003 (line load off the mesh), K2D-G005 (plate off the mesh), K2D-G007 (geogrid off the mesh), K2D-G008 (anchor with no end in the soil); warnings K2D-G002 (point load snapped), K2D-G004 (line load clipped), K2D-G006 (structure clipped), K2D-G009 (wall/interface not on mesh edges -> bonded), note K2D-M001 (tension cut-off applied sequentially on Hardening Soil), K2D-A001 (linear dynamic reports zero stress), K2D-A003 (a structure does not receive a prescribed displacement); note K2D-A004 (reactions exclude the structural end force); the unperturbed case raises NOTHING and carries 4 m x 100 kPa = 400 kN/m; the half-outside strip carries 2 m x 100 kPa = 200 kN/m
+//   expected: refusals K2D-G001 (point load off the mesh), K2D-G003 (line load off the mesh), K2D-G005 (plate off the mesh), K2D-G007 (geogrid off the mesh), K2D-G008 (anchor with no end in the soil); warnings K2D-G002 (point load snapped), K2D-G004 (line load clipped), K2D-G006 (structure clipped), K2D-G009 (wall/interface not on mesh edges -> bonded), note K2D-M001 (tension cut-off applied sequentially on Hardening Soil), K2D-A001 (linear dynamic reports zero stress); note K2D-A004 (reactions exclude the structural end force); K2D-A003 retired and NOT raised on a plate standing on a driven line (the motion it said was lost is verified against closed forms in KV-STR-009); the unperturbed case raises NOTHING and carries 4 m x 100 kPa = 400 kN/m; the half-outside strip carries 2 m x 100 kPa = 200 kN/m
 //   band:     exact on severity and code; 1e-9 relative on the equilibrium sums (the same discrete B^T sigma the supports see, so the residual is round-off, measured ~1e-13); 1e-12 m on the clipped-versus-shortened plate, which is a bit-level identity because the mesher clips structural lines in the arrangement, so both models are the SAME mesh and the same assembly
 
 #include <katai/jobs/driver.hpp>
@@ -362,10 +362,13 @@ void case_tension_cutoff_ignored() {
           "tension cut-off on Hardening Soil: states its sequential application (K2D-M001)");
 }
 
-// 12. A plate standing on a line that is pushed down. The prescribed-displacement ramp reaches
-//     the soil elements only, so the plate reports the internal forces of an undriven element
-//     (measured as M ~ 0 when this path was first designed); and the reaction at those now-fixed
-//     nodes is the soil's alone. Both facts are stated where they can be acted on.
+// 12. A plate standing on a line that is pushed down. The reaction at those now-fixed nodes is the
+//     soil's alone, and that is stated where it can be acted on (K2D-A004). What this fixture no
+//     longer expects is K2D-A003, which warned that the plate did not receive the motion: the
+//     analysis has carried it into structural elements since 2026-08-13, the anchor force report
+//     -- the one place it was still lost -- reads it too, and KV-STR-009 checks both against
+//     closed forms. A retired code is never reused, so its silence is pinned here, where every
+//     other code is.
 void case_prescribed_disp_on_structure() {
     std::printf("\n== plate standing on a prescribed-displacement line ==\n");
     m::Project pr = reference();
@@ -380,25 +383,11 @@ void case_prescribed_disp_on_structure() {
     const Run r = solve(pr);
     print_diags(r);
     check(r.ok, "prescribed displacement on a plate: the run completes");
-    check(raised(r, "K2D-A003", core::DiagnosticSeverity::Warning),
-          "prescribed displacement on a plate: warns that the plate does not see it (K2D-A003)");
     check(raised(r, "K2D-A004", core::DiagnosticSeverity::Note),
           "structure on a support: the reaction's missing structural share is noted (K2D-A004)");
-
-    // The SAME line prescribed to zero is not a motion, it is a support -- and a support line
-    // is the only way this schema can hold a plate at a point (edge_bc reaches model edges
-    // only). Nothing is understated there, so the warning must stay quiet; if it did not, it
-    // would send the user away from a force diagram that is correct. Pinned as deliberately as
-    // the warning above: a later tightening that forgets the distinction would silently put it
-    // back. The build's own beam verification (KV-STR-003) reads M off exactly such a model.
-    m::Project sup = pr;
-    sup.disps[0].name = "Support";
-    sup.disps[0].uy = 0.0;
-    const Run rs = solve(sup);
-    print_diags(rs);
-    check(rs.ok, "zero-valued support line on a plate: the run completes");
-    check(!raised(rs, "K2D-A003", core::DiagnosticSeverity::Warning),
-          "a support line (value 0) drives nothing, so it does NOT raise K2D-A003");
+    bool a003 = false;
+    for (const auto& d : r.diags) a003 = a003 || d.code == "K2D-A003";
+    check(!a003, "K2D-A003 is retired: a structure on a driven line raises it no longer");
 }
 
 // 13. A linear Dynamic phase reports zeros for stress -- not because the soil is unstressed, but

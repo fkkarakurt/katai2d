@@ -1414,39 +1414,18 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 return R;
             }
         }
-        // A structural element standing on a driven node does NOT see that motion: the
-        // prescribed-displacement ramp enters the soil element loop alone, and the structural
-        // elements read fixed DOFs as zero (internal_forces.hpp states the limit at the seam
-        // that has it). Its M / Q / N are then those of an undriven element -- near zero for a
-        // plate whose only load is the imposed settlement. The condition is checked rather than
-        // assumed, so a model whose structures stand clear of the driven line hears nothing.
-        //
-        // A component prescribed to ZERO is not a motion, it is a SUPPORT -- the format
-        // document's own words: "a set component with value 0 is a rigid support line". There
-        // is nothing for the structure to miss, its diagram is right, and warning here would
-        // send the user away from the very diagram this schema's only point-support idiom
-        // makes correct. Only a nonzero imposed value can be understated.
-        if (!presc_entries.empty()) {
-            std::vector<char> driven(mesh.node_count, 0);
-            for (const auto& e : presc_entries)
-                if (e.value != 0.0 && e.node >= 0 && e.node < mesh.node_count) driven[e.node] = 1;
-            std::string hit;
-            const auto touches = [&](int n) { return n >= 0 && n < mesh.node_count && driven[n]; };
-            for (const auto& p : structures.plates)
-                for (int n : p.nodes) if (touches(n) && hit.empty()) hit = "a plate";
-            for (const auto& p : structures.plates5)
-                for (int n : p.nodes) if (touches(n) && hit.empty()) hit = "a plate";
-            for (const auto& g : structures.geogrids)
-                for (int n : g.nodes) if (touches(n) && hit.empty()) hit = "a geogrid";
-            for (const auto& a : structures.anchors)
-                if ((touches(a.node_a) || touches(a.node_b)) && hit.empty()) hit = "an anchor";
-            if (!hit.empty())
-                warn(R, "K2D-A003", "",
-                     "A prescribed displacement drives a node that " + hit +
-                         " stands on. Structural elements do not receive the imposed motion in "
-                         "this build, so that element's internal forces (M, Q, N) understate the "
-                         "action -- read the soil results, not the structural diagram, here.");
-        }
+        // K2D-A003 IS RETIRED, and the reason is two measurements, not one. It warned that a
+        // structural element standing on a driven node does not receive the imposed motion. The
+        // SOLVER stopped being that way on 2026-08-13 (internal_forces.hpp, u_at), yet the
+        // warning kept firing -- including on KV-STR-005's own run, whose driven geogrid force
+        // that case asserts at +0.000%. The REPORT was half true. The plate, geogrid, embedded-
+        // beam and interface post-processors read the full displacement vector, whose fixed
+        // entries hold the prescribed values -- measured for the plate (a two-span plate whose
+        // middle support settles returns M_B = 3EI delta / L^2 with its shear term, to 1.4e-12)
+        // and for the geogrid (KV-STR-005). The anchor force skipped fixed DOFs and reported
+        // N = 0 where the solve carried EA d / L.
+        // With that report aligned to the solver (structural_forces.hpp, anchor_force), nothing
+        // the warning described remains, and a code is never reused: it is simply not raised.
     }
     // Staged construction: nodes touched only by passive (excavated / not-yet-filled) elements
     // would be singular -- fix them (their displacement is meaningless this phase).

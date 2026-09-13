@@ -376,10 +376,11 @@ struct NewtonResult {
         double moment_error = 0.0;     // Eq. 9-3; meaningless unless has_moment
         // The DENOMINATOR of that ratio, BEFORE the floor: the sum of absolute nodal moment
         // contributions over every rotational freedom in the model. Reported, not just used,
-        // because this is a ratio that can blow up from below -- a structure nothing is driving
+        // because this is a ratio that can blow up from below -- a structure nothing bends
         // carries no moment, and dividing a round-off residual by a round-off reference is not a
-        // measurement. Measured at 1.11e-12 kNm/m on an undriven plate against 4.71e+02 on the
-        // same plate under load; the floor that separates them is in measure_convergence.
+        // measurement. Measured at 1.11e-12 kNm/m on a plate that a uniform settlement only
+        // translates, against 4.71e+02 on the same plate under load; the floor that separates
+        // them is in measure_convergence.
         double moment_ref = 0.0;
         bool has_moment = false;       // something in the model carries a rotational DOF
         double tolerated = 0.0;        // the tolerated error all of these are measured against

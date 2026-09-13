@@ -1008,13 +1008,18 @@ dimensionally honest question left about the rows that matter.
 **What binding it actually cost: exactly one case, and that case found a missing floor.** The
 claim above — that binding Eq. 9-3 is free — was made on the two fixtures and then tested against
 the whole suite, which is the only place such a claim can be tested. One test failed:
-`test_no_silent_drop`'s plate standing on a line that is pushed down. That fixture exists because
-the prescribed displacement fixes those nodes and the plate is therefore **undriven** — the run
-says so itself (`K2D-A003`) — and an undriven plate carries no moment at all:
+`test_no_silent_drop`'s plate standing along the whole of a line that is pushed down. Every node
+of that plate takes the same settlement, so it translates without curving, and a plate that does
+not curve carries no moment at all:
+
+> **Correction (2026-09-13).** This paragraph first said the plate was *undriven* and that the run
+> said so itself (`K2D-A003`). The numbers below were right and the explanation was not: the
+> structural elements had read a driven node's motion since 2026-08-13, and `K2D-A003` was a stale
+> warning, now retired. The plate moves; it does not bend.
 
 | the same plate | reference sum \|M_nodal\| | moment error | outcome |
 |---|---|---|---|
-| standing on a pushed line (undriven) | 1.11e-12 kNm/m | 2.06e-1 | **phase refused at load factor 0** |
+| standing on a pushed line (translated, not bent) | 1.11e-12 kNm/m | 2.06e-1 | **phase refused at load factor 0** |
 | under a 100 kPa strip load | 4.71e+02 kNm/m | 4.5e-14 | converged in 2 iterations |
 
 Fourteen orders of magnitude of denominator. The ratio that refused the phase was one round-off
@@ -1023,7 +1028,7 @@ family has a floor and Eq. 9-3 did not**. Eq. 9-5 divides by `max(tau_max, c, 1 
 `max(|F_c|, 1% of |F_max|, 1 kN)`, and the manual's stated reason for them is that a point carrying
 almost nothing must not report an enormous relative error on a difference that is numerically
 nothing. A structure carrying almost no moment is that situation in different units. The floor is
-1 kNm/m — ten decades above the undriven reference and two below the driven one — and it is
+1 kNm/m — ten decades above the translated plate's reference and two below the loaded one — and it is
 recorded here as what it is: not in the manual's Eq. 9-3, adopted from the device the manual
 applies to its siblings, and forced by a measurement rather than chosen by taste.
 

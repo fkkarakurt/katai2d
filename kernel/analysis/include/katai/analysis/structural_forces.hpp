@@ -199,12 +199,18 @@ inline std::vector<ForceStation> plate_force_diagram(
     return out;
 }
 
-// Anchor AXIAL force — mirrors the solver (nonlinear_solver.cpp anchor loop) EXACTLY:
+// Anchor AXIAL force — mirrors the solver (internal_forces.hpp anchor loop) EXACTLY:
 //   U = Σ g_i·u  (g = ±unit direction),  N = N0 + kk·(U − U_p),  N ∈ [−Fmax_comp, +Fmax_tens],
 //   N0 = the lock-off prestress (0 for a slack anchor).
 // kk = EA/L (L≤0 ⇒ geometric distance). U_p = committed plastic elongation
-// (NewtonResult.anchor_plastic[i]; 0 for elastic/purely elastic anchors). Fixed DOFs are
-// excluded from U, as in the solver. yielded: at capacity.
+// (NewtonResult.anchor_plastic[i]; 0 for elastic/purely elastic anchors). yielded: at capacity.
+// A FIXED DOF IS READ LIKE ANY OTHER. `disp` carries a fixed DOF's prescribed value, and the
+// solver's anchor loop reads it (internal_forces.hpp, u_at) -- since 2026-08-13, when the
+// structural loops stopped treating a driven node as standing still. This report kept the old
+// rule and skipped fixed DOFs, so an anchor with an end on a line driven by a prescribed
+// displacement reported N = 0 while the solve carried EA·d/L: measured on a strut between two
+// driven edges (0 against -100 kN) and on a fixed-end anchor from a driven edge (0 against
+// +200 kN). A fixed DOF that is a support holds 0, so reading it changes nothing there.
 // `elastic=true` → the cap is NOT applied (raw N = kk·U): for the LINEAR dynamic envelope —
 // that system solves the anchor elastically; a capped report would silently CLIP at Fmax
 // and imply "yield" in a non-yielding analysis (D6b rule: the post-processor's constitutive
@@ -226,7 +232,7 @@ inline AnchorForce anchor_force(const AnchorElement& an, const mesh::Mesh& mesh,
     const double g[4] = {-dir(0), -dir(1), dir(0), dir(1)};
     double U = 0.0;
     for (int i = 0; i < 4; ++i)
-        if (gdof[i] >= 0 && !dofs.is_fixed(gdof[i])) U += g[i] * disp[gdof[i]];
+        if (gdof[i] >= 0) U += g[i] * disp[gdof[i]];
     double N = an.prestress + kk * (U - Up);
     AnchorForce r;
     if (elastic) { r.N = N; return r; }   // linear dynamic branch: uncapped elastic N (same as solver)

@@ -42,11 +42,44 @@ The Python `prj.phases.safety()` docstring said "phi-c reduction of the current 
 the search starts every trial from an unstressed state, so the stresses the earlier phases left are
 not its starting point. The docstring now says what the phase solves.
 
+### An anchor on a driven line reported no force, under a warning that blamed the wrong thing
+
+`K2D-A003` warned that a structural element standing on a node driven by a prescribed displacement
+does not receive the motion, so its M, Q and N understate the action — read the soil, not the
+structural diagram. The analysis stopped being that way on 2026-08-13, when every structural
+element loop started reading a driven node's displacement, and the warning kept firing anyway,
+including on `KV-STR-005`'s own run, whose driven geogrid force that case asserts at +0.000%.
+
+Taking the warning apart found it half stale and half true, and the true half was not what it
+said. The plate, geogrid, embedded-beam and interface force reports read the full displacement
+vector, whose fixed entries carry the prescribed values. **The anchor force report did not**: it
+still skipped fixed degrees of freedom, a rule its own comment attributed to the solver the
+solver had since dropped. Measured before the fix, against closed forms:
+
+| structure on driven nodes | reported | closed form |
+|---|---|---|
+| two-span plate, middle support settles 10 mm (force method, with the plate's shear term) | M_B = 8.988161933073 kNm/m | 8.988161933064 kNm/m |
+| strut between an edge held at u_x = 0 and an edge driven by −10 mm | N = 0.0 kN | −100 kN |
+| fixed-end anchor from the driven edge to a point 5 m beyond it | N = 0.0 kN | +200 kN |
+
+The anchor report now reads what the solver reads, and **`K2D-A003` is retired**: no longer
+raised, kept in the catalogue so it is never given another meaning. A fixed degree of freedom that
+is a support holds zero, so every anchor not standing on a non-zero prescribed displacement
+reports exactly what it did. The three closed forms are a new verification case, `KV-STR-009`.
+
+Five places repeated the warning's account of a plate standing on a uniformly pushed line as
+"undriven" — two solver comments, two tests, and `docs/validation/numerical-uncertainty.md` §11.7.
+Their numbers were right: such a plate carries no moment. The reason was not — every one of its
+nodes takes the same settlement, so it translates without curving. Corrected, and the published
+record carries a dated correction note rather than a silent edit.
+
 ### Upgrading from 0.9.0
 
 - A project whose Safety phase (or initial Safety procedure) has a structural element active is
   refused. Before this build it ran and reported the factor of safety of the same model without
   that element; deactivate the element in the Safety phase to get that number knowingly.
+- Scripts that matched on `K2D-A003` will no longer see it. An anchor whose end stands on a
+  non-zero prescribed displacement now reports its force; before, it reported 0.
 
 ## [0.9.0] - 2026-08-31
 

@@ -321,9 +321,9 @@ void test_nonlinear_elastic_criterion() {
 // max(something the point carries, a floor): Eq. 9-5 by max(tau_max, c, 1 kPa), Eq. 9-9 by
 // max(|F_c|, 1% of |F_max|, 1 kN). The moment criterion had no floor, and nothing noticed while
 // it was measured-but-not-consulted. On the day it started gating, the first case in the suite
-// to meet it was a plate standing on a line that is pushed DOWN: the prescribed displacement
-// fixes those nodes, the plate is undriven (the run says so itself, K2D-A003), and its reference
-// was 1.11e-12 kNm/m. One round-off over another came to 2.06e-1 and refused the phase at load
+// to meet it was a plate standing along the whole of a line that is pushed DOWN: every node of
+// the plate takes the same settlement, so it translates without curving, and its reference was
+// 1.11e-12 kNm/m. One round-off over another came to 2.06e-1 and refused the phase at load
 // factor zero.
 //
 // Both ends are asserted here, because a floor that is never approached from either side is a
@@ -346,19 +346,20 @@ void test_moment_reference_floor() {
     pr.structs.push_back(se);
     pr.loads.clear();
 
-    // (a) UNDRIVEN: the settlement is the action, and the plate does not see it.
-    m::Project undriven = pr;
+    // (a) TRANSLATED, NOT BENT: the settlement is the action, and it moves every node of the
+    // plate by the same amount, so the plate carries no moment.
+    m::Project translated = pr;
     m::PrescribedDisp D;
     D.name = "Footing settlement";
     D.x1 = 18.0; D.y1 = 20.0; D.x2 = 22.0; D.y2 = 20.0;
     D.set_uy = true; D.uy = -0.01;
-    undriven.disps.push_back(D);
-    const Run u = solve(undriven, 0.0, true);
-    std::printf("     undriven plate: reference sum|M| = %.2e kNm/m, moment error %.2e of "
+    translated.disps.push_back(D);
+    const Run u = solve(translated, 0.0, true);
+    std::printf("     translated plate: reference sum|M| = %.2e kNm/m, moment error %.2e of "
                 "%.2e tolerated, load factor %.3f\n",
                 u.c.moment_ref, u.c.moment_error, u.c.tolerated, u.load_factor);
     check(u.ok && u.load_factor >= 1.0,
-          "a plate nothing is driving does not stop the phase it is standing in");
+          "a plate that translates without bending does not stop the phase it is standing in");
     check(u.c.has_moment,
           "...and it still REPORTS a moment criterion: has_moment is about the model, not the "
           "loading, so an unloaded structure says a small number rather than disappearing");

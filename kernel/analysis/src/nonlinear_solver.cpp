@@ -63,9 +63,11 @@ void measure_convergence(const detail::LocalErrorProbe& p, const Eigen::VectorXd
     // and the tree had no floor there because the criterion was never consulted: the moment
     // reference is a sum of ABSOLUTE nodal moments, which cannot cancel, but it CAN be empty.
     //
-    // Measured, on the day the criterion first gated (2026-08-25): a plate standing on a line
-    // that is pushed down is UNDRIVEN -- the prescribed displacement fixes those nodes and the
-    // run says so itself (K2D-A003) -- and its reference is 1.11e-12 kNm/m, i.e. round-off. The
+    // Measured, on the day the criterion first gated (2026-08-25): a plate standing along the
+    // whole of a line that is pushed down is driven UNIFORMLY -- every one of its nodes takes the
+    // same settlement, so it translates without curving -- and its reference is 1.11e-12 kNm/m,
+    // i.e. round-off. (This comment first called the plate "undriven", after K2D-A003; that
+    // warning was stale and is retired -- the plate moves, it just does not bend.) The
     // ratio of one round-off to another came out at 2.06e-1 and refused the phase outright, at
     // load factor 0. The same plate under a strip load has a reference of 4.71e+02 kNm/m and an
     // error of 4.5e-14. Fourteen orders of magnitude of denominator separate a criterion that

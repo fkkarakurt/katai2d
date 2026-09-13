@@ -207,12 +207,12 @@ int main(int argc, char** argv) {
     }
 
     // Eq. 9-3/9-4 -- the MOMENT criterion, and specifically the case that made it bind: a plate
-    // standing on a line that is pushed down. The prescribed displacement fixes those nodes, so
-    // the plate is UNDRIVEN (the run says so itself, K2D-A003) and carries no moment. Its own
+    // standing along the whole of a line that is pushed down. Every node of the plate takes the
+    // same settlement, so it translates without curving and carries no moment. Its own
     // reference then collapses towards zero, and a round-off residual over a round-off reference
     // is not a measurement -- it is a ratio with nothing under it.
     if (which == "moment" || which == "all") {
-        std::printf("\n-- Eq. 9-3: a plate nothing is driving, and what its reference does --\n");
+        std::printf("\n-- Eq. 9-3: a plate that translates without bending, and what its reference does --\n");
         m::Project pr;
         std::string err;
         const std::string path = std::string(KATAI_CORPUS_DIR) + "/kv-fnd-008-strip-load.k2d";
