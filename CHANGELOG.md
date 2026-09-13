@@ -73,6 +73,24 @@ Their numbers were right: such a plate carries no moment. The reason was not —
 nodes takes the same settlement, so it translates without curving. Corrected, and the published
 record carries a dated correction note rather than a silent edit.
 
+### A correction to 0.9.0: the Hoek-Brown Safety refusal gave the wrong reason
+
+The 0.9.0 entry *Rock, from the file to the answer* says a Safety phase on a Hoek-Brown material is
+refused "because the manual does not give the rule", and the refusal message said the manual
+defines only the tension cut-off's reduction for this model. That was read from the Material
+Models Manual alone. The Reference Manual (2025.1) §7.4.5.2 does define strength reduction for
+this model: it writes the Hoek-Brown yield function with the reduction factor inside it (Eq 7-10 to
+7-13, after Benz, Schwab, Vermeer & Kauther 2007), evaluated at each stress point's own σ′₃, so it
+needs no σ′₃max. The same section states that the factor it gives *does not correspond to the
+safety factor obtained for Mohr-Coulomb material with equivalent strength properties* — which the
+refusal's recommended remedy, an equivalent Mohr-Coulomb fit, did not say.
+
+The refusal itself stands: this build does not implement that formulation, and without it a Safety
+phase would keep the rock at full strength. Its reason is corrected, in the engine and in the input
+contract, and the remedy now says what it is — an approximation whose factor belongs to the fit
+and to the confining range it was made over, not the Hoek-Brown factor of safety. The released
+0.9.0 entry is left as it was published; this note is the correction.
+
 ### Upgrading from 0.9.0
 
 - A project whose Safety phase (or initial Safety procedure) has a structural element active is

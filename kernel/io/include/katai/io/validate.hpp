@@ -675,11 +675,14 @@ inline ValidationReport validate_project(const model::Project& p) {
             if (safety_phase)
                 r.add(Severity::Error, where,
                       "a Safety analysis (phi-c reduction) cannot be run on a model that contains "
-                      "a Hoek-Brown material: that model has no c' or phi' for the reduction to "
-                      "act on, so the rock would keep full strength through every trial and the "
-                      "factor of safety would come out too HIGH. Convert the envelope to an "
-                      "equivalent c' and phi' over the confining range the problem spans (MMM Eq "
-                      "4-15/4-16) and run the Safety phase on a Mohr-Coulomb material instead");
+                      "a Hoek-Brown material in this build: that model has no c' or phi' for the "
+                      "reduction to act on, so the rock would keep full strength through every "
+                      "trial and the factor of safety would come out too HIGH. The strength "
+                      "reduction defined for this model reformulates the Hoek-Brown yield function "
+                      "itself (Reference Manual sec 7.4.5.2) and is not implemented yet. A "
+                      "Mohr-Coulomb material fitted to the envelope over the confining range the "
+                      "problem spans (MMM Eq 4-15/4-16) will run, but its factor of safety belongs "
+                      "to that fit and does not correspond to the Hoek-Brown one");
             for (size_t i = 0; i < p.phases.size(); ++i) {
                 const auto da = p.phases[i].design_approach;
                 if (da != model::DesignApproach::EC7_DA1_C2 &&

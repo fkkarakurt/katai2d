@@ -228,7 +228,8 @@ int main() {
     // rock at full strength, nothing would ever bring it down, and the search would report its
     // cap itself -- "FoS > 3.0", whatever the rock. The refusal is what is checked here,
     // because a wrong number in the safe-looking direction is the worst kind this program can
-    // produce. (MMM sec 4.3.7 defines only the tension cut-off's reduction for this model.)
+    // produce. (The strength reduction that IS defined for this model reformulates the Hoek-Brown
+    // yield function itself -- Reference Manual sec 7.4.5.2 -- and this build does not have it.)
     {
         auto pr = specimen(1000.0, 0.001);
         m::Phase sf; sf.name = "FoS"; sf.type = m::PhaseType::Safety;
