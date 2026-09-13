@@ -648,12 +648,13 @@ NB_MODULE(_core, m) {
                 "1 while the response is elastic, towards 0 as a mechanism forms. The force "
                 "criterion is normalised by it, so the check tightens as the soil plastifies")
         .def_ro("force_error", &katai::core::NewtonResult::Convergence::force_error,
-                "the CSP-normalised global error: the out-of-balance force over "
-                "||f_int|| + CSP*||f_const||")
+                "the stiffness-weighted global error, the out-of-balance force over "
+                "||f_int|| + CSP*||f_const||. Informational: reported beside global_error, "
+                "which is the ratio a step stops on")
         .def_ro("global_error", &katai::core::NewtonResult::Convergence::global_error,
-                "the ratio the DEFAULT gate uses: the out-of-balance force over a FIXED scale, "
-                "max(||f_ext||, ||f_const||, 1). Reported next to force_error because they are "
-                "not the same question, and only this one decides when a step stops")
+                "the ratio a step STOPS on: the out-of-balance force over a fixed scale, "
+                "max(||f_ext||, ||f_const||, 1). NaN on a result reopened from a results file "
+                "older than version 10, which did not record it")
         .def_ro("moment_error", &katai::core::NewtonResult::Convergence::moment_error,
                 "meaningless unless has_moment")
         .def_ro("has_moment", &katai::core::NewtonResult::Convergence::has_moment,
@@ -695,7 +696,12 @@ NB_MODULE(_core, m) {
                 "was integrated to the tolerance it was given")
         .def("integration_met_tolerance",
              &katai::core::NewtonResult::Convergence::integration_met_tolerance)
-        .def("force_ok", &katai::core::NewtonResult::Convergence::force_ok)
+        .def("global_ok", &katai::core::NewtonResult::Convergence::global_ok,
+             "the stopping test: global_error within `tolerated` (False when not recorded)")
+        .def("global_recorded", &katai::core::NewtonResult::Convergence::global_recorded,
+             "False on a result reopened from a results file older than version 10")
+        .def("force_ok", &katai::core::NewtonResult::Convergence::force_ok,
+             "the stiffness-weighted force_error within `tolerated` -- informational")
         .def("moment_ok", &katai::core::NewtonResult::Convergence::moment_ok)
         .def("iface_points_ok", &katai::core::NewtonResult::Convergence::iface_points_ok)
         .def("foot_ok", &katai::core::NewtonResult::Convergence::foot_ok)
@@ -709,8 +715,10 @@ NB_MODULE(_core, m) {
              "the moment residual")
         .def("__repr__", [](const katai::core::NewtonResult::Convergence& c) {
             if (!c.measured) return std::string("<Convergence not measured>");
-            return "<Convergence force " + std::to_string(c.force_error) + " of " +
-                   std::to_string(c.tolerated) + ", stiffness " + std::to_string(c.csp) +
+            return "<Convergence force " +
+                   (c.global_recorded() ? std::to_string(c.global_error) : "not recorded") +
+                   " of " + std::to_string(c.tolerated) + " (stiffness-weighted " +
+                   std::to_string(c.force_error) + "), stiffness " + std::to_string(c.csp) +
                    ", " + std::to_string(c.plastic_inaccurate) + "/" +
                    std::to_string(c.plastic_points) + " yielding points inaccurate" +
                    (c.local_ok() ? "" : " (LOCAL CRITERION NOT MET)") + ">";

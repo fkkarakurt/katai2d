@@ -367,13 +367,19 @@ struct NewtonResult {
         // a mechanism forms, which would make the stiffness-weighted force error LOOSEN towards
         // failure. Implemented as total over elastic, deliberately.
         double csp = 1.0;
-        // Stiffness-weighted global force error: ||r|| / (||f_int|| + CSP*||f_const||).
+        // Stiffness-weighted global force error: ||r|| / (||f_int|| + CSP*||f_const||). REPORTED,
+        // not gated: its denominator has no floor tied to the applied load, so a phase that
+        // prestresses against ground that has not responded yet can never bring it under the
+        // tolerance (the KATAI_CONV_CSPGATE seam in nonlinear_solver.cpp measured that). It is
+        // kept because it is the stricter reading near collapse.
         double force_error = 0.0;
-        // The number the DEFAULT gate actually uses: ||r|| over a FIXED scale,
-        // max(||f_ext||, ||f_const||, 1). Reported next to the stiffness-weighted force error
-        // because the two are not the same question and the tree used to publish only the one it
-        // does NOT gate on -- so a run could say "force error 3e-2, tolerance 1e-1" while the
-        // quantity that let it stop was a different ratio entirely.
+        // The ratio the step actually STOPS on: ||r|| over a FIXED scale,
+        // max(||f_ext||, ||f_const||, 1). Every surface leads with this one and labels the
+        // stiffness-weighted error above as informational -- they used to print that one as "the
+        // force error", so a converged run could read "1.763e-07 of 1.000e-10 tolerated" (KV-STR-005),
+        // a thousandfold miss, while the quantity that let it stop was 1.763e-13.
+        // NaN on a result reopened from a results file older than version 10, which did not
+        // record it: an absent number is not a met one, and 0 would say it was.
         double global_error = 0.0;
         // Moment error: the largest |residual| on a rotational equation over the sum of absolute
         // nodal moment contributions (floored at 1 kNm/m); meaningless unless has_moment.
@@ -431,6 +437,12 @@ struct NewtonResult {
         static constexpr double kInaccurateFraction = 0.1;
         static constexpr int kInaccurateAllowance = 3;
 
+        // The stopping test: true when the ratio the step stops on is within the tolerance.
+        // False when it was not recorded (NaN compares false), which a caller that wants to say
+        // "not recorded" rather than "not met" separates with global_recorded().
+        bool global_ok() const { return global_error <= tolerated; }
+        bool global_recorded() const { return global_error == global_error; }
+        // The stiffness-weighted error against the same tolerance -- informational, see above.
         bool force_ok() const { return force_error <= tolerated; }
         bool moment_ok() const { return !has_moment || moment_error <= tolerated; }
         bool plastic_points_ok() const {

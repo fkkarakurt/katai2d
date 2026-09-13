@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -60,9 +61,14 @@ using katai::core::InterfaceStation;
 // package later than the soil ones; v9 adds the consolidation stop record -- WHAT a consolidation
 // phase was asked to end on, whether it got there, and the pressure ratio it reached. A phase that
 // ends on a target answers a question ("how long?") that a phase ending on a time interval does not
-// ask, and a reopened result with the answer but not the question is a number with no units on it.
-// Older files predate each feature, so reading the fields back as false/0/None is correct for them.
-inline constexpr std::uint32_t kResultsFileVersion = 9;
+// ask, and a reopened result with the answer but not the question is a number with no units on it;
+// v10 adds the force error the phase was actually ACCEPTED on (Convergence::global_error, the
+// residual over the fixed load scale). v7 stored only the stiffness-weighted force error, which is
+// reported beside it but decides nothing, so a reopened result could show a number above its
+// tolerance under a phase that had converged -- and could not show the one that let it stop.
+// Older files predate each feature, so reading the fields back as false/0/None is correct for them
+// -- except the v10 force error, which reads back as NaN: zero would be a measurement nobody made.
+inline constexpr std::uint32_t kResultsFileVersion = 10;
 
 inline std::uint64_t fnv1a64(const std::string& s) {
     std::uint64_t h = 1469598103934665603ull;
@@ -235,6 +241,8 @@ inline bool save_results(const std::string& path, std::uint64_t model_hash,
         w.put<std::uint8_t>(R.consol_stop_met ? 1 : 0);
         w.put<double>(R.consol_pore_reference);
         w.put<double>(R.consol_degree_reached);
+        // v10: the force error the phase was accepted on.
+        w.put<double>(cv.global_error);
     }
     std::ofstream f(path, std::ios::binary);
     if (!f) { if (err) *err = "cannot open file for writing: " + path; return false; }
@@ -375,6 +383,10 @@ inline bool load_results(const std::string& path, std::uint64_t model_hash,
             R.consol_pore_reference = r.get<double>();
             R.consol_degree_reached = r.get<double>();
         }
+        // absent before v10: the accepted force error. NaN, not 0 -- a file that never recorded
+        // it must not report a perfect one.
+        R.convergence.global_error =
+            ver >= 10 ? r.get<double>() : std::numeric_limits<double>::quiet_NaN();
         // Per-phase sanity: nodal arrays must match the stored mesh.
         if (R.disp.size() != (Eigen::Index)mesh.node_count * 2 ||
             (int)R.stress.stress.size() != mesh.node_count ||

@@ -161,6 +161,30 @@ Two cases changed what they claim, and one record was tidied:
 - **Four rows of the verification matrix no longer run on** into the section title that follows
   their declaration in `test_foundation_benchmarks`.
 
+### A converged phase could read as a thousandfold miss
+
+The command line printed `converged: force error 1.763e-07 of 1.000e-10 tolerated` for the second
+phase of `KV-STR-005`, which had converged, and the Studio's HTML report put the same number under a
+**warn** badge beneath a "Converged" row. Nothing was wrong with the run: the ratio its steps
+stopped on was 1.763e-13. Two force ratios are measured at every accepted iterate, and the surfaces
+printed the one that decides nothing: the stiffness-weighted error, ‖r‖ / (‖f_int‖ + CSP·‖f_const‖),
+which is reported because it is the stricter reading near collapse but cannot yet gate — its
+denominator has no floor tied to the applied load, and gating on it measured 5 failures in 142 fast
+tests. A step stops on the other one, ‖r‖ over the fixed scale max(‖f_ext‖, ‖f_const‖, 1), and a
+results file did not store it at all.
+
+**Every surface now leads with the ratio the step stopped on, against the tolerance it was held
+to,** and shows the stiffness-weighted error beside it, labelled as reported and not the stopping
+test: the command line (a second line under `converged:`), the Studio's text and HTML reports (a
+"Weighted force error" row with no badge — a reading that decides nothing cannot warn), and the
+Python `Convergence` repr. `Convergence.global_ok()` and `global_recorded()` are new; `force_ok()`
+keeps its meaning and is documented as informational. **`.res` v10** stores the stopping ratio.
+A version 9 file still loads, and the ratio it never stored reads back as NaN and is shown as "not
+recorded" — never as 0, which would be a perfect number nobody measured. `test_results_io` builds a
+genuine version 9 file from a version 10 one and checks both halves of that; `test_report` checks
+the order, the missing badge and the "not recorded" line; `test_convergence_criteria` checks that the
+stopping ratio is recorded and within its tolerance on a converged run.
+
 ### Upgrading from 0.9.0
 
 - A project whose Safety phase (or initial Safety procedure) has a structural element active is
@@ -175,6 +199,12 @@ Two cases changed what they claim, and one record was tidied:
   above.
 - The validation comparison page for the four footing benchmarks is withdrawn; each case is in
   `docs/validation/verification-matrix.md` against its analytical solution.
+- Results files are written as `.res` version 10, which 0.9.0 refuses as "from a newer version".
+  This build reads the older files; their stopping ratio shows as not recorded.
+- The command line prints one more line per converged phase, and scripts that read the number after
+  `converged: force error` now get the ratio the step stopped on (before: the stiffness-weighted
+  one, still printed on the line below). In Python, `Convergence.force_error` is unchanged; the
+  stopping ratio is `global_error`.
 
 ## [0.9.0] - 2026-08-31
 

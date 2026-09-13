@@ -159,6 +159,10 @@ void test_convergence_family() {
     // (3) The separation. The global criterion is met by orders of magnitude while a local one
     // is not -- the case N-2 was written to find, and the reason one check is not enough.
     check(f300.ok && f300.c.force_ok(), "q=300 converged on the global force criterion");
+    // The record says which ratio stopped the step, and it is inside its tolerance on a
+    // converged run -- the property every surface now leads with.
+    check(f300.c.global_recorded() && f300.c.global_ok(),
+          "q=300: the ratio the step stopped on is recorded and within the tolerated error");
     const double separation = f300.c.worst_plastic_error / f300.c.force_error;
     std::printf("     q=300: force error %.3e, worst local %.3e, separation %.0fx\n",
                 f300.c.force_error, f300.c.worst_plastic_error, separation);

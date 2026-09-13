@@ -1076,7 +1076,9 @@ collapsing.
   now been measured, so the decision is a small one.** Both ratios are on the record at the same
   iterate (`Convergence::force_error` for the CSP-normalised ratio and `Convergence::global_error` for the gate —
   until 2026-08-25 only the one that does NOT gate was published, so a run could print "force error
-  3e-2, tolerance 1e-1" while the quantity that let it stop was a different ratio entirely), and
+  3e-2, tolerance 1e-1" while the quantity that let it stop was a different ratio entirely; the
+  command line and the Studio report went on printing that one as "the force error" until
+  2026-09-13, when both began to lead with the gate and `.res` v10 began to store it), and
   `KATAI_CONV_CSPGATE` swaps the gate over. What the swap is worth, measured on the Mohr-Coulomb
   footing walked to collapse:
 

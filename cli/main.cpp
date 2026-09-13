@@ -70,14 +70,22 @@ void print_diagnostics(const api::SolveResult& R) {
 //
 // Printed for every phase that measured it, so the accuracy the numbers were accepted under
 // travels with them; the second block appears only when there is something to act on.
+//
+// The first line leads with the ratio the step STOPPED on, against the tolerance it was held to.
+// The stiffness-weighted force error follows on its own line, labelled for what it is: a stricter
+// reading reported beside the test, not the test. Printed as "the force error" it read as a
+// thousandfold miss on a converged phase (KV-STR-005: 1.763e-07 against 1.000e-10, while the
+// ratio it stopped on was 1.763e-13).
 void print_convergence(const api::SolveResult& R) {
     const auto& c = R.convergence;
     if (!c.measured) return;
-    std::printf("  converged: force error %.3e of %.3e tolerated", c.force_error, c.tolerated);
+    std::printf("  converged: force error %.3e of %.3e tolerated", c.global_error, c.tolerated);
     if (c.plastic_points > 0 || c.nl_elastic_points > 0)
         std::printf(", stiffness parameter %.3f", c.csp);
     if (c.has_moment) std::printf(", moment error %.3e", c.moment_error);
     std::printf("\n");
+    std::printf("             stiffness-weighted force error %.3e (reported, not the stopping "
+                "test)\n", c.force_error);
     if (!c.plastic_points_ok())
         std::printf("  note    %d of %d yielding stress points carry a LOCAL error above the "
                     "same tolerance (worst %.2e).\n"

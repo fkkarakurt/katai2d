@@ -66,6 +66,9 @@ std::vector<katai::app::SolveResult> build_phases() {
         R.convergence.worst_iface_error = 2.05e-6 * k;
         R.convergence.feet = k;
         R.convergence.foot_force_error = 5.58e-9 * k;
+        // v10: the ratio the step stopped on. A reopened result that kept only the
+        // stiffness-weighted error reported a number nothing had been compared against.
+        R.convergence.global_error = 6.0917253e-8 * (k + 1);
         // v9: WHAT a consolidation phase was asked to end on, and what it reached. A result that
         // says "90% consolidated" without saying which 90% (a pressure ratio, not the settlement
         // ratio) is the number without its definition -- the same reason stopped_by is stored.
@@ -117,6 +120,10 @@ bool same(const katai::app::SolveResult& a, const katai::app::SolveResult& b) {
         ca.iface_points != cb.iface_points || ca.iface_inaccurate != cb.iface_inaccurate ||
         ca.worst_iface_error != cb.worst_iface_error || ca.feet != cb.feet ||
         ca.foot_force_error != cb.foot_force_error) return false;
+    // NaN-safe: a field that was not recorded on both sides is the same absence.
+    if (!(ca.global_error == cb.global_error ||
+          (ca.global_error != ca.global_error && cb.global_error != cb.global_error)))
+        return false;
     if (a.consol_stop != b.consol_stop || a.consol_stop_met != b.consol_stop_met ||
         a.consol_pore_reference != b.consol_pore_reference ||
         a.consol_degree_reached != b.consol_degree_reached) return false;
@@ -198,6 +205,52 @@ int main() {
     std::vector<katai::app::SolveResult> cut;
     check(!katai::app::load_results(path, hash, cut, &err) && !err.empty(),
           "truncated file rejected");
+
+    // A version 9 file is the same bytes without the v10 field, the last double of each phase
+    // record. Reading one must not invent the ratio the step stopped on -- it comes back NaN,
+    // "not recorded" -- and every other field must come back exactly as before.
+    {
+        err.clear();
+        check(katai::app::save_results(path, hash, phases, &err), "results saved again");
+        std::string data;
+        {
+            std::ifstream in(path, std::ios::binary);
+            std::ostringstream ss; ss << in.rdbuf();
+            data = ss.str();
+        }
+        bool located = true;
+        for (const auto& P : phases) {
+            const double v = P.convergence.global_error;
+            const std::string bytes(reinterpret_cast<const char*>(&v), sizeof v);
+            const std::size_t at = data.find(bytes);
+            located = located && at != std::string::npos &&
+                      data.find(bytes, at + 1) == std::string::npos;
+            if (at != std::string::npos) data.erase(at, sizeof v);
+        }
+        check(located, "the v10 field is found exactly once per phase");
+        const std::uint32_t v9 = 9;
+        std::memcpy(&data[4], &v9, sizeof v9);   // "K2DR", then the version
+        {
+            std::ofstream out(path, std::ios::binary);
+            out.write(data.data(), (std::streamsize)data.size());
+        }
+        std::vector<katai::app::SolveResult> old;
+        err.clear();
+        check(katai::app::load_results(path, hash, old, &err) && old.size() == 2,
+              "a version 9 file still loads");
+        if (old.size() == 2) {
+            check(!old[0].convergence.global_recorded() && !old[1].convergence.global_recorded() &&
+                      !old[1].convergence.global_ok(),
+                  "...and the ratio it never stored reads as NOT RECORDED, not as a met zero");
+            bool rest_same = true;
+            for (int k = 0; k < 2; ++k) {
+                auto expect = phases[k];
+                expect.convergence.global_error = old[k].convergence.global_error;
+                rest_same = rest_same && same(expect, old[k]);
+            }
+            check(rest_same, "...and every other field is unchanged");
+        }
+    }
     std::remove(path);
 
     if (g_failures == 0) {

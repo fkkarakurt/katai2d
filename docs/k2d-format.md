@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **18** · Current `.res` version: **9**
+Current `.k2d` version: **18** · Current `.res` version: **10**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -429,7 +429,7 @@ u32 phase count · per phase: flags + scalars + message + displacements/stresses
   so results are refused as **stale** when the model no longer matches them — even after
   formatting-only edits to the project file.
 - Version history (a reader accepts 1..current; absent fields read as `false`/`0`, which is correct
-  for files that predate the feature): **v2** interface results (τ/σ_n/slip) · **v3** seismic
+  for files that predate the feature, except where a version below says otherwise): **v2** interface results (τ/σ_n/slip) · **v3** seismic
   envelope flags · **v4** superposed design action + Coulomb utilisation · **v5**
   `slip_checked` (the envelope came from the nonlinear Coulomb branch) · **v6** `stopped_by`,
   the reason a solve stopped short of full load, without which a reopened result cannot say whether
@@ -439,7 +439,14 @@ u32 phase count · per phase: flags + scalars + message + displacements/stresses
   counts at the soil stress points) — "converged" is a claim about the accuracy of every number in
   the file, and a reopened result used to keep the claim while dropping its evidence · **v8**
   completes that family with the interface / coupling-spring counts and the embedded-beam foot
-  force error, which landed one package after the soil ones.
+  force error, which landed one package after the soil ones · **v9** the consolidation stop record —
+  what a consolidation phase was asked to end on, whether it got there, and the pressure ratio it
+  reached · **v10** the force error each phase was accepted on, the out-of-balance force over the
+  fixed scale max(‖f_ext‖, ‖f_const‖, 1), which is the ratio a step stops on. The v7 field is the
+  stiffness-weighted force error, reported beside it and deciding nothing; a reopened result that
+  had only that one could show a number above its tolerance under a phase that converged. A file
+  older than v10 reads this field back as **NaN**, shown as "not recorded" — zero would be a
+  measurement nobody made.
 - Committed Gauss states are NOT stored: restored results are for viewing and post-processing;
   continuing a staged run re-calculates. This is honest and keeps the file an order of magnitude
   smaller.
