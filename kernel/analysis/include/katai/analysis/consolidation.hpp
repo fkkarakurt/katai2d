@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <utility>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -67,6 +68,31 @@ inline double mean_element_size(const mesh::Mesh& mesh) {
 inline double consolidation_eta(const mesh::Mesh& mesh) {
     return mesh.nodes_per_element == 15 ? 80.0 : 40.0;
 }
+
+// The pore fluid's stiffness Kw/n [kPa] -- the reciprocal of the storage term n/Kw in the flow
+// equation. It belongs to each MATERIAL, because the porosity does: two layers of different
+// porosity store different volumes of water per kPa of pressure. A single number is what a
+// one-material model needs, and every caller that passes one still gets exactly that (the
+// constructor is implicit on purpose); `by_material` gives each material id its own value.
+//
+// Until 2026-09-13 the consolidation and fully-coupled phases passed one value, taken from the
+// first material in the list, so the answer for a layered model depended on the ORDER its
+// materials were listed in. Measured on two 6 m layers of porosity 0.2 and 0.6 at E_oed = 500 MPa:
+// the degree of consolidation moved by 6.8 percentage points, and the undrained pressure from
+// 8.69 to 9.52 kPa, when the two materials swapped places in the list (KV-CON-004).
+struct PoreFluidStiffness {
+    double uniform = 0.0;
+    std::vector<double> by_material;   // empty: `uniform` everywhere
+
+    PoreFluidStiffness(double value) : uniform(value) {}
+    PoreFluidStiffness(std::vector<double> per_material, double fallback)
+        : uniform(fallback), by_material(std::move(per_material)) {}
+
+    double at(int material) const {
+        return material >= 0 && material < (int)by_material.size() ? by_material[material]
+                                                                  : uniform;
+    }
+};
 
 namespace detail {
 
@@ -156,8 +182,8 @@ struct ConsolidationPlasticResult {
 // what it was before this parameter existed.
 //
 // Linear-elastic Biot consolidation. dofs: translations (2/node), finalized (lateral/base BCs).
-// materials: LinearElastic; perm: k by material id; gamma_w, kw_over_n=Kw/n (same as the undrained
-// wrapper); drained_node[n]=1 -> p=0 at that node (drainage boundary); initial_pore[n] = initial
+// materials: LinearElastic; perm: k by material id; gamma_w, kw_over_n=Kw/n, one value or one per
+// material id (PoreFluidStiffness above); drained_node[n]=1 -> p=0 at that node (drainage boundary); initial_pore[n] = initial
 // excess pore pressure (size node_count); dt fixed time step, nsteps step count. `active`
 // (optional, size = element_count; empty = all active) is the staged excavation/fill mask --
 // passive elements enter none of the K/L/H/S assemblies. `load_increment` (optional, size =
@@ -172,7 +198,7 @@ struct ConsolidationPlasticResult {
 ConsolidationResult solve_consolidation(const mesh::Mesh& mesh, const DofMap& dofs,
                                         const std::vector<MaterialModel>& materials,
                                         const std::vector<Permeability>& perm,
-                                        double gamma_w, double kw_over_n,
+                                        double gamma_w, const PoreFluidStiffness& kw_over_n,
                                         const std::vector<char>& drained_node,
                                         const std::vector<double>& initial_pore,
                                         double dt, int nsteps,
@@ -192,7 +218,7 @@ ConsolidationResult solve_consolidation(const mesh::Mesh& mesh, const DofMap& do
 // Definition in kernel/analysis/src/consolidation.cpp (section 5.2).
 ConsolidationPlasticResult solve_consolidation_plastic(
     const mesh::Mesh& mesh, const DofMap& dofs, const std::vector<MaterialModel>& materials,
-    const std::vector<Permeability>& perm, double gamma_w, double kw_over_n,
+    const std::vector<Permeability>& perm, double gamma_w, const PoreFluidStiffness& kw_over_n,
     const std::vector<char>& drained_node, const std::vector<GaussState>& initial_state,
     const std::vector<double>& initial_pore, double dt, int nsteps, const std::vector<char>& active,
     const Eigen::VectorXd* load_increment, const ConsolidationSolveFactory& solve_factory,

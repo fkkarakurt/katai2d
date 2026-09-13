@@ -14,7 +14,7 @@ ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dof
                                        const std::vector<MaterialModel>& materials,
                                        const std::vector<MaterialProfile>& profile,
                                        const std::vector<Permeability>& perm,
-                                       double gamma_w, double kw_over_n,
+                                       double gamma_w, const PoreFluidStiffness& kw_over_n,
                                        const std::vector<char>& drained_node,
                                        const std::vector<double>& initial_pore,
                                        double dt, int nsteps,
@@ -76,7 +76,7 @@ ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dof
             Le.noalias() += w * sd.B.transpose() * (mvec * Nsh.transpose());
             He.noalias() += w * (G.row(0).transpose() * (pm.kx / gamma_w) * G.row(0)
                                + G.row(1).transpose() * (pm.ky / gamma_w) * G.row(1));
-            Se.noalias() += w * (1.0 / kw_over_n) * (Nsh * Nsh.transpose());
+            Se.noalias() += w * (1.0 / kw_over_n.at(e_mat)) * (Nsh * Nsh.transpose());
         }
         // Scatter into the combined system (full symmetric) + H (for the RHS product).
         for (int a = 0; a < N; ++a) {
@@ -180,7 +180,7 @@ template <class E>
 ConsolidationPlasticResult consolidation_plastic_impl(
     const mesh::Mesh& mesh, const DofMap& dofs, const std::vector<MaterialModel>& materials,
     const std::vector<MaterialProfile>& profile,
-    const std::vector<Permeability>& perm, double gamma_w, double kw_over_n,
+    const std::vector<Permeability>& perm, double gamma_w, const PoreFluidStiffness& kw_over_n,
     const std::vector<char>& drained_node, const std::vector<GaussState>& initial_state,
     const std::vector<double>& initial_pore,
     double dt, int nsteps, const std::vector<char>& active, const Eigen::VectorXd* load_increment,
@@ -260,7 +260,7 @@ ConsolidationPlasticResult consolidation_plastic_impl(
                 Le.noalias() += w * sd.B.transpose() * (mvec * Nsh.transpose());
                 He.noalias() += w * (G.row(0).transpose() * (pm.kx / gamma_w) * G.row(0)
                                    + G.row(1).transpose() * (pm.ky / gamma_w) * G.row(1));
-                Se.noalias() += w * (1.0 / kw_over_n) * (Nsh * Nsh.transpose());
+                Se.noalias() += w * (1.0 / kw_over_n.at(e_mat)) * (Nsh * Nsh.transpose());
             }
             for (int a = 0; a < N; ++a)
                 for (int ca = 0; ca < 2; ++ca) {
@@ -380,7 +380,7 @@ ConsolidationPlasticResult consolidation_plastic_impl(
 ConsolidationResult solve_consolidation(const mesh::Mesh& mesh, const DofMap& dofs,
                                                const std::vector<MaterialModel>& materials,
                                                const std::vector<Permeability>& perm,
-                                               double gamma_w, double kw_over_n,
+                                               double gamma_w, const PoreFluidStiffness& kw_over_n,
                                                const std::vector<char>& drained_node,
                                                const std::vector<double>& initial_pore,
                                                double dt, int nsteps,
@@ -403,7 +403,7 @@ ConsolidationResult solve_consolidation(const mesh::Mesh& mesh, const DofMap& do
 
 ConsolidationPlasticResult solve_consolidation_plastic(
     const mesh::Mesh& mesh, const DofMap& dofs, const std::vector<MaterialModel>& materials,
-    const std::vector<Permeability>& perm, double gamma_w, double kw_over_n,
+    const std::vector<Permeability>& perm, double gamma_w, const PoreFluidStiffness& kw_over_n,
     const std::vector<char>& drained_node, const std::vector<GaussState>& initial_state,
     const std::vector<double>& initial_pore, double dt, int nsteps, const std::vector<char>& active,
     const Eigen::VectorXd* load_increment, const ConsolidationSolveFactory& solve_factory,

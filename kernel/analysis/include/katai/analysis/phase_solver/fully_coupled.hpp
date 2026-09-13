@@ -123,17 +123,17 @@ inline bool solve_fully_coupled_phase(
         }
     }
     // Non-porous x coupled flow-deformation: the same honest refusal as the consolidation
-    // strategy (every active element gets a pore-pressure DOF and ONE scalar Kw/n, so a
-    // non-porous region would silently behave water-filled).
+    // strategy (every active element gets a pore-pressure DOF, so a non-porous region would
+    // silently carry pore pressure and pass water).
     for (size_t mi = 0; mi < nmat; ++mi) {
         bool used_np = false;
         for (int e = 0; e < mesh.element_count && !used_np; ++e)
             if ((in.active.empty() || in.active[e]) && mesh.element_material[e] == (int)mi) used_np = true;
         if (used_np && in.materials[mi].nonporous) {
             R.message = "Material '" + in.materials[mi].name + "' is Non-porous: consolidation "
-                        "/ fully-coupled phases give every element a pore-pressure DOF and a "
-                        "single fluid stiffness, so a non-porous region would silently behave "
-                        "water-filled. Model the concrete with Drained + high stiffness in "
+                        "/ fully-coupled phases give every element a pore-pressure DOF, so a "
+                        "non-porous region would silently carry pore pressure and pass water. "
+                        "Model the concrete with Drained + high stiffness in "
                         "coupled phases, or keep Non-porous to static/dynamic phases.";
             return false;
         }
@@ -167,12 +167,13 @@ inline bool solve_fully_coupled_phase(
         }
     }
     // Pore-fluid stiffness Kw/n from the real water bulk modulus (Verruijt):
-    // near-incompressible -> cv = k Eoed / gamma_w. v1 uses one representative porosity.
+    // near-incompressible -> cv = k Eoed / gamma_w. One value per material, from that material's
+    // own porosity (PoreFluidStiffness, consolidation.hpp), as in the consolidation phase.
     constexpr double kWaterBulk = 2.0e6;   // bulk modulus of water [kPa]
-    double porosity = 0.3;
+    std::vector<double> kw_by_material(nmat, kWaterBulk / 0.3);
     for (size_t mi = 0; mi < nmat; ++mi)
-        if (used[mi]) { porosity = poros[mi]; break; }
-    const double kw_over_n = kWaterBulk / std::max(0.05, porosity);
+        kw_by_material[mi] = kWaterBulk / std::max(0.05, poros[mi]);
+    const PoreFluidStiffness kw_over_n(std::move(kw_by_material), kWaterBulk / 0.3);
 
     // Drainage boundary (engine service, B4): prescribed-head / seepage edges drain; with no
     // declared flow BCs the model top drains; inactive-only nodes carry no pore DOF.

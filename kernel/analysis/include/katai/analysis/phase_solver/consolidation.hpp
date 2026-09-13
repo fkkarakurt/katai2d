@@ -166,18 +166,19 @@ inline bool solve_consolidation_phase(
         }
     }
     // Non-porous x consolidation: honest refusal. The Biot solver gives every active element a
-    // pore-pressure DOF and ONE scalar Kw/n -- a non-porous region would silently behave
-    // water-filled (concrete gaining pore stiffness, drainage paths corrupted). Region-based
-    // pore-DOF exclusion is a separate work item (with per-material Kw/n).
+    // pore-pressure DOF -- a non-porous region would silently carry pore pressure and pass water
+    // (concrete gaining pore stiffness, drainage paths running through it). The fluid stiffness is
+    // per material now, but a stiffness is not an exclusion: region-based pore-DOF exclusion is
+    // the separate work item this refusal waits for.
     for (size_t mi = 0; mi < nmat; ++mi) {
         bool used_np = false;
         for (int e = 0; e < mesh.element_count && !used_np; ++e)
             if ((in.active.empty() || in.active[e]) && mesh.element_material[e] == (int)mi) used_np = true;
         if (used_np && in.materials[mi].nonporous) {
             R.message = "Material '" + in.materials[mi].name + "' is Non-porous: consolidation "
-                        "/ fully-coupled phases give every element a pore-pressure DOF and a "
-                        "single fluid stiffness, so a non-porous region would silently behave "
-                        "water-filled. Model the concrete with Drained + high stiffness in "
+                        "/ fully-coupled phases give every element a pore-pressure DOF, so a "
+                        "non-porous region would silently carry pore pressure and pass water. "
+                        "Model the concrete with Drained + high stiffness in "
                         "consolidation phases, or keep Non-porous to static/dynamic phases.";
             return false;
         }
@@ -205,13 +206,14 @@ inline bool solve_consolidation_phase(
             return false;
         }
     }
-    // Pore-fluid stiffness Kw/n from the real water bulk modulus (Verruijt):
-    // near-incompressible -> cv = k Eoed / gamma_w. v1 uses one representative porosity.
+    // Pore-fluid stiffness Kw/n from the real water bulk modulus (Verruijt), one value per
+    // material from that material's own porosity (PoreFluidStiffness, consolidation.hpp): a
+    // layered model is answered the same whatever order its materials are listed in.
     constexpr double kWaterBulk = 2.0e6;   // bulk modulus of water [kPa]
-    double porosity = 0.3;
+    std::vector<double> kw_by_material(nmat, kWaterBulk / 0.3);
     for (size_t mi = 0; mi < nmat; ++mi)
-        if (used[mi]) { porosity = in.materials[mi].porosity; break; }
-    const double kw_over_n = kWaterBulk / std::max(0.05, porosity);
+        kw_by_material[mi] = kWaterBulk / std::max(0.05, in.materials[mi].porosity);
+    const PoreFluidStiffness kw_over_n(std::move(kw_by_material), kWaterBulk / 0.3);
 
     // Drainage boundary (engine service, B4): prescribed-head / seepage edges drain; with no
     // declared flow BCs the model top drains; inactive-only nodes carry no pore DOF.

@@ -12,7 +12,7 @@ CoupledFlowResult coupled_flow_impl(
     const mesh::Mesh& mesh, const DofMap& dofs, const std::vector<MaterialModel>& materials,
     const std::vector<MaterialProfile>& profile,
     const std::vector<Permeability>& perm, const std::vector<WaterRetention>& retention,
-    const std::vector<double>& porosity, double gamma_w, double kw_over_n,
+    const std::vector<double>& porosity, double gamma_w, const PoreFluidStiffness& kw_over_n,
     const std::vector<char>& drained_node, const std::vector<double>& initial_pore,
     double dt, int nsteps, const std::vector<char>& active, const Eigen::VectorXd* load_increment,
     const ConsolidationSolveFactory& solve_factory, int max_picard, double picard_tol,
@@ -61,7 +61,7 @@ CoupledFlowResult coupled_flow_impl(
                 const double kr = relative_permeability(w, Se_eff);
                 const double Sdeg = saturation(w, psi);             // degree of saturation
                 const double dS_dpw = -ne * moisture_capacity(w, psi) / gamma_w;  // n.dS/dp_w >= 0
-                const double Cp = Sdeg / kw_over_n + dS_dpw;        // storage coefficient (pos)
+                const double Cp = Sdeg / kw_over_n.at(e_mat) + dS_dpw;   // storage coefficient (pos)
                 Eigen::Matrix<double, 2, N> G;
                 for (int i = 0; i < N; ++i) { G(0, i) = sd.B(0, 2 * i); G(1, i) = sd.B(1, 2 * i + 1); }
                 // Depth-varying E' at the stress point (uniform() keeps the hoisted M -> bit-for-bit).
@@ -194,7 +194,7 @@ CoupledFlowResult coupled_flow_impl(
 CoupledFlowResult solve_coupled_flow_deformation(
     const mesh::Mesh& mesh, const DofMap& dofs, const std::vector<MaterialModel>& materials,
     const std::vector<Permeability>& perm, const std::vector<WaterRetention>& retention,
-    const std::vector<double>& porosity, double gamma_w, double kw_over_n,
+    const std::vector<double>& porosity, double gamma_w, const PoreFluidStiffness& kw_over_n,
     const std::vector<char>& drained_node, const std::vector<double>& initial_pore,
     double dt, int nsteps, const std::vector<char>& active,
     const Eigen::VectorXd* load_increment,
@@ -217,7 +217,7 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
     const mesh::Mesh& mesh, const DofMap& dofs, const std::vector<MaterialModel>& materials,
     const std::vector<MaterialProfile>& profile,
     const std::vector<Permeability>& perm, const std::vector<WaterRetention>& retention,
-    const std::vector<double>& porosity, double gamma_w, double kw_over_n,
+    const std::vector<double>& porosity, double gamma_w, const PoreFluidStiffness& kw_over_n,
     const std::vector<char>& drained_node, const std::vector<GaussState>& initial_state,
     const std::vector<double>& initial_pore, double dt, int nsteps, const std::vector<char>& active,
     const Eigen::VectorXd* load_increment, const ConsolidationSolveFactory& solve_factory,
@@ -301,7 +301,7 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
                 const double kr = relative_permeability(w, Se_eff);
                 const double Sdeg = saturation(w, psi);
                 const double dS_dpw = -ne * moisture_capacity(w, psi) / gamma_w;  // n.dS/dp_w >= 0
-                const double Cp = Sdeg / kw_over_n + dS_dpw;                       // storage coefficient
+                const double Cp = Sdeg / kw_over_n.at(e_mat) + dS_dpw;             // storage coefficient
                 fe.noalias() += wdet * sd.B.transpose() * tr.stress;
                 Ke.noalias() += wdet * sd.B.transpose() * Dt * sd.B;
                 Eigen::Matrix<double, 2, N> G;
@@ -436,7 +436,7 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
 CoupledFlowPlasticResult solve_coupled_flow_deformation_plastic(
     const mesh::Mesh& mesh, const DofMap& dofs, const std::vector<MaterialModel>& materials,
     const std::vector<Permeability>& perm, const std::vector<WaterRetention>& retention,
-    const std::vector<double>& porosity, double gamma_w, double kw_over_n,
+    const std::vector<double>& porosity, double gamma_w, const PoreFluidStiffness& kw_over_n,
     const std::vector<char>& drained_node, const std::vector<GaussState>& initial_state,
     const std::vector<double>& initial_pore, double dt, int nsteps,
     const std::vector<char>& active, const Eigen::VectorXd* load_increment,

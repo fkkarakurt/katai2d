@@ -66,7 +66,7 @@ struct CoupledFlowResult {
 CoupledFlowResult solve_coupled_flow_deformation(
     const mesh::Mesh& mesh, const DofMap& dofs, const std::vector<MaterialModel>& materials,
     const std::vector<Permeability>& perm, const std::vector<WaterRetention>& retention,
-    const std::vector<double>& porosity, double gamma_w, double kw_over_n,
+    const std::vector<double>& porosity, double gamma_w, const PoreFluidStiffness& kw_over_n,
     const std::vector<char>& drained_node, const std::vector<double>& initial_pore,
     double dt, int nsteps, const std::vector<char>& active = {},
     const Eigen::VectorXd* load_increment = nullptr,
@@ -114,7 +114,7 @@ struct CoupledFlowPlasticResult {
 CoupledFlowPlasticResult solve_coupled_flow_deformation_plastic(
     const mesh::Mesh& mesh, const DofMap& dofs, const std::vector<MaterialModel>& materials,
     const std::vector<Permeability>& perm, const std::vector<WaterRetention>& retention,
-    const std::vector<double>& porosity, double gamma_w, double kw_over_n,
+    const std::vector<double>& porosity, double gamma_w, const PoreFluidStiffness& kw_over_n,
     const std::vector<char>& drained_node, const std::vector<GaussState>& initial_state,
     const std::vector<double>& initial_pore, double dt, int nsteps,
     const std::vector<char>& active = {}, const Eigen::VectorXd* load_increment = nullptr,

@@ -185,6 +185,35 @@ genuine version 9 file from a version 10 one and checks both halves of that; `te
 the order, the missing badge and the "not recorded" line; `test_convergence_criteria` checks that the
 stopping ratio is recorded and within its tolerance on a converged run.
 
+### A layered model consolidated differently depending on the order of its material list
+
+A consolidation or fully-coupled phase stores water as well as moving it: the pores hold a volume
+n/K_w per kPa of pore pressure, and the porosity n is each material's own (`e_init`). Both phases
+took one value for the whole mesh — from whichever material came first in the project's list. For a
+soft soil that is invisible, because its compressibility dwarfs the water's; for a stiff layer it is
+not, and the symptom was an answer that depended on the order of a list. Measured on two 6 m layers
+of porosity 0.2 over 0.6 under a 10 kPa surcharge, swapping the two materials in the list moved the
+degree of consolidation by
+
+| E_oed | largest change in U |
+|---|---|
+| 1 MPa | 0.02 percentage points |
+| 50 MPa | 0.8 percentage points |
+| 500 MPa | 6.8 percentage points, and the undrained pressure from 8.69 to 9.52 kPa |
+
+**The storage term is now per material in both phases.** `KV-CON-004` checks it three ways: after a
+first step far shorter than the drainage time each layer holds its own closed-form undrained
+pressure, q / (1 + n E_oed / K_w) — 9.5238 and 8.6957 kPa in one column, measured to −0.013% and
++0.000%; the two listing orders give bit-identical answers; and the settlement history follows an
+independent finite-volume solution of the two-layer equation written in the test to −0.09%, where
+the same solution with one porosity for both layers is 0.97% or 3.76% away. A model whose
+materials all share one `e_init` — including every model that never set it — gives exactly the
+answer it gave before.
+
+The Non-porous refusal in these phases gave "a single fluid stiffness" as half of its reason. That
+half is gone; the refusal stays, because every element still receives a pore-pressure unknown, and
+the message now says only that.
+
 ### Upgrading from 0.9.0
 
 - A project whose Safety phase (or initial Safety procedure) has a structural element active is
@@ -205,6 +234,8 @@ stopping ratio is recorded and within its tolerance on a converged run.
   `converged: force error` now get the ratio the step stopped on (before: the stiffness-weighted
   one, still printed on the line below). In Python, `Convergence.force_error` is unchanged; the
   stopping ratio is `global_error`.
+- Consolidation and fully-coupled results change for a model whose materials have different
+  `e_init`, most for stiff layers (see the table above); models with one `e_init` are unchanged.
 
 ## [0.9.0] - 2026-08-31
 
