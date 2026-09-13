@@ -1,6 +1,6 @@
 #pragma once
 // Depth-varying stiffness / strength profile construction (Stage B6: extracted
-// from the application driver). PLAXIS E'_inc / c'_inc about y_ref become a
+// from the application driver). The depth increments E'_inc / c'_inc about y_ref become a
 // MaterialProfile, gated by what the resolved model actually reads -- the
 // catalogue's profile_E / profile_c flags (registry.hpp), stated once with the
 // model instead of re-derived at every caller. A model that cannot honour a

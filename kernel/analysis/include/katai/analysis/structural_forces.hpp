@@ -1,5 +1,5 @@
 #pragma once
-// Structural internal-force OUTPUTS (PLAXIS Output counterpart) — the DISTRIBUTION of N
+// Structural internal-force OUTPUTS — the DISTRIBUTION of N
 // (axial), Q (shear), M (bending moment) + location along plate/anchor/geogrid elements,
 // from the converged global solution.
 //
@@ -9,8 +9,8 @@
 // DofMap. The GENERAL + DISTRIBUTED counterpart of wall_force_envelope, which returned
 // only max |M|,|Q|,|N|.
 //
-// PLAXIS Reference Manual "Output → Structures → Bending moments M / Shear forces Q / Axial forces N":
-// structural forces along the element, per unit width (kN·m/m, kN/m). Sign convention as in
+// Bending moments M / shear forces Q / axial forces N: structural forces along the element, per
+// unit width (kN·m/m, kN/m). Sign convention as in
 // plate.hpp: N tension-positive, M = EI·κ, Q = kGA'·γ.
 // Math: docs/references/structural-plate-formulation.md §9.
 
@@ -106,8 +106,9 @@ inline constexpr std::array<double, 4> kPlate5ShearXi{
 // `plastic_state`: the chain's committed M-N hinge state ([ε_p,κ_p]×3 Gauss × element; the
 // slice of NewtonResult.plate_plastic belonging to this chain). NON-EMPTY + props.plastic()
 // ⇒ N,M are expanded to the stations by Lagrange from the return-mapped values at the GAUSS
-// (stress) points (PLAXIS: "extrapolation of the values at the stress points"; a station
-// value may slightly exceed the cap — PLAXIS does not check the node either). EMPTY ⇒
+// (stress) points (the station values are extrapolated from the stress points; a station
+// value may therefore slightly exceed the cap — the cap is checked at the stress points, not at
+// the nodes). EMPTY ⇒
 // elastic recovery (D6b: a linear dynamic envelope that solves the plate ELASTICALLY must
 // not be silently clipped by a capped report).
 inline std::vector<ForceStation> plate_force_diagram(
@@ -245,7 +246,7 @@ inline AnchorForce anchor_force(const AnchorElement& an, const mesh::Mesh& mesh,
 
 // Geogrid axial-force diagram — mirrors the constitutive/return mapping
 // (geogrid::axial_return) EXACTLY: N = clamp(EA(ε − ε_p), 0, N_p); compression cut-off
-// (slack) + N_p yield. The plastic state is defined at the 2 Gauss points (like PLAXIS
+// (slack) + N_p yield. The plastic state is defined at the 2 Gauss points (the element's
 // stress points) → the diagram is reported at those 2 points. `ep_committed` = this
 // geogrid's 2 committed plastic ε (NewtonResult.geogrid_plastic[2*gi .. 2*gi+1]);
 // elastic/pure tension-only → {0,0}.
@@ -288,8 +289,8 @@ inline std::vector<ForceStation> geogrid_force_diagram(
     return out;
 }
 
-// Embedded beam (pile row) N,Q,M diagram along the pile (PLAXIS Output -> Structures, embedded
-// beam forces). The beam is a chain of 3-node Timoshenko elements on its OWN independent DOFs
+// Embedded beam (pile row) N,Q,M diagram along the pile (the embedded beam forces). The beam is
+// a chain of 3-node Timoshenko elements on its OWN independent DOFs
 // (beam.dof_x/dof_y/dof_phi are global DOF indices into `disp`) with its OWN node coordinates
 // (beam.node_x/node_y, NOT mesh nodes) -> it reuses the validated plate::forces kernel + Barlow
 // shear, exactly like plate_force_diagram but reading the beam's geometry/DOFs instead of the mesh.
@@ -332,7 +333,7 @@ inline std::vector<ForceStation> embedded_beam_force_diagram(
     return out;
 }
 
-// --- INTERFACE (soil-structure Coulomb joint) output (PLAXIS Output -> Interfaces) --------------
+// --- INTERFACE (soil-structure Coulomb joint) output --------------------------------------------
 // Along an interface, at the Newton-Cotes node pairs: shear stress tau, normal (effective)
 // stress sigma_n (tension-pos; compression < 0), relative slip = du_s, relative opening
 // gap = du_n, and whether at the Coulomb limit (slipping). Mirrors the solver's

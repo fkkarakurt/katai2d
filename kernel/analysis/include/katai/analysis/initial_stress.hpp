@@ -7,7 +7,7 @@
 // self-weight). The hook for staged construction (phase-to-phase σ carry-over).
 //
 // Math + equilibrium proof + sources: docs/references/initial-stress-k0.md
-// (Jaky 1944; PLAXIS Reference/Scientific Manual — K0 procedure / Gravity loading).
+// (Jaky 1944; K0 procedure / gravity loading).
 
 #include <algorithm>
 #include <functional>
@@ -78,9 +78,9 @@ inline std::vector<GaussState> compute_k0_initial_stress(const mesh::Mesh& mesh,
 // layered (material per polygon), have a water table and an irregular surface. Here σ'_v is
 // found at each Gauss point by the VERTICAL integral of the effective unit weight ABOVE
 // that point (the classic K0-procedure assumption: column-based overburden — exact for
-// horizontally layered soil, approximate on a sloped surface; PLAXIS gives the same
-// warning). γ_eff must return the buoyant γ'=γ_sat−γ_w below the water table (effective
-// stress). σ'_h = K0·σ'_v, K0 by material id (Jaky 1−sinφ' or a user value).
+// horizontally layered soil, approximate on a sloped surface, which is why a non-level K0
+// phase takes a plastic nil-step). γ_eff must return the buoyant γ'=γ_sat−γ_w below the water
+// table (effective stress). σ'_h = K0·σ'_v, K0 by material id (Jaky 1−sinφ' or a user value).
 struct K0LayeredOptions {
     std::function<double(double x, double y)> eff_unit_weight;  // effective (buoyant) γ' at a point
     std::function<double(double x)> ground_surface;            // ground surface elevation y_surf(x)
@@ -92,8 +92,8 @@ struct K0LayeredOptions {
     // identity f_int(σ_K0)=f_gravity holds to round-off). If absent, the old single-piece
     // midpoint behaviour.
     std::function<std::vector<double>(double x)> strata_breaks;
-    // NonPorous target correction (PLAXIS: a non-porous material sees NEITHER initial NOR
-    // excess pore pressure): the eff_unit_weight slice function yields the effective σ'_v
+    // NonPorous target correction (a non-porous material sees NEITHER initial NOR excess
+    // pore pressure): the eff_unit_weight slice function yields the effective σ'_v
     // for POROUS targets; if the target Gauss point's material is non-porous, the seed must
     // be the TOTAL stress — σ_v = σ'_v − u(x,y) (tension-positive; u ≥ 0 is the pressure
     // magnitude). σ_h = K0·σ_v on the same total. Both empty = old behaviour bit-for-bit.
@@ -162,7 +162,8 @@ inline std::vector<GaussState> compute_k0_initial_stress_layered(const mesh::Mes
     return detail::k0_layered_impl<Tri6Element>(mesh, opt);
 }
 
-// Overconsolidation raises the automatic K0 (PLAXIS Reference, elastic unloading):
+// Overconsolidation raises the automatic K0 (elastic 1-D unloading from the preconsolidation
+// stress, d sigma'_h = nu/(1 - nu) d sigma'_v):
 //   K0 = K0nc OCR - nu/(1 - nu) (OCR - 1),
 // clamped to [0, Kp = (1 + sin phi)/(1 - sin phi)] as a coarse passive-limit
 // safeguard. nu is nu_ur for the advanced models and nu for LE/MC (the caller
@@ -213,7 +214,7 @@ inline void seed_preconsolidation(const mesh::Mesh& mesh,
             // (sigma'_v0 + POP)/sigma'_v0 (vertical = yy). POP used to be
             // SILENTLY ignored (only OCR was wired) -- hs_initial_pp is
             // first-order homogeneous in sigma, so the ratio-scaling is the
-            // exact counterpart of PLAXIS's POP definition; for SS the same
+            // exact counterpart of the POP definition (sigma'_p = sigma'_v0 + POP); for SS the same
             // ratio applies to f-bar (see the ss_initial_pp note).
             double ocr_eq = 1.0;
             if (oc[mat].mode == 1) {

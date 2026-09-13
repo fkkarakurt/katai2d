@@ -130,7 +130,7 @@ void test_ocr_memory() {
     check(ok, "OCR = 4 column converged");
     if (!ok) { std::printf("   (%s)\n", msg.c_str()); return; }
 
-    // OCR now raises the automatic K0 too (an audit fix; the PLAXIS Ref formula):
+    // OCR now raises the automatic K0 too (an audit fix; the elastic-unloading formula):
     //   K0_oc = K0nc*OCR - nu_ur/(1-nu_ur)*(OCR-1)  -> the initial lateral coefficient C changes too.
     const double k0oc = kK0nc * 4.0 - 0.15 / 0.85 * 3.0;
     const double uk = -kKap * elastic_integral(q, 0.15, k0oc);
@@ -206,19 +206,19 @@ m::Project ssc_column() {
 // SSC is an ISOTACH model: "primary" compression is creep at a high rate. So the
 // GUI wiring is pinned by TIME CLASSES on the same column:
 //   T = 0 (timeless stage)  -> elastic (kappa*) + MC only: far stiffer than lambda*;
-//   T = tau = 1 day         -> the 1-day NC isotach IS the lambda* line (Eq 11-14's
-//                              definition), so u matches Soft Soil's NC integral;
+//   T = tau = 1 day         -> the 1-day NC isotach IS the lambda* line (the model's
+//                              definition of tau), so u matches Soft Soil's NC integral;
 //   T = 100 vs 1 day        -> depth-UNIFORM secondary creep, du = mu* H ln(100).
 // The phase's 'Time interval [day]' drives all of this through the solver's
-// SumMstage-proportional time distribution (Stage 2 contract) -- exactly the
+// load-fraction-proportional time distribution (Stage 2 contract) -- exactly the
 // plumbing this test exists to pin.
 void test_ssc_time_classes() {
     std::printf("-- SSC time classes: T = 0 (kappa*), T = tau (~lambda* isotach), creep tail --\n");
     const double q = 50.0;
     double u_seed = -1.0;
     // Load WITH time: the phase's 'Time interval' is distributed over the load
-    // increments in Delta-lambda proportion (the Stage 2 SumMstage contract) --
-    // the PLAXIS-realistic staged use. (The pathological alternative -- a TIMELESS
+    // increments in Delta-lambda proportion (the Stage 2 staged-fraction contract) --
+    // the realistic staged use. (The pathological alternative -- a TIMELESS
     // full load, then a pure hold -- leaves the state overstressed by p_eq/pp up
     // to ~50 with a creep rate ~ ratio^((lam*-kap*)/mu*) = ratio^16, a shock the
     // one-increment plastic phase honestly fails on; holding periods belong in a
@@ -245,7 +245,7 @@ void test_ssc_time_classes() {
     std::printf("   u(T=0) = %.4f  u(T=1d) = %.4f  u(T=100d) = %.4f  (lambda* form %.4f)\n",
                 u_0d, u_1d, u_100d, u_lam);
     // Loading over tau = 1 day approaches the 1-day NC isotach = the lambda* line;
-    // the SumMstage distribution leaves the end state slightly YOUNGER than 1 day
+    // the staged-fraction distribution leaves the end state slightly YOUNGER than 1 day
     // (later increments arrive late with little time to relax), so the settlement
     // sits somewhat above the closed form -- measured -18%; a 25% class band is the
     // honest statement. The 100-vs-1-day DIFFERENCE cancels that youth deficit and
@@ -313,7 +313,7 @@ void test_ssc_consolidation_hold() {
           "state sits on its isotach when the hold starts)");
     // The chain ends at a TRUE age of ~100 days, so it should sit on the ideal
     // 100-day isotach: u = lambda* I(q/gamma) + mu* H ln(100/tau). The single ramped
-    // run is genuinely YOUNGER (the SumMstage distribution hands later increments
+    // run is genuinely YOUNGER (the staged-fraction distribution hands later increments
     // little time), so it settles LESS -- that ordering is the physics, not an error.
     const double u_ideal = -kLam * lnlaw_integral(50.0) - kMu * kH * std::log(100.0);
     std::printf("   hold chain u(1d + 99d) = %.4f m (ideal 100-day isotach %.4f, err %+.1f%%); "
@@ -322,7 +322,7 @@ void test_ssc_consolidation_hold() {
     check(std::fabs(u_chain - u_ideal) < 0.05 * std::fabs(u_ideal),
           "the aged chain sits on the ideal 100-day isotach closed form (5%)");
     check(std::fabs(u_chain) > std::fabs(u_ramp),
-          "the ramped run is younger and settles less (SumMstage youth, physical)");
+          "the ramped run is younger and settles less (staged-fraction youth, physical)");
     // SSC x Consolidation: honest refusal until the Biot x creep interaction verifies.
     {
         m::Project pr = ssc_column();

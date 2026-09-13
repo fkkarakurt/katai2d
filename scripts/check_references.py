@@ -9,11 +9,11 @@ below makes it adoptable without rewriting the whole suite in one day.
 The declaration block (roadmap section 6.2), anywhere in a ``tests/test_*.cpp``:
 
     // verify: KV-FND-001
-    //   oracle:   published_benchmark
-    //   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems)
-    //   locator:  Section 2.1, smooth rigid strip footing on elastic soil
+    //   oracle:   closed_form
+    //   source:   Giroud, J.P. (1972). Settlement of rectangular foundation on soil layer. J. Soil Mech. Found. Div., ASCE, 98(SM1), 149-154
+    //   locator:  smooth rigid strip footing on an elastic layer: F = 2 (1 + nu) G B s / rho, rho = 0.88
     //   quantity: footing force F at prescribed settlement 10 mm [kN/m]
-    //   expected: 15.15 (Giroud analytic); PLAXIS publishes 15.24
+    //   expected: 15.15 (Giroud analytic)
     //   band:     2% vs analytic -- coarse-mesh bias measured at +1.4%
 
 Field rules:
@@ -71,8 +71,8 @@ ORACLES = ("closed_form", "independent_path", "external_code", "published_benchm
 # to answer?" is a verification question a reviewer is entitled to ask.
 #
 # GEO is the second of that kind, added 2026-08-27 on the same argument. It verifies what the
-# PRE-PROCESSING produces -- the geometry a set of borehole logs describes -- against a rule
-# published in a manual and levels a reader can compute by hand. It earns its row because a wrong
+# PRE-PROCESSING produces -- the geometry a set of borehole logs describes -- against the rules
+# the input contract states and levels a reader can compute by hand. It earns its row because a wrong
 # stratigraphy is the one error no residual can see: the mesher will mesh it, every phase will
 # converge on it, and the answer will be a correct solution to a model nobody meant.
 CLASSES = ("NUM", "CST", "FND", "EXC", "SLP", "CON", "FLW", "STR", "DYN", "SSI", "DIA", "GEO")

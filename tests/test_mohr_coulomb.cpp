@@ -365,7 +365,7 @@ void test_tangent_vs_finite_difference() {
 }
 
 // ===================== Tension cut-off (Rankine cap) ==========================
-// Formulation doc sec 7: three associated Rankine planes (PLAXIS MMM Eq 3-11)
+// Formulation doc sec 7: three associated Rankine planes (sigma_i - sigma_t <= 0)
 // reduce, with sorted principals, to sigma_1 <= sigma_t; the combined MC+cap
 // return adds the tension face / TT edge / T apex, the MC-tension line and its
 // two vertices -- all affine, all with constant exact region Jacobians.

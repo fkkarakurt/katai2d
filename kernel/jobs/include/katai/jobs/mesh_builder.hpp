@@ -46,11 +46,11 @@ struct MeshResult {
     double min_angle_asked = 0.0;   // the bound the refinement was given [deg]
 };
 
-// Local mesh-density options (PLAXIS coarseness semantics; docs/references/mesh-sizing.md).
+// Local mesh-density options (coarseness factors; docs/references/mesh-sizing.md).
 // The target edge length h0 = sqrt(2 * max_area) is modulated by per-object coarseness factors:
 //   - inside a polygon with factor f      -> h_region = h0 * f (last polygon wins, like material);
 //   - near a structural line / load with factor f -> a line/point SOURCE of size h0 * f
-//     (times auto_factor when auto_refine is on -- PLAXIS-style automatic refinement around
+//     (times auto_factor when auto_refine is on -- automatic refinement around
 //     structures and loads), growing away from the source with the Lipschitz grading slope
 //     h(d) = h_src + grading * d (bounded size transition; Shewchuk / Persson practice).
 // h(x) = min(h_region(x), min over sources). Factors are clamped to [1/16, 4], so the field has
@@ -62,10 +62,10 @@ struct MeshOptions {
     double grading = 0.5;        // size growth per unit distance from a source
 };
 
-// The CONNECTION POINT of an embedded beam (PLAXIS 2D Ref. Man. sec 5.6.3): for a pile it is
-// "the point on the embedded beam that has the highest y-coordinate in the model", and "in the
-// rare case of an exactly horizontal embedded beam defined as a Pile, Top refers to the point
-// ... that has the lowest x-coordinate". Returns true and writes (cx, cy) for an embedded beam.
+// The CONNECTION POINT of an embedded beam (docs/k2d-format.md, `conn`): for a pile it is the
+// point on the embedded beam with the highest y-coordinate in the model, and for an exactly
+// horizontal pile (a rare case) the end with the lowest x-coordinate. Returns true and writes
+// (cx, cy) for an embedded beam.
 //
 // The mesher carries this ONE point as a vertex so a hinged connection is an exact degree-of-
 // freedom identity rather than an interpolation; the shaft stays mesh-nonconforming. Both the

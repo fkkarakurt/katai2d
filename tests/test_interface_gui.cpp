@@ -178,14 +178,14 @@ void run_wall(const char* label, bool vertical, int order) {
     std::printf("   max|disp|: bonded-plate=%.5e  interface-wall=%.5e  (%+.1f%%)\n",
                 db, dw, 100.0 * (dw - db) / db);
     check(std::fabs(dw - db) > 0.03 * db, "interface flag CHANGES the wall result (embedded wall built)");
-    // The wall must also yield an N/Q/M force diagram (PLAXIS Output), including on tri15.
+    // The wall must also yield an N/Q/M force diagram (structural output), including on tri15.
     bool has_M = false;
     for (const auto& d : Rw.struct_forces)
         if (d.kind == 0 && d.stations.size() >= 3 && d.max_M > 1.0) has_M = true;
     std::printf("   struct_forces: %d diagram(s)%s\n", (int)Rw.struct_forces.size(),
                 has_M ? "  (N/Q/M present)" : "");
     check(has_M, "embedded wall produces an N/Q/M force diagram");
-    // Interface results (PLAXIS Output -> Interfaces): tau / sigma_n / slip along the wall joint.
+    // Interface results (interface output): tau / sigma_n / slip along the wall joint.
     bool iface_ok = false, fin_if = true; double max_tau = 0.0, max_sn = 0.0, max_slip = 0.0;
     for (const auto& ir : Rw.interface_forces) {
         if (ir.stations.size() >= 2) iface_ok = true;

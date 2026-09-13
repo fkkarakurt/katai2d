@@ -1,12 +1,9 @@
-// Hardening Soil -- validation against the documented, PLAXIS-validated Berlin Sand III
-// drained triaxial test (Rocscience/PLAXIS 2014, Table 15.1 + Fig 15.4; cross-checked with
-// the PLAXIS 2D Material Models Manual sec 6, Fig 15.4). This is the concrete "as accurate
-// as PLAXIS" proof. The robust two-surface substepping integrator (hs_integrate, cap+shear)
-// drives a drained triaxial at sigma3 = 200 kPa with the cap CALIBRATED to (K0^NC, Eoed_ref);
-// we verify the full Fig 15.4 response:
-//   - deviatoric: qf = (c cot phi + sigma3) 2 sin phi/(1-sin phi) = 646 kPa (plateau ~640),
+// Hardening Soil -- the Berlin Sand III parameter set in a drained triaxial test. The robust
+// two-surface substepping integrator (hs_integrate, cap+shear) drives a drained triaxial at
+// sigma3 = 200 kPa with the cap CALIBRATED to (K0^NC, Eoed_ref); we verify the full response:
+//   - deviatoric: qf = (c cot phi + sigma3) 2 sin phi/(1-sin phi) = 646 kPa,
 //     reached as a perfectly-plastic plateau; secant at qf/2 == E50 (HS hyperbola);
-//   - volumetric (Fig 15.4 lower-left): initial CONTRACTION (cap, p rising) then net
+//   - volumetric: initial CONTRACTION (cap, p rising) then net
 //     DILATION (shear, psi=6 deg) -- eps_v turns negative and reaches ~ -0.005 at axial 5%.
 // The volumetric dilation needs (a) the Rowe dilatancy with the correct sign
 // (eps_v^p/eps_q^p = -sin psi_m) and (b) the perfectly-plastic Mohr-Coulomb flow on the qf
@@ -42,14 +39,14 @@ HardeningSoilParams berlin_sand_iii() {
 void test_berlin_triaxial() {
     HardeningSoilParams p = berlin_sand_iii();
     // Calibrate the cap to (K0^NC=0.38, Eoed_ref) -- the standard HS workflow; the cap is
-    // then ON for the fully-coupled cap+shear triaxial (Fig 15.4 volumetric).
+    // then ON for the fully-coupled cap+shear triaxial (volumetric response).
     katai::core::hs_calibrate_cap(p, 0.38);
     const double sigma3 = 200.0;
     const double qf = p.q_failure(sigma3);
     const double Ei = p.Ei(sigma3), qa = p.q_asymptote(sigma3), E50 = p.E50(sigma3);
     std::printf("  Berlin Sand III triaxial (sigma3=%.0f): qf=%.1f E50=%.0f "
                 "[cap alpha=%.2f beta=%.2e]\n", sigma3, qf, E50, p.cap_alpha, p.cap_beta);
-    check(close(qf, 646.0, 0.01), "qf = 646 kPa (matches PLAXIS Fig 15.4 plateau ~640)");
+    check(close(qf, 646.0, 0.01), "qf = 646 kPa ((c cot phi + sigma3) 2 sin phi/(1-sin phi))");
 
     // Drained triaxial: sigma3 const, axial strain driven; pp initialised to the isotropic
     // consolidation stress sigma3 (NC). Solve lateral strain each step for sigma3 = const.
@@ -86,15 +83,15 @@ void test_berlin_triaxial() {
     std::printf("  reached q=%.3f (qf=%.3f, %.3f%% of it) secant@50%%-vs-E50 err=%.2e | "
                 "eps_v: peak-contr=%+.6f  final(@5%%)=%+.6f\n",
                 q_final, qf, 100.0 * q_final / qf, q50_err, epsv_max_contr, epsv_final);
-    // Deviatoric (shear) parity -- unchanged from the shear-dominated validation.
+    // Deviatoric (shear) agreement -- unchanged from the shear-dominated validation.
     const double q_shipped = q_final;
     check(close(q_shipped, qf, 5e-3), "q reaches the qf plateau (perfect plasticity at failure)");
-    check(q50_err >= 0 && q50_err < 0.05, "secant at qf/2 = E50 (HS hyperbola, PLAXIS parity)");
-    // Volumetric (Fig 15.4): initial contraction then net dilation.
+    check(q50_err >= 0 && q50_err < 0.05, "secant at qf/2 = E50 (HS hyperbola)");
+    // Volumetric: initial contraction then net dilation.
     check(epsv_max_contr > 2e-4 && epsv_max_contr < 3e-3,
-          "initial volumetric contraction (cap), small peak ~0.1% (Fig 15.4)");
+          "initial volumetric contraction (cap), small peak ~0.1%");
     check(epsv_final < -2.5e-3,
-          "net dilation at 5% axial strain (psi=6 deg), eps_v < -0.0025 (Fig 15.4 ~ -0.006)");
+          "net dilation at 5% axial strain (psi=6 deg), eps_v < -0.0025");
     check(epsv_final > -8e-3, "dilation magnitude physical (not runaway)");
 
     // WHY THE PLATEAU IS NOT REACHED EXACTLY, asserted rather than tolerated. The check above is
@@ -131,7 +128,7 @@ void test_berlin_triaxial() {
 int main() {
     test_berlin_triaxial();
     if (g_failures == 0) {
-        std::printf("OK: Hardening Soil validated against Berlin Sand III (PLAXIS Fig 15.4: "
+        std::printf("OK: Hardening Soil verified on Berlin Sand III (drained triaxial: "
                     "qf, E50, AND volumetric contraction->dilation)\n");
         return 0;
     }

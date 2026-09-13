@@ -558,7 +558,7 @@ class _Phases:
         ph.type = ptype
         if duration is not None: ph.duration = duration
         if steps is not None: ph.time_steps = steps
-        # apply_fraction is the staged-change fraction (Sum-Mstage): 0.5 applies half
+        # apply_fraction is the staged-change fraction (`mstage` in the file): 0.5 applies half
         # the staged change and leaves the rest for a later phase.
         if apply_fraction is not None: ph.sum_mstage = apply_fraction
         if ignore_undrained is not None: ph.ignore_undrained = ignore_undrained
@@ -601,7 +601,7 @@ class _Phases:
     def plastic(self, name, **kw):
         """A plastic (staged construction) phase: fill, excavate, install, load.
 
-        ``apply_fraction=0.5`` applies half of the stage (Sum-Mstage) and
+        ``apply_fraction=0.5`` applies half of the stage and
         leaves the rest; ``ignore_undrained=True`` solves undrained materials as
         drained for this phase; ``reset_small_strain=True`` clears the HS-small
         strain history first, so the soil meets this phase at G0 instead of the

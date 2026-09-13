@@ -1,26 +1,26 @@
-// OFFICIAL PLAXIS VALIDATION MANUAL cases, reproduced in KATAI (Benchmark Wave-1 / ROADMAP
-// Track 7). Source: PLAXIS Validation Manual (Version 8), the company's own published benchmark
-// set -- each case states BOTH the analytical solution and PLAXIS's published number, so the table
-// docs/validation/plaxis-comparison-table.md can show analytic | PLAXIS | KATAI side by side.
+// Footing benchmarks with analytical solutions, reproduced in KATAI (Benchmark Wave-1 / ROADMAP
+// Track 7). Every case is checked against a closed-form or slip-line solution from the
+// literature.
 //
 //   (2.1) Smooth rigid strip footing on elastic soil (Giroud 1972).
-//         G=500 kPa, nu=0.333, H=4 m, B=2 m, prescribed uy=10 mm, weightless.
-//         Analytic F = 2(1+nu) G B s / rho, rho=0.88 -> 15.15 kN/m. PLAXIS: 15.24 (+0.6%).
+//         G=500 kPa, nu=0.333, H=4 m, B=2 m (half-width 1 m), prescribed uy=10 mm, weightless.
+//         Analytic F = 2(1+nu) G B s / rho with the half-width B = 1 m, rho=0.88 -> 15.15 kN/m.
 //   (2.2) Strip load on elastic GIBSON soil (Gibson 1967): G=100 z (E=299 z), nu=0.495,
 //         q=10 kPa on B=2 m, H=4 m. Exact (half-space): s = q/(2 dG/dz) = 0.050 m -- uniform
-//         under the load. PLAXIS (finite 4 m layer): 0.047 m (-6%). The SAME finite-layer bias
-//         must appear in KATAI: this pins our E(y) machinery against their Advanced E-increment.
+//         under the load. The model is a finite 4 m layer on a rigid base, which is stiffer than
+//         the half-space and must settle LESS (reference value for that layer: 0.047 m); this
+//         pins the E(y) profile machinery.
 //   (3.1) Bearing capacity of a smooth rigid CIRCULAR footing (Cox 1962): axisymmetric MC,
-//         E=2400, nu=0.2, c=1.6, phi=30, psi=0, gamma=16 (gamma R/c = 10), K0=0.5, R=1, H=4.
-//         Analytic p_max = 141 c = 225.6 kPa. PLAXIS: 220 (-2.5%).
+//         E=2400, nu=0.2, c=1.6, phi=30, psi=phi, gamma=16 (gamma R/c = 10), K0=0.5, R=1, H=4.
+//         Analytic p_max = 141 c = 225.6 kPa.
 //   (3.2) Strip footing on clay with strength increasing with depth (Davis & Booker 1973):
 //         c = 1 + 2 z kPa, E = 299 + 498 z, weightless, B=2 m, smooth.
-//         Analytic p_max = rho[(2+pi) c0 + B c_inc/4] = 1.27 * 6.1416 = 7.80 kPa. PLAXIS: 7.86.
+//         Analytic p_max = rho[(2+pi) c0 + B c_inc/4] = 1.27 * 6.1416 = 7.80 kPa.
 //         Pins the c(y) + E(y) profile machinery against a THEORETICAL collapse load.
 //
 // Method notes: displacement-controlled (prescribed footing settlement, reactions from the
-// committed-stress nodal internal force -- the study_footing_plaxis pattern), tri15 elements
-// (PLAXIS's own 15-node default). Bands stated per case and honest.
+// committed-stress nodal internal force), 15-node (fourth-order) triangles. Bands stated per
+// case and honest.
 #include <katai/analysis/nonlinear_solver.hpp>
 #include <katai/fem/assembly/assembler.hpp>
 #include <katai/fem/assembly/dof_map.hpp>
@@ -108,13 +108,14 @@ Eigen::VectorXd nodal_force_axi(const Mesh& mesh, const std::vector<GaussState>&
 
 // ============================================================================================
 // verify: KV-FND-001
-//   oracle:   published_benchmark
-//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); analytic solution Giroud (1972)
-//   locator:  Section 2.1, smooth rigid strip footing on elastic soil
+//   oracle:   closed_form
+//   source:   Giroud, J.P. (1972). Settlement of rectangular foundation on soil layer. J. Soil Mech. Found. Div., ASCE, 98(SM1), 149-154.
+//   locator:  smooth rigid strip footing on a 4 m elastic layer over a rigid base, G = 500 kPa, nu = 1/3, half-width B = 1 m, settlement s = 10 mm: F = 2 (1 + nu) G B s / rho with the influence coefficient rho = 0.88 for this geometry (stated in full)
 //   quantity: footing force F at prescribed settlement u_y = 10 mm [kN/m]
-//   expected: 15.15 (analytic, F = 2(1+nu) G B s / rho with rho = 0.88); PLAXIS publishes 15.24
-//   band:     2% vs analytic and 3% vs PLAXIS, as asserted below -- measured +1.4% / +0.8% (KATAI 15.35)
-// (2.1) Smooth rigid strip footing on elastic soil -- Giroud 15.15, PLAXIS 15.24.
+//   expected: 15.15 (F = 2 (4/3) (500) (1) (0.010) / 0.88)
+//   band:     2% vs the closed form, as asserted below -- measured +1.4% (KATAI 15.35)
+//
+// (2.1) Smooth rigid strip footing on elastic soil -- Giroud 15.15 kN/m.
 // ============================================================================================
 void case_2_1() {
     std::printf("-- (2.1) smooth rigid strip footing on elastic soil (Giroud) --\n");
@@ -146,33 +147,31 @@ void case_2_1() {
     for (int n : mesh.top_nodes)
         if (mesh.x[n] <= Bhalf + 1e-9) Ry += F(2 * n + 1);
     const double F_katai = 2.0 * std::fabs(Ry);                     // half-model -> full footing
-    const double F_exact = 15.15, F_plaxis = 15.24;
-    std::printf("   F: analytic %.2f | PLAXIS %.2f (+0.6%%) | KATAI %.2f (%+.1f%% vs analytic, "
-                "%+.1f%% vs PLAXIS)\n", F_exact, F_plaxis, F_katai,
-                100 * (F_katai - F_exact) / F_exact, 100 * (F_katai - F_plaxis) / F_plaxis);
+    const double F_exact = 15.15;
+    std::printf("   F: analytic %.2f | KATAI %.2f (%+.1f%% vs analytic)\n", F_exact, F_katai,
+                100 * (F_katai - F_exact) / F_exact);
     check(std::fabs(F_katai - F_exact) < 0.02 * F_exact,
           "KATAI within 2% of the Giroud analytic footing force");
-    check(std::fabs(F_katai - F_plaxis) < 0.03 * F_plaxis,
-          "KATAI within 3% of the published PLAXIS number");
 }
 
 // ============================================================================================
 // verify: KV-FND-002
-//   oracle:   published_benchmark
-//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); analytic solution Gibson (1967)
-//   locator:  Section 2.2, strip load on incompressible Gibson soil (E = 299 z, nu = 0.495)
+//   oracle:   closed_form
+//   source:   Gibson, R.E. (1967). Some results concerning displacements and stresses in a non-homogeneous elastic half-space. Geotechnique 17(1), 58-67.
+//   locator:  strip load q = 10 kPa over a 1 m half-width on incompressible Gibson soil G = 100 z (E = 299 z, nu = 0.495): the half-space settles uniformly under the load by s = q / (2 dG/dz) = 0.050 m (stated in full); the model is a 4 m layer on a rigid base, which is stiffer than the half-space and has no closed form
 //   quantity: settlement under a q = 10 kPa strip load on a 4 m layer [m]
-//   expected: 0.047 (PLAXIS, same finite layer); the half-space closed form gives 0.050
-//   band:     5% vs the PLAXIS finite-layer value, as asserted below -- measured -4.0% (KATAI 0.0451); the finite-layer bias vs the half-space is shared by construction and pinned separately below
-// (2.2) Strip load on Gibson soil -- exact 0.050 m (half-space), PLAXIS 0.047 m (finite layer).
+//   expected: the half-space closed form gives 0.050 m; the half-space closed form is exact for a fully incompressible soil (nu = 0.5) and is not the answer for this model: a 4 m layer on a rigid base settles less, and a nearly but not fully incompressible soil (nu = 0.495) settles more as the layer deepens -- measured on the corpus file's geometry, scaled in depth and width, at -9.2% (4 m, 0.15 m mesh), -1.3% (8 m) and +3.4% (16 m, both on a 0.3 m mesh) of it. This record holds no independent reference for the finite-layer settlement, so the case asserts a PLAUSIBILITY band, not a verification: between 85% and 100% of the half-space value, which a stiffness profile read 10% too stiff falls out of
+//   band:     0.85 s_exact < s < s_exact, as asserted below -- measured 90.2% (0.0451 m)
+//
+// (2.2) Strip load on Gibson soil -- exact 0.050 m for the half-space; the 4 m layer settles less.
 // ============================================================================================
 void case_2_2() {
     std::printf("-- (2.2) strip load on elastic Gibson soil (E = 299 z, nu = 0.495) --\n");
     constexpr double q = 10.0, Bhalf = 1.0, H = 4.0;
     const RectangularDomain dom{0.0, 0.0, 7.0, H, 0};
     // 0.125 m grid: with E -> 0 at the surface the compliance is concentrated in a thin surface
-    // band, and nu = 0.495 adds mild volumetric locking -- a 0.5 m grid under-settles by ~7%,
-    // 0.25 m by ~5.5%; the elastic solve is a single factorization, so the fine grid is cheap.
+    // band, and nu = 0.495 adds mild volumetric locking -- a 0.5 m grid settles ~3% less than
+    // this one, 0.25 m ~1.5% less; the elastic solve is a single factorization, so it is cheap.
     Mesh mesh = katai::mesh::generate_structured_tri15(dom, 56, 32);
 
     DofMap dofs(mesh.node_count, 2);
@@ -181,8 +180,8 @@ void case_2_2() {
     for (int n : mesh.right_nodes) dofs.fix_node_component(n, 0);
     dofs.finalize();
 
-    // E(y) = E_ref + E_inc (y_ref - y): tiny at the surface, 299 per metre of depth (their
-    // "Advanced E-increment" input, our MaterialProfile -- the same modelling decision).
+    // E(y) = E_ref + E_inc (y_ref - y): tiny at the surface, 299 per metre of depth (the
+    // MaterialProfile stiffness increment).
     const std::vector<MaterialModel> mm = {{MaterialType::LinearElastic, 0.01, 0.495, 0.0, 0.0, 0.0}};
     const std::vector<MaterialProfile> prof = {{299.0, 0.0, H}};   // {E_inc, c_inc, y_ref}
 
@@ -202,26 +201,25 @@ void case_2_2() {
     for (int n : mesh.top_nodes)
         if (std::fabs(mesh.x[n]) < 1e-9) nc = n;
     const double s_katai = -r.displacement(2 * nc + 1);
-    const double s_exact = 0.050, s_plaxis = 0.047;
-    std::printf("   settlement: exact (half-space) %.4f | PLAXIS (4 m layer) %.4f (-6%%) | KATAI "
-                "%.4f (%+.1f%% vs exact, %+.1f%% vs PLAXIS)\n", s_exact, s_plaxis, s_katai,
-                100 * (s_katai - s_exact) / s_exact, 100 * (s_katai - s_plaxis) / s_plaxis);
-    // The finite 4 m layer sits BELOW the half-space value -- KATAI must show the SAME bias as
-    // PLAXIS (same layer, same E(z) modelling), i.e. land near 0.047, not near 0.050.
-    check(std::fabs(s_katai - s_plaxis) < 0.05 * s_plaxis,
-          "KATAI within 5% of the published PLAXIS settlement (same finite-layer model)");
-    check(s_katai < s_exact, "the finite layer settles less than the half-space (shared bias)");
+    const double s_exact = 0.050;
+    std::printf("   settlement: half-space closed form %.4f | KATAI %.4f (%.1f%% of it)\n", s_exact,
+                s_katai, 100 * s_katai / s_exact);
+    // A plausibility band, not a verification: the half-space value is exact only for nu = 0.5
+    // and an unbounded layer (the declaration above says what the two effects measure).
+    check(s_katai > 0.85 * s_exact, "the 4 m layer settles at least 85% of the half-space value");
+    check(s_katai < s_exact, "the 4 m layer on a rigid base settles less than the half-space");
 }
 
 // ============================================================================================
 // verify: KV-FND-003
 //   oracle:   published_benchmark
-//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); slip-line solution Cox (1962)
-//   locator:  Section 3.1, bearing capacity of a smooth rigid circular footing (axisymmetric Mohr-Coulomb)
+//   source:   Cox, A.D. (1962). Axially-symmetric plastic deformation in soils -- II. Indentation of ponderable soils. Int. J. Mech. Sci. 4(5), 371-380.
+//   locator:  slip-line limit pressure of a smooth rigid circular footing on a ponderable Mohr-Coulomb soil with phi = 30 deg and gamma R / c = 10 (c = 1.6 kPa, gamma = 16 kN/m3, R = 1 m): p_max = 141 c
 //   quantity: limit pressure p_max [kPa], associated flow (psi = phi -- the slip-line solution is the associated limit load)
-//   expected: 225.6 (analytic, 141 c); PLAXIS publishes 220.0
+//   expected: 225.6 (141 c)
 //   band:     5% vs analytic, as asserted below -- measured +3.9% at the 0.25 m mesh (KATAI 234.4); the 0.5 m mesh over-predicts by +9% (two elements across the radius; recorded)
-// (3.1) Bearing capacity of a smooth circular footing -- Cox 225.6 kPa, PLAXIS 220 kPa.
+//
+// (3.1) Bearing capacity of a smooth circular footing -- Cox 225.6 kPa.
 // ============================================================================================
 void case_3_1() {
     std::printf("-- (3.1) bearing capacity of a circular footing (Cox, axisym MC) --\n");
@@ -235,8 +233,8 @@ void case_3_1() {
     const double psi = phi;
     const RectangularDomain dom{0.0, 0.0, 5.0, H, 0};
     // 0.25 m grid: a 0.5 m grid puts only two elements across the footing radius and OVER-predicts
-    // the collapse by ~9% (the classic coarse-mesh bearing-capacity bias PLAXIS's own manual warns
-    // about for low-order elements; even tri15 needs a few elements across the punch).
+    // the collapse by ~9% (the classic coarse-mesh bearing-capacity bias of displacement elements,
+    // worst for low-order ones; even tri15 needs a few elements across the punch).
     Mesh mesh = katai::mesh::generate_structured_tri15(dom, 20, 16);
 
     DofMap dofs(mesh.node_count, 2);
@@ -292,25 +290,24 @@ void case_3_1() {
     for (int n : mesh.top_nodes)
         if (mesh.x[n] <= R_foot + 1e-9) Ry += (Ff(2 * n + 1) - F0(2 * n + 1));
     const double p_katai = 2.0 * std::fabs(Ry) / (R_foot * R_foot);   // p = 2 F_rad / R^2
-    const double p_exact = 225.6, p_plaxis = 220.0;
-    std::printf("   p_max: Cox %.1f | PLAXIS %.1f (-2.5%%) | KATAI %.1f (%+.1f%% vs Cox, "
-                "%+.1f%% vs PLAXIS)   [%d iters]\n", p_exact, p_plaxis, p_katai,
-                100 * (p_katai - p_exact) / p_exact, 100 * (p_katai - p_plaxis) / p_plaxis,
-                r.total_iterations);
+    const double p_exact = 225.6;
+    std::printf("   p_max: Cox %.1f | KATAI %.1f (%+.1f%% vs Cox)   [%d iters]\n", p_exact,
+                p_katai, 100 * (p_katai - p_exact) / p_exact, r.total_iterations);
     check(std::fabs(p_katai - p_exact) < 0.05 * p_exact,
           "KATAI within 5% of the Cox exact collapse pressure");
 }
 
 // ============================================================================================
 // verify: KV-FND-004
-//   oracle:   published_benchmark
-//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); analytic solution Davis & Booker (1973)
-//   locator:  Section 3.2, smooth strip footing on clay with strength increasing with depth
+//   oracle:   closed_form
+//   source:   Davis, E.H. & Booker, J.R. (1973). The effect of increasing strength with depth on the bearing capacity of clays. Geotechnique 23(4), 551-563.
+//   locator:  smooth strip footing of width B = 2 m on weightless Tresca clay with c(z) = c0 + c_inc z, c0 = 1 kPa, c_inc = 2 kPa/m: p_max = rho [(2 + pi) c0 + B c_inc / 4] with the correction factor rho = 1.27 for a smooth footing at B c_inc / c0 = 4 (stated in full)
 //   quantity: limit pressure p_max [kPa] with c(z) = c0 + c_inc z
-//   expected: 7.80 (analytic, rho [(2 + pi) c0 + B c_inc / 4]); PLAXIS publishes 7.86
+//   expected: 7.80 (rho [(2 + pi) c0 + B c_inc / 4] = 1.27 x 6.1416)
 //   band:     5% vs analytic, as asserted below -- measured +2.8% (KATAI 8.02)
-// (3.2) Strip footing on clay with strength increasing with depth -- Davis & Booker 7.80 (smooth),
-//       PLAXIS 7.86. Pins the c(y) + E(y) profiles against a theoretical collapse load.
+//
+// (3.2) Strip footing on clay with strength increasing with depth -- Davis & Booker 7.80 (smooth).
+//       Pins the c(y) + E(y) profiles against a theoretical collapse load.
 // ============================================================================================
 void case_3_2() {
     std::printf("-- (3.2) strip footing on c(z) clay (Davis & Booker, smooth) --\n");
@@ -330,7 +327,7 @@ void case_3_2() {
         }
     dofs.finalize();
 
-    // Tresca (phi=0), c = 1 + 2 z, E = 299 + 498 z (their Advanced increments = our profiles).
+    // Tresca (phi=0), c = 1 + 2 z, E = 299 + 498 z (the MaterialProfile c and E increments).
     const std::vector<MaterialModel> mm = {{MaterialType::MohrCoulomb, 299.0, 0.3, 1.0, 0.0, 0.0}};
     const std::vector<MaterialProfile> prof = {{498.0, 2.0, H}};   // {E_inc, c_inc, y_ref = top}
 
@@ -345,11 +342,9 @@ void case_3_2() {
     for (int n : mesh.top_nodes)
         if (mesh.x[n] <= Bhalf + 1e-9) Ry += F(2 * n + 1);
     const double p_katai = std::fabs(Ry) / Bhalf;                   // average stress under footing
-    const double p_exact = 7.80, p_plaxis = 7.86;
-    std::printf("   p_max: Davis-Booker %.2f | PLAXIS %.2f (+0.8%%) | KATAI %.2f (%+.1f%% vs "
-                "analytic, %+.1f%% vs PLAXIS)   [%d iters]\n", p_exact, p_plaxis, p_katai,
-                100 * (p_katai - p_exact) / p_exact, 100 * (p_katai - p_plaxis) / p_plaxis,
-                r.total_iterations);
+    const double p_exact = 7.80;
+    std::printf("   p_max: Davis-Booker %.2f | KATAI %.2f (%+.1f%% vs analytic)   [%d iters]\n",
+                p_exact, p_katai, 100 * (p_katai - p_exact) / p_exact, r.total_iterations);
     check(std::fabs(p_katai - p_exact) < 0.05 * p_exact,
           "KATAI within 5% of the Davis-Booker exact collapse pressure");
 }
@@ -357,8 +352,8 @@ void case_3_2() {
 }  // namespace
 
 int main() {
-    std::printf("OFFICIAL PLAXIS VALIDATION MANUAL cases reproduced in KATAI\n"
-                "(analytic | PLAXIS published | KATAI -- the comparison-table backbone)\n\n");
+    std::printf("Footing benchmarks against analytical solutions (analytic | KATAI)\n"
+                "Giroud 1972, Gibson 1967, Cox 1962, Davis & Booker 1973\n\n");
     case_2_1();
     std::printf("\n");
     case_2_2();
@@ -367,7 +362,7 @@ int main() {
     std::printf("\n");
     case_3_2();
     if (g_failures == 0) {
-        std::printf("\nOK: KATAI reproduces the official PLAXIS validation set -- elastic footing, "
+        std::printf("\nOK: KATAI reproduces the analytical footing set -- elastic footing, "
                     "Gibson E(z), Cox circular bearing, Davis-Booker c(z) bearing\n");
         return 0;
     }

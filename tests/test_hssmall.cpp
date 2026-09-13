@@ -1,11 +1,12 @@
 // HSsmall -- small-strain stiffness law verification (Faz A.5). The Hardening Soil model with
 // small-strain stiffness adds two parameters (G0, gamma0.7) and a Hardin-Drnevich degradation:
-//   G_s/G0 = 1/(1+0.385 |g|/g07)          (Eq 7-3; G_s = 0.722 G0 at g=g07)
-//   tau    = G_s g = G0 g/(1+0.385 g/g07) (Eq 7-7)
-//   G_t    = dtau/dg = G0/(1+0.385 g/g07)^2, with cut-off G_t >= G_ur (Eq 7-8/7-9)
-//   g_cut  = (1/0.385)(sqrt(G0/G_ur)-1) g07  (Eq 7-10)
+//   G_s/G0 = 1/(1+0.385 |g|/g07)          (H1; G_s = 0.722 G0 at g=g07)
+//   tau    = G_s g = G0 g/(1+0.385 g/g07) (H2)
+//   G_t    = dtau/dg = G0/(1+0.385 g/g07)^2, with cut-off G_t >= G_ur (H3)
+//   g_cut  = (1/0.385)(sqrt(G0/G_ur)-1) g07  (H4)
 // plus the stress-level power law (same as HS). All checked against the closed form (round-off).
-// (See docs/references/hssmall-formulation.md; PLAXIS 2D Material Models Manual ch.7.)
+// (See docs/references/hssmall-formulation.md; Hardin & Drnevich 1972; Santos & Correia 2001;
+// Benz 2007.)
 #include <katai/materials/hardening_soil.hpp>
 #include <katai/materials/hardening_soil_plastic.hpp>
 #include <katai/materials/material_model.hpp>
@@ -34,27 +35,27 @@ void test_hssmall_law() {
     p.G0_ref = 1.2e5; p.gamma07 = 1.5e-4;   // small-strain params
     const double pr = p.p_ref;               // at reference stress -> stiffness_factor = 1
 
-    // (1) Eq 7-3: G_s(g07) = 0.722 G0.
+    // (1) H1: G_s(g07) = 0.722 G0.
     const double Gs07 = p.g_secant(p.gamma07, pr);
     std::printf("  G_s(g07)/G0 = %.4f (Hardin-Drnevich 0.722)\n", Gs07 / p.G0(pr));
     check(close(Gs07 / p.G0(pr), 0.722, 2e-3), "G_s = 0.722 G0 at gamma = gamma0.7");
 
-    // (2) Eq 7-7 hyperbola + (3) Eq 7-8 tangent = d(tau)/d(gamma) (uncapped, small strain).
+    // (2) H2 hyperbola + (3) H3 tangent = d(tau)/d(gamma) (uncapped, small strain).
     auto tau = [&](double g) { return p.g_secant(g, pr) * g; };
     double max_t = 0.0;
     for (double g = 1e-6; g < 5e-4; g *= 1.7) {
         const double gt_fd = (tau(g + 1e-9) - tau(g - 1e-9)) / 2e-9;
-        const double gt = p.G0(pr) / std::pow(1.0 + 0.385 * g / p.gamma07, 2.0);  // uncapped Eq 7-8
+        const double gt = p.G0(pr) / std::pow(1.0 + 0.385 * g / p.gamma07, 2.0);  // uncapped H3
         max_t = std::fmax(max_t, std::fabs(gt_fd - gt) / gt);
     }
     std::printf("  tangent G_t = d(tau)/d(gamma): max rel err = %.2e\n", max_t);
-    check(max_t < 1e-4, "G_t = d(tau)/d(gamma) = G0/(1+0.385 g/g07)^2 (Eq 7-8)");
+    check(max_t < 1e-4, "G_t = d(tau)/d(gamma) = G0/(1+0.385 g/g07)^2 (H3)");
 
-    // (4) Eq 7-10 cut-off: at gamma_cutoff the uncapped tangent equals G_ur; g_tangent clamps to G_ur beyond.
+    // (4) H4 cut-off: at gamma_cutoff the uncapped tangent equals G_ur; g_tangent clamps to G_ur beyond.
     const double gc = p.gamma_cutoff(pr);
     const double gt_uncapped_at_gc = p.G0(pr) / std::pow(1.0 + 0.385 * gc / p.gamma07, 2.0);
     std::printf("  gamma_cutoff=%.3e: uncapped G_t=%.1f vs G_ur=%.1f\n", gc, gt_uncapped_at_gc, p.Gur(pr));
-    check(close(gt_uncapped_at_gc, p.Gur(pr), 1e-6), "uncapped G_t(gamma_cutoff) = G_ur (Eq 7-10)");
+    check(close(gt_uncapped_at_gc, p.Gur(pr), 1e-6), "uncapped G_t(gamma_cutoff) = G_ur (H4)");
     check(close(p.g_tangent(2.0 * gc, pr), p.Gur(pr), 1e-12), "G_t clamps to G_ur beyond cut-off");
     check(p.G0(pr) > p.Gur(pr), "G0 > G_ur (small-strain stiffer than unload/reload)");
 
@@ -103,8 +104,9 @@ void test_hssmall_fe() {
     // ...and at the material point the two are then the same material -- ON AN ELASTIC STEP.
     // The probe has to be elastic to make that claim, because what degrades to HS beyond the
     // cut-off is the STIFFNESS, not the whole model: below phi_cv the two keep a different FLOW
-    // RULE for good (sec 7.9.1, test_li_dafalias_fe). This check used to run a plastic step and
-    // assert equality there, which was true only while HSsmall had no sec 7.9.1 branch -- a
+    // RULE for good (the Li & Dafalias branch, test_li_dafalias_fe). This check used to run a
+    // plastic step and assert equality there, which was true only while HSsmall had no such
+    // branch -- a
     // claim wider than the thing it measured. Committed gamma_p is put beyond reach so the
     // increment stays inside the yield surface and only the stiffness is being compared.
     GaussState comm_deg = comm; comm_deg.gamma_hist = 0.05; comm_deg.gamma_p = 1.0;
@@ -121,28 +123,32 @@ void test_hssmall_fe() {
     check(t_hs.gamma_hist == 0.0, "plain HS carries gamma_hist = 0 (HSsmall off)");
 }
 
-// --- sec. 7.9.1: the mobilised dilatancy BELOW the phase-transformation line ----------------
+// --- Li & Dafalias: the mobilised dilatancy BELOW the phase-transformation line --------------
 // Rowe's formula returns a NEGATIVE psi_m wherever phi_m < phi_cv. Plain HS takes zero there.
-// HSsmall does not: "bounding the lower value of psi_m may sometimes yield too little plastic
-// volumetric strains", so below phi_cv it puts a small CONTRACTION there instead, after
-// Li & Dafalias (2000) -- MMM Eq 7-19..7-23.
+// HSsmall does not: bounding psi_m from below at zero can leave too little plastic volumetric
+// strain, so below phi_cv it puts a small CONTRACTION there instead, after Li & Dafalias (2000):
+//   (L1) psi_m = 0.1 (-M_c exp((1/15) ln((M_c/M_d) q/q_a)) + M_d)
+//   (L2) M_c = 6 sin(phi_cv)/(3 - sin(phi_cv))
+//   (L3) M_d = 6 sin(phi_m)/(3 - sin(phi_m))
+//   (L4) q/q_a = ((1 - sin(phi_cv))/sin(phi_cv)) (sin(phi_m)/(1 - sin(phi_m)))
+//   (L5) sin(phi_m) >= sin(phi)/(2 - sin(phi))
 //
 // The oracle below is written straight from those five equations and shares no line of code
 // with the kernel's HsDilatancy, so agreement between them is a real comparison and not a
-// tautology. The case is the one the manual itself plots in Figure 7-10: phi=35, psi=5.
+// tautology. The case is phi=35, psi=5.
 void test_li_dafalias_dilatancy() {
     const double deg = std::acos(-1.0) / 180.0;
     const double phi = 35.0 * deg, psi = 5.0 * deg;
 
     const double sphi = std::sin(phi), sps = std::sin(psi);
     const double scv = (sphi - sps) / (1.0 - sphi * sps);  // Rowe's critical state
-    const double Mc = 6.0 * scv / (3.0 - scv);             // Eq 7-20
-    const double floor_s = sphi / (2.0 - sphi);            // Eq 7-23
+    const double Mc = 6.0 * scv / (3.0 - scv);             // L2
+    const double floor_s = sphi / (2.0 - sphi);            // L5
     auto oracle = [&](double sphi_m) {
-        const double s = std::fmax(sphi_m, floor_s);                              // Eq 7-23
-        const double Md = 6.0 * s / (3.0 - s);                                    // Eq 7-21
-        const double qqa = std::fmax((1.0 - scv) / scv * (s / (1.0 - s)), 1e-4);  // Eq 7-22
-        return 0.1 * (-Mc * std::exp(std::log((Mc / Md) * qqa) / 15.0) + Md);     // Eq 7-19
+        const double s = std::fmax(sphi_m, floor_s);                              // L5
+        const double Md = 6.0 * s / (3.0 - s);                                    // L3
+        const double qqa = std::fmax((1.0 - scv) / scv * (s / (1.0 - s)), 1e-4);  // L4
+        return 0.1 * (-Mc * std::exp(std::log((Mc / Md) * qqa) / 15.0) + Md);     // L1
     };
     auto rowe = [&](double s) { return (s - scv) / (1.0 - s * scv); };
 
@@ -155,14 +161,14 @@ void test_li_dafalias_dilatancy() {
     const auto dil = katai::core::detail::hs_dilatancy(p);
     const auto hs = katai::core::detail::hs_dilatancy(ph);
 
-    std::printf("  phi_cv = %.6f deg   Eq 7-23 floor = %.6f deg\n",
+    std::printf("  phi_cv = %.6f deg   L5 floor = %.6f deg\n",
                 std::asin(scv) / deg, std::asin(floor_s) / deg);
 
     // (1) THE TWO BRANCHES MEET EXACTLY. At phi_m = phi_cv we have M_d = M_c and q/q_a = 1, so
-    //     the logarithm vanishes and Eq 7-19 returns zero -- which is where Rowe changes sign.
+    //     the logarithm vanishes and L1 returns zero -- which is where Rowe changes sign.
     //     The composite rule is continuous by construction; there is no step to tolerate. In
-    //     double precision Eq 7-19 lands on 0 exactly, so this is pinned as an equality.
-    check(oracle(scv) == 0.0, "Eq 7-19 vanishes EXACTLY at phi_m = phi_cv (M_d = M_c, q/q_a = 1)");
+    //     double precision L1 lands on 0 exactly, so this is pinned as an equality.
+    check(oracle(scv) == 0.0, "L1 vanishes EXACTLY at phi_m = phi_cv (M_d = M_c, q/q_a = 1)");
     check(dil(scv) == 0.0, "psi_m = 0 at phi_m = phi_cv");
     const double eps = 1e-9;
     std::printf("  continuity across phi_cv: psi_m(-eps) = %+.3e   psi_m(+eps) = %+.3e\n",
@@ -170,7 +176,7 @@ void test_li_dafalias_dilatancy() {
     check(std::fabs(dil(scv - eps)) < 1e-8, "no jump entering the Li & Dafalias branch");
     check(dil(scv + eps) > 0.0, "Rowe (dilatant) on the other side of phi_cv");
 
-    // (2) The kernel reproduces Eq 7-19..7-23 across the whole branch -- and plain HS, the same
+    // (2) The kernel reproduces L1..L5 across the whole branch -- and plain HS, the same
     //     soil with G0_ref = 0, keeps the zero cut-off at every one of those points.
     double worst = 0.0;
     bool hs_zero = true, mono = true, bounded = true;
@@ -184,27 +190,29 @@ void test_li_dafalias_dilatancy() {
         if (dil(s) < plateau - 1e-16) bounded = false;
         prev = dil(s);
     }
-    std::printf("  vs Eq 7-19..7-23 oracle: worst |diff| = %.2e over the branch\n", worst);
-    check(worst < 1e-15, "kernel reproduces Eq 7-19..7-23");
-    check(hs_zero, "plain HS keeps psi_m = 0 below phi_cv (the sec 7.9.1 branch is HSsmall-only)");
+    std::printf("  vs L1..L5 oracle: worst |diff| = %.2e over the branch\n", worst);
+    check(worst < 1e-15, "kernel reproduces L1..L5");
+    check(hs_zero,
+          "plain HS keeps psi_m = 0 below phi_cv (the Li & Dafalias branch is HSsmall-only)");
     check(mono, "psi_m rises monotonically towards phi_cv");
-    check(bounded, "Eq 7-23 bounds the contraction: no psi_m below the plateau");
+    check(bounded, "L5 bounds the contraction: no psi_m below the plateau");
 
-    // (3) The plateau: Eq 7-23 floors phi_m, so psi_m is CONSTANT below 23.71 deg -- and that
+    // (3) The plateau: L5 floors phi_m, so psi_m is CONSTANT below 23.71 deg -- and that
     //     constant is the most contractant state the model can reach. Rowe, unbounded, would
     //     have asked for -7.96 deg there and -19.90 deg at phi_m = 12 deg; HS discards both.
     std::printf("  plateau psi_m = %.6f deg (Rowe there: %.4f deg; HS: 0)\n",
                 std::asin(plateau) / deg, std::asin(rowe(floor_s)) / deg);
     check(close(std::asin(plateau) / deg, -1.678935, 1e-6), "plateau psi_m = -1.678935 deg");
     check(dil(std::sin(5.0 * deg)) == plateau && dil(std::sin(20.0 * deg)) == plateau,
-          "psi_m is bit-for-bit constant below the Eq 7-23 floor");
+          "psi_m is bit-for-bit constant below the L5 floor");
 
     // (4) THE DILATANCY CUT-OFF STILL MEANS WHAT IT SAYS. Once the soil has dilated to e_max the
     //     cut-off sets the MOBILISED angle back to zero. The engine signals that by zeroing psi,
-    //     which for plain HS is the same statement -- but sec. 7.9.1 reads psi only through
-    //     phi_cv, so a zeroed psi alone would move phi_cv up to phi and switch the Li & Dafalias
-    //     contraction ON across the whole pre-failure range: a "stop dilating" option that starts
-    //     producing volume loss. HardeningSoilParams::dilatancy_cut is what prevents that.
+    //     which for plain HS is the same statement -- but the Li & Dafalias branch reads psi only
+    //     through phi_cv, so a zeroed psi alone would move phi_cv up to phi and switch the
+    //     Li & Dafalias contraction ON across the whole pre-failure range: a "stop dilating"
+    //     option that starts producing volume loss. HardeningSoilParams::dilatancy_cut is what
+    //     prevents that.
     HardeningSoilParams pcut = p; pcut.dilatancy = 0.0; pcut.dilatancy_cut = true;
     HardeningSoilParams pzero = p; pzero.dilatancy = 0.0;  // psi zeroed, cut-off NOT declared
     const auto cut = katai::core::detail::hs_dilatancy(pcut);
@@ -234,7 +242,8 @@ void test_li_dafalias_dilatancy() {
 // gamma_hist >> gamma_cutoff the small-strain overlay has degraded to E_ur exactly (pinned in
 // test_hssmall_fe), so HSsmall and plain HS then share every stiffness in the model. Under a
 // purely deviatoric strain increment the ONLY thing left that can separate them is the flow
-// rule -- so whatever mean stress difference appears here IS sec 7.9.1 and nothing else.
+// rule -- so whatever mean stress difference appears here IS the Li & Dafalias branch and nothing
+// else.
 void test_li_dafalias_fe() {
     const double deg = std::acos(-1.0) / 180.0;
     HardeningSoilParams base;
@@ -275,7 +284,7 @@ void test_li_dafalias_fe() {
     // Direction check. Contraction (comp-positive eps_v^p > 0) under a constant total volume
     // means the ELASTIC volumetric strain goes the other way, so the soil sheds mean effective
     // stress -- in undrained terms, it builds pore pressure. That is the realistic direction and
-    // it is why the manual bothers: HS's zero simply produced no volumetric strain at all here.
+    // it is why the branch exists: HS's zero simply produced no volumetric strain at all here.
     check(mean(t_hss) < 0.0, "still in compression (a small correction, not a sign flip)");
 }
 
@@ -287,7 +296,7 @@ int main() {
     test_li_dafalias_dilatancy();
     test_li_dafalias_fe();
     if (g_failures == 0) {
-        std::printf("OK: HSsmall verified (Hardin-Drnevich, cut-off, stress law, Li & Dafalias sec 7.9.1)\n");
+        std::printf("OK: HSsmall verified (Hardin-Drnevich, cut-off, stress law, Li & Dafalias branch)\n");
         return 0;
     }
     std::fprintf(stderr, "%d check(s) failed\n", g_failures);

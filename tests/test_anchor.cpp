@@ -1,6 +1,6 @@
-// Anchors (P2.4): the unidirectional axial spring (PLAXIS MMM Eq 18-1, N = (EA/L) U) wired
-// into the solver as a structural element. Two forms share the same element technology
-// (PLAXIS Reference Manual): node-to-node (strut between two mesh nodes) and fixed-end (one
+// Anchors (P2.4): the unidirectional axial spring (N = (EA/L) U) wired
+// into the solver as a structural element. Two forms share the same element technology:
+// node-to-node (strut between two mesh nodes) and fixed-end (one
 // mesh node to a fixed far point). Only translational DOFs (no rotation) -> no DofMap change.
 //
 // (1) Fixed-end anchor as a pure spring: with very soft soil a horizontally loaded node held
@@ -8,7 +8,7 @@
 // (2) Node-to-node strut SUPPORTS a wall: a horizontal strut from a loaded wall column to a
 //     fixed point drastically reduces the lateral deflection and carries ~ the applied load
 //     (the canonical supported-excavation mechanic).
-// (See docs/references/structural-plate-formulation.md sec 7; PLAXIS MMM sec 18.1.)
+// (See docs/references/structural-plate-formulation.md sec 7.)
 #include <katai/analysis/nonlinear_solver.hpp>
 #include <katai/fem/assembly/assembler.hpp>
 #include <katai/fem/assembly/dof_map.hpp>

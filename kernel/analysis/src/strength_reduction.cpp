@@ -10,16 +10,16 @@ namespace katai::core {
 // applied to BOTH the Mohr-Coulomb fields (used by the MC model) AND the Hardening Soil sub-struct
 // (the HS failure surface uses hs.cohesion / hs.friction -- a SEPARATE set of fields, so reducing
 // only the MC ones leaves an HS slope at full strength and it never collapses). Dilatancy is clamped
-// to the reduced friction afterwards (psi <= phi is required; PLAXIS practice) so the reduced state
+// to the reduced friction afterwards (psi <= phi is required) so the reduced state
 // stays physically admissible at high srf.
 static void factor_strength(MaterialModel& m, double srf) {
     m.cohesion /= srf;
     m.friction_angle = std::atan(std::tan(m.friction_angle) / srf);
     if (m.dilatancy_angle > m.friction_angle) m.dilatancy_angle = m.friction_angle;
-    // Tensile strength is a material strength too: PLAXIS documents the Safety
-    // reduction of the tension cut-off value explicitly for Hoek-Brown (MMM sec
-    // 4.3.7); the same rule is applied to the MC cap here (safe direction; the
-    // c*cot(phi) clamp inside the return mapping shrinks with c/srf as well).
+    // Tensile strength is a material strength too: the Safety reduction of the
+    // tension cut-off value is defined explicitly for Hoek-Brown; the same rule
+    // is applied to the MC cap here (safe direction; the c*cot(phi) clamp inside
+    // the return mapping shrinks with c/srf as well).
     m.tensile_strength /= srf;
     m.hs.cohesion /= srf;
     m.hs.friction = std::atan(std::tan(m.hs.friction) / srf);

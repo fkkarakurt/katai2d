@@ -1,6 +1,6 @@
 // A consolidation phase that ends when the ground has consolidated, not when a duration guessed in
-// advance runs out (PLAXIS 2D Reference Manual sec. 7.5, "Loading type" of a Consolidation phase:
-// Minimum excess pore pressures / Degree of consolidation). The design question has the shape "how
+// advance runs out (the `cstop` key of a Consolidation phase in docs/k2d-format.md: minimum excess
+// pore pressure / degree of consolidation). The design question has the shape "how
 // long until it has settled out?", and until this the only thing that could be said to the phase
 // was a number of days -- so the answer had to be obtained by guessing a span, reading the curve,
 // and guessing again.
@@ -14,10 +14,10 @@
 //      Asserted below for both cores, to 1e-12 relative -- if it ever stops holding, every stop
 //      criterion is measuring a different problem from the one Terzaghi validated.
 //
-//  (2) THE DEFINITION. "Degree of consolidation" names two different numbers, and PLAXIS says so
-//      itself: "Although the degree-of-consolidation is officially defined in terms of target
-//      settlement over final settlement, in PLAXIS 2D it is defined as the target minimum excess
-//      pore pressure over the maximum initial excess pore pressure p_max/p_max,initial." The two
+//  (2) THE DEFINITION. "Degree of consolidation" names two different numbers. Classically it is
+//      the settlement ratio, settlement over final settlement; KATAI's input contract (`cdeg`)
+//      defines the stop target instead as the PRESSURE ratio, the maximum excess pore pressure
+//      over the maximum initial excess pore pressure p_max/p_max,initial. The two
 //      are 21.6% apart in TIME on the one problem where both are known in closed form, so a build
 //      that implements the name instead of the definition would be wrong by a fifth of the answer
 //      and would look entirely reasonable doing it. The test pins the pressure ratio AGAINST the
@@ -33,7 +33,7 @@
 //
 // verify: KV-CON-003
 //   oracle:   closed_form
-//   source:   Terzaghi (1943) one-dimensional consolidation; the stop criterion and the definition of its target are PLAXIS 2D Reference Manual (2025.1) sec. 7.5, which states that the degree of consolidation is the target minimum excess pore pressure over the maximum initial excess pore pressure, not the settlement ratio the name suggests. Series derivation recorded in docs/references/consolidation-formulation.md
+//   source:   Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley -- one-dimensional consolidation; the stop criterion and the definition of its target are KATAI 2D input contract (docs/k2d-format.md, cstop / cdeg / cminp), which defines the degree of consolidation as the maximum excess pore pressure over the maximum initial excess pore pressure, not the settlement ratio the name suggests. Series derivation recorded in docs/references/consolidation-formulation.md
 //   locator:  for a column with uniform initial excess pore pressure u0 drained at one end, u(Z,T)/u0 = sum_j (2/M) sin(M Z) exp(-M^2 T), M = (2j+1) pi/2, Z measured from the drained end, T = cv t / H_dr^2, cv = k Eoed / gamma_w; the MAXIMUM over the column is the value at the impermeable end, u(1,T)/u0 = sum_j (2/M) (-1)^j exp(-M^2 T). The settlement ratio is the other series, U(T) = 1 - sum_j (2/M^2) exp(-M^2 T). The reference the ratio is taken against has its own closed form: the undrained pressure a surcharge q generates in the confined column, p_u = q / (1 + n Eoed / Kw)
 //   quantity: the time [day] at which a consolidation phase asked to stop at 90% degree of consolidation stops; the same time for a phase asked to stop at 1 kPa maximum excess pore pressure under the same 10 kPa surcharge (the same 10% of what it generates, so the same instant); the reference pressure of the ratio [kPa]; and the exactness of a restart of the fixed-dt core, which is what lets the march change its step at all
 //   expected: u(1,T)/u0 = 0.1 at T = 1.031105, i.e. t = 14.566 day for this column (H_dr = 12 m, cv = k Eoed / gamma_w = 0.1 * 1000 / 9.81 = 10.194 m2/day) -- and NOT t = 11.980 day, which is where the SETTLEMENT ratio reaches the same 90% (T = 0.848085), 21.6% earlier. The settlement ratio at the stop is 93.9%, not 90%. The reference is p_u = 10 / (1 + 0.3333 * 1000 / 2e6) = 9.99833 kPa. A restart is exact to round-off
@@ -76,8 +76,8 @@ void check(bool ok, const char* what) {
 }
 
 // Maximum excess pore pressure in the column / u0: the value at the impermeable end (the profile
-// increases monotonically away from the drainage boundary). This is the series PLAXIS's degree of
-// consolidation is a ratio of.
+// increases monotonically away from the drainage boundary). This is the series the pressure-ratio
+// degree of consolidation (`cdeg`) is a ratio of.
 double terzaghi_pmax(double Tv) {
     double s = 0.0;
     for (int j = 0; j < 200; ++j) {
@@ -309,12 +309,12 @@ std::vector<katai::core::SolveResult> run(const m::Project& pr) {
 void test_stop_criteria() {
     const double cv = kPerm * kE / katai::app::kGammaWater;   // nu = 0 -> Eoed = E
     const double s_inf = kQ * kH / kE;
-    const double Tv_pressure = time_factor_at(terzaghi_pmax, 0.1);        // PLAXIS's definition
+    const double Tv_pressure = time_factor_at(terzaghi_pmax, 0.1);        // the cdeg definition
     const double Tv_settle = time_factor_at([](double T) { return 1.0 - terzaghi_U(T); }, 0.1);
     const double t_pressure = Tv_pressure * kH * kH / cv;
     const double t_settle = Tv_settle * kH * kH / cv;
     std::printf("\n-- (3) 90%% degree of consolidation: WHICH 90%%? --\n");
-    std::printf("   pressure ratio (PLAXIS)   : Tv = %.6f -> t = %.4f day\n", Tv_pressure, t_pressure);
+    std::printf("   pressure ratio (cdeg)     : Tv = %.6f -> t = %.4f day\n", Tv_pressure, t_pressure);
     std::printf("   settlement ratio (classic): Tv = %.6f -> t = %.4f day\n", Tv_settle, t_settle);
     std::printf("   the two are %.1f%% apart in time; the settlement ratio at the pressure-90%% "
                 "instant is %.4f\n", 100.0 * (t_pressure / t_settle - 1.0), terzaghi_U(Tv_pressure));
@@ -460,7 +460,7 @@ void test_honest_endings() {
 }  // namespace
 
 int main() {
-    std::printf("Consolidation ended on a state: PLAXIS Ref sec. 7.5 stop criteria\n\n");
+    std::printf("Consolidation ended on a state: the cstop stop criteria\n\n");
     test_restart_identity();
     test_refused_solve_is_an_answer();
     test_stop_criteria();

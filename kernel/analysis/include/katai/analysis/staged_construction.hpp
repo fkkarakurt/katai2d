@@ -9,8 +9,7 @@
 // remaining mass comes to equilibrium (base heave). The phase displacement starts from zero
 // (incremental).
 //
-// Math + sources: docs/references/initial-stress-k0.md §5; PLAXIS Reference/
-// Scientific Manual (staged construction).
+// Math + sources: docs/references/initial-stress-k0.md §5 (staged construction).
 
 #include <algorithm>
 #include <cmath>
@@ -71,7 +70,7 @@ inline std::vector<SeamPair> split_mesh_at_wall(mesh::Mesh& mesh, double x_wall,
 // be a mesh edge chain (a structural/interface line is embedded in the mesh as a
 // constraint → nodes aligned). The mesh changes in place (node_count grows). Returns: seam
 // pairs SORTED by s (corner,mid,corner… tri6 / corner,q,m,q,corner… tri15). Must be called
-// BEFORE the DofMap is built. (PLAXIS interface: a structural/in-soil slip surface.)
+// BEFORE the DofMap is built. (Interface: a structural/in-soil slip surface.)
 struct SegSeam { int orig; int dup; double x, y, s; };
 inline std::vector<SegSeam> split_mesh_at_segment(mesh::Mesh& mesh, double ax, double ay,
                                                   double bx, double by, double s_lo, double s_hi,
@@ -133,8 +132,8 @@ inline std::vector<char> active_nodes(const mesh::Mesh& mesh,
 // transverse direction singular, so they keep the fixity. Empty = nothing exempted (the
 // old behaviour, bit-for-bit).
 //
-// The case this exists for is the manual's own: PLAXIS 2D Validation Manual §2.3 builds a
-// beam by deactivating the soil cluster so that only the beams remain.
+// The case this exists for is a structural benchmark built inside a soil model: a beam is
+// modelled by deactivating the soil cluster so that only the beams remain.
 inline void fix_inactive_nodes(const mesh::Mesh& mesh,
                                const std::vector<char>& active_element,
                                DofMap& dofs,

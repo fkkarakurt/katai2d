@@ -1,6 +1,6 @@
 // INPUT-AUDIT pins (2026-07 audit): the fixes for silently-ignored or silently-wrong user
 // inputs, verified through the FULL app compute path.
-//   (a) OCR raises the automatic K0 (PLAXIS Ref: K0 = K0nc*OCR - nu/(1-nu)*(OCR-1)); it was
+//   (a) OCR raises the automatic K0 (elastic unloading: K0 = K0nc*OCR - nu/(1-nu)*(OCR-1)); it was
 //       silently ignored for MC/LE geostatics before -- pinned against the hand formula;
 //   (b) NC control: OCR = 1 leaves K0 = 1 - sin(phi) untouched;
 //   (c) Hardening Soil + Undrained (B) is REFUSED (it silently behaved like Undrained (A));
@@ -56,7 +56,7 @@ double measured_k0(const katai::app::SolveResult& R) {
 }
 
 void test_ocr_k0() {
-    std::printf("-- (a,b) automatic K0 with OCR (PLAXIS formula), NC control --\n");
+    std::printf("-- (a,b) automatic K0 with OCR (elastic-unloading formula), NC control --\n");
     for (double ocr : {1.0, 2.0}) {
         m::Project pr = mc_column(ocr);
         const auto M = katai::app::mesh_from_project(pr, 0.5, 6);
@@ -124,11 +124,10 @@ void test_plate_elastoplastic_gate() {
 
 // (e) MC tension cut-off IS applied to soil elements now (audit item #1 -- the last
 // big silent-wrong: the box was checkable but soil carried tension unclipped). The
-// canonical scenario is the one PLAXIS itself cites (MMM 3.3.10, tensile cracks near
-// a trench in clay): excavating a deep vertical cut in cohesive soil relieves the
-// horizontal stress behind the crest into TENSION. With the cut-off ON (default,
-// sigma_t = 0) the recovered major principal stress stays at ~0 there; with it OFF
-// the same model carries real tension (MC alone allows sigma_1 up to
+// canonical scenario is tensile cracking near a trench in clay: excavating a deep vertical
+// cut in cohesive soil relieves the horizontal stress behind the crest into TENSION. With
+// the cut-off ON (default, sigma_t = 0) the recovered major principal stress stays at ~0
+// there; with it OFF the same model carries real tension (MC alone allows sigma_1 up to
 // 2c cos(phi)/(1+sin(phi)) = 28.9 kPa at zero confinement). Both runs go through
 // the FULL app path (build_problem -> solver -> recovery): this pins the wiring.
 void test_soil_tension_cutoff_applied() {
@@ -396,7 +395,7 @@ void test_wall_weight_static() {
 
 // (h) NonPorous drainage is now real (audit item #3 -- it was accepted by the GUI and
 // silently treated as Drained: a submerged concrete block got buoyancy AND pore
-// pressure). PLAXIS rule: a non-porous material holds no water at all -- gamma_unsat
+// pressure). The rule: a non-porous material holds no water at all -- gamma_unsat
 // everywhere, no pore pressure, total-stress equilibrium in its region. Pins on a
 // fully submerged column (water table at the surface):
 //   NonPorous:  sigma_yy(z) = -gamma_unsat * z (TOTAL; no buoyancy, no pore) and the
@@ -502,7 +501,7 @@ int main() {
     std::printf("\n");
     test_nonporous_drainage();
     if (g_failures == 0) {
-        std::printf("\nOK: OCR->K0 wired (PLAXIS formula), HS+Undrained(B) refused, plate Mp/Np "
+        std::printf("\nOK: OCR->K0 wired (elastic unloading), HS+Undrained(B) refused, plate Mp/Np "
                     "hinge live (zero-capacity elastoplastic refused)\n");
         return 0;
     }

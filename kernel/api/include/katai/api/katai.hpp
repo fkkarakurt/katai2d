@@ -27,7 +27,7 @@
 #include <katai/io/project_io.hpp>
 #include <katai/io/results_io.hpp>
 #include <katai/io/validate.hpp>
-#include <katai/materials/material_model.hpp>   // the undrained-stiffness conversions (MMM 2.4)
+#include <katai/materials/material_model.hpp>   // the undrained-stiffness conversions
 #include <katai/jobs/job.hpp>
 #include <katai/linsolve/direct_solver.hpp>   // backend_name(): result provenance
 
@@ -101,15 +101,17 @@ using app::DiagnosticSeverity;
 
 // -- derived input ---------------------------------------------------------------------
 // What a material's undrained stiffness inputs MEAN, computed the way the solve computes
-// them (PLAXIS MMM section 2.4). This is not solver state: it is the reading of an input,
+// them (alpha_Biot = 1). This is not solver state: it is the reading of an input,
 // and a front end that lets an engineer type nu_u or Skempton's B has to be able to show
 // the other two numbers, because they are the same statement in the units the engineer
 // happens to think in. Whichever of the two was entered, all four fields come back filled.
 struct UndrainedStiffness {
     double k_eff = 0.0;    // K' of the effective elastic pair the material's model reads
-    double nu_u = 0.0;     // equivalent undrained Poisson ratio (Eq. 2-55 when B was entered)
-    double kw_over_n = 0.0;  // pore-fluid bulk stiffness (Eq. 2-50) [kN/m2]
-    double skempton_B = 0.0; // Skempton's B (Eq. 2-57)
+    // equivalent undrained Poisson ratio; from B: (3 nu' + B(1 - 2 nu')) / (3 - B(1 - 2 nu'))
+    double nu_u = 0.0;
+    // pore-fluid bulk stiffness Kw/n = 3(nu_u - nu')/((1 - 2 nu_u)(1 + nu')) K' [kN/m2]
+    double kw_over_n = 0.0;
+    double skempton_B = 0.0; // Skempton's B = (Kw/n) / (K' + Kw/n) (Skempton 1954)
 };
 inline UndrainedStiffness undrained_stiffness(const Material& m) {
     // The Hardening Soil family's elasticity is the unload/reload pair; E and nu are boxes

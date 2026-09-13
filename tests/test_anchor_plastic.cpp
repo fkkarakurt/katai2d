@@ -1,5 +1,5 @@
 // Anchor elastoplasticity (P2.4): the unidirectional axial spring with a force capacity
-// F_max,tens / F_max,comp (PLAXIS MMM sec 18.1). Elastic-perfectly-plastic: N grows with EA/L
+// F_max,tens / F_max,comp (`Fmax_tens` / `Fmax_comp`). Elastic-perfectly-plastic: N grows with EA/L
 // stiffness until |N| reaches the cap, then plateaus while a permanent plastic elongation U_p
 // accumulates (a support that yields -- the critical supported-excavation behaviour).
 //

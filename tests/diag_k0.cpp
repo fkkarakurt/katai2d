@@ -2,7 +2,7 @@
 // (build_problem.hpp solve_gravity_le) and prints concrete numbers so we can be 1000% sure the
 // initial-stress procedure is right -- the user reported "K0 doesn't seem to work in the GUI".
 //
-// Geotechnical truth being checked (Terzaghi/Lambe&Whitman; PLAXIS Reference Manual, K0 procedure):
+// Geotechnical truth being checked (Terzaghi/Lambe&Whitman; the K0 procedure):
 //   * K0 procedure: undisturbed ground is in GEOSTATIC EQUILIBRIUM. Displacement ~0 by design,
 //     and sigma'_v = -gamma'(H-y), sigma'_h = K0 sigma'_v.
 //   * Gravity loading (self-weight from a STRESS-FREE start) reaches the SAME final sigma'_v at

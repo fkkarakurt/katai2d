@@ -1,8 +1,8 @@
 #pragma once
 // Boreholes -> soil polygons and a water surface.
 //
-// The one job in this header is the interpolation rule stated in Project's Borehole comment, taken
-// from the PLAXIS 2D 2025.1 Reference Manual sec. 4.2 / 4.3.1.1 / 7.10.1.1. It is a pure function
+// The one job in this header is the interpolation rule stated in Project's Borehole comment (the
+// input contract, docs/k2d-format.md `boreholes`). It is a pure function
 // from schema to schema: no mesh, no engine, no file. That is deliberate -- the generator is the
 // part most likely to be wrong in a way a solve cannot detect, so it is the part that has to be
 // testable on its own, against levels a person can compute by hand.
@@ -12,7 +12,7 @@
 // edges and every borehole x -- because the boundaries are piecewise linear with a break at each
 // borehole and nowhere else. A stratum that is everywhere zero-thickness produces no polygon at
 // all; one that pinches out locally produces a polygon that touches itself at that station, which
-// is what a layer running out actually looks like and what the manual explicitly allows.
+// is what a layer running out actually looks like and what the contract explicitly allows.
 //
 // WHAT DOES NOT COME OUT: materials are carried, but nothing else about the polygons is invented.
 // Edge boundary conditions, flow conditions and coarseness stay at their defaults, because a
@@ -40,7 +40,7 @@ inline std::vector<double> stratigraphy_stations(const Project& pr) {
     return xs;
 }
 
-// Level of boundary `k` at position x, by the manual's rule: linear between the two bracketing
+// Level of boundary `k` at position x, by the borehole rule: linear between the two bracketing
 // boreholes, and HELD -- not extrapolated -- outside the outermost ones.
 //
 // `sorted` must be the boreholes ordered by x. Boreholes whose level vector is too short for `k`
@@ -68,7 +68,7 @@ inline double stratigraphy_level_at(const std::vector<const Borehole*>& sorted, 
 }
 
 // The phreatic level at x, from the boreholes that carry a head. Same rule as a layer boundary --
-// sec. 7.10.1.1 combines the heads into one surface, and a single head is horizontal to the edges.
+// the heads combine into one surface, and a single head is horizontal to the edges.
 inline double stratigraphy_head_at(const std::vector<const Borehole*>& sorted, double x) {
     std::vector<const Borehole*> h;
     for (const Borehole* b : sorted)

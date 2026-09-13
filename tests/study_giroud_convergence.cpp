@@ -1,6 +1,5 @@
-// Solution verification of the Giroud rigid-footing benchmark (PLAXIS 2D Validation Manual V8,
-// Section 2.1): the footing force on three NESTED meshes, and the discretisation uncertainty
-// that follows from them.
+// Solution verification of the Giroud (1972) rigid-footing benchmark (KV-FND-012): the footing
+// force on three NESTED meshes, and the discretisation uncertainty that follows from them.
 //
 // Why nested. The mesher rebuilds an unstructured mesh from scratch at every density, so three
 // independently generated meshes differ by more than h^p and the observed order comes out at
@@ -9,8 +8,8 @@
 // and preserves every angle, which is what the Richardson/GCI procedure assumes.
 //
 // The quantity is the footing force at the imposed settlement: F = 2 |sum R_y| over the footing
-// nodes (half model, so twice the half-model reaction). The reference values are the manual's:
-// 15.15 kN/m analytic (Giroud 1972), 15.24 kN/m PLAXIS 2D.
+// nodes (half model, so twice the half-model reaction). The reference value is the closed form
+// F = 2 (1 + nu) G B s / rho = 15.15 kN/m (Giroud 1972; half-width B = 1 m, rho = 0.88).
 //
 // Not a ctest gate: it is a study, run when the published record needs its number re-measured.
 // Build: cmake --build <dir> --target study_giroud_convergence
@@ -33,9 +32,8 @@ namespace m = katai::model;
 
 namespace {
 
-// The manual's own numbers for Section 2.1.
+// The closed-form reference.
 constexpr double kAnalytic = 15.15;   // kN/m, Giroud (1972): F = 2 (1 + nu) G B s / rho
-constexpr double kPlaxis = 15.24;     // kN/m, as published in the same section
 
 // F = 2 |sum R_y| over the nodes the prescribed displacement acts on (half model).
 double footing_force(const katai::app::SolveResult& r, const m::PrescribedDisp& d) {
@@ -78,8 +76,7 @@ int main(int argc, char** argv) {
 
     std::printf("== Giroud rigid footing, solution verification (nested refinement) ==\n");
     std::printf("   file: %s\n", path.c_str());
-    std::printf("   references: analytic %.2f kN/m (Giroud 1972), PLAXIS 2D %.2f kN/m\n\n",
-                kAnalytic, kPlaxis);
+    std::printf("   reference: analytic %.2f kN/m (Giroud 1972)\n\n", kAnalytic);
 
     // Coarse -> fine: the file's own mesh, then two uniform refinements of it.
     std::vector<katai::mesh::Mesh> meshes;
@@ -100,10 +97,9 @@ int main(int argc, char** argv) {
         F[i] = footing_force(res.back(), pr.disps[0]);
         h[i] = gc::mesh_representative_size(mesh_area(meshes[i]), meshes[i].element_count);
         std::printf("   mesh %d: %6d elements, %6d nodes, h = %.5f m  ->  F = %.5f kN/m "
-                    "(%+.2f%% analytic, %+.2f%% PLAXIS)\n",
+                    "(%+.2f%% analytic)\n",
                     i, meshes[i].element_count, meshes[i].node_count, h[i], F[i],
-                    100.0 * (F[i] - kAnalytic) / kAnalytic,
-                    100.0 * (F[i] - kPlaxis) / kPlaxis);
+                    100.0 * (F[i] - kAnalytic) / kAnalytic);
     }
 
     gc::GridTriplet t;
@@ -115,16 +111,13 @@ int main(int argc, char** argv) {
     std::printf("\n   refinement ratios r21 = %.4f, r32 = %.4f\n", e.r21, e.r32);
     std::printf("   observed order p = %.4f (%s)\n", e.p, gc::convergence_kind_name(e.kind));
     if (!e.message.empty()) std::printf("   note: %s\n", e.message.c_str());
-    std::printf("   Richardson extrapolation F(h->0) = %.5f kN/m (%+.2f%% analytic, %+.2f%% PLAXIS)\n",
-                e.phi_extrapolated, 100.0 * (e.phi_extrapolated - kAnalytic) / kAnalytic,
-                100.0 * (e.phi_extrapolated - kPlaxis) / kPlaxis);
+    std::printf("   Richardson extrapolation F(h->0) = %.5f kN/m (%+.2f%% analytic)\n",
+                e.phi_extrapolated, 100.0 * (e.phi_extrapolated - kAnalytic) / kAnalytic);
     std::printf("   asymptotic ratio %.4f, extrapolation quotable: %s\n", e.asymptotic_ratio,
                 e.asymptotic ? "yes" : "no");
     std::printf("   NUMERICAL UNCERTAINTY of the fine mesh: +/- %.4f%% (%s)\n",
                 100.0 * e.band, e.band_basis.c_str());
-    std::printf("\n   => F(fine) = %.4f kN/m +/- %.4f%%; distance to PLAXIS %+.2f%%, "
-                "to the analytic value %+.2f%%\n",
-                F[2], 100.0 * e.band, 100.0 * (F[2] - kPlaxis) / kPlaxis,
-                100.0 * (F[2] - kAnalytic) / kAnalytic);
+    std::printf("\n   => F(fine) = %.4f kN/m +/- %.4f%%; distance to the analytic value %+.2f%%\n",
+                F[2], 100.0 * e.band, 100.0 * (F[2] - kAnalytic) / kAnalytic);
     return 0;
 }

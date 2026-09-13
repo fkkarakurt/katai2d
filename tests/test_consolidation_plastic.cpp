@@ -1,4 +1,4 @@
-// Elastoplastic (MC/HS) Biot consolidation -- monolithic coupled Newton (PLAXIS Sci.Man 4.3).
+// Elastoplastic (MC/HS) Biot consolidation -- monolithic coupled Newton (Biot 1941).
 // There is no simple closed form for elastoplastic consolidation, so the verification is anchored two
 // ways: (1) LE REDUCTION -- with a linear-elastic skeleton the coupled Newton solver must reproduce
 // the validated LE consolidation core (and hence the classical Terzaghi U-Tv) to round-off; (2) an MC

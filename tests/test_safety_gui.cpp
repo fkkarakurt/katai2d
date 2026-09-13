@@ -1,11 +1,11 @@
 // Safety analysis (phi-c reduction / SRM) through the GUI compute path (build_problem, phase=Safety).
-// PLAXIS "Safety" phase -> slope factor of safety + failure mechanism. The core SRM is validated
-// directly (test_slope: FoS=1.01 vs ~0.99); here we verify the INTEGRATED GUI path reproduces it and
+// A "Safety" phase -> slope factor of safety + failure mechanism. The core SRM is validated
+// directly (test_slope: FoS=1.01 vs 1.00); here we verify the INTEGRATED GUI path reproduces it and
 // returns a non-zero failure mechanism (the slip surface), answering the user's question: a slope DOES
 // show collapse -- via the Safety analysis, not the K0 procedure (which is zero-displacement by design).
 //
-// Rocscience/Slide #1 (Griffiths & Lane): homogeneous 1:2 slope on a foundation, gamma=20.2, c=3 kPa,
-// phi=19.6 deg, psi=0 -> FoS ~ 0.99 (Bishop 0.988, Spencer 0.987, Phase2 T6 0.997).
+// Slope benchmark (after Griffiths & Lane): homogeneous 1:2 slope on a foundation, gamma=20.2,
+// c=3 kPa, phi=19.6 deg, psi=0 -> referee FoS 1.00 (Giam & Donald 1989, Monash report 8/1989).
 #include <katai/io/validate.hpp>
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/jobs/driver.hpp>
@@ -61,11 +61,11 @@ void test_safety_slope_fos() {
     const auto R = katai::app::solve_gravity_le(pr, M.mesh, katai::app::InitialPhase::Safety);
     check(R.ok, "Safety analysis ran");
     if (!R.ok) { std::printf("  (%s)\n", R.message.c_str()); return; }
-    const double ref = 0.99;
+    const double ref = 1.00;
     const double err = std::fabs(R.fos - ref) / ref * 100.0;
     // Failure mechanism: the slip surface must show NON-zero displacement (unlike the K0 procedure).
     double max_u = R.max_disp;
-    std::printf("  GUI Safety: FoS = %.3f  (ref ~0.99, T6 0.997)  err = %.1f%%   mechanism max|u| = %.3e\n",
+    std::printf("  GUI Safety: FoS = %.3f  (ref 1.00)  err = %.1f%%   mechanism max|u| = %.3e\n",
                 R.fos, err, max_u);
     check(err < 8.0, "GUI-path slope factor of safety within 8% of the benchmark");
     check(max_u > 1e-6, "Safety returns a non-zero failure mechanism (slip surface displacement)");
@@ -173,8 +173,8 @@ void test_safety_structures_refused() {
                                                 nullptr, io);
     check(R.ok && !raised(R, "K2D-G016"), "with every structural element deactivated it runs");
     if (R.ok) {
-        const double err = std::fabs(R.fos - 0.99) / 0.99 * 100.0;
-        std::printf("  structures deactivated: FoS = %.3f (ref ~0.99)  err = %.1f%%\n", R.fos, err);
+        const double err = std::fabs(R.fos - 1.00) / 1.00 * 100.0;
+        std::printf("  structures deactivated: FoS = %.3f (ref 1.00)  err = %.1f%%\n", R.fos, err);
         check(err < 8.0, "and returns the unreinforced slope's factor within 8% of the benchmark");
     }
 

@@ -6,8 +6,7 @@
 //     M u'' + C u' + K u = -M.r.a_g(t),      C = alpha.M + beta.K  (Rayleigh)
 // The soil contribution comes from assemble_stiffness / assemble_mass (assembly/assembler.hpp).
 // This header adds the STRUCTURE's contribution to the SAME K and M -> soil and structure solve
-// in ONE system = soil-structure interaction (the counterpart of PLAXIS 2D Dynamics'
-// plate+interface seismic analysis).
+// in ONE system = soil-structure interaction (a plate + interface seismic analysis).
 //
 // STIFFNESS: assemble_structural_stiffness is the ELASTIC branch, at u=0, of solve_nonlinear's
 // structural tangent (analysis/nonlinear_solver.cpp) -- the same elements, the same DOF mapping,
@@ -31,7 +30,7 @@
 //     M_translation = int rho_A N'N ds   (into the u_x and u_y blocks separately, uncoupled)
 //     M_rotation    = int rho_I N'N ds   (the phi DOF)
 // rho_A = w/g [Mg/m], rho_I = rho_A.d^2/12 [Mg.m] (d = equivalent thickness).
-// Anchor/geogrid/interface are MASSLESS (as in PLAXIS: those elements carry no weight). A
+// Anchor/geogrid/interface are MASSLESS (those elements carry no weight input). A
 // massless DOF (e.g. phi with rho_I=0) is fine: K_eff = K + a0.M + a1.C takes a nonsingular
 // contribution from K on those rows.
 //
@@ -81,10 +80,10 @@ void assemble_structural_mass(const mesh::Mesh& mesh, const DofMap& dofs,
 // independently in Timoshenko). On a straight uniform 3-node element this is exactly the
 // Simpson distribution (L/6, L/6, 2L/3); on the 5-node one Boole (7,32,12,32,7)/90.L.
 // rho_A = 0 (the default w=0) -> no contribution (bit-for-bit the old behaviour).
-// Anchor/geogrid/interface are weightless in PLAXIS too. The PLAXIS w input contract: for a
+// Anchor/geogrid/interface are weightless too. The w input contract: for a
 // wall embedded in soil the user enters w with the overlapping soil deducted
-// (w = gamma_plate.d - gamma_soil.d) -- the entered value is applied as given (PLAXIS does the
-// same). Definition in kernel/analysis/src/structural_dynamics.cpp (section 5.2).
+// (w = gamma_plate.d - gamma_soil.d) -- the entered value is applied as given.
+// Definition in kernel/analysis/src/structural_dynamics.cpp (section 5.2).
 void assemble_structural_weight(const mesh::Mesh& mesh, const DofMap& dofs,
                                        const Structures& structures, double g,
                                        Eigen::VectorXd& f);

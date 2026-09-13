@@ -2,7 +2,7 @@
 // Per-line structural force diagrams (Stage B9). One drawn structure line -- a
 // plate, an embedded wall, an anchor, a geogrid, an embedded beam -- owns a
 // contiguous slice of a Structures vector; a DiagSpec remembers that slice so
-// a named N/Q/M diagram (PLAXIS Output -> Structures) can be produced from any
+// a named N/Q/M diagram along the structure can be produced from any
 // full global-DOF displacement field. IfaceDiag is the same bookkeeping for
 // Coulomb interfaces (tau / sigma_n / slip per line).
 //
@@ -33,7 +33,7 @@ namespace katai::core {
 // kind: 0 plate / embedded wall (tri6) · 1 anchor · 2 geogrid ·
 // 3 embedded beam · 5 embedded wall (tri15).
 // anchor_spacing: the solver's anchor force is per-metre of wall (EA/Ls); the
-// REPORT is per-anchor [kN] (PLAXIS convention -- the user enters Fmax per
+// REPORT is per-anchor [kN] (the input convention -- the user enters Fmax per
 // anchor, so a per-metre report would be a xLs trap in capacity comparisons;
 // audit finding). 1.0 for every other kind.
 struct DiagSpec { int kind; std::string name; size_t begin, end; double anchor_spacing = 1.0; };

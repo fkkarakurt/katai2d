@@ -1,9 +1,9 @@
 #pragma once
-// KATAI 2D project data model (GUI). Mirrors the PLAXIS 2D Input working logic: a project holds a
+// KATAI 2D project data model (GUI). The usual geotechnical input workflow: a project holds a
 // material database and a soil column defined by a borehole (layers with top/bottom levels + a water
 // head). Materials are defined independently and assigned to layers. UI-agnostic plain data; the app
 // edits it and the solver consumes it (mesh/solve wiring comes in later GUI steps).
-// Reference: PLAXIS 2D 2025.1 Reference Manual §3-§4 (Soil mode); docs/references/gui-design.md.
+// Reference: docs/references/gui-design.md; the file contract is docs/k2d-format.md.
 
 #include <algorithm>
 #include <cmath>
@@ -15,16 +15,17 @@ namespace katai::model {
 // Enum VALUES are file-stable (written as int in the project file) — a new model is appended at the END.
 enum class SoilModel { LinearElastic, MohrCoulomb, HardeningSoil, HSsmall, SoftSoil, SoftSoilCreep,
                       HoekBrown };   // values are FILE-STABLE: append only
-// Drainage type (PLAXIS Material > General). Undrained (A): EFFECTIVE strength c', phi' + the pore-
+// Drainage type (material General data). Undrained (A): EFFECTIVE strength c', phi' + the pore-
 // fluid bulk stiffness Kw/n (excess pore pressure generated, effective stress path; su is PREDICTED).
 // Undrained (B): the same Kw/n machinery but the UNDRAINED strength is entered directly -- c = su,
 // phi = 0 (a Tresca su envelope), which the solver enforces. Both share the effective-stress + Kw
 // computation. Enum VALUES are kept file-stable (UndrainedB appended as 3); the GUI presents them in
-// PLAXIS order via an explicit index<->enum map (drainage_names is indexed by the enum value).
+// its own display order via an explicit index<->enum map (drainage_names is indexed by the enum
+// value).
 // Undrained (C): a TOTAL stress analysis. Stiffness is the undrained pair (E_u, nu_u close to
 // 0.5) and strength the undrained shear strength (c = su, phi = 0), entered in the same boxes;
 // no pore pressure is generated OR carried, so what the output calls effective stress is total
-// stress, and K0 refers to total stress too (MMM section 2.7). It is not a variant of (A)/(B):
+// stress, and K0 refers to total stress too. It is not a variant of (A)/(B):
 // those separate the water from the skeleton, this one declines to.
 enum class Drainage { Drained = 0, Undrained = 1, NonPorous = 2, UndrainedB = 3, UndrainedC = 4 };
 
@@ -53,7 +54,7 @@ inline const char* drainage_name(Drainage d) {
     return (i >= 0 && i < kDrainageCount) ? drainage_names()[i] : "Unknown drainage";
 }
 
-// One soil material data set (PLAXIS "Soil" material). Parameters cover all supported models; only
+// One soil material data set. Parameters cover all supported models; only
 // the fields relevant to `model` are used. Stiffness in kN/m^2, unit weight kN/m^3, angles in degrees.
 struct Material {
     std::string name = "New material";
@@ -65,7 +66,7 @@ struct Material {
     double gamma_unsat = 17.0, gamma_sat = 20.0;
     double e_init = 0.5;   // initial void ratio
 
-    // Mechanical — Linear elastic / Mohr-Coulomb (PLAXIS MMM §3).
+    // Mechanical — Linear elastic / Mohr-Coulomb.
     double E = 1.3e4;     // E'ref (Young's modulus)
     double nu = 0.3;      // Poisson's ratio
     double c = 1.0;       // c'ref cohesion
@@ -76,34 +77,37 @@ struct Material {
     double y_ref = 0.0;   // reference level for the increments
     bool tension_cutoff = true;     // tension cut-off (on by default)
     double tensile_strength = 0.0;  // sigma_t
-    // Dilatancy cut-off (PLAXIS MMM Eq. 5.16b / Fig. 5.6, entered on the material's General
-    // tab): a dilating soil arrives at a critical void ratio where dilatancy ends. With it OFF
-    // -- the default, as in PLAXIS -- a dense sand dilates without limit and its bearing
-    // capacity is over-predicted. e_init above is the in-situ void ratio; e_max is the critical
-    // one. PLAXIS also stores e_min, and its own manual says e_min "is not used within the
-    // context of the Hardening-Soil model", so it is not carried here.
+    // Dilatancy cut-off (entered on the material's General tab): a dilating soil arrives at a
+    // critical void ratio where dilatancy ends -- once the volume change has taken the soil to
+    // e_max, the mobilised dilatancy angle is set to zero. With it OFF -- the default -- a dense
+    // sand dilates without limit and its bearing capacity is over-predicted. e_init above is the
+    // in-situ void ratio; e_max is the critical one. A minimum void ratio e_min plays no part in
+    // the Hardening Soil dilatancy rule, so it is not carried here.
     bool dilatancy_cutoff = false;
     double e_max = 1.0;
 
-    // Groundwater — stiffness of the pore fluid for Undrained (A)/(B) (PLAXIS Reference §6.1.2.17
-    // "Parameters for excess pore pressure calculation"; MMM §2.4). The bulk modulus of water is
-    // not a property of the water in PLAXIS: it is a numerical value tied to the soil stiffness,
-    // K_w/n = 3(ν_u − ν')/((1 − 2ν_u)(1 + ν')) K' (Eq. 2-50), and what the user chooses is how ν_u
-    // is arrived at. Two ways, PLAXIS's two suboptions of the ν-undrained definition:
-    //   und_mode = 0  Direct        — ν_u is entered (PLAXIS default 0.495; exactly 0.5 is singular)
-    //   und_mode = 1  Skempton-B    — B is entered and ν_u follows from Eq. 2-55 with α_Biot = 1
-    // ν_u is NOT ν_ur (the unloading/reloading ratio above) — the manual flags that confusion too.
+    // Groundwater — stiffness of the pore fluid for Undrained (A)/(B), the parameters of the excess
+    // pore pressure calculation. The bulk modulus of water here is not a property of the water:
+    // it is a numerical value tied to the soil stiffness,
+    //   K_w/n = 3(ν_u − ν')/((1 − 2ν_u)(1 + ν')) K',
+    // and what the user chooses is how ν_u is arrived at. Two ways of defining the undrained
+    // Poisson's ratio:
+    //   und_mode = 0  Direct        — ν_u is entered (0.495, nearly incompressible; exactly 0.5 is
+    //                                 singular)
+    //   und_mode = 1  Skempton-B    — B is entered and, with α_Biot = 1,
+    //                                 ν_u = (3ν' + B(1 − 2ν'))/(3 − B(1 − 2ν')) (Skempton 1954)
+    // ν_u is NOT ν_ur (the unloading/reloading ratio above) — the two are easily confused.
     // These are per material because the pore fluid's stiffness is: two clays with different ν'
     // and different B do not share a K_w/n, and until now every undrained material in a model was
     // given ν_u = 0.495 whatever its data said.
-    // PLAXIS's third option (the Biot effective stress concept, α_Biot < 1 with K_w entered
+    // A third definition (the Biot effective stress concept, α_Biot < 1 with K_w entered
     // directly) is deliberately absent: α_Biot enters the effective-stress split itself
-    // (Eq. 2-60), so honouring it in the undrained corner alone would be a half-truth.
+    // (σ' = σ − α_Biot p), so honouring it in the undrained corner alone would be a half-truth.
     int und_mode = 0;
     double nu_u = 0.495;       // equivalent undrained Poisson ratio (und_mode = 0)
     double skempton_B = 0.0;   // Skempton's B (und_mode = 1); 0 is refused there, never assumed
 
-    // Mechanical — Hardening Soil (+ HS small) (PLAXIS MMM §6.4 / §7).
+    // Mechanical — Hardening Soil (+ HS small) (Schanz, Vermeer & Bonnier 1999; Benz 2007).
     double E50ref = 3.0e4, Eoedref = 3.0e4, Eurref = 9.0e4;
     double m = 0.5, nu_ur = 0.2, p_ref = 100.0;
     double Rf = 0.9;             // failure ratio qf/qa
@@ -112,39 +116,41 @@ struct Material {
     // HS small.
     double G0ref = 1.2e5, gamma07 = 1.5e-4;
 
-    // Mechanical — Soft Soil (PLAXIS MMM §10). λ*/κ* = the modified compression/swelling
+    // Mechanical — Soft Soil. λ*/κ* = the modified compression/swelling
     // indices (strain-based; conversion from Cc/Cs/e₀: λ* = Cc/(2.3(1+e₀)),
-    // κ* ≈ 2Cs/(2.3(1+e₀)), Table 10-2 — the GUI editor offers a converter, the stored
+    // κ* ≈ 2Cs/(2.3(1+e₀)) — the GUI editor offers a converter, the stored
     // value is ALWAYS λ*/κ*). ν_ur, c, φ, ψ and K0NC are read from the shared fields above
     // (nu_ur, c, phi, psi, k0nc_auto/k0nc); M is derived internally from K0NC (Brinkgreve
     // 1994). OCR/POP scales the initial p_p seed (Initial tab).
     double lam_star = 0.10, kap_star = 0.02;
-    // Soft Soil Creep (PLAXIS MMM §11): modified creep index μ* = Cα/(2.3(1+e₀)); λ*/μ*
-    // typically 15-25. Reference time τ = 1 day (a PLAXIS constant; the 24-hour definition
+    // Soft Soil Creep (Vermeer & Neher 1999): modified creep index μ* = Cα/(2.3(1+e₀)); λ*/μ*
+    // typically 15-25. Reference time τ = 1 day (a fixed constant; the 24-hour definition
     // of the NC line) — not an input.
     double mu_star = 0.005;
 
-    // Hoek-Brown (PLAXIS MMM §4; the 2002 criterion). Rock keeps Hooke's law, so the elastic pair
-    // is the shared E / nu above -- E is the ROCK MASS modulus E_rm there, not the intact rock's.
+    // Hoek-Brown (the 2002 criterion; Hoek, Carranza-Torres & Corkum 2002). Rock keeps Hooke's
+    // law, so the elastic pair is the shared E / nu above -- E is the ROCK MASS modulus E_rm
+    // there, not the intact rock's.
     // The strength is these five, and they are the geologist's own vocabulary rather than a fitted
     // c' and phi': the intact rock's uni-axial compressive strength, its material constant, how
     // jointed the mass is, how much the excavation disturbed it, and how it dilates.
     //   sig_ci  |sigma_ci|, uni-axial compressive strength of the INTACT rock [kPa, > 0]
-    //   mi      intact rock parameter [-] (MMM Fig 4-5: 4 for claystone, ~33 for granite)
-    //   gsi     Geological Strength Index [-] (MMM Fig 4-6; 100 = intact, ~10 = crushed)
-    //   hb_D    disturbance factor [-] (MMM Fig 4-7; 0 undisturbed, 1 heavily blasted)
-    //   sig_psi the confining stress at which dilatancy has died out [kPa] (MMM Eq 4-13; the
-    //           dilatancy angle itself is the shared psi, its value at sigma'_3 = 0)
+    //   mi      intact rock parameter [-] (about 4 for claystone, ~33 for granite)
+    //   gsi     Geological Strength Index [-] (100 = intact, ~10 = crushed)
+    //   hb_D    disturbance factor [-] (0 undisturbed, 1 heavily blasted)
+    //   sig_psi the confining stress at which dilatancy has died out [kPa]; the mobilised
+    //           dilatancy falls linearly from the shared psi (its value at sigma'_3 = 0) to
+    //           zero at that confinement
     double sig_ci = 50000.0;
     double mi = 10.0;
     double gsi = 50.0;
     double hb_D = 0.0;
     double sig_psi = 0.0;
 
-    // Groundwater — permeability (PLAXIS Groundwater tab; used by seepage/consolidation/flow).
+    // Groundwater — permeability (Groundwater tab; used by seepage/consolidation/flow).
     // Default ≈ a fine-medium sand, ~1 m/day ≈ 1.2e-5 m/s (Das, Principles of Geotech. Eng., Table 7.1).
     double kx = 1.0, ky = 1.0;   // [m/day]
-    // Groundwater — unsaturated water-retention (van Genuchten 1980 + Mualem 1976; PLAXIS Groundwater
+    // Groundwater — unsaturated water-retention (van Genuchten 1980 + Mualem 1976; Groundwater tab
     // "van Genuchten"). Used by transient + fully-coupled flow in the unsaturated zone (suction ψ>0).
     // In the saturated regime (ψ≤0) these do NOT activate (S_e=1, k_rel=1) → saturated behaviour
     // reduces to classic seepage/consolidation. Defaults = USDA "sand" (Carsel & Parrish 1988, WRR
@@ -161,16 +167,16 @@ struct Material {
     // Initial — lateral earth pressure coefficient (K0). Auto = 1 - sin(phi').
     bool k0_auto = true;
     double k0 = 0.5;
-    // Initial — stress history / pre-overburden (PLAXIS): 0 = none, 1 = OCR, 2 = POP.
+    // Initial — stress history / pre-overburden: 0 = none, 1 = OCR, 2 = POP.
     int oc_mode = 0;
     double OCR = 1.0;   // overconsolidation ratio
     double POP = 0.0;   // pre-overburden pressure [kN/m2]
 };
 
-// --- Structural material data sets (PLAXIS set types: Plates / Anchors / Geogrids / Embedded beams).
+// --- Structural material data sets (set types: Plates / Anchors / Geogrids / Embedded beams).
 //     Each structural element type has its own parameter set, separate from soil materials.
 
-// Plate (PLAXIS Ref §5.6 / MMM §18.3): EA, EI, weight, Poisson, optional plastic Mp/Np.
+// Plate: EA, EI, weight, Poisson, optional plastic Mp/Np.
 struct PlateMaterial {
     std::string name = "Plate";
     float color[3] = {0.20f, 0.42f, 0.80f};
@@ -184,7 +190,7 @@ struct PlateMaterial {
     double d() const { return EA > 0.0 ? std::sqrt(12.0 * EI / EA) : 0.0; }  // equivalent thickness
 };
 
-// Anchor (node-to-node / fixed-end): axial stiffness + capacities + out-of-plane spacing (MMM §18.1).
+// Anchor (node-to-node / fixed-end): axial stiffness + capacities + out-of-plane spacing.
 struct AnchorMaterial {
     std::string name = "Anchor";
     float color[3] = {0.70f, 0.35f, 0.12f};
@@ -202,7 +208,7 @@ struct AnchorMaterial {
     double prestress = 0.0;
 };
 
-// Geogrid (tension-only membrane): axial stiffness + optional tension cap (MMM §18.2).
+// Geogrid (tension-only membrane): axial stiffness + optional tension cap.
 struct GeogridMaterial {
     std::string name = "Geogrid";
     float color[3] = {0.10f, 0.60f, 0.32f};
@@ -211,7 +217,7 @@ struct GeogridMaterial {
     double Np = 0.0;     // tension cap [kN/m] (0 = unlimited)
 };
 
-// Embedded beam / pile row (MMM §18.4): material + geometry + skin & base resistance + spacing.
+// Embedded beam / pile row: material + geometry + skin & base resistance + spacing.
 struct EmbeddedBeamMaterial {
     std::string name = "Embedded beam";
     float color[3] = {0.40f, 0.40f, 0.42f};
@@ -223,7 +229,7 @@ struct EmbeddedBeamMaterial {
     double Fmax_base = 0.0;  // base resistance [kN]
 };
 
-// --- Structural elements + loads (Structures mode; PLAXIS Reference Manual §5) ------------------
+// --- Structural elements + loads (Structures mode) ----------------------------------------------
 enum class StructKind { Plate, Anchor, Geogrid, EmbeddedBeam, Interface };
 inline const char* const* struct_kind_names() {
     static const char* n[] = {"Plate", "Anchor", "Geogrid", "Embedded beam", "Interface"};
@@ -236,44 +242,43 @@ struct StructElement {
     std::string name = "Element";
     double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
     int material = -1;
-    // Local mesh density (PLAXIS Coarseness factor): target element size near this line is
+    // Local mesh density (coarseness factor): target element size near this line is
     // multiplied by it (1 = global, 0.5 = twice as fine, ...). Refine/coarsen halve/double it.
     double coarseness = 1.0;
-    // Interfaces attached to the element side (PLAXIS: right-click -> positive / negative interface).
+    // Interfaces attached to the element side (right-click -> positive / negative interface).
     // They use the adjacent soil's Rinter unless iface_material >= 0 (a soil material override).
     bool iface_pos = false, iface_neg = false;
     int iface_material = -1;
-    // CROSS PERMEABILITY in a groundwater calculation (PLAXIS Reference Table 5-2 / sec. 6.1.7.4,
-    // Scientific Manual sec. 3.4). A wall or interface is a line the water either crosses freely,
-    // cannot cross at all, or crosses against a resistance:
+    // CROSS PERMEABILITY in a groundwater calculation (docs/k2d-format.md, `flow_barrier`). A wall
+    // or interface is a line the water either crosses freely, cannot cross at all, or crosses
+    // against a resistance:
     //   0 fully permeable   — no effect on flow. The DEFAULT, and what every project written
     //                         before this field said: the flow net runs through the line.
     //   1 impermeable       — a screen. The pore-pressure degrees of freedom on the two sides are
-    //                         fully separated, which is exactly how PLAXIS words it.
+    //                         fully separated.
     //   2 semi-permeable    — the line passes q_n = dh / R per unit area, R = d/k the HYDRAULIC
-    //                         RESISTANCE in units of TIME: "considering a semi-permeable wall with
-    //                         a thickness d and permeability k, the hydraulic resistance is defined
-    //                         by d/k... To determine d/k, one needs to measure the average
-    //                         discharge q through a wall (per unit of area) for a given head
-    //                         difference dh, so d/k = dh/q." Neither d nor k separately matters.
-    // The manual's own note that "the end points of an interface are always permeable" is honoured
-    // for free: the mesh splitter keeps the end nodes shared, so water goes around the ends.
+    //                         RESISTANCE in units of TIME: for a wall of thickness d and
+    //                         permeability k, R = d/k, and it is measured as the head difference
+    //                         dh over the average discharge q through the wall per unit area,
+    //                         d/k = dh/q. Neither d nor k separately matters.
+    // The end points of an interface stay permeable, and that comes for free: the mesh splitter
+    // keeps the end nodes shared, so water goes around the ends.
     // Longitudinal drainage conductivity (dk, the interface acting as a drain along its length) is
     // NOT carried yet — a declared gap rather than a silent zero.
     int flow_barrier = 0;
     double hydraulic_resistance = 0.0;   // d/k [day], read when flow_barrier = 2
-    // EMBEDDED BEAM ONLY -- how the beam's connection point is attached (PLAXIS Reference sec
-    // 5.6.3). The connection point is the pile's top: the end with the highest y, or for an
+    // EMBEDDED BEAM ONLY -- how the beam's connection point is attached (docs/k2d-format.md,
+    // `conn`). The connection point is the pile's top: the end with the highest y, or for an
     // exactly horizontal pile the end with the lowest x.
-    //   0 hinged  — the beam's top translations ARE the soil's there: "they undergo exactly the
-    //               same displacement, but not necessarily in the same rotation". This is
-    //               PLAXIS's DEFAULT when no structure shares the point, and it is what makes a
-    //               pile loadable at its head at all.
-    //   1 free    — "not directly coupled with the soil element in which the beam top is
-    //               located, but the interaction through the interface elements is still
-    //               present". PLAXIS sets this intrinsically for a Grout body, so that a ground
-    //               anchor does not lose axial force into the soil at the connection.
-    // PLAXIS's third type, Rigid (rotation coupled too, to a plate), is out of scope and
+    //   0 hinged  — the beam's top translations ARE the soil's there: the two undergo the same
+    //               displacement, but not necessarily the same rotation. This is the DEFAULT
+    //               when no structure shares the point, and it is what makes a pile loadable at
+    //               its head at all.
+    //   1 free    — the beam top is not coupled directly to the soil element it lies in; it
+    //               still interacts with the soil through the skin and foot springs. This is
+    //               the natural choice for a grout body, so that a ground anchor does not lose
+    //               axial force into the soil at the connection.
+    // A third type, Rigid (rotation coupled too, to a plate), is out of scope and
     // declared in docs/references/embedded-beam-formulation.md sec 8.
     int conn = 0;
 };
@@ -293,7 +298,7 @@ struct Load {
     double coarseness = 1.0;   // local mesh density near the load (see StructElement)
 };
 
-// Deformation boundary conditions (PLAXIS "Model conditions > Deformations"). Automatic by default
+// Deformation boundary conditions (model conditions, deformations). Automatic by default
 // (sides on rollers, base fully fixed, top free); the user may override each edge.
 enum class BCType { Free, NormallyFixed, HorizontallyFixed, VerticallyFixed, FullyFixed };
 inline const char* const* bc_type_names() {
@@ -307,7 +312,7 @@ struct BoundaryConditions {   // default: all Free (the user applies BC explicit
     int ymax = (int)BCType::Free;   // top
 };
 
-// Groundwater flow boundary conditions (PLAXIS GroundwaterFlow BCs, Reference Manual). Closed
+// Groundwater flow boundary conditions (per polygon edge). Closed
 // (impermeable, q_n = 0) is the natural FE condition and the default; Head prescribes the hydraulic
 // head h [m elevation] (reservoir / far-field water level); Seepage marks a free-drainage face
 // (downstream dam face, excavation wall) where water may exit at atmospheric pressure -- the exit
@@ -321,22 +326,22 @@ inline const char* const* flow_bc_names() {
     return n;
 }
 
-// A construction phase (PLAXIS Phases explorer / staged construction). The INITIAL phase
+// A construction phase (staged construction). The INITIAL phase
 // establishes the initial stress state (K0 procedure / gravity loading, selected separately);
 // each USER phase changes the active configuration -- excavate (deactivate a soil region),
 // fill (activate one), install or remove structures and loads -- and re-equilibrates starting
-// from the previous phase's committed stresses (PLAXIS SumMstage). A Safety phase computes the
-// factor of safety of the configuration instead.
+// from the previous phase's committed stresses (the staged-construction multiplier).
+// A Safety phase computes the factor of safety of the configuration instead.
 // Consolidation is a time-dependent (Biot) calculation phase: the configuration's load increment is
 // applied at t=0 (undrained response generates excess pore pressure), which then dissipates over the
-// phase's time interval, developing settlement (PLAXIS "Consolidation" phase, classic Terzaghi U-t).
+// phase's time interval, developing settlement (classic Terzaghi U-t).
 // TransientFlow: time-dependent groundwater flow only (no deformation) -- the pore/head field evolves
-// under time-varying hydraulic BCs (storage + backward-Euler; PLAXIS "Groundwater flow, transient").
-// FullyCoupled: simultaneous flow + deformation (PLAXIS "Fully coupled flow-deformation", the most
+// under time-varying hydraulic BCs (storage + backward-Euler).
+// FullyCoupled: simultaneous flow + deformation (the most
 // general analysis) -- Biot consolidation generalized with unsaturated van Genuchten/Mualem retention
 // and Bishop effective stress (chi = S_eff). Both are time-dependent (reuse duration / time_steps).
 // Dynamic: time-history (seismic) analysis -- M u'' + C u' + K u = -M r a_g(t) integrated by Newmark-β
-// with Rayleigh damping (PLAXIS "Dynamic"). Linear-elastic skeleton (v1); horizontal base acceleration
+// with Rayleigh damping. Linear-elastic skeleton (v1); horizontal base acceleration
 // (site response / SSI). Boundaries: absorbing base + free-field sides (docs/references/dynamic-seismic-
 // formulation.md). Enum VALUES are file-stable (appended); names array is indexed by the enum value.
 enum class PhaseType { Plastic, Safety, Consolidation, TransientFlow, FullyCoupled, Dynamic };
@@ -347,16 +352,17 @@ inline const char* const* phase_type_names() {
     return n;
 }
 
-// How a Consolidation phase ENDS (PLAXIS Ref. Man. sec. 7.5, "Loading type"). Model-level enum,
+// How a Consolidation phase ENDS (docs/k2d-format.md, `cstop`). Model-level enum,
 // mapped to katai::core::ConsolidationStop in build_problem (like SoilModel/Drainage/PhaseType).
 // TimeInterval is the classic one: the phase's own duration, split into equal steps. The other two
 // end it on a STATE instead, and for them a time interval is not applicable at all -- the phase
 // runs until the excess pore pressure has fallen far enough and REPORTS how long that took, which
 // is the form the design question has ("how long until it has settled out?").
-// DegreeOfConsolidation is a PRESSURE ratio, not Terzaghi's settlement ratio -- PLAXIS defines it
-// as target minimum excess pore pressure over maximum initial excess pore pressure, and says so
-// explicitly because the name suggests the other definition. The two differ by ~20% in time on the
-// 1-D column. katai::core::ConsolidationStop (analysis/results.hpp) carries the full statement.
+// DegreeOfConsolidation is a PRESSURE ratio, not Terzaghi's settlement ratio -- it is defined from
+// the current maximum excess pore pressure over the maximum initial excess pore pressure, and that
+// is stated explicitly because the name suggests the other definition. The two differ by ~20% in
+// time on the 1-D column. katai::core::ConsolidationStop (analysis/results.hpp) carries the full
+// statement.
 // Values file-stable (append only).
 enum class ConsolStop { TimeInterval, MinExcessPore, DegreeOfConsolidation };
 inline const char* const* consol_stop_names() {
@@ -387,7 +393,7 @@ inline const char* const* design_approach_names() {
 struct Phase {
     std::string name = "Phase";
     PhaseType type = PhaseType::Plastic;
-    // Groundwater conditions for THIS phase (PLAXIS "water conditions per phase"). When
+    // Groundwater conditions for THIS phase (per-phase water conditions). When
     // water_override is set, the phreatic surface is this polyline instead of the project's,
     // and the change from the previous phase is carried by the staged-construction imbalance
     // like any other change: the pore pressure and the effective weight both follow it.
@@ -405,16 +411,16 @@ struct Phase {
     // number of Newmark steps over it (so the step dt = duration/time_steps [s]).
     double duration = 1.0;
     int time_steps = 25;
-    // Consolidation stop criterion (PLAXIS Ref sec. 7.5). With consol_stop != TimeInterval the two
+    // Consolidation stop criterion. With consol_stop != TimeInterval the two
     // fields above are NOT used -- there is no interval to divide -- and the phase instead marches
     // until |p|max <= consol_min_pore [kPa], or until the degree of consolidation (as a PRESSURE
     // ratio, see ConsolStop) reaches consol_degree [%]. consol_first_step [day] is the first time
-    // step; 0 = automatic (the Vermeer-Verruijt critical step, which is also PLAXIS's default).
+    // step; 0 = automatic (the Vermeer-Verruijt critical step).
     // consol_max_steps caps the march: reaching it REFUSES the phase, it does not report a time as
     // if the target had been met. Ignored by every other phase type.
     ConsolStop consol_stop = ConsolStop::TimeInterval;
-    double consol_min_pore = 1.0;    // [kPa] (PLAXIS default: 1 stress unit)
-    double consol_degree = 90.0;     // [%]   (PLAXIS default: 90)
+    double consol_min_pore = 1.0;    // [kPa] (1 stress unit)
+    double consol_degree = 90.0;     // [%]   (target degree of consolidation, a pressure ratio)
     double consol_first_step = 0.0;  // [day] 0 = automatic
     int consol_max_steps = 1000;
     // Dynamic (seismic) time-history input (PhaseType::Dynamic; ignored otherwise). Horizontal base
@@ -438,12 +444,12 @@ struct Phase {
     // driving force) so the sides follow the free field and do not reflect the interior's scattered
     // waves back in -- required for realistic 2D soil-structure models. The base stays rigid.
     bool seismic_free_field = false;
-    // COMPLIANT (absorbing) BASE (Dynamic phase; Joyner & Chen 1975 -- PLAXIS Sci 6.3.2, factor 2).
+    // COMPLIANT (absorbing) BASE (Dynamic phase; Joyner & Chen 1975, input force with factor 2).
     // false = rigid base (the user's fixed bottom; the historical bit-identical path; the base
     // reflects all downgoing energy). true = the bottom boundary absorbs outgoing waves through
     // Lysmer dashpots (rho Vs of the deepest layer = the halfspace continues it) and the input is
     // applied THERE as the upward-propagating wave: KATAI takes the phase's a_g(t) as the bedrock
-    // (within) motion and applies HALF of it internally (Tutorial 17.8.5 convention). The solve is
+    // (within) motion and applies HALF of it internally (the upgoing incident wave). The solve is
     // then in TOTAL motion (the base moves). Combinable with free-field sides (the 1D side columns
     // solve on a compliant base too) and with dynamic_nonlinear (linear-limit identity verified).
     // Scope: horizontal SH only (base u_y stays fixed; disclosed in the phase message).
@@ -452,7 +458,7 @@ struct Phase {
     // force is K u, so the soil stays elastic and interfaces/geogrids/anchors do not slip/yield during
     // shaking -- fast, and the historical bit-identical path). true = the fully NONLINEAR Newmark solve
     // (per-step Newton on f_int(u) from the constitutive return mapping, so the soil can plastify and the
-    // structures can slip/yield DURING the earthquake, like PLAXIS Dynamics). Much slower (the tangent is
+    // structures can slip/yield DURING the earthquake). Much slower (the tangent is
     // refactored every iteration), so it is opt-in. Needs a parent phase for the initial stress state.
     bool dynamic_nonlinear = false;
     // TBDY 2018 design spectrum overlay (Dynamic phase): map spectral acceleration coefficients S_S
@@ -474,48 +480,46 @@ struct Phase {
     // EC7 / TBDY 2018 design approach for this phase (None = characteristic values). The material-
     // factored approaches (DA1-C2, DA3) reduce c'/tan(phi') and scale variable loads before the solve.
     DesignApproach design_approach = DesignApproach::None;
-    // SumMstage TARGET (PLAXIS "Σ Mstage"): the fraction of this phase's staged change that is
-    // actually applied. 1 = the whole stage, which is what staged construction normally means
-    // and what every project written before this field said. A smaller value applies part of it
-    // and leaves the rest -- half an excavation lift, a partly built embankment -- and the next
-    // phase continues from that partly-changed state.
+    // Stage-fraction TARGET (docs/k2d-format.md `mstage`): the fraction of this phase's
+    // staged change that is actually applied. 1 = the whole stage, which is what staged
+    // construction normally means and what every project written before this field said. A
+    // smaller value applies part of it and leaves the rest -- half an excavation lift, a partly
+    // built embankment -- and the next phase continues from that partly-changed state.
     //
     // It applies to a STAGED (chained) phase only. The initial phase establishes the in-situ
     // state; scaling gravity there would not be a partial construction step, it would be a
     // different planet, so the value is refused rather than quietly obeyed.
     double sum_mstage = 1.0;
-    // IGNORE UNDRAINED BEHAVIOUR (PLAXIS "Ignore und. behaviour (A,B)"): for this phase, materials
+    // IGNORE UNDRAINED BEHAVIOUR (docs/k2d-format.md `ignoreund`): for this phase, materials
     // whose drainage is Undrained (A) or (B) are treated as drained -- no excess pore pressure is
     // generated. Strength parameters are untouched, so an Undrained (B) material still carries its
     // c_u with phi = 0. The standard use is a phase where the undrained response is not the
-    // question being asked (establishing an initial state, or a long-term stage), which PLAXIS
-    // supports for exactly the same reason.
+    // question being asked (establishing an initial state, or a long-term stage).
     bool ignore_undrained = false;
-    // RESET SMALL STRAIN (PLAXIS "Reset small strain", Material Models Manual sec. 7.6): start
+    // RESET SMALL STRAIN (docs/k2d-format.md `resetsmall`): start
     // this phase with the small-strain history cleared, so a Hardening Soil small material meets
     // it at its maximum stiffness G0 instead of wherever the previous phases left it.
     //
-    // The manual's own reason for the option is that strain history outlives its cause. Its
-    // example is overconsolidation modelled by placing and removing a surcharge: the loading is
-    // there to leave a preconsolidation pressure behind, but it also leaves a strain history
-    // that -- in the real soil -- ageing erased long before the analysis begins. "Unfortunately,
-    // strain history is already triggered by adding and removing a surcharge. In this case the
-    // strain history can be reset manually, by using the Reset small strain option."
+    // The reason for the option is that strain history outlives its cause. The typical case is
+    // overconsolidation modelled by placing and removing a surcharge: the loading is there to
+    // leave a preconsolidation pressure behind, but it also leaves a strain history that -- in
+    // the real soil -- ageing erased long before the analysis begins. Placing and removing the
+    // surcharge has already triggered that history; this option clears it.
     //
-    // It carries extra weight in THIS engine. Sec. 7.2 derives gamma_hist from a strain history
-    // TENSOR H that is partially or fully reset whenever a reversal is detected (a Simpson brick
-    // criterion; the manual refers the transformation of H to Benz (2006)). This tree accumulates
+    // It carries extra weight in THIS engine. The full small-strain formulation (Benz 2007)
+    // derives gamma_hist from a strain history TENSOR H that is partially or fully reset whenever
+    // a reversal is detected (a Simpson brick criterion). This tree accumulates
     // a monotone SCALAR instead and detects no reversal, which is declared in
     // docs/references/hssmall-formulation.md sec. 7: an unloading that FOLLOWS a loading phase
     // stays on the degraded stiffness rather than recovering G0, so the answer is softer than
-    // the reference code's. Until the tensor exists, this flag is the engineer's only way to say
-    // "the history up to here is not the history that matters now" -- which turns a systematic
+    // the tensor formulation's. Until the tensor exists, this flag is the engineer's only way to
+    // say "the history up to here is not the history that matters now" -- which turns a systematic
     // difference into a controlled one.
     bool reset_small_strain = false;
-    // NUMERICAL CONTROLS for this phase (PLAXIS "Numerical control parameters"). Zero means
+    // NUMERICAL CONTROLS for this phase. Zero means
     // "let the program choose", which is what every project that never touches them says, so
     // the defaults stay exactly where they are: derived from the material class (Hardening Soil
-    // at a PLAXIS-realistic 1%, Mohr-Coulomb at 1e-6, a linear problem at 1e-10) or, in a
+    // at a tolerated error of 1%, Mohr-Coulomb at 1e-6, a linear problem at 1e-10) or, in a
     // Safety phase, from the strength-reduction search's own trial settings.
     //
     // They belong in the FILE and not only in the program because a published number has to be
@@ -525,13 +529,13 @@ struct Phase {
     // moved or because the stopping rule did -- a question only a file that carries the stopping
     // rule can answer.
     //
-    // `load_steps` is the number of increments the load is split into. This is NOT PLAXIS's "Max
-    // steps": PLAXIS steps automatically and caps the count, KATAI splits the load into a fixed
+    // `load_steps` is the number of increments the load is split into. This is NOT a cap on an
+    // automatically chosen step count ("max steps"): KATAI splits the load into a fixed
     // number of increments (the solver still cuts back adaptively when one will not converge).
     // The field is named for what it does rather than for the box it resembles.
-    double tolerance = 0.0;     // tolerated relative force residual (PLAXIS "Tolerated error")
+    double tolerance = 0.0;     // tolerated relative force residual ("tolerated error")
     int load_steps = 0;         // load increments for this phase
-    int max_iterations = 0;     // Newton iterations per increment (PLAXIS "Max iterations")
+    int max_iterations = 0;     // Newton iterations per increment ("max iterations")
     // The FOURTH control, and the one that took longest to earn its place here. The three above
     // govern the EQUILIBRIUM iteration; this one governs the CONSTITUTIVE integration -- the
     // error tolerance of the substepping that walks a stress point along its material law inside
@@ -572,13 +576,12 @@ struct SoilPolygon {
     std::vector<int> edge_flow;
     std::vector<double> edge_head;
     // Prescribed boundary flux [m/day] for FlowBCType::Flux edges (same size; ignored otherwise),
-    // INFLOW POSITIVE -- the sign the PLAXIS Scientific Manual gives its wells in the same
-    // chapter ("the source term is positive for a recharge well", §3.2.7). It is a specific
-    // discharge normal to the boundary: the flow solve integrates it over the edge as the
-    // manual's boundary term q (Eqs. 3-31, 3-34). Flow calculations only -- the manual states
-    // that a CONSOLIDATION analysis cannot carry a non-zero prescribed outflow (Ch. 4).
+    // INFLOW POSITIVE -- the same sign convention as a source term, which is positive for a
+    // recharge well. It is a specific discharge normal to the boundary: the flow solve integrates
+    // it over the edge as the boundary flux term q of the weak form. Flow calculations only -- a
+    // CONSOLIDATION analysis does not carry a non-zero prescribed outflow.
     std::vector<double> edge_flux;
-    // Local mesh density of the region (PLAXIS Coarseness factor): the target element size
+    // Local mesh density of the region (coarseness factor): the target element size
     // inside this polygon is multiplied by it (1 = global, 0.5 = twice as fine, 2 = coarser).
     double coarseness = 1.0;
 };
@@ -590,28 +593,26 @@ struct SoilPolygon {
 // polygons by hand, which is both the slowest part of setting a model up and the easiest place to
 // put a number in the wrong row.
 //
-// The contract is PLAXIS's, because it is the workflow every user of this kind of program already
-// knows (Reference Manual 2025.1 sec. 4.2, "Creating boreholes"):
+// The contract (docs/k2d-format.md, `strata` / `boreholes`) is the borehole workflow every user of
+// this kind of program already knows:
 //
-//   "Boreholes are locations in the drawing area at which the information on the position of soil
-//    layers and the water table is given. If multiple boreholes are defined, PLAXIS 2D will
-//    automatically interpolate between boreholes ... Each defined soil layer is used throughout
-//    the whole model contour. In other words, all soil layers appear in all boreholes. The top and
-//    the bottom boundaries of the layers may vary through boreholes, making it possible to define
-//    non-horizontal soil layers of non-uniform thickness as well as layers that locally have a
-//    zero thickness."
+//   A borehole is a location in the drawing area at which the position of the soil layers and the
+//   water table is given. With several boreholes the levels are interpolated between them. Every
+//   soil layer is used throughout the whole model contour, so all layers appear in all boreholes;
+//   their top and bottom boundaries may vary from borehole to borehole, which gives
+//   non-horizontal layers of non-uniform thickness as well as layers that locally have a zero
+//   thickness.
 //
 // Two consequences are load-bearing and are why the types look like this:
 //
 //   * THE LAYER LIST IS GLOBAL, THE LEVELS ARE PER BOREHOLE. A stratum carries the name and the
 //     material; a borehole carries where its boundaries are. A layer missing at one location is
-//     not a missing row, it is a ZERO THICKNESS there (sec. 4.3.1.1: "it should be assigned a zero
-//     thickness (bottom level equal to top level) in the relevant borehole").
-//   * ONE BOREHOLE MEANS HORIZONTAL, AND THE LEVELS REACH THE MODEL EDGE. Stated for the water
-//     surface in sec. 7.10.1.1 -- "A single borehole can be used to create a horizontal water
-//     surface that extends to the model boundaries" -- and for the layers by "used throughout the
-//     whole model contour" above. So outside the outermost borehole the nearest one's levels
-//     continue unchanged; nothing is extrapolated on a slope.
+//     not a missing row, it is a ZERO THICKNESS there (bottom level equal to top level in that
+//     borehole).
+//   * ONE BOREHOLE MEANS HORIZONTAL, AND THE LEVELS REACH THE MODEL EDGE. A single borehole gives
+//     a horizontal water surface that extends to the model boundaries, and the layers, used
+//     throughout the whole model contour, behave the same way. So outside the outermost borehole
+//     the nearest one's levels continue unchanged; nothing is extrapolated on a slope.
 //
 // WHAT THIS DOES NOT DO, and the boundary is the point: boreholes GENERATE polygons, they do not
 // replace them. `polygons` remains the model -- what the mesher meshes and what a phase activates
@@ -628,17 +629,17 @@ struct Borehole {
     double x = 0.0;                   // location along the model [m]
     // Levels of the layer boundaries at this borehole, top down: level[j] is the TOP of stratum j
     // and level[j+1] its bottom, so the size is strata.size() + 1 and the stack is continuous by
-    // construction (sec. 4.3.1: "the top boundary of an underlying layer is defined by the lower
-    // boundary of the overlying layer"). Equal consecutive values are a layer that pinches out
+    // construction (the top boundary of an underlying layer is the lower boundary of the overlying
+    // layer). Equal consecutive values are a layer that pinches out
     // here, which is legal and meant.
     std::vector<double> level;
-    // The phreatic level at this borehole (sec. 4.3.2, water condition "Head"). Heads from several
-    // boreholes combine into a non-horizontal water surface (sec. 7.10.1.1).
+    // The phreatic level at this borehole (a "Head" water condition). Heads from several
+    // boreholes combine into a non-horizontal water surface.
     bool has_head = true;
     double head = 0.0;                // [m]
 };
 
-// A line prescribed displacement (PLAXIS "Prescribed displacement"): every mesh node on
+// A line prescribed displacement: every mesh node on
 // the segment gets the set components IMPOSED (ramped 0 -> value over the phase, like a
 // load), the unset components stay free. A set component with value 0 is a rigid support
 // line. Activated per phase exactly like loads (Phase::disp_active); the classic use is a
@@ -651,16 +652,15 @@ struct PrescribedDisp {
     double coarseness = 1.0;                          // local mesh density factor (like loads)
 };
 
-// A hydraulic condition drawn INSIDE the model (PLAXIS Reference sec. 5.9 "Hydraulic
-// conditions"): a line along which water is taken out of or put into the ground. Two kinds,
+// A hydraulic condition drawn INSIDE the model (docs/k2d-format.md, `hydros`): a line along
+// which water is taken out of or put into the ground. Two kinds,
 // because the ground is told two different things:
 //
 //   Well  — a DISCHARGE is prescribed: |Q| per unit time per unit width out of plane. The head
-//           is whatever that extraction produces, down to h_min, "the minimum possible head in
-//           the well. When the groundwater head reduces below the h_min level no further
-//           extraction will occur."
-//   Drain — a HEAD is prescribed: "the pore pressure in all nodes of the drain is reduced such
-//           that it is equivalent to the given head". A Normal drain only takes water away
+//           is whatever that extraction produces, down to h_min, the lowest head the well can
+//           reach: once the groundwater head has fallen to h_min, no further extraction occurs.
+//   Drain — a HEAD is prescribed: the pore pressure in every node of the drain is reduced to
+//           the value that corresponds to the given head. A Normal drain only takes water away
 //           (pore pressures already below the drain's head are untouched); a Vacuum drain holds
 //           the head at its value in both directions, which is what vacuum consolidation does.
 //
@@ -729,7 +729,7 @@ struct Project {
     // Staged construction phases AFTER the initial phase (empty = classic single-phase solve).
     // phases[0] runs from the initial state, phases[k] from phases[k-1]'s committed stresses.
     std::vector<Phase> phases;
-    // Initial-phase activation (PLAXIS: initial phase = soil only by default; structures and
+    // Initial-phase activation (the initial phase is soil only by default; structures and
     // loads are installed in later phases). Same index semantics as Phase.
     Phase initial;
     BoundaryConditions bc;                      // deformation boundary conditions (auto default)
@@ -737,7 +737,7 @@ struct Project {
     std::vector<double> wx, wy;                 // water polyline
     double x_min = 0.0, x_max = 40.0;           // model horizontal extent (BC edges)
     double y_min = 0.0, y_max = 20.0;           // model vertical extent (BC edges)
-    // Analysis mode (PLAXIS "Model"): plane strain (default) or axisymmetric. In axisymmetric mode the
+    // Analysis mode: plane strain (default) or axisymmetric. In axisymmetric mode the
     // x-coordinate is the RADIUS r (x=0 is the symmetry axis) and the integration is r-weighted; used
     // for circular footings, piles, shafts and cylinders. (v1: soil-only, dry, no structural elements.)
     bool axisymmetric = false;

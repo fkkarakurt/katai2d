@@ -8,7 +8,7 @@
 //
 // verify: KV-FLW-003
 //   oracle:   closed_form
-//   source:   Dupuit-Forchheimer one-dimensional confined flow (Darcy's law integrated across a strip of aquifer), the classical basis of the well and trench formulae; PLAXIS 2D 2025.1 Reference Manual sec. 5.9.1-5.9.2 for what the two objects mean -- a well prescribes "the discharge of the well in the unit of volume per unit of time, per unit of width" and stops at h_min ("when the groundwater head reduces below the h_min level no further extraction will occur"), a drain prescribes a head where "the pore pressure in all nodes of the drain is reduced such that it is equivalent to the given head", and a NORMAL drain leaves ground that is already drier alone ("pore pressures lower than the equivalent to the given head are not affected by the drain")
+//   source:   Dupuit-Forchheimer one-dimensional confined flow (Darcy's law integrated across a strip of aquifer), the classical basis of the well and trench formulae; KATAI 2D input contract (docs/k2d-format.md, hydros / kind / behaviour / q / h_min / head) for what the two objects mean -- a well prescribes a discharge in volume per unit time per unit width out of plane and stops extracting once the groundwater head at it has fallen to h_min; a drain prescribes a head, reducing the pore pressure in all its nodes to the value equivalent to that head; and a NORMAL drain leaves ground that is already drier alone, since pore pressures below the equivalent of its head are not affected
 //   locator:  a confined strip of aquifer of thickness b and permeability k, held at head H on both sides, with a FULL-DEPTH vertical line at mid-span: as a well pumping Q, and as a drain holding h_d. The flow to a full-depth line is one-dimensional on each side, so each side carries half of it and Darcy gives the answer exactly
 //   quantity: drawdown at the line [m], the discharge the line removes [m3/day per m], and the head profile away from it
 //   expected: a well of discharge Q draws the line down to H - Q L / (2 k b) and the head varies linearly to H at each boundary; a drain at h_d removes 2 k b (H - h_d)/L and produces the same linear profiles; a well whose rated discharge would pull the head below h_min instead settles at h_min and removes exactly what a drain at that level would -- the well BECOMES a drain at its floor; and a normal drain set above the surrounding head does nothing at all
@@ -208,7 +208,7 @@ int main() {
                     "removed %.6f m3/day/m (a drain at that level: %.6f)\n",
                     h_min, h_line, r.R.hydro_discharge, Q_drain_exact);
         check(std::fabs(h_line - h_min) < 1e-9,
-              "the head at the well stops exactly at h_min, as the manual says it must");
+              "the head at the well stops exactly at h_min, as the well contract says it must");
         check(std::fabs(r.R.hydro_discharge - Q_drain_exact) < 0.005 * Q_drain_exact,
               "and the extraction is what the ground can supply at that head, not the rated 100");
         check(r.R.hydro_limited > 0, "the run reports that the well is limited by h_min");
@@ -259,7 +259,7 @@ int main() {
         }
     }
 
-    // A well through TWO layers: the manual's own rule for where the water comes from.
+    // A well through TWO layers: the contract's rule for where the water comes from.
     std::printf("\n== a well through two layers draws on each in proportion to k b ==\n");
     {
         // TWO aquifers with an almost impermeable band between them, and one well through all
@@ -269,10 +269,10 @@ int main() {
         // each aquifer supplies exactly the share the well takes from it, and the two rules give
         // visibly different answers:
         //
-        //   manual's rule (share ~ k b)  ->  s_i = Q (L/2) / (2 sum(k b)) -- the SAME in both
+        //   transmissivity (share ~ k b) ->  s_i = Q (L/2) / (2 sum(k b)) -- the SAME in both
         //   spread by length             ->  s_i ~ 1/(k_i b_i)            -- here 3 : 1 apart
         //
-        // So "the two drawdowns are equal" IS the manual's rule, stated as a measurement.
+        // So "the two drawdowns are equal" IS the transmissivity rule, stated as a measurement.
         const double k_lo = 3.0 * kK, k_up = kK, b_half = 3.5, y_band = 3.5, band_top = 4.5;
         m::Project pr;
         pr.name = "KV-FLW-003 layered well";
@@ -335,7 +335,7 @@ int main() {
             check(std::fabs(s_lo - s_ex) < 0.03 * s_ex && std::fabs(s_up - s_ex) < 0.03 * s_ex,
                   "each aquifer draws down by Q (L/2) / (2 sum(k b)) -- the same amount");
             check(std::fabs(s_lo / s_up - 1.0) < 0.03,
-                  "so the two drawdowns are EQUAL, which is the manual's k b rule measured");
+                  "so the two drawdowns are EQUAL, which is the k b rule measured");
             check(std::fabs(r.R.hydro_discharge - Qw) < 0.005 * Qw,
                   "and the well still removes exactly what it was asked for");
         }

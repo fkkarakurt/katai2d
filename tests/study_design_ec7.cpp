@@ -3,8 +3,8 @@
 // Verifies that the design-code MATERIAL factoring (design_code.hpp) produces the correct,
 // EXPECTED design result on a real boundary-value problem, cross-checked against:
 //   (a) the natural analytical result -- an EXACT composition identity;
-//   (b) a published slope-stability benchmark (Griffiths & Lane / Rocscience);
-//   (c) the algorithm PLAXIS 2D uses for its "Design Approaches" facility.
+//   (b) a limit-equilibrium slope-stability benchmark (after Griffiths & Lane);
+//   (c) the factoring rule itself: strength is divided by the partial factors BEFORE the analysis.
 //
 // The identity. Strength reduction (SRM) defines the factor of safety FoS as the factor S by which
 // BOTH c and tan(phi) are divided to reach incipient collapse:  strength / FoS  at collapse.
@@ -13,12 +13,13 @@
 // Because the solver sees the identical effective (c, tan phi) at a given TOTAL factor regardless of
 // how it is reached, collapse occurs at the same total factor:
 //        gamma_M * ODF  =  FoS_characteristic       =>   ODF = FoS_char / 1.25   (EXACT, mesh-free).
-// PLAXIS documents the same mechanism: "cohesion, friction angle and dilatancy are reduced using the
-// partial factor" (Bentley/PLAXIS Design Approaches). So KATAI's result agrees with PLAXIS by
-// construction of the identical algorithm. EC7 criterion: the design is safe iff ODF >= 1.0.
+// The factoring rule (factor_material_strength): c is divided by gamma_c, tan(phi) by gamma_phi,
+// and the dilatancy angle is capped at the factored friction angle -- the same reduction of c and
+// tan(phi) that strength reduction applies, which is why the identity holds. EC7 criterion: the
+// design is safe iff ODF >= 1.0.
 //
 // Benchmark (from test_slope): homogeneous 1:2 foundation slope, gamma = 20.2, c = 3 kPa,
-// phi = 19.6 deg, psi = 0. LEM FoS ~ 0.987-0.988 (Bishop/Spencer), Phase2 T6 0.997.
+// phi = 19.6 deg, psi = 0. Referee FoS 1.00 (Giam & Donald 1989, Monash report 8/1989).
 #include <katai/analysis/design_code.hpp>
 #include <katai/analysis/strength_reduction.hpp>
 #include <katai/fem/assembly/assembler.hpp>
@@ -102,7 +103,7 @@ int main() {
     const double predicted_odf = fos_char / gamma_M;
     const double id_err = std::fabs(odf - predicted_odf) / predicted_odf;
 
-    std::printf("\n  FoS (characteristic)      = %.4f   (LEM benchmark ~0.99)\n", fos_char);
+    std::printf("\n  FoS (characteristic)      = %.4f   (referee value 1.00)\n", fos_char);
     std::printf("  ODF (EC7 DA3, M2 factored) = %.4f\n", odf);
     std::printf("  identity  FoS/gamma_M      = %.4f   (gamma_M = 1.25)\n", predicted_odf);
     std::printf("  identity error             = %.3f%%   (expected ~0, mesh-free)\n", 100.0 * id_err);
@@ -113,11 +114,11 @@ int main() {
     // The composition identity is the core correctness proof (mesh-independent, analytical).
     check(id_err < 0.015, "ODF * gamma_M == FoS_characteristic (EC7 DA3 material-factoring identity)");
     // Bonus sanity: the characteristic FoS reproduces the published benchmark.
-    check(std::fabs(fos_char - 0.99) / 0.99 < 0.05, "characteristic FoS within 5% of LEM benchmark");
+    check(std::fabs(fos_char - 1.00) / 1.00 < 0.05, "characteristic FoS within 5% of the referee value");
     // The design conclusion must be the correct one for these (low) characteristic strengths.
     check(odf < 1.0, "EC7 DA3 correctly reports this slope as unsafe (ODF < 1)");
 
     if (g_failures) { std::fprintf(stderr, "\n%d check(s) FAILED\n", g_failures); return 1; }
-    std::printf("\nOK: EC7 DA3 material-factoring verified (analytical identity + benchmark + PLAXIS-consistent).\n");
+    std::printf("\nOK: EC7 DA3 material-factoring verified (analytical identity + benchmark).\n");
     return 0;
 }

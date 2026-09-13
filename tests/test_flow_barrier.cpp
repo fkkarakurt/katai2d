@@ -9,7 +9,7 @@
 //
 // verify: KV-FLW-004
 //   oracle:   closed_form
-//   source:   PLAXIS 2D 2025.1 Reference Manual Table 5-2 and sec. 6.1.7.4, Scientific Manual sec. 3.4 -- an interface is Impermeable ("a full separation of the pore pressure degrees-of-freedom of the interface node pairs", zero cross permeability), Semi-permeable with a HYDRAULIC RESISTANCE d/k in units of time ("to determine d/k, one needs to measure the average discharge q through a wall (per unit of area) for a given head difference dh, so d/k = dh/q"), or Fully permeable. Read against Darcy's law in series: the two halves of a confined aquifer and the screen between them are three resistances the same discharge passes through
+//   source:   KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res) -- a barrier is Fully permeable (no effect on flow), Impermeable (a full separation of the pore-pressure degrees of freedom of the interface node pairs, zero cross permeability), or Semi-permeable with a HYDRAULIC RESISTANCE d/k in units of time, the head difference dh across the wall divided by the average discharge q through it per unit area, d/k = dh/q. Read against Darcy's law in series: the two halves of a confined aquifer and the screen between them are three resistances the same discharge passes through
 //   locator:  a confined aquifer strip of length L, thickness b and permeability k, held at two different heads at its ends, with a full cut-off at mid-span: absent, impermeable, and semi-permeable at two resistances
 //   quantity: the discharge through the strip [m3/day per m] and the head on each side of the barrier [m]
 //   expected: with no barrier, q = k b dh / L; with an impermeable barrier, q = 0 EXACTLY and each side stands at its own boundary head, so the barrier holds the whole difference; with a semi-permeable barrier, q = dh / (L/(k b) + R/b) -- the soil either side and the screen in series -- which for the values used here is exactly half of the unobstructed discharge at R = 20 days
@@ -74,8 +74,8 @@ m::Project strip(int barrier, double resistance) {
 
     if (barrier) {
         // The line runs from BELOW the base to ABOVE the surface on purpose. The splitter keeps
-        // the end nodes shared -- which is the manual's own rule, "the end points of an interface
-        // are always permeable" -- so a screen that stops inside the soil leaks around its ends.
+        // the end nodes shared -- the end points of an interface are always permeable -- so a
+        // screen that stops inside the soil leaks around its ends.
         // Here the ends are outside the mesh, which is what a full cut-off means.
         m::StructElement w;
         w.kind = m::StructKind::Interface;
@@ -164,7 +164,7 @@ int main() {
     }
 
     // A semi-permeable screen: the soil either side and the screen are three resistances in
-    // series, and the manual defines the middle one as R = d/k = dh / q per unit area.
+    // series, and the input contract defines the middle one as R = d/k = dh / q per unit area.
     for (const double R_res : {20.0, 5.0}) {
         const double q_ex = kDh / (kL / (kK * kB) + R_res / kB);
         const Run r = run(strip(2, R_res));

@@ -159,7 +159,7 @@ ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dof
     for (int step = 0; step < nsteps; ++step) {
         Eigen::VectorXd rhs = Eigen::VectorXd::Zero(NT);
         // Applied load increment Δf (staged-construction surcharge / fill): applied in full at the
-        // FIRST step, i.e. at t=0+ of the consolidation phase (PLAXIS practice). With the storage
+        // FIRST step, i.e. at t=0+ of the consolidation phase. With the storage
         // matrix S≈0 (near-incompressible pore fluid) the t=0+ response is the UNDRAINED one — the
         // load generates an excess pore pressure that the subsequent (Δf=0) steps then dissipate.
         if (step == 0 && load_increment) rhs.head(ndisp) = *load_increment;

@@ -28,7 +28,7 @@
 //
 // verify: KV-CST-003
 //   oracle:   closed_form
-//   source:   Terzaghi's effective-stress principle (sigma' = sigma - u) applied to a change of phreatic level in a laterally confined column; the per-phase water condition itself follows the PLAXIS staged-construction contract ("water conditions per phase"), and the case that required it is the DGGT / Schweiger triple-anchored excavation, which dewaters before excavating
+//   source:   Terzaghi's effective-stress principle (sigma' = sigma - u) applied to a change of phreatic level in a laterally confined column; the per-phase water condition itself follows KATAI 2D input contract (docs/k2d-format.md, phases[i].water_override / wx / wy: a phase may use its own phreatic line instead of the project's), and the case that required it is the DGGT / Schweiger triple-anchored excavation, which dewaters before excavating
 //   locator:  ds = gamma_w (y_hi - y_lo) / E_oed * (y_lo + (y_hi - y_lo)/2) with E_oed = E(1-nu)/((1+nu)(1-2nu)), gamma_w = 9.81 kN/m3, measured at the top of the column between the phase that holds the high water level and the phase that lowers it (stated in full)
 //   quantity: settlement of the surface of a laterally confined weightless-buoyancy column when a staged phase lowers the phreatic surface from y_hi to y_lo [m]
 //   expected: the closed form above

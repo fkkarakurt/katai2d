@@ -112,7 +112,7 @@ void assemble_surface_traction(const mesh::Mesh& mesh, const DofMap& dofs,
 // given at each chain node is interpolated along the edge with the shape functions and the
 // consistent nodal forces f += ∫ Nᵢ (Σⱼ Nⱼ tⱼ) ds accumulate. node_traction_x/y must have
 // the same size as ordered_boundary_nodes. The general form of the uniform version
-// (above); for the PLAXIS distributed load (q1→q2 linear between the ends). The nodes must
+// (above); for a distributed load varying linearly from q1 to q2 between the ends. The nodes must
 // form an edge chain (corner, mid, corner, ...) (existing on the surface, or a line
 // conformed into the mesh).
 void assemble_surface_traction_varying(const mesh::Mesh& mesh, const DofMap& dofs,

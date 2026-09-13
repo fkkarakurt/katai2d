@@ -135,7 +135,7 @@ prj.geometry.polygon(
 prj.initial(procedure="safety")     # phi-c reduction of the gravity state
 
 job = prj.run()
-print(f"FoS = {job.results()[-1].fos:.3f}")   # 1.010; published ~0.99
+print(f"FoS = {job.results()[-1].fos:.3f}")   # 1.010; referee value 1.00
 
 prj.save("slope.k2d")               # the same case, ready for `katai solve`
 ```
@@ -276,8 +276,8 @@ parameter study is a `for` loop.
 
 ### Staged construction
 
-Activation is **inherited** from the previous phase, PLAXIS-style: a phase
-lists only what changes.
+Activation is **inherited** from the previous phase: a phase lists only what
+changes.
 
 ```python
 upper = prj.geometry.rectangle(0.0, 6.0, 20.0, 10.0, material=m,
@@ -291,7 +291,7 @@ Phases also take the controls that make a run reproducible and a design check
 possible — all written into the `.k2d`:
 
 ```python
-prj.phases.plastic("Half the stage", apply_fraction=0.5)      # PLAXIS Sum-Mstage
+prj.phases.plastic("Half the stage", apply_fraction=0.5)      # half the staged change
 prj.phases.plastic("Design check", design="ec7_da3")          # partial factors
 prj.phases.plastic("Dewater", water=8.0)                      # phase water table
 prj.phases.plastic("Fine", tolerance=1e-3, max_iterations=60)
@@ -414,7 +414,7 @@ A selection:
 | Benchmark | Reference | Result |
 |---|---|---|
 | Prandtl strip footing N_c (φ = 0) | 2 + π (Prandtl 1921) | +0.6% |
-| Slope factor of safety (φ–c reduction) | Griffiths & Lane (1999), published ≈ 0.99 | 1.010 |
+| Slope factor of safety (φ–c reduction) | Giam & Donald (1989) referee value 1.00 | 1.010 |
 | Rigid strip footing on elastic soil | Giroud (1972) 15.15 | +1.1% |
 | Unconfined dam discharge with a seepage face | Charny (1951) exact theorem | +1.02% |
 | Terzaghi 1D consolidation U(T_v) | Terzaghi series | −1.2% … −0.4% |
@@ -423,10 +423,9 @@ A selection:
 | Sparse solve vs dense LU, independent path | Eigen FullPivLU, no shared code | 4.4×10⁻¹⁶ |
 
 For a guided tour, [Three published benchmarks, end to
-end](docs/validation/three-published-benchmarks.md) reproduces Cox (1962),
-Davis & Booker (1973) and Griffiths & Lane (1999) letter-for-letter from the
-sources and solves each one with the `katai` command line, published value
-beside computed value.
+end](docs/validation/three-published-benchmarks.md) sets up the problems of Cox
+(1962), Davis & Booker (1973) and Griffiths & Lane (1999) and solves each one with
+the `katai` command line, published value beside computed value.
 
 Where a number is uncertain, the uncertainty is measured rather than asserted:
 [numerical-uncertainty.md](docs/validation/numerical-uncertainty.md) records
@@ -471,7 +470,6 @@ to leave the build.
 | [`docs/diagnostics.md`](docs/diagnostics.md) | every `K2D-*` code and what it means |
 | [`docs/validation/verification-matrix.md`](docs/validation/verification-matrix.md) | the generated verification record, with its [bibliography](docs/validation/references.bib) |
 | [`docs/validation/numerical-uncertainty.md`](docs/validation/numerical-uncertainty.md) | how far a computed number sits from the exact solution of its own equations |
-| [`docs/validation/plaxis-2d-validation-comparison.md`](docs/validation/plaxis-2d-validation-comparison.md) | four documented validation cases, rebuilt from their problem statements |
 | [`CHANGELOG.md`](CHANGELOG.md) | what changed, and which wrong answers it fixed |
 
 ---

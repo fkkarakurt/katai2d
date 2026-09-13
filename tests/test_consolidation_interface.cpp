@@ -1,9 +1,9 @@
 // An interface inside a CONSOLIDATION phase -- the case a real retaining wall is, and the one the
 // previous increment deliberately refused. The refusal said the split seam "would silently make the
 // joint impermeable, which is a modelling claim". That was right about the danger and wrong about
-// the default: the model already carries the interface's cross permeability, sourced from the
-// manual, and its default is FULLY PERMEABLE -- the flow net runs through the line. So the fix was
-// not to keep refusing but to read the input that was already there.
+// the default: the model already carries the interface's cross permeability as an input
+// (`flow_barrier`), and its default is FULLY PERMEABLE -- the flow net runs through the line. So
+// the fix was not to keep refusing but to read the input that was already there.
 //
 // WHAT AN INTERFACE ADDS TO A COUPLED PHASE. It splits the mesh, so the joint carries two pore
 // pressures where the ground carried one. Which of them the water sees is an input, not a
@@ -26,7 +26,7 @@
 //
 // verify: KV-STR-007
 //   oracle:   independent_path
-//   source:   PLAXIS 2D Reference Manual Table 5-2 / Scientific Manual sec. 3.4 for the three cross-permeability cases and what each means (the model's own field comment quotes them, and its default is fully permeable); and the drained limit of Biot consolidation, as in KV-STR-006 -- once the excess pore pressure is gone the coupled problem IS the drained problem, which this program solves by an independent path (solve_nonlinear, with a real Coulomb return on the joint)
+//   source:   KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res) for the three cross-permeability cases and what each means (fully permeable, the default: no effect on flow; impermeable: separate pore-pressure degrees of freedom on the two sides; semi-permeable: a hydraulic resistance d/k); and the drained limit of Biot consolidation, as in KV-STR-006 -- once the excess pore pressure is gone the coupled problem IS the drained problem, which this program solves by an independent path (solve_nonlinear, with a real Coulomb return on the joint)
 //   locator:  a permeable joint is ONE pressure: p_left - p_right = 0 identically, because the two nodes share the pore equation. An impermeable joint is two, and a surcharge on one side cannot cross it. Coulomb capacity at a station: tau_max = c_i - sigma_n tan(phi_i), with c_i = R_inter c and tan(phi_i) = R_inter tan(phi)
 //   quantity: the maximum |p_left - p_right| across the seam EARLY in the dissipation (Tv = 0.05) for a permeable and an impermeable joint [kPa]; the settlement and the joint's peak shear at the end of a consolidation phase run to Tv = 4, against the same model as a drained Plastic phase [m, kPa]; the Coulomb demand/capacity the elastic joint reaches; and whether a joint past its capacity is reported
 //   expected: permeable -> 0 (one equation, so the difference is a number minus itself); impermeable -> of the order of the surcharge (measured 12.62 kPa of 50 kPa; 12.83 when the case was first recorded, and the assertion is the order, above 10% of the surcharge). With a joint below its capacity the coupled phase must reach the drained answer in BOTH the settlement and the joint's shear; with one above it (1.19x here) it must not, and the run must say so; semi-permeable must be refused with what it actually is

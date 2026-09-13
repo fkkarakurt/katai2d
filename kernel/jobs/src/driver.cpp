@@ -165,8 +165,8 @@ static void set_plate_mass(katai::core::plate::PlateProps& pp, double w) {
 }
 
 // Phreatic-surface elevation at horizontal position x (engine service since Stage B4).
-// `config` is the phase being solved: a phase may carry its own phreatic polyline (PLAXIS
-// "water conditions per phase"), which is how staged dewatering is expressed. Null config or
+// `config` is the phase being solved: a phase may carry its own phreatic polyline (per-phase
+// water conditions), which is how staged dewatering is expressed. Null config or
 // no override falls back to the project's own line, so every existing run is unchanged.
 static double water_table_at(const model::Project& pr, double x, const model::Phase* config) {
     if (!pr.has_water) return -1e30;
@@ -254,8 +254,8 @@ static bool any_flow_bc_declared(const model::Project& pr) {
 
 // Drainage-boundary mask / prescribed-head boundary for time-dependent flow phases.
 // The mesh nodes of the DRAINS active in this phase, and whether any WELL is active. A drain is
-// read by the time-dependent flow solvers (its nodes drain: excess pore pressure zero, PLAXIS Ref
-// sec. 5.9.2); a well prescribes a discharge, which those solvers do not take, so an active well
+// read by the time-dependent flow solvers (its nodes drain: excess pore pressure zero); a well
+// prescribes a discharge, which those solvers do not take, so an active well
 // in such a phase is reported rather than silently ignored.
 // Said where a consolidation / fully-coupled phase meets a flow barrier it cannot read. A split
 // seam -- a wall with interfaces, or an interface on mesh edges -- IS read: fully permeable ties
@@ -404,7 +404,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     if (pr.materials.empty())    { R.message = "No materials."; return R; }
 
     // Material tables indexed by material id. The constitutive model follows the GUI Material.model
-    // (PLAXIS: the selected model governs), resolved by name in the constitutive catalogue --
+    // (the selected model governs), resolved by name in the constitutive catalogue --
     // parameter wiring, K0^NC memory, cap calibration and the Undrained (A/B) machinery all live
     // with the models in katai/materials/registry.hpp now. `mats` (LinearElastic) is kept only as
     // a fallback; the real solve uses `models`. nonlinear_soil drives load-stepping / solver choice.
@@ -413,7 +413,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     std::vector<double> gamma;      // unsaturated (above water table)
     std::vector<double> gamma_sat;  // saturated (below water table)
     bool nonlinear_soil = false;
-    bool has_hardening = false;  // hardening family present (needs PLAXIS-realistic tol)
+    bool has_hardening = false;  // hardening family present (needs a 1% tolerated error)
     bool has_softsoil = false;   // soft-soil family present (FD tangent -> same step/tol class)
     for (const auto& m : pr.materials) {
         katai::core::LinearElastic le; le.youngs_modulus = m.E; le.poisson_ratio = m.nu;
@@ -425,11 +425,11 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             return R;
         }
         models.push_back(entry->build(to_material_params(m)));
-        // "Ignore undrained behaviour" (PLAXIS): this phase treats Undrained (A)/(B) soil as
+        // "Ignore undrained behaviour" (`ignoreund`): this phase treats Undrained (A)/(B) soil as
         // drained -- no excess pore pressure is generated. Only the volumetric coupling is
         // switched off; the strength parameters stay exactly as the material declares them, so
-        // an Undrained (B) soil keeps its c_u with phi = 0, which is what the option means in
-        // PLAXIS too. Reported per material, because a phase that quietly stops being undrained
+        // an Undrained (B) soil keeps its c_u with phi = 0, which is what the option means.
+        // Reported per material, because a phase that quietly stops being undrained
         // is the difference between a short-term and a long-term answer.
         if (io.config && io.config->ignore_undrained && models.back().undrained) {
             models.back().undrained = false;
@@ -440,11 +440,11 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                      "answer, not a short-term one.");
         }
         // The Rankine tension cut-off is consumed by the Mohr-Coulomb return only: the hardening
-        // and soft-soil integrators do not carry the extra planes (material_model.hpp). PLAXIS
-        // applies a tension cut-off to these models by DEFAULT, and so does this schema, so a
-        // silent omission here is a systematic difference from the reference code in the
-        // unsafe direction -- the soil takes tension it should not.
-        // CLOSED 2026-08-13: these models now read the cut-off (MMM Eq. 3-11, applied to the
+        // and soft-soil integrators do not carry the extra planes (material_model.hpp). This
+        // schema applies a tension cut-off to these models by DEFAULT, so a silent omission here
+        // is a systematic error in the unsafe direction -- the soil takes tension it should not.
+        // CLOSED 2026-08-13: these models now read the cut-off (the Rankine condition
+        // sigma_i - sigma_t <= 0 on each principal stress, tension positive, applied to the
         // principal stresses their own return produced -- materials/mohr_coulomb.hpp,
         // apply_rankine_cap). What remains is a formulation boundary worth stating, and only
         // where it can actually bite: the cap is applied SEQUENTIALLY after the model's own
@@ -459,11 +459,11 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                      "the cut-off and the volumetric cap are active at the same point, the cap "
                      "is not re-checked against the capped stress.");
         // The model does not take a small-strain stiffness more than 20x its own unload/reload
-        // stiffness (MMM sec. 7.5: "Although Alpan suggests that the ratio E0/Eur can exceed 10
-        // for very soft clays, the maximum ratio E0/Eur or G0/Gur permitted in the HSsmall model
-        // is limited to 20"). The cap is applied in the engine, so the run is the reference
-        // code's run rather than a stiffer one -- and it is said out loud, because a G0 that is
-        // quietly reduced describes a different soil from the one the file asks for.
+        // stiffness: the ratio E0/Eur or G0/Gur is limited to 20 in the HS small model, although
+        // Alpan suggests the ratio can exceed 10 for very soft clays. The cap is applied in the
+        // engine, so the run is the model's as defined rather than a stiffer one -- and it is
+        // said out loud, because a G0 that is quietly reduced describes a different soil from
+        // the one the file asks for.
         if (m.model == model::SoilModel::HSsmall && m.G0ref > 0.0) {
             const double Gur_ref = m.Eurref / (2.0 * (1.0 + m.nu_ur));
             const double cap = katai::core::HardeningSoilParams::kMaxG0Ratio * Gur_ref;
@@ -505,7 +505,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         has_hardening |= entry->hardening_family;
         has_softsoil |= entry->softsoil_family;
         gamma.push_back(m.gamma_unsat);
-        // NonPorous (PLAXIS): a non-porous material holds NO water -- below the water table its
+        // NonPorous: a non-porous material holds NO water -- below the water table its
         // total weight is still gamma_unsat (giving a concrete block gamma_sat would silently
         // saturate it). This one line fixes the gravity_phreatic + gravity_from_head +
         // consolidation dF paths alike.
@@ -515,7 +515,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // `mat_total_stress` is the wider set: materials whose equilibrium is stated in TOTAL
     // stress and which therefore carry no pore pressure -- Non-porous because it holds no
     // water, Undrained (C) because it declines to separate the water from the skeleton
-    // (MMM section 2.7: "all pore pressures are equal to zero"). Everything downstream that
+    // (all its pore pressures are zero). Everything downstream that
     // asks "does this element get a pore pressure?" asks this mask; the places that ask "does
     // this material hold water at all?" (its saturated weight) keep asking about Non-porous.
     std::vector<char> mat_nonporous, mat_total_stress;
@@ -542,7 +542,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             katai::core::find_model(constitutive_name(m.model))->validate(to_material_params(m));
         if (!why.empty()) { R.message = why; return R; }
     }
-    // The plate Mp/Np plastic hinge is NOW IN THE CORE (the MMM 18.3 diamond;
+    // The plate Mp/Np plastic hinge is NOW IN THE CORE (the M-N interaction diamond;
     // structural-plate-formulation section 10) -- active in the static family and in nonlinear
     // dynamics. The remaining honest gate: elastoplastic is set but BOTH capacities are 0 (the
     // GUI default) -> the user expects yielding while the plate would solve unbounded-elastic
@@ -651,7 +651,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
 
     // --- Embedded walls: a plate with a positive/negative interface flag becomes a barrier -- the mesh
     // is split along the wall line and the plate sits on independent DOFs, joined to each soil side by a
-    // Coulomb interface (PLAXIS plate + interface). K0 seeding keeps the wished-in-place wall in
+    // Coulomb interface (plate + interface). K0 seeding keeps the wished-in-place wall in
     // equilibrium (no spurious installation movement). Works on tri6 AND tri15, at ANY orientation: a
     // vertical wall uses the validated x-column split (bit-for-bit), a non-vertical wall the general
     // split_mesh_at_segment (seam keyed by arc length s so the builders' sort stays correct).
@@ -747,7 +747,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                     w.pp.Np = pm.Np > 0.0 ? pm.Np : -1.0;
                 }
             }
-            // Interface strength/stiffness from the adjacent soil + Rinter (PLAXIS strength reduction).
+            // Interface strength/stiffness from the adjacent soil + Rinter (strength reduced as
+            // c_i = Rinter c, tan phi_i = Rinter tan phi).
             const double mx = 0.5 * (s.x1 + s.x2), my = 0.5 * (s.y1 + s.y2);
             int smat = s.iface_material >= 0 ? s.iface_material : material_at(mx + 1e-3 * w.nx, my + 1e-3 * w.ny);
             if (smat < 0) smat = material_at(mx - 1e-3 * w.nx, my - 1e-3 * w.ny);
@@ -764,8 +765,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // to do with the rock it is cut into, and nothing would say so. The schema already
             // carries the remedy: `iface_material` points the interface at a DIFFERENT soil
             // material for its strength, so a rock joint is modelled by naming a Mohr-Coulomb
-            // material whose c'/phi' IS the joint strength intended -- which is also how the
-            // manual has it, the interface being Mohr-Coulomb whatever the surrounding model.
+            // material whose c'/phi' IS the joint strength intended, the interface being
+            // Mohr-Coulomb whatever the surrounding model.
             if (sm.model == model::SoilModel::HoekBrown) {
                 refuse(R, "K2D-G014", s.name,
                     "The interface on \"" + s.name +
@@ -781,7 +782,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             }
             w.ip.c_i = Rinter * sm.c;
             w.ip.phi_i = std::atan(Rinter * std::tan(sm.phi * kPi / 180.0));
-            // Interface tensile strength = R * sigma_t (the PLAXIS rule) -- only while the
+            // Interface tensile strength = R * sigma_t (reduced like c) -- only while the
             // material's tension cutoff is on; otherwise 0 (the interface default: carries no
             // tension -- the safe side). Previously the material's sigma_t never reached the
             // interface at all (an audit finding).
@@ -864,7 +865,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             for (const auto& p : sp.seam)
                 if (p.orig < (int)is_bnode.size() && is_bnode[p.orig])
                     boundary_seam.push_back({p.orig, p.dup});
-            // Interface strength/stiffness from the adjacent soil + Rinter (PLAXIS strength reduction).
+            // Interface strength/stiffness from the adjacent soil + Rinter (strength reduced as
+            // c_i = Rinter c, tan phi_i = Rinter tan phi).
             const double mx = 0.5 * (s.x1 + s.x2), my = 0.5 * (s.y1 + s.y2);
             int smat = s.iface_material >= 0 ? s.iface_material : material_at(mx + 1e-3 * sp.nx, my + 1e-3 * sp.ny);
             if (smat < 0) smat = material_at(mx - 1e-3 * sp.nx, my - 1e-3 * sp.ny);
@@ -881,8 +883,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // to do with the rock it is cut into, and nothing would say so. The schema already
             // carries the remedy: `iface_material` points the interface at a DIFFERENT soil
             // material for its strength, so a rock joint is modelled by naming a Mohr-Coulomb
-            // material whose c'/phi' IS the joint strength intended -- which is also how the
-            // manual has it, the interface being Mohr-Coulomb whatever the surrounding model.
+            // material whose c'/phi' IS the joint strength intended, the interface being
+            // Mohr-Coulomb whatever the surrounding model.
             if (sm.model == model::SoilModel::HoekBrown) {
                 refuse(R, "K2D-G014", s.name,
                     "The interface on \"" + s.name +
@@ -906,7 +908,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // sit at the SAME coordinates and apply_boundary_conditions matches by coordinate, so this
         // cannot be left to it: measured 2026-08-10, an interface drawn ALONG a fixed boundary got
         // both of its sides fixed and became inert -- the mesh split, the joint assembled, and the
-        // block welded itself to its own base (PLAXIS Validation Manual 3.3 read 5.4e6 kN/m instead
+        // block welded itself to its own base (the sliding-block benchmark read 5.4e6 kN/m instead
         // of 60). The discriminator is which side carries soil once the split has re-wired the
         // elements, which is why this runs after every interface has been built.
         if (!boundary_seam.empty()) {
@@ -967,7 +969,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // DOFs are shared with the soil; one rotation extra-DOF is allocated per chain node.
     // Diagram bookkeeping lives in the engine now (Stage B9, katai/analysis/
     // structural_diagrams.hpp): DiagSpec / IfaceDiag remember which contiguous slice of each
-    // structures vector belongs to which drawn line, so force diagrams (PLAXIS Output M/Q/N)
+    // structures vector belongs to which drawn line, so force diagrams (M/Q/N)
     // and interface results (tau/sigma_n/slip) can be produced per line.
     using katai::core::DiagSpec;
     using katai::core::IfaceDiag;
@@ -1066,7 +1068,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
 
     // Anchors: single axial spring (node-to-node when both ends sit in the soil; fixed-end when one
     // end is drawn outside the soil -> that end is a fixed far anchor point). EA/Fmax are divided by
-    // the out-of-plane spacing to get the per-metre (plane-strain) values (PLAXIS MMM §18.1).
+    // the out-of-plane spacing to get the per-metre (plane-strain) values.
     const auto nearest_node = [&](double x, double y) {
         int best = -1; double bd = 1e300;
         for (int n = 0; n < mesh.node_count; ++n) {
@@ -1262,7 +1264,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // Embedded beams (pile rows / nails): a beam line cuts the mesh at any orientation; skin + foot
     // springs couple the beam (on independent DOFs) to the soil AT the beam location (non-conforming,
     // no mesh change). EA/EI and the skin/foot spring stiffnesses come from the embedded-beam material
-    // via PLAXIS default interface-stiffness factors (Sluis 2012; PLAXIS 2D Ref §6.6): ISF = 2.5
+    // via default interface-stiffness factors (Sluis 2012): ISF = 2.5
     // (Lspacing/Deq)^-0.75 for the springs, 25 (...)^-0.75 for the foot, times the soil shear modulus.
     double area_total = 0.0;
     for (int e = 0; e < mesh.element_count; ++e) {
@@ -1302,7 +1304,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         if (by.front() > by.back()) {   // build_embedded_beam: node 0 = toe (foot) -> deeper (lower y) end
             std::reverse(bx.begin(), bx.end()); std::reverse(by.begin(), by.end());
         }
-        // CONNECTION POINT (PLAXIS Ref. sec 5.6.3). Hinged -- PLAXIS's default when no structure
+        // CONNECTION POINT (`conn`). Hinged -- the default when no structure
         // shares the point -- ties the beam's top translations to the mesh node there, which the
         // mesher carries as a vertex precisely so this is an exact DOF identity and not an
         // interpolation or a penalty. Free leaves the top coupled through the skin springs alone.
@@ -1354,7 +1356,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         const int smat = material_at(0.5 * (s.x1 + s.x2), 0.5 * (s.y1 + s.y2));
         const auto& sm = pr.materials[smat >= 0 ? smat : 0];
         const double G = sm.E / (2.0 * (1.0 + sm.nu));
-        // Skin/foot spring stiffnesses from the PLAXIS default interface-stiffness factors --
+        // Skin/foot spring stiffnesses from the default interface-stiffness factors (Sluis 2012) --
         // engine-owned now (Stage B9, embedded_beam.hpp: default_interface_stiffness).
         double k_axial, k_lateral, D_foot;
         katai::core::ebeam::default_interface_stiffness(Ls, em.diameter, G, pp.EA, pp.EI,
@@ -1447,9 +1449,9 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // would be singular -- fix them (their displacement is meaningless this phase).
     // A node a PLATE runs through is NOT orphaned -- the beam's own stiffness holds it. Pinning
     // it would weld the structure to the outside world and the phase would converge on a model
-    // in which that plate carries nothing, without saying so. The manual's own beam verification
-    // (PLAXIS 2D Validation Manual sec. 2.3) is built exactly this way: the soil cluster is
-    // deactivated so that only the beams remain, supported at their end points.
+    // in which that plate carries nothing, without saying so. A plain beam verification is built
+    // exactly this way: the soil cluster is deactivated so that only the beams remain, supported
+    // at their end points.
     if (!act.empty()) {
         std::vector<char> carried(mesh.node_count, 0);
         const auto carry = [&](int n) { if (n >= 0 && n < mesh.node_count) carried[(size_t)n] = 1; };
@@ -1572,7 +1574,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         }
     }
 
-    // NonPorous elements take no pore-pressure LOAD (PLAXIS: a non-porous material carries
+    // NonPorous elements take no pore-pressure LOAD (a non-porous material carries
     // neither initial nor excess pore pressure -- concrete holds no water of its own;
     // equilibrium in that region is stated in TOTAL stress). The mask overlays activation;
     // without NonPorous it stays empty (the legacy path).
@@ -1605,9 +1607,10 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                          "(head and head_far) until the deformation mesh is split with it.");
                 break;
             }
-        // Pore pressure + saturation from the steady-state seepage head field (PLAXIS groundwater
-        // flow pore generation): total-stress gravity with gamma_sat where psi = h - y >= 0, and
-        // the pore load interpolated from the SAME nodal head -> recovered stress is EFFECTIVE.
+        // Pore pressure + saturation from the steady-state seepage head field (pore pressures
+        // generated by a groundwater flow calculation): total-stress gravity with gamma_sat where
+        // psi = h - y >= 0, and the pore load interpolated from the SAME nodal head -> recovered
+        // stress is EFFECTIVE.
         katai::core::assemble_gravity_from_head(mesh, dofs, gamma, gamma_sat, *flow_head, f);
         katai::core::assemble_pore_load_from_head(mesh, dofs, *flow_head, kGammaWater, f, pore_mask);
     } else if (water) {
@@ -1684,7 +1687,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     }
     // Distributed (line) loads: a linearly-varying traction (qx1,qy1)->(qx2,qy2) along the
     // segment, assembled as CONSISTENT nodal forces over the mesh edge chain it lies on (the
-    // common PLAXIS surcharge). The mesh conforms to the load line (build_mesh adds it as a
+    // common surcharge). The mesh conforms to the load line (build_mesh adds it as a
     // constraint), so collect_chain returns the edge nodes (corner, mid, corner, ...); the
     // varying-traction integral reproduces the q1->q2 ramp exactly. A line that does not resolve
     // to a valid edge chain (non-conforming) is skipped rather than mis-applied.
@@ -1745,8 +1748,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // Material-factored approaches (EC7 DA1-C2, DA3) reduce c'/tan(phi') on every soil material and
     // scale the VARIABLE (applied) loads by gamma_Q; self-weight is permanent (gamma_G = 1.0 for these
     // approaches) so gravity + pore stay at characteristic values. The geostatic K0 seed below always
-    // uses characteristic strength (the in-situ state is real, not factored) -- PLAXIS likewise applies
-    // design factors in the calculation phase, not the initial one. None -> no-op (bit-identical). The
+    // uses characteristic strength (the in-situ state is real, not factored) -- design factors
+    // belong to the calculation phase, not the initial one. None -> no-op (bit-identical). The
     // resistance-factored approaches (DA2, TBDY 2018) do not change the FEM solve; their E_d <= R_d
     // verdict is a report-layer check. Reference: docs/references/design-codes-ec7-tbdy.md.
     if (io.config && io.config->design_approach != model::DesignApproach::None) {
@@ -1759,8 +1762,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // silently used unfactored strength is the worst outcome this seam can produce, so
             // it is refused. EN 1997-1 factors c' and tan(phi') by name and gives no M-set for a
             // Hoek-Brown envelope; deriving one -- factoring sigma_ci, or m_b, or the equivalent
-            // c'/phi' of MMM Eq 4-15/4-16 -- would be this program inventing a design rule, and
-            // the three choices do not agree with each other.
+            // c'/phi' of Hoek, Carranza-Torres & Corkum 2002 -- would be this program inventing a
+            // design rule, and the three choices do not agree with each other.
             for (const auto& mm : models)
                 if (mm.type == katai::core::MaterialType::HoekBrown) {
                     refuse(R, "K2D-G015", "design approach",
@@ -1770,8 +1773,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                         "CHARACTERISTIC strength while the report said the design approach had "
                         "been applied. EN 1997-1 gives no partial factor for a Hoek-Brown "
                         "envelope. Convert the envelope to an equivalent c' and phi' over the "
-                        "confining range the problem spans (PLAXIS 2D Material Models Manual sec "
-                        "4.2, Eq 4-15/4-16), apply the factors to those, and run the design phase "
+                        "confining range the problem spans (Hoek, Carranza-Torres & Corkum 2002), "
+                        "apply the factors to those, and run the design phase "
                         "on a Mohr-Coulomb material -- or use a resistance-factored approach "
                         "(EC7 DA2, TBDY 2018), which does not touch the material at all.");
                     return R;
@@ -1782,7 +1785,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         }
     }
 
-    // K0 initial-stress procedure (PLAXIS): the undisturbed ground starts in geostatic equilibrium
+    // K0 initial-stress procedure: the undisturbed ground starts in geostatic equilibrium
     // (sigma'_v = effective overburden, sigma'_h = K0 sigma'_v), so self-weight produces ~zero
     // displacement and the post-processed stress is the real geostatic field. Layered + water-aware
     // via vertical integration; reuses the eff_unit_weight / ground_surface lambdas built above.
@@ -1791,9 +1794,9 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     k0opt.eff_unit_weight = eff_unit_weight;
     k0opt.ground_surface = ground_surface;
     // Total-stress targets are seeded in total stress (header note): u(x,y) hydrostatic. For
-    // Undrained (C) this is the manual's "the K0-value refers to total stresses rather than
-    // effective stresses in this case" -- the seed has to be the stress the material is
-    // analysed in, or the initial state contradicts the constitutive law from the first step.
+    // Undrained (C) the K0 value refers to total stresses rather than effective stresses -- the
+    // seed has to be the stress the material is analysed in, or the initial state contradicts
+    // the constitutive law from the first step.
     if (any_total_stress && water) {
         k0opt.nonporous = mat_total_stress;
         k0opt.pore = [&pr, &io](double x, double y) {
@@ -1806,7 +1809,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // gamma' discontinuity elevations along the column at x: polygon (layer) edge crossings + the
     // water table. With these the overburden integral is exact for piecewise-constant gamma', so the
     // level-ground K0 identity f_int(sigma_K0) = f_gravity holds to round-off even with layers/water.
-    // PLAXIS K0 validity condition (Reference Manual, literally): the K0 procedure is correct ONLY
+    // K0 validity condition: the K0 procedure is correct ONLY
     // when the ground surface, the layer boundaries and the water table are ALL horizontal. Detect
     // violation GEOMETRICALLY (not from the assembled force imbalance: quadrature residuals -- the
     // r-weighted axisymmetric cubic integrand, a water-table kink crossing element interiors -- are
@@ -1885,17 +1888,17 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     const bool use_k0 = !io.chained && ((phase == InitialPhase::K0Procedure) || has_interfaces);
     std::vector<katai::core::GaussState> init;
     if (io.chained) {
-        // Staged phase: start from the previous phase's committed stresses (SumMstage chaining).
+        // Staged phase: start from the previous phase's committed stresses (staged chaining).
         if (!io.init_states || io.init_states->empty() ||
             io.init_states->size() % (size_t)std::max(1, mesh.element_count) != 0) {
             R.message = "Internal: staged phase started without the previous phase's stress state.";
             return R;
         }
         init = *io.init_states;
-        // RESET SMALL STRAIN (PLAXIS's phase option; Material Models Manual sec. 7.6). The
+        // RESET SMALL STRAIN (the `resetsmall` phase option). The
         // inherited state carries the small-strain history with it, which is exactly right when
         // the phases continue one loading path and exactly wrong when they do not -- the
-        // manual's own case being a surcharge placed and removed to leave a preconsolidation
+        // typical case being a surcharge placed and removed to leave a preconsolidation
         // pressure behind, where the strain history it also leaves is an artefact of how the
         // state was built rather than something the soil would still remember.
         //
@@ -1959,7 +1962,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // plasticity develops gradually (the solver also has adaptive cut-back).
         const bool nonsym = nonlinear_soil || has_interfaces || has_embedded;
         // Hardening Soil uses an analytic CONTINUUM tangent (linear, not quadratic, global
-        // convergence), so it needs more, smaller load increments and a PLAXIS-realistic
+        // convergence), so it needs more, smaller load increments and a looser
         // tolerated error (~1%); ramping gravity into the K0 seed keeps each increment small.
         // Mohr-Coulomb has a closed-form CONSISTENT tangent (quadratic) -> tighter 1e-6.
         // io.numeric overrides either of them (0 = keep the derived value), so the same problem
@@ -2086,10 +2089,10 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // walls/piles. Consistent nodal line load over every ACTIVE chain of THIS phase, added to
         // BOTH f and f_loads: a gravity-start phase ramps it with the body force (ramp = f); a
         // K0/baseline initial phase ramps it as an unbalanced new load (ramp = f_loads -- the
-        // wished-in-place wall settles under its own weight, PLAXIS's plastic nil-step equivalent);
+        // wished-in-place wall settles under its own weight, the equivalent of a plastic nil-step);
         // a chained phase sees it inside ramp = f - B, so a plate already equilibrated by the parent
         // adds NOTHING (nil identity preserved) and a newly activated plate arrives incrementally
-        // (SumMstage). Permanent load -> assembled AFTER the gamma_Q variable-load scaling; the
+        // (the staged change). Permanent load -> assembled AFTER the gamma_Q variable-load scaling; the
         // Safety branch consumed f above and stays structure-free (consistent: safety_analysis takes
         // no structures). Dynamic reads neither f nor f_loads (static equilibrium comes from the
         // parent baseline). w = 0 (default) contributes nothing -> bit-identical.
@@ -2176,7 +2179,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                                  !plate_is_wall[si] && !iface_split[si];
         }
         if (phase == InitialPhase::Consolidation) {
-            // --- Time-dependent (Biot) consolidation phase (PLAXIS "Consolidation") --------------
+            // --- Time-dependent (Biot) consolidation phase ---------------------------------------
             // The strategy lives in the engine (Stage B9: katai/analysis/phase_solver/
             // consolidation.hpp). This seam resolves the schema materials, reuses the B4 flow-edge
             // vocabulary, and builds the solver factories -- a composition-root decision. On
@@ -2202,8 +2205,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 warn(R, "K2D-A009", "wells",
                      "A well is active in this consolidation phase, but a consolidation analysis "
                      "solves the EXCESS pore pressure and takes no prescribed discharge: the "
-                     "well's pumping is not applied here. PLAXIS offers wells for groundwater "
-                     "flow and fully coupled analyses. Drains, which set the excess pore pressure "
+                     "well's pumping is not applied here. Wells are applied in a steady "
+                     "groundwater-flow calculation. Drains, which set the excess pore pressure "
                      "to zero, ARE applied.");
             cin.active = act;
             // Plates, anchors and geogrids now take part in the coupled solve; interfaces (and
@@ -2220,7 +2223,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             cin.pore_tie = &pore_tie;
             if (io.config) {
                 cin.duration_day = io.config->duration; cin.time_steps = io.config->time_steps;
-                // How the phase ends (PLAXIS Ref sec. 7.5). With a state criterion the two above
+                // How the phase ends (`cstop`). With a state criterion the two above
                 // are not read at all -- the phase marches until the state is reached and its
                 // ANSWER is the time that took.
                 cin.stop = to_core_consol_stop(io.config->consol_stop);
@@ -2230,7 +2233,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 cin.max_steps = io.config->consol_max_steps;
             }
             cin.yscale = ymax - ymin;
-            const Eigen::VectorXd dF = f - B;   // configuration imbalance (SumMstage)
+            const Eigen::VectorXd dF = f - B;   // configuration imbalance (the staged change)
             // Sparse Biot solve factories: the coupled saddle-point system A = [K L; Lᵀ -(ΔtH+S)] is
             // symmetric indefinite (nonsymmetric with a non-associated elastoplastic tangent); the
             // solver factors ONCE (constant dt) and back-substitutes every time step. Built here
@@ -2247,7 +2250,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 return R;
             if (io.out_states) *io.out_states = committed;
         } else if (phase == InitialPhase::FullyCoupled) {
-            // --- Fully-coupled flow-deformation (PLAXIS "Fully coupled flow-deformation") ----------
+            // --- Fully-coupled flow-deformation --------------------------------------------------
             // The strategy lives in the engine (Stage B9: katai/analysis/phase_solver/
             // fully_coupled.hpp). This seam resolves the schema materials (flow description +
             // van Genuchten retention), reuses the B4 flow-edge vocabulary, and builds the
@@ -2286,7 +2289,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             fin.pore_tie = &pore_tie;
             if (io.config) { fin.duration_day = io.config->duration; fin.time_steps = io.config->time_steps; }
             fin.yscale = ymax - ymin;
-            const Eigen::VectorXd dF = f - B;   // configuration imbalance (SumMstage)
+            const Eigen::VectorXd dF = f - B;   // configuration imbalance (the staged change)
             // Sparse coupled solve factories: the saddle-point system is symmetric indefinite
             // (nonsymmetric with a non-associated elastoplastic tangent); the solver factors ONCE
             // (constant dt) and back-substitutes every time step. Built here because a test or app
@@ -2303,7 +2306,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 return R;
             if (io.out_states) *io.out_states = committed;
         } else if (phase == InitialPhase::TransientFlow) {
-            // --- Transient groundwater flow only (PLAXIS "Groundwater flow, transient") ------------
+            // --- Transient groundwater flow only -------------------------------------------------
             // The strategy lives in the engine (Stage B9 pilot: katai/analysis/phase_solver/
             // transient_flow.hpp). This seam resolves the schema materials to their flow
             // description and precomputes the initial-head fallback (water table / ground
@@ -2318,9 +2321,9 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 fm.retention = {Mt.gw_ga, Mt.gw_gn, Mt.gw_gl, Mt.gw_Sres, 1.0};
                 fm.porosity = Mt.e_init / (1.0 + Mt.e_init);
                 // In flow, "non-porous" means one thing: no water moves through here and none is
-                // stored. An Undrained (C) cluster is in the same position -- PLAXIS does not even
-                // let its permeability be entered ("the input field for permeabilities are greyed
-                // out when the drainage type is either Non-porous or Undrained C") -- so it takes
+                // stored. An Undrained (C) cluster is in the same position -- its permeability is
+                // not an input at all, the permeability fields not applying to the Non-porous and
+                // Undrained (C) drainage types -- so it takes
                 // the same impermeable-barrier treatment rather than a permeability nobody set.
                 fm.nonporous = mat_total_stress[mi] != 0;
             }
@@ -2328,11 +2331,11 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             tin.active = act;
             // Wells and drains in a TRANSIENT flow phase: refused by name rather than dropped.
             // This solver takes a prescribed-head boundary set and no source term, so a well's
-            // discharge has nowhere to enter and a NORMAL drain's one-sided rule ("pore pressures
-            // lower than the equivalent head are not affected") cannot be re-evaluated as the
+            // discharge has nowhere to enter and a NORMAL drain's one-sided rule (pore pressures
+            // below the drain's head are left untouched) cannot be re-evaluated as the
             // head moves through the time steps -- applying it as a plain fixed head would let a
             // drain FEED water into ground that is drier than it, which is the opposite of what
-            // a drain does. PLAXIS applies both here; this build does not yet, and says so.
+            // a drain does. This build does not apply them here yet, and says so.
             for (std::size_t hi = 0; hi < pr.hydros.size(); ++hi) {
                 if (io.config && !io.config->active_hydro(hi)) continue;
                 const model::HydroLine& H = pr.hydros[hi];
@@ -2352,7 +2355,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             R.mesh = std::move(mesh);   // flow-only: skip the deformation post-processing tail
             return R;
         } else if (phase == InitialPhase::Dynamic) {
-            // --- Dynamic (seismic) time-history analysis (PLAXIS "Dynamic") -----------------------
+            // --- Dynamic (seismic) time-history analysis -----------------------------------------
             // The strategy lives in the engine (Stage B9: katai/analysis/phase_solver/dynamic.hpp).
             // This seam resolves the schema once -- the seismic configuration and code-spectrum
             // overlays from io.config, the per-material unit weights (drainage-resolved by the
@@ -2410,7 +2413,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             return R;
         } else {
         // The strategy lives in the engine (Stage B9: katai/analysis/phase_solver/
-        // static_phase.hpp) together with the ramp / nil-step semantics (K0 baseline, SumMstage
+        // static_phase.hpp) together with the ramp / nil-step semantics (K0 baseline, staged
         // chaining, SSC time apportioning). This seam passes the common setup's neutral products
         // (loads, baseline, activity, Newton class, carry) and the composition root's solver
         // callback; on success the phase falls through to the common result tail, as before.
@@ -2424,17 +2427,17 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         stin.line_search_window = io.numeric.line_search_window;
         stin.enforce_local_criteria = io.numeric.enforce_local_criteria;
         stin.substep_tolerance = io.numeric.substep_tolerance;
-        // SumMstage: a partial stage is a construction step only where there IS a stage, so the
+        // Stage fraction: a partial stage is a construction step only where there IS a stage, so the
         // fraction is read on chained phases and left at 1 on the initial one (the validator
         // refuses it there rather than letting a scaled gravity look like a partial excavation).
         stin.stage_fraction = (io.chained && io.config) ? io.config->sum_mstage : 1.0;
         if (stin.stage_fraction != 1.0)
             note(R, "K2D-A007", io.config->name,
                  "This phase applies only " + dnum(100.0 * stin.stage_fraction) +
-                     "% of its staged change (SumMstage = " + dnum(stin.stage_fraction) +
+                     "% of its staged change (mstage = " + dnum(stin.stage_fraction) +
                      "), so the configuration it describes is NOT reached: the remainder is "
                      "still carried by the soil. Results belong to the partial stage.");
-        // Only a CHAINED (staged) phase carries time: in PLAXIS the initial phase is TIMELESS --
+        // Only a CHAINED (staged) phase carries time: the initial phase is TIMELESS --
         // an unconditional duration here once leaked 1 day of creep into the K0 phase and broke
         // the geostatic identity (measured: K0 max |u| = 26 mm = exactly mu* ln2 H on an SSC
         // column). The initial phase also has io.config (pr.initial, for activation flags), which
@@ -2489,7 +2492,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                     " kPa). See the settlement-time curve below.";
         // A phase that ended on a STATE answers a question the timed one does not ask -- how long
         // -- so the time leads, and the definition of the number travels WITH the number. The
-        // degree of consolidation here is PLAXIS's pressure ratio, and saying so is not pedantry:
+        // degree of consolidation here is a pressure ratio, and saying so is not pedantry:
         // the settlement ratio of the same name reaches 90% about 21% of the time earlier.
         if (R.consol_stop != katai::core::ConsolidationStop::TimeInterval) {
             char cbuf[520];
@@ -2579,7 +2582,7 @@ std::vector<SolveResult> solve_phases(const model::Project& pr,
         if (!out.back().ok) return out;
         // Safety, TransientFlow and Dynamic leave the committed effective-stress state unchanged (a
         // time-history returns RELATIVE displacements, not a new static state); Plastic, Consolidation
-        // and FullyCoupled commit it forward (SumMstage chaining).
+        // and FullyCoupled commit it forward (staged chaining).
         if (ph.type != model::PhaseType::Safety && ph.type != model::PhaseType::TransientFlow &&
             ph.type != model::PhaseType::Dynamic)
             committed = std::move(next);

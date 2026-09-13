@@ -4,11 +4,11 @@
 // consolidation U(t) = settlement(t)/settlement_inf must follow the classical Terzaghi series
 //   U = 1 - sum (2/M^2) exp(-M^2 Tv),  M=(2m+1)pi/2,  Tv = cv t / H_dr^2,  cv = k Eoed/gamma_w.
 // Final settlement = u0 H / Eoed. Closed-form analytic reference (gold standard).
-// (See docs/references/consolidation-formulation.md; PLAXIS 2D Scientific Manual ch.4.)
+// (See docs/references/consolidation-formulation.md; Terzaghi 1943; Biot 1941.)
 //
 // verify: KV-CON-001
 //   oracle:   closed_form
-//   source:   Terzaghi one-dimensional consolidation theory; derivation recorded in docs/references/consolidation-formulation.md (cites PLAXIS 2D Scientific Manual ch. 4)
+//   source:   Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley -- one-dimensional consolidation theory; derivation recorded in docs/references/consolidation-formulation.md
 //   locator:  U(Tv) = 1 - sum (2/M^2) exp(-M^2 Tv), M = (2m+1) pi/2; final settlement u0 H / Eoed
 //   quantity: degree of consolidation U(Tv) at sampled time factors, and the final settlement [-]
 //   expected: the Terzaghi series above at Tv = 0.2, 0.4, 0.6, 0.9

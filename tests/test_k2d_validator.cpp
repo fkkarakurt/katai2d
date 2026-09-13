@@ -8,7 +8,7 @@
 //
 // verify: none -- input-contract mechanics (field paths, severities, report
 // plumbing); no external oracle exists. The parameter BOUNDS the rules encode
-// cite their sources (PLAXIS MMM, van Genuchten 1980) in validate.hpp.
+// cite their sources (e.g. van Genuchten 1980) in validate.hpp.
 #include <katai/io/project_io.hpp>
 #include <katai/io/validate.hpp>
 
@@ -301,7 +301,7 @@ int main() {
           },
           "materials[0].Rinter", E, "interface factor above 1");
     // K0 = 0 is legal: with free vertical sides it is the only initial state in equilibrium
-    // with them, and the PLAXIS Validation Manual's own sliding-block case (3.3) asks for it.
+    // with them, and the sliding-block benchmark (KV-STR-002) asks for it.
     probe_accepts(base,
                   [](m::Project& p) {
                       p.materials[0].k0_auto = false;

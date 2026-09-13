@@ -12,7 +12,7 @@
 //   - the cap is ACTIVE -> pp increases above its geostatic value at loaded Gauss points;
 //   - cap-ON settles MORE than cap-OFF (the volumetric cap adds plastic compressibility);
 //   - the developed stress ratio is oedometer-like (0 < sigma'_h/sigma'_v < 1).
-// (See hardening-soil-formulation.md sec 7; single-point parity is test_hs_berlin / _calibration.)
+// (See hardening-soil-formulation.md sec 7; single-point checks are test_hs_berlin / _calibration.)
 #include <katai/analysis/initial_stress.hpp>
 #include <katai/analysis/nonlinear_solver.hpp>
 #include <katai/fem/assembly/assembler.hpp>
@@ -87,7 +87,7 @@ Result run(bool cap_on) {
     // Unified K0 procedure: the geostatic equilibrium (K0 prestress) is held as a constant
     // internal force and ONLY the surface surcharge ramps -- ramping self-weight instead
     // double-counts gravity during the increments and yields spuriously once the soil is
-    // plastic (see build_problem.hpp / initial-stress-k0.md). A PLAXIS-realistic tolerated
+    // plastic (see build_problem.hpp / initial-stress-k0.md). A practical tolerated
     // error (1%) is used (the continuum HS tangent gives linear, not quadratic, convergence).
     Eigen::VectorXd geostatic = Eigen::VectorXd::Zero(dofs.equation_count());
     katai::core::assemble_internal_force(mesh, dofs, init, geostatic);

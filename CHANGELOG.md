@@ -107,20 +107,59 @@ fully-coupled phase reads the seam at all, which no test had checked.
 ### A correction to 0.9.0: the Hoek-Brown Safety refusal gave the wrong reason
 
 The 0.9.0 entry *Rock, from the file to the answer* says a Safety phase on a Hoek-Brown material is
-refused "because the manual does not give the rule", and the refusal message said the manual
-defines only the tension cut-off's reduction for this model. That was read from the Material
-Models Manual alone. The Reference Manual (2025.1) §7.4.5.2 does define strength reduction for
-this model: it writes the Hoek-Brown yield function with the reduction factor inside it (Eq 7-10 to
-7-13, after Benz, Schwab, Vermeer & Kauther 2007), evaluated at each stress point's own σ′₃, so it
-needs no σ′₃max. The same section states that the factor it gives *does not correspond to the
-safety factor obtained for Mohr-Coulomb material with equivalent strength properties* — which the
-refusal's recommended remedy, an equivalent Mohr-Coulomb fit, did not say.
+refused because no rule for reducing its shear strength was known, and the refusal message said
+that only the tension cut-off's reduction is defined for this model. That was wrong. Strength reduction
+is defined for this model by writing the Hoek-Brown yield function with the reduction factor inside
+it (Benz, Schwab, Kauther & Vermeer 2008, *Int. J. Rock Mech. Min. Sci.* 45(2), 210–222), evaluated at each stress point's own σ′₃, so it
+needs no σ′₃max. The factor that formulation gives does not correspond to the safety factor of a
+Mohr-Coulomb material with equivalent strength properties — which the refusal's recommended
+remedy, an equivalent Mohr-Coulomb fit, did not say.
 
 The refusal itself stands: this build does not implement that formulation, and without it a Safety
 phase would keep the rock at full strength. Its reason is corrected, in the engine and in the input
 contract, and the remedy now says what it is — an approximation whose factor belongs to the fit
 and to the confining range it was made over, not the Hoek-Brown factor of safety. The released
-0.9.0 entry is left as it was published; this note is the correction.
+0.9.0 entry keeps the reason it gave at release; this note is the correction.
+
+### Every reference is a primary source
+
+A statement in this project now stands on a formula written out, a closed form or an academic
+primary source, and on nothing else. Citations of other programs' manuals are gone from the source,
+the messages, the Python docstrings, the validation record and this changelog. A pointer to
+another manual's equation number is removed; where the equation matters it is written out or
+attributed to the paper it comes from (the Hoek-Brown constants to Hoek, Carranza-Torres & Corkum
+2002, the strength-factorised form to Benz, Schwab, Kauther & Vermeer 2008). `test_product_text`, which
+read only the command line and the package docstrings, now reads every tracked file of the tree,
+and the Studio's gate its whole tree. The staged-construction multiplier is described in this
+tree's own words — the stage fraction, `mstage` — in messages, docstrings and the Studio's phase
+panel (`K2D-A007` now reads "mstage = 0.5"); the file key and the Python attribute `sum_mstage`
+are unchanged.
+
+Most verification cases lost nothing, because the quantity was already asserted against its own
+closed form and the removed check was a second comparison with another program's published output:
+the Giroud rigid footing (`KV-FND-001`, `KV-FND-012`, against 15.15 kN/m), the Davis & Booker
+strip footing from its file (`KV-FND-014`, against 7.80 kPa), the
+sliding block (`KV-STR-002`, against the Coulomb closed form) and the beam-bending pair
+(`KV-STR-003`, against the Timoshenko closed forms, 13.96206 and 17.43428 mm).
+
+Two cases changed what they claim, and one record was tidied:
+
+- **The Gibson strip load (`KV-FND-002`, `KV-FND-011`) is a plausibility band now, and says so.**
+  Its only reference for the 4 m layer on a rigid base was a published finite-element number; the
+  closed form is for the half-space, and it is exact only for a fully incompressible soil. Measured
+  on the corpus geometry scaled in depth, the model settles −9.2% (4 m), −1.3% (8 m) and +3.4%
+  (16 m) of the half-space value — a finite layer settles less, and ν = 0.495 settles more as the
+  layer deepens — so the half-space number is not this model's answer either. The cases assert
+  85% to 100% of it (measured 90.2% and 90.8%), which a stiffness profile read 10% too stiff fails,
+  and the record states that it holds no independent reference for the finite layer.
+- **The homogeneous slope (`KV-SLP-001`, `test_slope`, `test_safety_gui`, the Python example) is
+  measured against the referee value 1.00** of the simple slope in Giam & Donald (1989), *Example
+  problems for testing soil slope stability programs*, Monash University report 8/1989, in place of
+  a 0.99 that had no single primary source. The computed factor is unchanged at 1.010
+  (+1.0%), and so is the 8% band. The file carries γ = 20.2 kN/m³ against the problem's 20.0, which
+  can lower the factor by at most 1%.
+- **Four rows of the verification matrix no longer run on** into the section title that follows
+  their declaration in `test_foundation_benchmarks`.
 
 ### Upgrading from 0.9.0
 
@@ -129,6 +168,13 @@ and to the confining range it was made over, not the Hoek-Brown factor of safety
   that element; deactivate the element in the Safety phase to get that number knowingly.
 - Scripts that matched on `K2D-A003` will no longer see it. An anchor whose end stands on a
   non-zero prescribed displacement now reports its force; before, it reported 0.
+- Two corpus files are renamed, `tests/corpus/kv-str-002-sliding-block.k2d` and
+  `tests/corpus/kv-str-003-beam-bending.k2d`, and so are the examples the installer ships from them.
+  The test target that runs the four footing benchmarks is now `test_foundation_benchmarks`, and
+  the circular-footing study `study_circular_footing`. Contents and assertions are as described
+  above.
+- The validation comparison page for the four footing benchmarks is withdrawn; each case is in
+  `docs/validation/verification-matrix.md` against its analytical solution.
 
 ## [0.9.0] - 2026-08-31
 
@@ -147,7 +193,7 @@ the wrong row, which is the one error nothing downstream can catch. Logs are now
 polygons are generated from them.
 
 And a run could not say **what its answer had actually satisfied**. "Converged" was a single global
-force residual, and the two criteria beside it in the reference formulation — the current stiffness
+force residual, and the two criteria that complete it — the current stiffness
 parameter that tightens the test as a mechanism forms, and the local error at the stress points,
 which asks whether the stress a point carries is the stress its own material law would return —
 had never been consulted. Both are now computed, both are reported, and a result file carries which
@@ -194,7 +240,7 @@ out of them.
 ### The rock model meets a boundary value problem, and three things break
 
 A model verified at the material point is not a model that works. Hoek-Brown had been checked twice
-against the manual's closed forms and once through the whole FE path from a `.k2d` file, and all
+against its closed forms and once through the whole FE path from a `.k2d` file, and all
 three of those tests are PLANE STRAIN and all three are element tests. Putting it in an
 axisymmetric boundary value problem instead — a circular tunnel unloaded into a rock mass, against
 the closed-form ground reaction curve — broke it three separate ways.
@@ -270,12 +316,12 @@ The rock model reached the ground. The previous increment built the Hoek-Brown c
 material point; a criterion nothing can select is a header, so this one puts it in the schema
 (`.k2d` v18: `sigci`, `mi`, `gsi`, `hbD`, `sigpsi`, written only by a material that uses the
 model), in the material registry, in the Python surface, and in the Studio's material editor,
-which asks for it in the geologist's own vocabulary and shows the manual's derived m_b, s, a and
+which asks for it in the geologist's own vocabulary and shows the derived m_b, s, a and
 the resulting rock-mass strengths next to the four inputs.
 
 **The verification is a triaxial test run by the program itself** (`KV-CST-015`): a `.k2d` file
 naming Hoek-Brown, meshed, brought to an isotropic cell pressure and squeezed past yield, twice, at
-1 and 8 MPa. The stress the block carries on the plateau is the Eq 4-1 envelope at the confinement
+1 and 8 MPa. The stress the block carries on the plateau is the Hoek-Brown envelope at the confinement
 it is actually under, to **−0.0000%** at both, with the specimen 0.05% from homogeneous. Two cell
 pressures rather than one because the envelope is CURVED: their ratio is **3.231** where a straight
 line through the origin would give 8.000, so a build that had quietly fallen back to Mohr-Coulomb
@@ -307,14 +353,13 @@ instead.
     have kept full strength through every trial of the strength-reduction search, and the search
     would have walked to its cap and reported the cap itself — **"FoS > 3.0", for any rock mass
     whatever, however weak** — a wrong number in the safe-looking direction, which is the worst
-    kind this program can produce. It is refused rather than approximated because the manual does
-    not give the rule: MMM sec 4.3.7 defines exactly one thing Safety does to this model, reducing
-    the tension cut-off value, and says nothing about the shear strength. The conversion to an
-    equivalent Mohr-Coulomb pair does exist (Eq 4-15/4-16), and reducing THAT pair would be the
-    natural construction, but it is a fit over a confining range whose upper limit the manual
-    leaves to the caller — "the upper limit of the confining stress depends on the application" —
-    so a factor of safety built on it would be a function of a number nobody entered, wearing the
-    clothes of a measurement.
+    kind this program can produce. It is refused rather than approximated because no rule for
+    it was known: the one thing Safety was known to do to this model is reduce the tension
+    cut-off value, which says nothing about the shear strength. The conversion to an equivalent
+    Mohr-Coulomb pair does exist, and reducing THAT pair would be the natural construction, but
+    it is a fit over a confining range whose upper limit depends on the application and is left
+    to the caller — so a factor of safety built on it would be a function of a number nobody
+    entered, wearing the clothes of a measurement.
 
   * **A material-factored design approach** (EC7 DA1-C2, DA3) is the same defect at a worse seam:
     the partial factors divide `c'` and `tan(phi')`, so the rock would have been solved at its
@@ -329,8 +374,8 @@ instead.
     boxes hold the schema DEFAULTS — 1 kPa and 30 degrees — so the joint would have been given a
     Mohr-Coulomb strength with no relation to the rock it is cut into. The remedy already existed
     in the schema and is what the refusal names: point the interface at a Mohr-Coulomb material
-    (`iface_material`) whose `c'` and `phi'` ARE the joint strength intended, which is also how the
-    manual has it — an interface is Mohr-Coulomb whatever the surrounding model. For a rock joint
+    (`iface_material`) whose `c'` and `phi'` ARE the joint strength intended, since an interface
+    is Mohr-Coulomb whatever the surrounding model. For a rock joint
     that is the discontinuity's own friction, not the rock mass's envelope (`K2D-G014`).
 
   * **The automatic K0** is Jaky's 1 − sin(phi'), and with no phi' it reads the unused box and
@@ -346,9 +391,9 @@ not have" — and it was about to happen on a material whose strengths are megap
 returns the criterion's own strength at zero confinement on a cohesion scale, sigma_c/2, the Tresca
 relation the model's degeneration was already verified against.
 
-**One thing the manual offers was implemented rather than refused.** MMM sec 4.3.7 lets the user cap
-the criterion's own tensile strength: "if that value is lower than σ_t, the tensile capacity will be
-cut-off at that value". The tree already has the two schema fields every other model's Rankine cap
+**One tension control was implemented rather than refused.** A user-entered tensile strength may
+cap the criterion's own tensile strength: where that value is lower than σ_t, the tensile capacity
+is cut off at it. The tree already has the two schema fields every other model's Rankine cap
 uses, so the whole implementation is one line — the cap is applied to `Constants::sigt`, and every
 path that reads a tensile limit (the yield functions' second branch, the apex return region, the
 tensile branch of the mobilised dilatancy) is written in terms of it, so none can miss it. It only
@@ -372,12 +417,11 @@ place in the whole workflow to put a number in the wrong row. A number in the wr
 the one error nothing downstream can catch: the mesher will mesh the wrong ground, every phase will
 converge on it, and the answer will be a correct solution to a model nobody meant.
 
-**The rules are not invented.** They are the PLAXIS 2D 2025.1 Reference Manual's, read in the
-original, because the workflow it describes is the one every user of this kind of program already
-knows: the layer list is **global** — every layer exists at every borehole, and a layer absent
-somewhere is not a missing row but two equal levels (§4.2, §4.3.1.1) — and a single log makes a
-horizontal water surface that reaches the model boundaries, while several combine into a
-non-horizontal one (§7.10.1.1). Between logs the boundaries interpolate linearly; **outside** the
+**The rules are the established ones**, because the borehole workflow is the one every user of
+this kind of program already knows: the layer list is **global** — every layer exists at every
+borehole, and a layer absent somewhere is not a missing row but two equal levels — and a single
+log makes a horizontal water surface that reaches the model boundaries, while several combine into
+a non-horizontal one. Between logs the boundaries interpolate linearly; **outside** the
 outermost log its levels are *held*, never continued on their slope, because extrapolating grows
 ground nobody logged.
 
@@ -429,7 +473,7 @@ statement are two statements, and one of them decays first.
 The previous increment let plates, anchors and geogrids into a consolidation phase and refused
 interfaces, on the grounds that the split seam "would silently make the joint impermeable, which is
 a modelling claim". That was right about the danger and wrong about the remedy: the model already
-carries the interface's cross permeability, quoted from the manual, and **its default is fully
+carries the interface's cross permeability, and **its default is fully
 permeable** — the flow net runs through the line. The fix was to read the input that was already
 there, not to keep refusing.
 
@@ -570,12 +614,11 @@ pressure than its Mohr-Coulomb strength can carry must come back and say so.
 Until now the only thing a consolidation phase could be given was a duration. The design question is
 the other way round — *how long until the excess pore pressure has gone?* — so answering it meant
 guessing a span, reading the curve, and guessing again. A phase can now end when the ground gets
-there instead: **at a maximum excess pore pressure**, or **at a target degree of consolidation**
-(PLAXIS Reference Manual §7.5). The time interval is then not used at all, and the time the target
-took is what the phase reports.
+there instead: **at a maximum excess pore pressure**, or **at a target degree of consolidation**. The time
+interval is then not used at all, and the time the target took is what the phase reports.
 
 **The degree of consolidation is a pressure ratio, and every surface that prints it says so.** The
-manual is explicit that its "degree of consolidation" is the excess pore pressure left over the
+criterion's "degree of consolidation" is defined as the excess pore pressure left over the
 maximum the stage generated, not the settlement ratio the name suggests — and the two are different
 numbers, not two spellings of one. On the 1-D column where both are known in closed form, the
 settlement ratio reaches 90% at Tv = 0.848 and the pressure ratio only at Tv = 1.031: **21.6% apart
@@ -693,7 +736,7 @@ reason as `KATAI_CONV_NOLOCAL` over the phase's convergence setting.
 The criteria family added above was measured and reported, but two of its members had no case
 behind them. Both have been read through to the end, and neither answer was the expected one.
 
-- **The moment residual (Eq. 9-3/9-4) was not actually in the gate**, although the record said it
+- **The moment residual was not actually in the gate**, although the record said it
   was. It is now — and measuring what that is worth found a real defect. With an *elastic* plate the
   rotational equations are linear, so the linear solve satisfies them exactly and the criterion
   reads round-off at every tolerance, including a run whose wall deflection is 21% wrong: it is
@@ -708,7 +751,7 @@ behind them. Both have been read through to the end, and neither answer was the 
   other criterion in this family has a floor for exactly that situation; this one did not, because
   nothing had ever consulted it. It has one now (1 kNm/m), which is ten decades above the undriven
   case's own reference and two decades below a loaded plate's, and both ends are pinned by tests.
-- **The non-linear elastic criterion (Eq. 9-7) is identically zero in this program, and now it is
+- **The non-linear elastic criterion is identically zero in this program, and now it is
   known why.** Run on unloading — the only place a non-yielding point can have a stress-dependent
   stiffness — all 96 points are counted and the error is 1.3e-15 at every tolerance. The unloading
   modulus is held at the state each increment begins from, so a point that does not yield walks the
@@ -723,8 +766,8 @@ force error next to a tolerance it was never compared against.
 ### A run now says which convergence criteria it met, not just that it "converged"
 
 The solver checked one thing — a global force residual against a fixed scale — and reported the
-result as though that one thing were the whole question. It is not, and no code this program is
-measured against treats it as such: the criteria are a family, and the members disagree.
+result as though that one thing were the whole question. It is not: the criteria are a family,
+and the members disagree.
 
 A run now measures and reports all of these at the iterate it accepted, per phase:
 
@@ -751,8 +794,7 @@ lands on the converged settlement in 194 iterations where tightening the global 
 decades costs 399.
 
 **They now decide whether a step has converged.** A run must satisfy the local criteria as well as
-the force balance before an increment counts, which is what the codes this program is measured
-against do. The decision was taken on the measurement rather than on the principle: this is not a
+the force balance before an increment counts. The decision was taken on the measurement rather than on the principle: this is not a
 stricter rule bought with iterations, it is a cheaper route to the same answer — the Hardening Soil
 oedometer lands on its converged settlement in 194 iterations where tightening the global tolerance
 by four decades costs 399. `KATAI_CONV_NOLOCAL` turns it off for a run, which is how every
@@ -788,11 +830,10 @@ can still say which criteria its numbers were accepted under. Files written by e
 read back with the family marked "not measured", which is the honest answer for them; older builds
 refuse a version 8 file rather than mis-read it.
 
-**A conflict between two official sources, resolved by measurement.** The two 2025.1 manuals of the
-program this criterion is taken from print CSP as reciprocals of each other — one as elastic energy
-over total, the other as total over elastic. Only the second is consistent with the behaviour both
-of them describe in words ("unity when fully elastic, approaching zero at failure") and with what
-is built on it there. The first form is at least 1 and grows without bound as a mechanism forms,
+**Two orientations of CSP, resolved by measurement.** CSP can be written as either of two
+reciprocals — elastic energy over total, or total over elastic. Only the second is consistent with
+the behaviour the parameter exists to have (unity when fully elastic, approaching zero at failure)
+and with what is built on it. The first form is at least 1 and grows without bound as a mechanism forms,
 which would make the global criterion loosen towards collapse. The second is implemented, and a
 test pins the direction so the other reading cannot return quietly.
 
@@ -892,8 +933,8 @@ count and which linear solver ran it. A capacity is not a function of either.
 that ending, and it was wrong: `KV-FND-010`'s Prandtl strip footing, whose limit load is verified
 against `N_c = 2 + π`, ends the very same way. What separates them is the current stiffness
 parameter — **0.00010 for the footing against 0.65550 for the column**, with 1468 yielding stress
-points against 96 — and the threshold is PLAXIS's own, the CSP < 0.5 at which it engages arc-length
-(Reference §7.9.3.15). So the rule is now one function beside the field it reads, called by all four
+points against 96 — and the threshold is CSP < 0.5, the level below which arc-length control is
+specified to engage. So the rule is now one function beside the field it reads, called by all four
 surfaces, and each of them names the stiffness parameter it decided on rather than deciding
 invisibly.
 
@@ -1106,7 +1147,7 @@ tested at the element, but had never been run along the path a user actually
 takes: from a file, through the mesher and the driver. Run that way for the
 first time, **five of the six were wrong**, and one further cross-cutting fault
 (the tension cut-off) came out of the same work. Every closure arrives with a
-benchmark input checked in and a citation to the manual clause it implements:
+benchmark input checked in and a stated reference for what it implements:
 the verification record grows from 45 declared cases over 17 input files to
 **57 cases over 26 files**, and the suite to **152 tests**.
 
@@ -1125,7 +1166,7 @@ guard — each bump marks an input an older build would have dropped in silence.
   pleasant layer covered the tutorial and gave up at the first real job.
   Interfaces come from the wall that needs them (`interfaces="both"`), a wall can
   be made a groundwater screen, and a pile states how its head attaches — hinged
-  by default, as PLAXIS does.
+  by default.
 - **What a structure carries is readable from a script.** `ForceStation` and
   `StructForce` are bound: the stations along an element with their arc length,
   position, N, Q, M and displacement, plus the element's name, kind, yield flag
@@ -1142,21 +1183,20 @@ guard — each bump marks an input an older build would have dropped in silence.
   the structural force envelopes, and every diagnostic the engine raised —
   because those change how the numbers should be read. A field that is uniform
   says so instead of inventing a location.
-- **"Reset small strain" as a phase option** (`.k2d` v14 `phases[].resetsmall`,
-  diagnostic `K2D-M005`), after Material Models Manual sec. 7.6. A surcharge
+- **A small-strain history reset as a phase option** (`.k2d` v14
+  `phases[].resetsmall`, diagnostic `K2D-M005`). A surcharge
   placed and removed to leave an overconsolidation behind also leaves a strain
   history, and in the real soil ageing erased that long before the analysis
   began. Verified by KV-CST-012 against an oracle established before the option
   existed: with the reset the run lands on KV-CST-008's fresh-K₀ answer to
   +0.0012%; without it, on a run 4.50× softer. On plain Hardening Soil, which
   has no history to reset, the flag is bit-for-bit inert and the run says so.
-- **Li & Dafalias dilatancy below the phase-transformation line** for HS small
-  (Material Models Manual sec. 7.9.1, Eq. 7-19…7-23), measured against an oracle
-  written from the five equations and sharing no code with the kernel: worst
-  difference 0.00e+00 over the branch. Recorded honestly, because the manual
-  disagrees with itself here — Fig. 7-10 plots this function at 1.29× the
-  amplitude Eq. 7-19 gives, and a formula printed in the specification outranks
-  a constant reverse-engineered from a raster plot.
+- **Li & Dafalias dilatancy below the phase-transformation line** for HS small,
+  measured against an oracle written from the five equations and sharing no code
+  with the kernel: worst difference 0.00e+00 over the branch. Recorded honestly,
+  because the formulation's description disagrees with itself here — its plot of
+  this function shows 1.29× the amplitude its equation gives, and a printed
+  formula outranks a constant reverse-engineered from a raster plot.
 - **Numerical-uncertainty cases on axes other than the mesh** (KV-NUM-009…011).
   One of them measured a prediction wrong: the Newmark scheme was argued to be
   second order and the sweep recovered three, so the rule that "the algebra
@@ -1170,36 +1210,36 @@ Each of these produced a converged run, a green suite and a wrong number.
   the split sat at identical coordinates and boundary conditions are applied by
   coordinate, so both were fully fixed: the block sheared elastically against
   its own base instead of sliding, and every check in the run reported success.
-  PLAXIS's own sliding-block case (Validation Manual V8 §3.3) returned
-  **5,401,612 kN/m where the manual's arithmetic gives 60**. Which side holds the
+  The sliding-block benchmark returned **5,401,612 kN/m where the hand
+  calculation gives 60**. Which side holds the
   support is now decided rather than copied. KV-STR-002 from the checked-in file:
   59.7202 kN/m, and deleting the interface still returns 5.4e6 — that check is
   the sentry that fails loudly if the rule is ever undone.
-- **Deactivating the soil welded the beams standing in it.** The manual builds
-  its beam-bending case by removing the soil cluster; every node of the
+- **Deactivating the soil welded the beams standing in it.** The beam-bending
+  benchmark is built by removing the soil cluster; every node of the
   remaining beam then touched no active element and was pinned in both
   translations. The solve converged, reported "ok" and handed back
   max|u| = 0.000000e+00 with no diagnostic. A node a plate runs through is now
   exempt; an axial-only element keeps the fixity. KV-STR-003 reproduces the
-  manual's 13.96 mm and 17.43 mm.
-- **HS small rode the virgin backbone.** Masing's rule (Eq. 7-11,
-  γ₀.₇,reloading = 2 γ₀.₇,virgin) was not applied, degrading the stiffness twice
+  closed-form deflections, 13.96 mm and 17.43 mm.
+- **HS small rode the virgin backbone.** Masing's rule
+  (γ₀.₇,reloading = 2 γ₀.₇,virgin) was not applied, degrading the stiffness twice
   as fast — measured **+5.7% / +12.9% / +34.8%** too much heave at three
   unloading sizes, a deviation that grows with strain, which is the signature of
-  a wrong threshold rather than of discretisation. Sec. 7.5's ceiling on
+  a wrong threshold rather than of discretisation. The ceiling on
   E₀/E_ur was missing too; it is capped now and `K2D-M004` states the G₀ the run
   actually used.
 - **The tension cut-off did not reach the models it belongs to.** `K2D-M001` had
   declared since 2026-08-08 that only the Mohr-Coulomb return read it, while the
-  schema switches it on by default as PLAXIS does — so every Hardening Soil, HS
-  small, Soft Soil and Soft Soil Creep run in this engine allowed tension past
-  σ_t, a systematic difference from the reference code in the unsafe direction.
+  schema switches it on by default — so every Hardening Soil, HS small, Soft
+  Soil and Soft Soil Creep run in this engine allowed tension past σ_t, a
+  systematic error in the unsafe direction.
   KV-CST-011 pins it, including the identity that a cut-off the tension never
   reaches is bit-identical to no cut-off at all.
-- **Every embedded-beam interface spring was 2.5× too stiff.** Reference Manual
-  Eq. 6-65 divides all three springs by the out-of-plane spacing, as EA, EI, the
-  weight and both capacities are divided; only Eq. 6-66's dimensionless factors
-  were implemented. The foot also used D/2 where Eq. 6-67 defines
+- **Every embedded-beam interface spring was 2.5× too stiff.** All three springs
+  must be divided by the out-of-plane spacing, as EA, EI, the weight and both
+  capacities are divided; only their dimensionless stiffness factors were
+  implemented. The foot also used D/2 where the equivalent radius is
   R_eq = √(12 EI/EA)/2. A pile row could not be loaded at its head, which is why
   no case had ever run.
 - **Structural elements read a driven node as standing still**, so a geogrid
@@ -1250,9 +1290,9 @@ Each of these produced a converged run, a green suite and a wrong number.
 ### Known limits, stated rather than implied
 
 - HS small accumulates a monotone strain-history scalar and detects no reversal
-  *inside* a phase; the manual refers that transformation to Benz (2006), which
-  is a source to obtain rather than to paraphrase. Between phases,
-  `resetsmall` is the manual's own remedy and is implemented.
+  *inside* a phase; that transformation is attributed to Benz (2006), which
+  is a source to obtain rather than to paraphrase. Between phases, the
+  `resetsmall` option is the remedy, and it is implemented.
 
 ## [0.7.1] - 2026-08-09
 
@@ -1281,7 +1321,7 @@ verification record.
 Capability release. Ten inputs a geotechnical model needs, and could not
 express, are now in the file format; four of them closed a silently wrong
 answer rather than a missing convenience. Every closure arrives with a
-verification case and a citation to the manual clause it implements, and the
+verification case and a stated reference for what it implements, and the
 verification record grows from 27 to 45 declared cases.
 
 The project file moves from version 8 to version 12. This build reads every
@@ -1293,10 +1333,10 @@ silence and solved a different problem for.
 
 - **Per-material undrained stiffness** (`materials[].und_mode`, `nu_u`,
   `skempton_B`; `.k2d` v9). The pore fluid's bulk stiffness Kw/n was derived
-  from a fixed nu_u = 0.495 for every undrained material — PLAXIS's default
-  applied to users who had entered something else. Either the equivalent
-  undrained Poisson ratio or Skempton's B is now a per-material input, related
-  by the Material Models Manual's own equations. The same change fixed a
+  from a fixed nu_u = 0.495 for every undrained material — one nearly
+  incompressible value applied to users who had entered something else. Either
+  the equivalent undrained Poisson ratio or Skempton's B is now a per-material
+  input, each converted to the same pore-fluid stiffness. The same change fixed a
   measured silent error: for the Hardening Soil family, K' was read from the
   `E`/`nu` boxes that model never reads, sizing the pore fluid by an untouched
   default — a factor of 7.6 on an ordinary data set. It now follows the
@@ -1305,7 +1345,7 @@ silence and solved a different problem for.
 - **Undrained (C)** (`materials[].drainage` = 4; `.k2d` v10). A total-stress
   analysis: undrained stiffness and strength, no pore pressure generated or
   carried, K0 on total stress. Available for the Linear Elastic and
-  Mohr-Coulomb models, as in the manual; refused by name elsewhere, and in
+  Mohr-Coulomb models; refused by name elsewhere, and in
   consolidation and fully-coupled phases. EC7 factors its cohesion as an
   undrained strength (gamma_cu).
 - **Wells and drains** (`hydros`, `phases[].hydro`; `.k2d` v11). Dewatering
@@ -1317,8 +1357,7 @@ silence and solved a different problem for.
 - **Cross permeability of walls and interfaces** (`structs[].flow_barrier`,
   `hyd_res`; `.k2d` v12). A cut-off wall can block flow: the groundwater
   calculation splits its own mesh along the barrier so the two sides carry
-  separate pore-pressure degrees of freedom, exactly as the Scientific Manual
-  describes. Impermeable, semi-permeable (hydraulic resistance d/k) or fully
+  separate pore-pressure degrees of freedom. Impermeable, semi-permeable (hydraulic resistance d/k) or fully
   permeable — the last being the default and the previous behaviour.
 - **Prescribed boundary flux** (`polygons[].edge_flux`, `Flux` in `edge_flow`;
   `.k2d` v6). Rainfall, infiltration and recharge boundaries. The kernel had
@@ -1327,7 +1366,7 @@ silence and solved a different problem for.
 - **Dilatancy cut-off** (`materials[].dilatancy_cutoff`, `e_max`; `.k2d` v5).
   A dilating soil stops dilating at its critical void ratio. Without it a dense
   sand dilates without limit and its bearing capacity comes out too high — an
-  unsafe number, produced quietly. Off by default, as in PLAXIS.
+  unsafe number, produced quietly. Off by default.
 - **Per-phase water conditions** (`phases[].water_override`, `wx`, `wy`;
   `.k2d` v4) and **anchor prestress** (`anchors[].prestress`; `.k2d` v3).
   Between them they make an anchored, dewatered excavation expressible: the
@@ -1359,14 +1398,12 @@ silence and solved a different problem for.
   automated tests.
 - **A numerical uncertainty band for published numbers**: the Grid Convergence
   Index after Roache (1994) and Celik et al. (2008), in the ASME V&V 20 sense,
-  with `mesh::refine_uniform` supplying the nested triplets it assumes. No
-  geotechnical vendor manual defines a discretisation-error estimator; this one
-  comes from the verification literature, and is itself verified against
-  manufactured triplets whose answer is known.
+  with `mesh::refine_uniform` supplying the nested triplets it assumes. The
+  estimator comes from the verification literature, and is itself verified
+  against manufactured triplets whose answer is known.
 - Measured with it: the Giroud rigid-footing benchmark converges to 15.244
-  kN/m ± 0.21%, which is 0.03% from the published PLAXIS 2D value — the
-  file's own mesh reads 0.5% higher, and the difference is the mesh, not the
-  physics.
+  kN/m ± 0.21% — the file's own mesh reads 0.5% higher, and the difference is
+  the mesh, not the physics.
 - `K2D-A005`: a factor of safety computed with a non-associated flow rule
   depends on the mesh and falls as the mesh is refined (−7.9% over a fourfold
   refinement on Griffiths & Lane). The run says so.
@@ -1402,11 +1439,9 @@ Patch release: the published binaries catch up with the tree.
 - Three new published benchmarks in the corpus, each a checked-in `.k2d`
   solved from the file by the suite:
   - `KV-FND-013` — bearing capacity of a smooth rigid circular footing,
-    axisymmetric Mohr–Coulomb (Cox 1962 slip-line solution; PLAXIS 2D
-    Validation Manual section 3.1).
+    axisymmetric Mohr–Coulomb (Cox 1962 slip-line solution).
   - `KV-FND-014` — smooth strip footing on clay with strength increasing
-    with depth (Davis & Booker 1973; PLAXIS 2D Validation Manual
-    section 3.2).
+    with depth (Davis & Booker 1973).
   - `KV-SLP-002` — Griffiths & Lane (1999) Example 1, the homogeneous 2:1
     slope, factor of safety by phi–c reduction against the published pair
     (their FE 1.4, Bishop & Morgenstern charts 1.380).
@@ -1420,8 +1455,8 @@ The first published version: the engine, the command line, the Python
 surface and the verification record.
 
 ### Engine
-- Staged construction (plastic phases with PLAXIS-style inherited
-  activation), K0 procedure and gravity initial stress.
+- Staged construction (plastic phases with activation inherited from the
+  previous phase), K0 procedure and gravity initial stress.
 - Constitutive models: Linear Elastic, Mohr–Coulomb with a tension cut-off,
   Hardening Soil, HS-small, Soft Soil, Soft Soil Creep; drained,
   undrained (A/B) and non-porous drainage types.

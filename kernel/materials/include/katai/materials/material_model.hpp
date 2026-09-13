@@ -23,12 +23,12 @@
 
 namespace katai::core {
 
-// Depth-VARYING stiffness/strength profile (indexed by material id; PLAXIS "E'_inc /
-// c'_inc" + y_ref). The most common real-soil case is stiffness growing with depth — in
+// Depth-VARYING stiffness/strength profile (indexed by material id; the depth increments
+// "E'_inc / c'_inc" + y_ref). The most common real-soil case is stiffness growing with depth — in
 // seismics E(y) is directly the Vs profile itself:
 //     E(y) = E_ref + E_inc·(y_ref − y)      (decreases ABOVE y_ref)
 //     c(y) = c_ref + c_inc·(y_ref − y)      (Mohr-Coulomb strength only)
-// Evaluated PER STRESS (Gauss) POINT — PLAXIS does it per stress point too. An element
+// Evaluated PER STRESS (Gauss) POINT. An element
 // average would silently drift on a coarse mesh; the whole meaning of a gradient is that
 // it varies within an element. uniform() ⇒ callers use the old constant-E path →
 // BIT-FOR-BIT the same result.
@@ -136,23 +136,23 @@ struct MaterialModel {
     double cohesion = 0.0;         // c        (Mohr-Coulomb)
     double friction_angle = 0.0;   // phi [rad] (Mohr-Coulomb)
     double dilatancy_angle = 0.0;  // psi [rad] (Mohr-Coulomb)
-    // Rankine tension cap (PLAXIS MMM Eq 3-11; sigma_1 <= sigma_t, associated flow).
+    // Rankine tension cap (sigma_1 <= sigma_t, associated flow).
     // Read by the MohrCoulomb branch of integrate_point / integrate_point_axisym;
     // HS/SS do not consume it yet (their integrators lack the extra planes -- the
     // GUI states this honestly). Default OFF keeps every direct caller bit-identical.
     bool tension_cutoff = false;
     double tensile_strength = 0.0;  // sigma_t [kN/m2], tension-positive
-    // Dilatancy cut-off (Material Models Manual Eq. 5.16b, Fig. 5.6): "After extensive shearing,
-    // dilating materials arrive in a state of critical density where dilatancy has come to an
-    // end... As soon as the volume change results in a state of maximum void, the mobilised
-    // dilatancy angle is automatically set back to zero." Without it a dense sand dilates for
-    // ever and its bearing capacity is over-predicted -- an unsafe number, produced quietly.
+    // Dilatancy cut-off: after extensive shearing a dilating material arrives at a state of
+    // critical density where dilatancy has come to an end. As soon as the volume change takes the
+    // soil to its maximum void ratio e_max, the mobilised dilatancy angle is set back to zero.
+    // Without it a dense sand dilates for ever and its bearing capacity is over-predicted -- an
+    // unsafe number, produced quietly.
     //
     // The void ratio follows the volume change: 1 + e = (1 + e_init) exp(eps_v), expansion
-    // positive. The manual writes the same statement through ln((1+e)/(1+e_init)) (Eq. 5.17)
-    // with a sign convention that is ambiguous as printed; the exponential form says it once.
-    // e_min is deliberately NOT here: the manual states it "is not used within the context of
-    // the Hardening-Soil model", so storing it would suggest a rule that does not exist.
+    // positive. The same statement can be written eps_v = ln((1+e)/(1+e_init)), where the sign
+    // convention is easy to get wrong; the exponential form says it once.
+    // e_min is deliberately NOT here: the cut-off does not use a minimum void ratio, so storing
+    // one would suggest a rule that does not exist.
     bool dilatancy_cutoff = false;
     double e_init = 0.5, e_max = 1.0;
 
@@ -160,8 +160,8 @@ struct MaterialModel {
     // volumetric stiffness Kw/n is added to the GLOBAL tangent (D_u = D' + (Kw/n)mm^T)
     // and the internal force uses TOTAL stress = sigma' + (Kw/n) eps_v m, while the
     // constitutive model still works on effective stress. The solver tracks the excess
-    // pore pressure in GaussState::eps_vol. undrained_poisson = nu_u (PLAXIS default
-    // 0.495; exactly 0.5 is singular).
+    // pore pressure in GaussState::eps_vol. undrained_poisson = nu_u (0.495 by default, a
+    // nearly incompressible undrained Poisson's ratio; exactly 0.5 is singular).
     bool undrained = false;
     double undrained_poisson = 0.495;  // nu_u
     // The EFFECTIVE elastic pair the pore-fluid derivation uses, when it is not (E, nu).
@@ -175,7 +175,7 @@ struct MaterialModel {
     // the untouched field happened to sit.
     double undrained_E_ref = 0.0, undrained_nu_ref = 0.0;
 
-    // Undrained (C): the material is analysed in TOTAL stress (MMM section 2.7). The stiffness
+    // Undrained (C): the material is analysed in TOTAL stress. The stiffness
     // and strength above are the undrained ones, no pore pressure is generated or carried, and
     // the stress this model returns is total stress wearing the effective stress's name. The
     // flag exists because the difference is invisible in the parameters: an undrained Tresca
@@ -188,7 +188,7 @@ struct MaterialModel {
     // hardening_soil_plastic.hpp / docs/references/hardening-soil-formulation.md.
     HardeningSoilParams hs;
 
-    // Soft Soil parameters (used when type == SoftSoil; PLAXIS MMM §10, soft_soil.hpp /
+    // Soft Soil parameters (used when type == SoftSoil; soft_soil.hpp /
     // docs/references/soft-soil-formulation.md). youngs_modulus/poisson_ratio are NOT USED —
     // the stiffness comes from the ln-law (K = p'/κ*). CAUTION (honest Stage-2 limit):
     // SS + undrained (A) is NOT wired yet — kw_over_n() derives from E and would silently
@@ -197,13 +197,13 @@ struct MaterialModel {
     // drained.
     softsoil::Params ssoil;
 
-    // Soft Soil Creep parameters (type == SoftSoilCreep; PLAXIS MMM §11,
+    // Soft Soil Creep parameters (type == SoftSoilCreep; Vermeer & Neher 1999,
     // soft_soil_creep.hpp / docs/references/soft-soil-creep-formulation.md). Time enters
-    // via integrate_point's trailing parameter dt_day (0 = no creep — in PLAXIS too, SSC in
-    // a phase without a time interval gives only elastic+MC). Undrained/Safety limits as SS.
+    // via integrate_point's trailing parameter dt_day (0 = no creep: SSC in a phase without
+    // a time interval gives only elastic+MC). Undrained/Safety limits as SS.
     softsoilcreep::Params ssc;
 
-    // Hoek-Brown parameters (type == HoekBrown; PLAXIS MMM §4, hoek_brown.hpp). The elastic part
+    // Hoek-Brown parameters (type == HoekBrown; hoek_brown.hpp). The elastic part
     // IS youngs_modulus / poisson_ratio -- rock keeps Hooke's law, which is the whole reason the
     // model is only a strength criterion. hb.E / hb.nu are filled from those two at the seam so
     // the core stays self-contained.
@@ -215,9 +215,10 @@ struct MaterialModel {
     }
 
     // Undrained (A) pore-fluid bulk stiffness Kw/n from the EFFECTIVE parameters and
-    // an assumed undrained Poisson ratio (PLAXIS default nu_u = 0.495; exactly 0.5
-    // makes the stiffness singular). MMM Eq. 2-50. Derived so that K' + Kw/n = the
-    // correct undrained bulk modulus Ku (see effective-stress-formulation.md).
+    // an assumed undrained Poisson ratio (nu_u = 0.495 by default; exactly 0.5
+    // makes the stiffness singular): Kw/n = 3 (nu_u - nu') / ((1 - 2 nu_u)(1 + nu')) K'.
+    // Derived so that K' + Kw/n = the correct undrained bulk modulus Ku (see
+    // effective-stress-formulation.md).
     double kw_over_n(double nu_u) const {
         const bool own = undrained_E_ref > 0.0;   // the model carries its own elastic pair
         const double e = own ? undrained_E_ref : youngs_modulus;
@@ -252,27 +253,27 @@ struct MaterialModel {
     }
 };
 
-// --- The undrained stiffness trio (PLAXIS MMM section 2.4, alpha_Biot = 1) -------------------
-// Three quantities describe the same pore fluid and the manual gives one equation for each:
-//   Kw/n  from nu_u        Eq. 2-50, MaterialModel::kw_over_n above
-//   nu_u  from Skempton B  Eq. 2-55, undrained_poisson_from_skempton
-//   B     from Kw/n        Eq. 2-57, skempton_from_kw_over_n
+// --- The undrained stiffness trio (alpha_Biot = 1) ---------------------------------------------
+// Three quantities describe the same pore fluid, and each has a closed form:
+//   Kw/n  from nu_u        MaterialModel::kw_over_n above
+//   nu_u  from Skempton B  undrained_poisson_from_skempton
+//   B     from Kw/n        skempton_from_kw_over_n
 // They are mutually consistent -- going round the ring returns the number it started from, which
 // is what test_undrained_stiffness measures rather than assumes. Which one the USER supplies is
-// the choice PLAXIS offers (nu-undrained definition: Direct or Skempton-B based); the other two
+// an input choice (docs/k2d-format.md, `und_mode`: nu_u entered, or Skempton's B); the other two
 // are then derived and are worth showing, because a B of 0.98 and a Kw/n of 45 K' are the same
 // statement and an engineer recognises one of them.
 
-// Eq. 2-55 with alpha_Biot = 1: nu_u = (3 nu' + B (1 - 2 nu')) / (3 - B (1 - 2 nu')).
+// With alpha_Biot = 1: nu_u = (3 nu' + B (1 - 2 nu')) / (3 - B (1 - 2 nu')).
 // B -> 1 gives exactly 0.5 (incompressible, singular), so the caller must keep B < 1.
 inline double undrained_poisson_from_skempton(double B, double nu_eff) {
     const double t = B * (1.0 - 2.0 * nu_eff);
     return (3.0 * nu_eff + t) / (3.0 - t);
 }
 
-// Eq. 2-57 with alpha_Biot = 1: B = 1 / (1 + n K'/Kw), written on the quantity the engine
-// actually carries -- B = (Kw/n) / (K' + Kw/n) = (Kw/n) / Ku. The porosity cancels because
-// Kw and n only ever enter as the ratio; PLAXIS's own input box is Kw,ref / n for that reason.
+// With alpha_Biot = 1: B = 1 / (1 + n K'/Kw) (Skempton 1954), written on the quantity the
+// engine actually carries -- B = (Kw/n) / (K' + Kw/n) = (Kw/n) / Ku. The porosity cancels
+// because Kw and n only ever enter as the ratio, which is why Kw/n is the natural quantity.
 inline double skempton_from_kw_over_n(double kw_over_n, double k_eff) {
     return kw_over_n / (k_eff + kw_over_n);
 }
@@ -293,15 +294,14 @@ inline double hs_frozen_Eur(const HardeningSoilParams& pe,
 }
 
 // HSsmall (G0_ref>0): scale Eur_ref by the small-strain over-stiffness Et/Eur(gamma_hist).
-// G0_ref=0 -> returns p unchanged (plain HS, byte-identical). (Material Models Manual sec 7.)
+// G0_ref=0 -> returns p unchanged (plain HS, byte-identical). (Benz 2007.)
 //
-// The threshold is the RELOADING one, 2*gamma07 (Masing, Eq 7-11): what this function sets is
-// the model's quasi-elastic (unload/reload) stiffness, and the manual keeps that factor
+// The threshold is the RELOADING one, 2*gamma07 (Masing 1926): what this function sets is
+// the model's quasi-elastic (unload/reload) stiffness, and the model keeps that factor
 // constant at 2 throughout loading rather than switching it on at a reversal. Riding the
-// virgin backbone here instead would degrade the stiffness twice as fast as the manual's
-// model: measured 12.9% more heave on the unloading case KV-CST-008 (0.7996 mm against the
-// manual's curve, 0.7132 mm) -- and softer is not the safe side when the number being read is
-// a wall deflection or a heave.
+// virgin backbone here instead would degrade the stiffness twice as fast as the model
+// intends, and measurably overstate the heave on the unloading case KV-CST-008 -- and softer
+// is not the safe side when the number being read is a wall deflection or a heave.
 inline HardeningSoilParams hs_small_strain_params(const HardeningSoilParams& p,
                                                   double gamma_hist) {
     HardeningSoilParams pe = p;
@@ -336,9 +336,9 @@ struct HsReturnCore {
     int saturated = 0;
 };
 
-// The material's own tension cut-off, as the cap the principal returns take. PLAXIS switches
-// the cut-off ON by default, and so does this schema, so `off` here is a deliberate choice by
-// the engineer and not a default nobody looked at.
+// The material's own tension cut-off, as the cap the principal returns take. The schema
+// switches the cut-off ON by default, so `off` here is a deliberate choice by the engineer and
+// not a default nobody looked at.
 inline double tension_cap_of(const MaterialModel& m) {
     return m.tension_cutoff ? m.tensile_strength : kNoTensionCap;
 }
@@ -393,7 +393,8 @@ inline HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
     const HsIntegrated ret = hs_integrate(pe, sig_n_cp, gamma_p_n, pp_n, deps_p, substep_tol,
                                          plan_out, plan_in);
     double r[3] = {-ret.stress(2), -ret.stress(1), -ret.stress(0)};  // tension, desc
-    // Tension cut-off (MMM Eq. 3-11), applied to the principals the model's own return produced.
+    // Tension cut-off (sigma_i <= sigma_t), applied to the principals the model's own return
+    // produced.
     // Off by default, and the branch is not taken when the largest principal is admissible, so
     // every run without a cut-off is bit-identical to the one before this existed.
     const bool capped = apply_rankine_cap(r, sigma_t_cap, lame_from(Eur, pe.nu_ur).lambda,
@@ -436,8 +437,8 @@ inline HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
 // predictor (deps_zz=0) -> kinematics-agnostic principal return -> analytic 3x3 tangent.
 // nsub_fixed / plastic_out / nsub_out: the numerical consistent-tangent plumbing (see
 // hs_consistent_tangent) — the base run reports its nsub, the perturbed runs pin it.
-// Has the dilatancy cut-off been reached at this stress point? (Material Models Manual
-// Eq. 5.16b.) The state carries the accumulated volumetric strain, and the void ratio follows
+// Has the dilatancy cut-off been reached at this stress point (e >= e_max)? The state
+// carries the accumulated volumetric strain, and the void ratio follows
 // the volume change: 1 + e = (1 + e_init) exp(eps_v), expansion positive. The question is asked
 // of the COMMITTED state -- the void ratio at the start of the increment -- so the answer is
 // the same for every iteration of that increment and the return mapping stays a pure function
@@ -463,13 +464,13 @@ inline void hs_forward(const MaterialModel& m, const GaussState& committed,
                        int* saturated_out = nullptr) {
     HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
     // Dilatancy cut-off: psi = 0 clamps the mobilised dilatancy sin(psi_m) to [0, 0] inside the
-    // return core, which IS Eq. 5.16b -- the rule enters where the manual puts it, and nothing
-    // else in the HS machinery has to know about void ratios. The flag carries the SAME fact a
-    // second way because for HSsmall the two stopped being equivalent: sec. 7.9.1 reads psi only
-    // through phi_cv, so zeroing psi alone would move phi_cv up to phi and switch the Li &
-    // Dafalias contraction on everywhere below failure -- a "stop dilating" option that starts
-    // producing volume loss. The cut-off's own words are that psi_m "is automatically set back
-    // to zero", so it is set back to zero.
+    // return core, which IS the cut-off rule -- the rule enters at the mobilised dilatancy, and
+    // nothing else in the HS machinery has to know about void ratios. The flag carries the SAME
+    // fact a second way because for HSsmall the two stopped being equivalent: the Li & Dafalias
+    // rule reads psi only through phi_cv, so zeroing psi alone would move phi_cv up to phi and
+    // switch the Li & Dafalias contraction on everywhere below failure -- a "stop dilating"
+    // option that starts producing volume loss. The cut-off sets psi_m itself back to zero, so
+    // it is set back to zero.
     if (dilatancy_cut(m, committed)) { pe.dilatancy = 0.0; pe.dilatancy_cut = true; }
     const double Eur = hs_frozen_Eur(pe, committed.stress, committed.stress_zz);
     const LameConstants lame_ur = lame_from(Eur, pe.nu_ur);
@@ -490,7 +491,8 @@ inline void hs_forward(const MaterialModel& m, const GaussState& committed,
     if (Eur_out) *Eur_out = Eur;
     if (saturated_out) *saturated_out = c.saturated;
 
-    // HSsmall: γ_hist += Δγ (monotone accumulation; Eq 7-5 γ=√(1.5 e:e), e=deviatoric; plane strain εzz=0).
+    // HSsmall: γ_hist += Δγ (monotone accumulation; γ=√(1.5 e:e), e=deviatoric; plane strain
+    // εzz=0).
     if (m.hs.G0_ref > 0.0) {
         const double tr = de(0) + de(1), em = tr / 3.0;
         const double exx = de(0) - em, eyy = de(1) - em, ezz = -em, exy = 0.5 * de(2);
@@ -604,8 +606,8 @@ inline SsReturnCore ss_return_core(const softsoil::Params& P,
         ret_nsub = ret.nsub;
     }
     double r[3] = {-ret_sig(2), -ret_sig(1), -ret_sig(0)};   // tension-positive, descending rank
-    // Tension cut-off (MMM Eq. 3-11); see the Hardening Soil branch. K_tr and G are this step's
-    // secant moduli, so the cap is returned on the same elasticity the step was taken with.
+    // Tension cut-off (sigma_i <= sigma_t); see the Hardening Soil branch. K_tr and G are this
+    // step's secant moduli, so the cap is returned on the same elasticity the step was taken with.
     const bool ss_capped = apply_rankine_cap(r, sigma_t_cap, K_tr - 2.0 * G / 3.0, G);
 
     SsReturnCore out;
@@ -720,10 +722,11 @@ inline double cohesion_of(const MaterialModel& m) {
         // Rock keeps no cohesion at all -- its strength IS the curve -- so the default below
         // would hand the normaliser a zero, which is precisely the failure the paragraph above
         // describes, on a material whose strengths are megapascals. What the criterion has at
-        // zero confinement is the rock mass's uni-axial compressive strength sigma_c (Eq 4-5),
-        // and a compressive strength sits on a cohesion scale at half of it -- the Tresca
-        // relation c = sigma_c / 2, which is the same degeneration KV-CST-014 checks this model
-        // against. It is a SCALE for a convergence check, not a parameter: nothing else reads it.
+        // zero confinement is the rock mass's uni-axial compressive strength
+        // sigma_c = sigma_ci s^a, and a compressive strength sits on a cohesion scale at half of
+        // it -- the Tresca relation c = sigma_c / 2, which is the same degeneration KV-CST-014
+        // checks this model against. It is a SCALE for a convergence check, not a parameter:
+        // nothing else reads it.
         case MaterialType::HoekBrown: {
             hoekbrown::Params hp = m.hb;
             hp.E = m.youngs_modulus; hp.nu = m.poisson_ratio;
@@ -1064,13 +1067,13 @@ inline void integrate_point_axisym(const MaterialModel& m,
             // assembly), exactly mirroring Mohr-Coulomb.
             HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
     // Dilatancy cut-off: psi = 0 clamps the mobilised dilatancy sin(psi_m) to [0, 0] inside the
-    // return core, which IS Eq. 5.16b -- the rule enters where the manual puts it, and nothing
-    // else in the HS machinery has to know about void ratios. The flag carries the SAME fact a
-    // second way because for HSsmall the two stopped being equivalent: sec. 7.9.1 reads psi only
-    // through phi_cv, so zeroing psi alone would move phi_cv up to phi and switch the Li &
-    // Dafalias contraction on everywhere below failure -- a "stop dilating" option that starts
-    // producing volume loss. The cut-off's own words are that psi_m "is automatically set back
-    // to zero", so it is set back to zero.
+    // return core, which IS the cut-off rule -- the rule enters at the mobilised dilatancy, and
+    // nothing else in the HS machinery has to know about void ratios. The flag carries the SAME
+    // fact a second way because for HSsmall the two stopped being equivalent: the Li & Dafalias
+    // rule reads psi only through phi_cv, so zeroing psi alone would move phi_cv up to phi and
+    // switch the Li & Dafalias contraction on everywhere below failure -- a "stop dilating"
+    // option that starts producing volume loss. The cut-off sets psi_m itself back to zero, so
+    // it is set back to zero.
     if (dilatancy_cut(m, committed)) { pe.dilatancy = 0.0; pe.dilatancy_cut = true; }
             const double Eur = hs_frozen_Eur(pe, committed.stress, committed.stress_zz);
             const double nu = pe.nu_ur;

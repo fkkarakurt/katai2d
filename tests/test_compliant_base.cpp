@@ -1,6 +1,6 @@
 // COMPLIANT (absorbing) BASE -- V&V against the layered solution with a RADIATION base condition
-// (formulation locked in docs/references/dynamic-seismic-formulation.md sec 11; PLAXIS Sci 6.3.2
-// Joyner & Chen factor 2 + Tut 17.8.5 half-of-within input convention).
+// (formulation locked in docs/references/dynamic-seismic-formulation.md sec 11; Joyner & Chen
+// factor 2 + the half-of-within-motion input convention).
 //
 // THE ORACLE (total motion, shares no code with the solver): layers u_j = a_j cos(k_j z) +
 // b_j sin(k_j z) (no body force -- the input enters through the base), with the FE's Rayleigh

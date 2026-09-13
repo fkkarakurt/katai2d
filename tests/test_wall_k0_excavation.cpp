@@ -11,7 +11,7 @@
 //       at u=0, ramped to active gravity) makes the wall deflect toward the cut -- a genuine,
 //       excavation-driven response, NOT the installation artifact.
 //
-// Reference: PLAXIS K0 procedure -> interface initial stress; interface-formulation.md §6.
+// Reference: K0 procedure -> interface initial stress; interface-formulation.md §6.
 #include <katai/analysis/initial_stress.hpp>
 #include <katai/analysis/nonlinear_solver.hpp>
 #include <katai/analysis/embedded_wall.hpp>
@@ -111,7 +111,7 @@ Out run(bool excavate) {
     DofMap dofs(mesh.node_count, 2);
     plate::PlateProps pp; pp.EA = EA; pp.EI = EI; pp.nu = 0.15;
     iface::InterfaceProps ip; ip.kn = 1e5; ip.ks = 1e5;
-    ip.c_i = 2.0;                                 // R_inter ~ 0.67 (PLAXIS strength reduction)
+    ip.c_i = 2.0;                                 // R_inter ~ 0.67 (interface strength reduction)
     ip.phi_i = std::atan(0.67 * std::tan(phi));
     WallBuild wall = build_embedded_wall(mesh, seam, toe, dofs, pp, ip);
 

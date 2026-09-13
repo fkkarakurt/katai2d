@@ -18,10 +18,11 @@
 //   * OUT: geometry that only the mesher can judge (polygon self-intersection,
 //          region overlap). The mesher's failure is the honest report there.
 //
-// Parameter-bound references: PLAXIS 2D Material Models Manual -- HS ranges and
-// the Rf < 1 asymptote (par. 6.4), Soft Soil lambda* > kappa* (par. 10), SSC mu*
-// (par. 11); van Genuchten (1980) requires n > 1; Rayleigh target ordering
-// 0 < f1 < f2 per docs/references/dynamic-seismic-formulation.md.
+// Parameter-bound references: Hardening Soil ranges and the Rf < 1 asymptote of
+// the hyperbola (Schanz, Vermeer & Bonnier 1999), Soft Soil lambda* > kappa*, Soft
+// Soil Creep mu* > 0 (Vermeer & Neher 1999); van Genuchten (1980) requires n > 1;
+// Rayleigh target ordering 0 < f1 < f2 per
+// docs/references/dynamic-seismic-formulation.md.
 //
 // Every rule is pinned by tests/test_k2d_validator.cpp, which also prints the
 // full message catalogue so engineer-readability stays reviewable.
@@ -79,7 +80,7 @@ inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::
               "water level is used and these points are ignored");
     }
 
-    // SumMstage: the fraction of the staged change to apply. Out of range is refused rather than
+    // Stage fraction (`mstage`): the fraction of the staged change to apply. Out of range is refused rather than
     // clamped -- 1.4 means the author expected something this program does not do.
     if (!(ph.sum_mstage > 0.0) || ph.sum_mstage > 1.0)
         r.add(Severity::Error, path("mstage"),
@@ -100,11 +101,11 @@ inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::
         r.add(Severity::Error, path("tol"),
               "a tolerated error of " + num(ph.tolerance) +
                   " accepts a residual as large as the load itself; it is a relative error, so "
-                  "it must be below 1 (PLAXIS's default is 0.01)");
+                  "it must be below 1 (a usual value is 0.01)");
     else if (ph.tolerance > 0.05)
         r.add(Severity::Warning, path("tol"),
               "a tolerated error of " + num(ph.tolerance) + " (" + num(100.0 * ph.tolerance) +
-                  "%) is far looser than any published default (PLAXIS: 1%); the equilibrium "
+                  "%) is far looser than the usual 1%; the equilibrium "
                   "this phase reports may be a long way from equilibrium");
     if (ph.load_steps < 0)
         r.add(Severity::Error, path("loadsteps"),
@@ -140,7 +141,7 @@ inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::
               "a staged-construction target below 1 is applied by the plastic (staged) solve; "
               "this phase type does not ramp a staged change, so the value is ignored");
 
-    // Consolidation stop criterion (PLAXIS Ref sec. 7.5). Its whole point is that the phase does
+    // Consolidation stop criterion (`cstop`). Its whole point is that the phase does
     // NOT run for a stated time, so the rules about the time interval have to step aside for it --
     // and every field it does read has to be checked here, because the alternative is a march that
     // discovers a nonsensical target after the first hour of solving.
@@ -311,9 +312,9 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
     const bool le = m.model == SoilModel::LinearElastic;
     const bool mc = m.model == SoilModel::MohrCoulomb;
     const bool hs = m.model == SoilModel::HardeningSoil || m.model == SoilModel::HSsmall;
-    // Hoek-Brown (MMM §4). Every one of these is a scale a geologist reads off a chart, so a
-    // value outside it is not a preference but a misreading -- GSI is 0..100 and D is 0..1, and
-    // the manual's own figures have no room on either side of them.
+    // Hoek-Brown (Hoek, Carranza-Torres & Corkum 2002). Every one of these is a scale a geologist
+    // reads off a chart, so a value outside it is not a preference but a misreading -- GSI is
+    // 0..100 and D is 0..1, and the charts they are read from have no room on either side.
     if (m.model == SoilModel::HoekBrown) {
         if (!(m.E > 0.0))
             r.add(Severity::Error, path("E"),
@@ -326,15 +327,15 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
         if (!(m.mi > 0.0))
             r.add(Severity::Error, path("mi"),
                   "the intact rock parameter m_i must be positive (got " + num(m.mi) +
-                      "); MMM Fig 4-5 ranges from about 4 for claystone to about 33 for granite");
+                      "); it ranges from about 4 for claystone to about 33 for granite");
         if (m.gsi < 0.0 || m.gsi > 100.0)
             r.add(Severity::Error, path("gsi"),
                   "the Geological Strength Index is a 0..100 scale (got " + num(m.gsi) +
-                      "); 100 is intact rock and about 10 a crushed mass (MMM Fig 4-6)");
+                      "); 100 is intact rock and about 10 a crushed mass");
         if (m.hb_D < 0.0 || m.hb_D > 1.0)
             r.add(Severity::Error, path("hbD"),
                   "the disturbance factor is a 0..1 scale (got " + num(m.hb_D) +
-                      "); 0 is undisturbed and 1 heavily blasted (MMM Fig 4-7)");
+                      "); 0 is undisturbed and 1 heavily blasted");
         if (m.sig_psi < 0.0)
             r.add(Severity::Error, path("sigpsi"),
                   "the confining stress at which dilatancy dies out cannot be negative (got " +
@@ -352,8 +353,8 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
         if (m.gsi > 0.0 && m.gsi < 25.0 && m.hb_D > 0.0)
             r.add(Severity::Warning, path("hbD"),
                   "a disturbance factor above 0 on a mass whose GSI is already " + num(m.gsi) +
-                      " reduces an already weak rock further; the manual warns that D should be "
-                      "applied to the blast-damaged zone only, not to the whole mass");
+                      " reduces an already weak rock further; D is meant for the blast-damaged "
+                      "zone only, not for the whole mass");
     }
 
     const bool ss = m.model == SoilModel::SoftSoil || m.model == SoilModel::SoftSoilCreep;
@@ -411,24 +412,24 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
         }
     }
 
-    // -- Undrained (C): a total stress analysis (MMM section 2.7) --------------
+    // -- Undrained (C): a total stress analysis ---------------------------------
     if (m.drainage == Drainage::UndrainedC) {
-        // The manual offers it for the Linear Elastic and Mohr-Coulomb models (and for NGI-ADP /
-        // UDCAM-S, which this build does not have). The constitutive catalogue refuses the rest
-        // at solve time; saying it here means the project is refused before a mesh is built.
+        // It is offered for the Linear Elastic and Mohr-Coulomb models only. The constitutive
+        // catalogue refuses the rest at solve time; saying it here means the project is refused
+        // before a mesh is built.
         if (!(le || mc))
             r.add(Severity::Error, path("drainage"),
                   who + "Undrained (C) is a total stress analysis and is available for the "
                         "Linear elastic and Mohr-Coulomb models only; this material uses " +
                       std::string(model::soil_model_name(m.model)) +
                       ", whose stiffness and hardening are written for effective stress");
-        // "Typically, for the undrained Poisson ratio a value close to 0.5 is selected (between
-        // 0.495 and 0.499)" -- the point of the type is a nearly incompressible total-stress
+        // The undrained Poisson's ratio is typically chosen close to 0.5, between 0.495 and 0.499
+        // -- the point of the type is a nearly incompressible total-stress
         // soil, and a nu of 0.3 quietly gives an undrained analysis that compresses.
         if (m.nu < 0.4)
             r.add(Severity::Warning, path("nu"),
-                  who + "Undrained (C) reads nu as the UNDRAINED Poisson's ratio, which the "
-                        "manual puts between 0.495 and 0.499 (undrained soil barely changes "
+                  who + "Undrained (C) reads nu as the UNDRAINED Poisson's ratio, which is "
+                        "normally between 0.495 and 0.499 (undrained soil barely changes "
                         "volume); the entered " + num(m.nu) + " will let it compress");
     }
 
@@ -509,7 +510,7 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
                       ")");
     }
 
-    // -- Groundwater: the pore fluid's stiffness (PLAXIS MMM section 2.4) ------
+    // -- Groundwater: the pore fluid's stiffness ------------------------------
     // Kw/n = 3(nu_u - nu')/((1 - 2 nu_u)(1 + nu')) K' is positive only for nu' < nu_u < 0.5.
     // Outside that window the "water" would either soften the skeleton or make the stiffness
     // matrix singular, and both are silent in a converged-looking run.
@@ -538,7 +539,7 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
                 r.add(Severity::Warning, path("nu_u"),
                       who + "nu_u = " + num(m.nu_u) + " is very close to 0.5: Kw/n exceeds "
                             "5000 K' and the stiffness matrix becomes ill-conditioned "
-                            "(PLAXIS's default is 0.495)");
+                            "(0.495 is nearly incompressible and well-conditioned)");
         } else if (und && m.und_mode == 1) {
             if (!(m.skempton_B > 0.0 && m.skempton_B < 1.0))
                 r.add(Severity::Error, path("skempton_B"),
@@ -548,11 +549,11 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
             else if (m.skempton_B > 0.999)
                 r.add(Severity::Warning, path("skempton_B"),
                       who + "B = " + num(m.skempton_B) + " puts nu_u within 1e-4 of 0.5; the "
-                            "system becomes ill-conditioned (PLAXIS's default corresponds to "
+                            "system becomes ill-conditioned (nu_u = 0.495 corresponds to "
                             "B slightly below 0.98)");
         }
-        // The manual's own condition for the derivation to mean anything: Kw must be large
-        // against n K', "sufficiently ensured by requiring nu' <= 0.35" (MMM section 2.4).
+        // The condition for the derivation to mean anything: Kw must be large against n K',
+        // which requiring nu' <= 0.35 sufficiently ensures.
         if (und && nu_eff > 0.35)
             r.add(Severity::Warning, path(hs ? "nu_ur" : "nu"),
                   who + "an undrained analysis wants nu' <= 0.35 so that the pore fluid stays "
@@ -588,8 +589,8 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
               who + "the interface strength factor must lie in (0, 1] (got " + num(m.Rinter) +
                   ")");
     // K0 = 0 is allowed and is not a curiosity: with free vertical sides, sigma_h = 0 is the ONLY
-    // initial state in equilibrium with them, which is why the PLAXIS Validation Manual's own
-    // sliding-block case (section 3.3) specifies it. A NEGATIVE K0 stays refused -- it asks for
+    // initial state in equilibrium with them, which is why a sliding-block benchmark on free
+    // vertical sides specifies it. A NEGATIVE K0 stays refused -- it asks for
     // horizontal tension under vertical compression, which no initial state has.
     if (!m.k0_auto && !(m.k0 >= 0.0))
         r.add(Severity::Error, path("k0"),
@@ -677,11 +678,12 @@ inline ValidationReport validate_project(const model::Project& p) {
                       "a Safety analysis (phi-c reduction) cannot be run on a model that contains "
                       "a Hoek-Brown material in this build: that model has no c' or phi' for the "
                       "reduction to act on, so the rock would keep full strength through every "
-                      "trial and the factor of safety would come out too HIGH. The strength "
-                      "reduction defined for this model reformulates the Hoek-Brown yield function "
-                      "itself (Reference Manual sec 7.4.5.2) and is not implemented yet. A "
+                      "trial and the factor of safety would come out too HIGH. A strength "
+                      "reduction for this model has to reformulate the Hoek-Brown yield function "
+                      "itself, and that is not implemented yet. A "
                       "Mohr-Coulomb material fitted to the envelope over the confining range the "
-                      "problem spans (MMM Eq 4-15/4-16) will run, but its factor of safety belongs "
+                      "problem spans (the equivalent c'/phi' of Hoek, Carranza-Torres & Corkum "
+                      "2002) will run, but its factor of safety belongs "
                       "to that fit and does not correspond to the Hoek-Brown one");
             for (size_t i = 0; i < p.phases.size(); ++i) {
                 const auto da = p.phases[i].design_approach;
@@ -695,7 +697,8 @@ inline ValidationReport validate_project(const model::Project& p) {
                           "has neither -- the rock would be solved at its CHARACTERISTIC strength "
                           "while the report said the design approach had been applied. EN 1997-1 "
                           "gives no partial factor for a Hoek-Brown envelope. Apply the factors to "
-                          "an equivalent c'/phi' (MMM Eq 4-15/4-16) on a Mohr-Coulomb material, or "
+                          "an equivalent c'/phi' (Hoek, Carranza-Torres & Corkum 2002) on a "
+                          "Mohr-Coulomb material, or "
                           "use a resistance-factored approach (EC7 DA2, TBDY 2018), which does not "
                           "touch the material at all");
             }
@@ -1072,7 +1075,7 @@ inline ValidationReport validate_project(const model::Project& p) {
                   "(deactivate them initially and activate them in a staged phase)");
     }
 
-    // -- Cross permeability of walls and interfaces (PLAXIS Ref Table 5-2) -----
+    // -- Cross permeability of walls and interfaces (`flow_barrier`) -----------
     for (size_t i = 0; i < p.structs.size(); ++i) {
         const auto& st = p.structs[i];
         const std::string who = "\"" + st.name + "\": ";
@@ -1099,7 +1102,7 @@ inline ValidationReport validate_project(const model::Project& p) {
                       std::string(st.flow_barrier == 0 ? "fully permeable" : "impermeable"));
     }
 
-    // -- Hydraulic conditions: wells and drains (PLAXIS Reference sec. 5.9) -----
+    // -- Hydraulic conditions: wells and drains (`hydros`) ---------------------
     for (size_t i = 0; i < p.hydros.size(); ++i) {
         const auto& H = p.hydros[i];
         const std::string who = "\"" + H.name + "\": ";
@@ -1137,7 +1140,7 @@ inline ValidationReport validate_project(const model::Project& p) {
                 r.add(Severity::Warning, path("h_min"),
                       who + "h_min = " + num(H.h_min) + " m is above the well's own top (" +
                           num(top) + " m): the well stops extracting as soon as the head reaches "
-                                     "it, so it will do little or nothing. PLAXIS's habit is to "
+                                     "it, so it will do little or nothing. The usual choice is to "
                                      "set h_min at the bottom of the well");
         } else {
             const double bottom = std::fmin(H.y1, H.y2);

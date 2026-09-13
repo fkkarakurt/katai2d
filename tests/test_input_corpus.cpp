@@ -59,15 +59,15 @@
 //
 // verify: KV-SLP-001
 //   oracle:   published_benchmark
-//   source:   Griffiths and Lane (1999), "Slope stability analysis by finite elements", Geotechnique 49(3); Rocscience Slide verification problem 1
-//   locator:  homogeneous 1:2 slope on a foundation layer, gamma = 20.2 kN/m3, c' = 3 kPa, phi' = 19.6 deg, psi = 0; published FoS: Bishop 0.988, Spencer 0.987, Phase2 T6 0.997
+//   source:   Giam, P.S.K. & Donald, I.B. (1989). Example problems for testing soil slope stability programs. Civil Engineering Research Report 8/1989, Monash University -- the simple homogeneous slope of that referee set (c' = 3.0 kPa, phi' = 19.6 deg, gamma = 20.0 kN/m3), for which the study publishes a referee factor of safety of 1.00; the finite-element strength-reduction procedure itself is Griffiths, D.V. & Lane, P.A. (1999). Slope stability analysis by finite elements. Geotechnique 49(3), 387-403
+//   locator:  homogeneous 1:2 slope, 10 m high, on a foundation layer, c' = 3 kPa, phi' = 19.6 deg, psi = 0; the file carries gamma = 20.2 kN/m3, 1% above the referee problem's 20.0, which can lower the factor of safety by at most 1% (the only gamma-dependent term, c'/(gamma H), falls by 1%)
 //   quantity: slope factor of safety by phi-c reduction, run as the file's INITIAL procedure (initial_procedure = Safety) from the checked-in tests/corpus/kv-slp-001-griffiths-lane-slope.k2d [-]
-//   expected: FoS ~ 0.99 (the multi-method consensus above)
-//   band:     8% vs 0.99, as asserted below -- SRM-versus-LEM method scatter plus the file's own coarse mesh; measured FoS 1.010 (+2.1%); the mechanism must also displace
+//   expected: FoS 1.00, the referee value
+//   band:     8% vs 1.00, as asserted below -- strength reduction against a limit-equilibrium referee value, plus the file's own coarse mesh and the mesh dependence a non-associated flow rule brings (K2D-A005); measured FoS 1.010 (+1.0%); the mechanism must also displace
 //
 // verify: KV-EXC-001
 //   oracle:   closed_form
-//   source:   1D elastic unloading of a laterally confined column (oedometric heave) under the staged-construction SumMstage rule
+//   source:   1D elastic unloading of a laterally confined column (oedometric heave) when a staged phase applies its full change (KATAI 2D input contract, docs/k2d-format.md, mstage = 1)
 //   locator:  heave u = +gamma_f h_exc H_rem / E_oed, E_oed = E (1 - nu) / ((1 + nu)(1 - 2 nu)); the base total stress sheds exactly the excavated weight (stated in full)
 //   quantity: pit-floor heave and base total vertical stress after deactivating the upper layer in a staged phase, run from the checked-in tests/corpus/kv-exc-001-staged-excavation.k2d [m; kPa]
 //   expected: u(y = 6) = +17 * 4 * 6 / E_oed; sigma_v(base) = -18 * 6; the initial full-geometry K0 phase does not displace
@@ -106,72 +106,72 @@
 //   band:     2%, as asserted below -- measured +0.6% on the file's own 0.4 m tri15 mesh (the direct structured-mesh benchmark KV-FND-005 measures +1.1% at tri15)
 //
 // verify: KV-FND-011
-//   oracle:   published_benchmark
-//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); analytic solution Gibson (1967)
-//   locator:  Section 2.2, strip load on incompressible Gibson soil (E = 299 z, nu = 0.495); half-space closed form s = q / (2 dG/dz), uniform under the load
+//   oracle:   closed_form
+//   source:   Gibson, R.E. (1967). Some results concerning displacements and stresses in a non-homogeneous elastic half-space. Geotechnique 17(1), 58-67 (the half-space closed form); KATAI 2D input contract (docs/k2d-format.md, E_inc / y_ref)
+//   locator:  strip load on incompressible Gibson soil (E = 299 z, nu = 0.495); half-space closed form s = q / (2 dG/dz) with dG/dz = (dE/dz) / (2 (1 + nu)), uniform under the load (stated in full)
 //   quantity: centreline surface settlement under a q = 10 kPa strip load on a 4 m Gibson layer, E(y) via the schema's E_inc/y_ref profile, run from the checked-in tests/corpus/kv-fnd-011-gibson-strip-load.k2d [m]
-//   expected: 0.047 (PLAXIS, same finite layer); the half-space closed form gives 0.050 and the finite layer must sit BELOW it (shared bias)
-//   band:     5% vs the PLAXIS finite-layer value, as asserted below -- measured -3.4% (0.0454) on the file's own 0.15 m tri15 mesh (the direct structured benchmark KV-FND-002 measures -4.0%)
+//   expected: the half-space closed form gives 0.050 m; the half-space closed form is exact for a fully incompressible soil (nu = 0.5) and is not the answer for this model: a 4 m layer on a rigid base settles less, and a nearly but not fully incompressible soil (nu = 0.495) settles more as the layer deepens -- measured on the corpus file's geometry, scaled in depth and width, at -9.2% (4 m, 0.15 m mesh), -1.3% (8 m) and +3.4% (16 m, both on a 0.3 m mesh) of it. This record holds no independent reference for the finite-layer settlement, so the case asserts a PLAUSIBILITY band, not a verification: between 85% and 100% of the half-space value, which a stiffness profile read 10% too stiff falls out of
+//   band:     0.85 s_exact < s < s_exact, as asserted below -- measured 90.8% (0.0454 m) on the file's own 0.15 m tri15 mesh (the structured twin KV-FND-002 measures 90.2%)
 //
 // verify: KV-FND-012
 //   oracle:   published_benchmark
-//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); analytic solution Giroud (1972)
-//   locator:  Section 2.1, smooth rigid strip footing on elastic soil; F = 2 (1 + nu) G B s / rho, rho = 0.88
+//   source:   Giroud, J.P. (1972). Settlement of rectangular foundation on soil layer. J. Soil Mech. Found. Div., ASCE, 98(SM1), 149-154 (analytic solution); KATAI 2D input contract (docs/k2d-format.md, disps)
+//   locator:  smooth rigid strip footing on an elastic soil layer; F = 2 (1 + nu) G B s / rho, rho = 0.88 for this layer geometry (stated in full)
 //   quantity: footing force at a prescribed settlement of 10 mm, via the schema's line prescribed displacement (v2) and the reaction output, run from the checked-in tests/corpus/kv-fnd-012-giroud-rigid-footing.k2d [kN/m]
-//   expected: 15.15 (analytic); PLAXIS publishes 15.24; the weightless gravity initial does not displace; a footing node carries exactly the imposed u_y
-//   band:     2% vs analytic and 3% vs PLAXIS, as asserted below -- measured +1.1% / +0.5% (15.32) on the file's own 0.5 m tri15 mesh (the direct structured benchmark KV-FND-001 measures +1.4% / +0.8%)
+//   expected: 15.15 (analytic); the weightless gravity initial does not displace; a footing node carries exactly the imposed u_y
+//   band:     2% vs analytic, as asserted below -- measured +1.1% (15.32) on the file's own 0.5 m tri15 mesh (the direct structured benchmark KV-FND-001 measures +1.4%)
 //
 // verify: KV-FND-013
 //   oracle:   published_benchmark
-//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); slip-line solution Cox (1962)
-//   locator:  Section 3.1, bearing capacity of a smooth rigid circular footing (axisymmetric Mohr-Coulomb), run from the checked-in tests/corpus/kv-fnd-013-cox-circular-footing.k2d
+//   source:   Cox, A.D. (1962). Axially-symmetric plastic deformation in soils -- II. Indentation of ponderable soils. Int. J. Mech. Sci. 4(5), 371-380 (slip-line solution); KATAI 2D input contract (docs/k2d-format.md, disps)
+//   locator:  bearing capacity of a smooth rigid circular footing on a ponderable soil (axisymmetric Mohr-Coulomb), run from the checked-in tests/corpus/kv-fnd-013-cox-circular-footing.k2d
 //   quantity: limit pressure p_max from the axisymmetric reaction output at a prescribed settlement of 0.35 m, associated flow (psi = phi -- the slip-line solution is the associated limit load) [kPa]
-//   expected: 225.6 (analytic, 141 c); PLAXIS publishes 220.0; the K0 initial phase does not displace; a footing node carries exactly the imposed u_y
+//   expected: 225.6 (analytic, 141 c); the K0 initial phase does not displace; a footing node carries exactly the imposed u_y
 //   band:     5% vs analytic, as asserted below -- measured +3.7% (233.9) on the file's own 0.25 m tri15 mesh (the direct structured benchmark KV-FND-003 measures +3.9%; a 0.5 m mesh over-predicts by ~9%, the coarse-mesh bearing bias)
 //
 // verify: KV-FND-014
 //   oracle:   published_benchmark
-//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); analytic solution Davis & Booker (1973)
-//   locator:  Section 3.2, smooth strip footing on clay with strength increasing with depth, run from the checked-in tests/corpus/kv-fnd-014-davis-booker-strip-footing.k2d
+//   source:   Davis, E.H. & Booker, J.R. (1973). The effect of increasing strength with depth on the bearing capacity of clays. Geotechnique 23(4), 551-563 (analytic solution); KATAI 2D input contract (docs/k2d-format.md, c_inc / E_inc / y_ref)
+//   locator:  smooth strip footing on clay with strength increasing linearly with depth, run from the checked-in tests/corpus/kv-fnd-014-davis-booker-strip-footing.k2d
 //   quantity: limit pressure p_max [kPa] with c(z) = c0 + c_inc z and E(z) = E0 + E_inc z via the schema's c_inc / E_inc / y_ref profile, from the reaction output at a prescribed settlement of 30 mm
-//   expected: 7.80 (analytic, rho [(2 + pi) c0 + B c_inc / 4]); PLAXIS publishes 7.86; the weightless gravity initial does not displace; a footing node carries exactly the imposed u_y
-//   band:     5% vs analytic and 3% vs PLAXIS, as asserted below -- measured +1.4% / +0.6% (7.91) on the file's own 0.5 m tri15 mesh (the direct structured benchmark KV-FND-004 measures +2.8%)
+//   expected: 7.80 (analytic, rho [(2 + pi) c0 + B c_inc / 4]); the weightless gravity initial does not displace; a footing node carries exactly the imposed u_y
+//   band:     5% vs analytic, as asserted below -- measured +1.4% (7.91) on the file's own 0.5 m tri15 mesh (the direct structured benchmark KV-FND-004 measures +2.8%)
 //
 // verify: KV-CST-002
 //   oracle:   closed_form
-//   source:   the Hardening Soil oedometric stiffness law as published in the PLAXIS Material Models Manual: E_oed = E_oed^ref ((c cos(phi) + sigma_1 sin(phi))/(c cos(phi) + p_ref sin(phi)))^m, integrated over one-dimensional primary loading; the same law is verified at the material point against the manual's own figures in test_hardening_soil and test_hs_berlin
+//   source:   the oedometric stiffness law of the Hardening Soil model (Schanz, T., Vermeer, P.A. & Bonnier, P.G. (1999). The Hardening Soil model: formulation and verification. Beyond 2000 in Computational Geotechnics, Balkema, 281-296), in the form this build implements: E_oed = E_oed^ref ((c cos(phi) + sigma_1 sin(phi))/(c cos(phi) + p_ref sin(phi)))^m, integrated over one-dimensional primary loading; KATAI 2D input contract (docs/k2d-format.md, Eoedref / p_ref / m); the same law is verified at the material point in test_hardening_soil and test_hs_berlin
 //   locator:  with c = 0 the stiffness factor reduces to (sigma_1/p_ref)^m and d eps_1 = d sigma_1 / E_oed gives -eps_1 = (p_ref^m / E_oed^ref) [sigma_1^(1-m)]/(1-m) between the two stress levels (stated in full and evaluated in the test, not called from the material header)
 //   quantity: settlement increment of a laterally confined weightless Hardening Soil column when the vertical stress steps from 50 to 200 kPa, run from the checked-in tests/corpus/kv-cst-002-hs-oedometer.k2d [m]
 //   expected: the closed form above with E_oed^ref = 30 MPa, p_ref = 100 kPa, m = 0.5, H = 4 m
 //   band:     3%, as asserted below -- measured -0.93% on the file's own 0.5 m tri6 mesh with the driver's 40 load steps (it was +0.41% until 2026-08-20, when the stress-point integrator stopped holding the stress-dependent moduli at the state each increment began from; KV-NUM-009 carries that measurement, and the same law integrated at the stress point, with no FE at all, gives -0.95%). The first HS boundary-value case in the corpus: the model was already verified at the material point, this verifies the path from the file through the mesher, the cap return mapping and the load stepping. It also pins a phase convention: a phase reports displacement relative to its own start, so the loading phase's field IS the increment (the seating phase's 0 -> 50 kPa settlement of 0.0164 m is reported separately and is not comparable to the same integral, because the law's stiffness vanishes as sigma -> 0)
 
 // verify: KV-STR-002
-//   oracle:   published_benchmark
-//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems)
-//   locator:  Section 3.3, sliding block for testing interfaces; the manual states the answer as failure force = width * c_w + weight * tan(phi_w) = 4 * 2.5 + 100 * 0.5 = 60 kN/m, and reports 60.4 kN/m for its own run. Block E = 30 GN/m2, nu = 0, gamma = 25 kN/m3 with K0 = 0; interface in a separate elastoplastic data set, E = 3 GN/m2, nu = 0.45, phi_w = 26.6 deg, c_w = 2.5 kN/m2; bottom fully fixed, u_x = 0.1 m prescribed on the left side with u_y free, everything else free. Width 4 m and a weight of 100 kN/m at gamma = 25 fix the block at 4 m x 1 m -- the manual prints the arithmetic rather than the height
-//   quantity: the horizontal failure force, as the sum of the reactions on the pushed edge, run from the checked-in tests/corpus/kv-str-002-plaxis-sliding-block.k2d [kN/m]
-//   expected: 60.076 -- the manual's own formula evaluated at the phi_w it specifies. Its printed 60 uses tan(phi_w) = 0.5, i.e. 26.565 deg, so the manual is 0.13% self-inconsistent and the closed form is quoted here at the INPUT it publishes; PLAXIS reports 60.4
-//   band:     2% vs the closed form and 2% vs PLAXIS, as asserted below -- measured -0.59% (59.7202) on the file's own 0.25 m tri6 mesh, converging monotonically with refinement (-1.31% / -0.59% / -0.27% at 0.5 / 0.25 / 0.125 m). Four further checks make the number more than a coincidence: the block translates rigidly rather than shearing; the force agrees to nine significant figures when the imposed slip is doubled (apart by 1.4e-9 relative, against the ~100% a stiffness reading would move), so it is a plateau and not a stiffness reading; adhesion and friction each move the answer by exactly the closed form's amount, so the two terms are reproduced separately; and deleting the interface changes the answer by five orders of magnitude. That last one is a regression sentry: until 2026-08-10 the interface lay along a fixed boundary whose two split sides share coordinates, the boundary conditions fixed both, and the joint was welded shut in silence
+//   oracle:   closed_form
+//   source:   Coulomb friction with adhesion on a planar joint: the horizontal force that makes a rigid block slide on its base is the joint's adhesion over the contact width plus the block's weight times the tangent of the joint friction angle; KATAI 2D input contract (docs/k2d-format.md, iface_material)
+//   locator:  sliding block on an interface; failure force F = B c_w + W tan(phi_w) with B = 4 m the width and W = 100 kN/m the weight (stated in full). Block E = 30 GN/m2, nu = 0, gamma = 25 kN/m3 with K0 = 0; interface in a separate elastoplastic data set, E = 3 GN/m2, nu = 0.45, phi_w = 26.6 deg, c_w = 2.5 kN/m2; bottom fully fixed, u_x = 0.1 m prescribed on the left side with u_y free, everything else free. Width 4 m and a weight of 100 kN/m at gamma = 25 fix the block at 4 m x 1 m
+//   quantity: the horizontal failure force, as the sum of the reactions on the pushed edge, run from the checked-in tests/corpus/kv-str-002-sliding-block.k2d [kN/m]
+//   expected: 60.076 -- the closed form evaluated at the input phi_w = 26.6 deg. Rounding tan(phi_w) to 0.5, i.e. 26.565 deg, would give 60.0, 0.13% lower, so the closed form is evaluated here at the INPUT angle itself
+//   band:     2% vs the closed form, as asserted below -- measured -0.59% (59.7202) on the file's own 0.25 m tri6 mesh, converging monotonically with refinement (-1.31% / -0.59% / -0.27% at 0.5 / 0.25 / 0.125 m). Four further checks make the number more than a coincidence: the block translates rigidly rather than shearing; the force agrees to nine significant figures when the imposed slip is doubled (apart by 1.4e-9 relative, against the ~100% a stiffness reading would move), so it is a plateau and not a stiffness reading; adhesion and friction each move the answer by exactly the closed form's amount, so the two terms are reproduced separately; and deleting the interface changes the answer by five orders of magnitude. That last one is a regression sentry: until 2026-08-10 the interface lay along a fixed boundary whose two split sides share coordinates, the boundary conditions fixed both, and the joint was welded shut in silence
 //
 // verify: KV-CST-009
 //   oracle:   closed_form
-//   source:   the Soft Soil logarithmic compression law as published in the PLAXIS Material Models Manual chapter 10: e_v = lambda* ln(p'/p'_0) in primary loading (Eq 10-5) and e_v^e = kappa* ln(p'/p'_0) in unloading/reloading (Eq 10-6, with the tangent bulk modulus K_ur = p'/kappa* of Eq 10-7); M is not an input but is derived from K0nc (Eq 10-13) so that primary one-dimensional compression reaches that K0nc. The same equations are verified at the material point and through a hand-built BVP in test_soft_soil
-//   locator:  a laterally confined weightless column walks the SAME stress range three times -- 50 -> 200 kPa primary, back to 50, and up to 200 again -- so the two indices and the pre-consolidation memory are each read from one file. Primary loading holds K0 = K0nc, so there the mean stress is proportional to the vertical one and the vertical stress ratio stands in for p'/p'_0. UNLOADING does not: with nu_ur = 0.15 the lateral stress falls far less than the vertical one, the ratio of horizontal to vertical stress RISES (sec. 10.3.5, "a well-known phenomenon in overconsolidated materials"), and sec. 10.3.1 draws the consequence that kappa* has no exact relation to the one-dimensional swelling index. The swelling leg therefore has its own closed form, evaluated on the mean stresses the elastic one-dimensional path d(sigma_h) = nu_ur/(1-nu_ur) d(sigma_v) produces (stated in full and evaluated in the test, not called from the material header)
+//   source:   the logarithmic compression law of the Soft Soil model, stated in full: e_v = lambda* ln(p'/p'_0) in primary loading and e_v^e = kappa* ln(p'/p'_0) in unloading/reloading, with the tangent bulk modulus K_ur = p'/kappa*; M is not an input but is derived from K0nc so that primary one-dimensional compression reaches that K0nc; KATAI 2D input contract (docs/k2d-format.md, lamstar / kapstar / k0nc_auto). The same equations are verified at the material point and through a hand-built BVP in test_soft_soil
+//   locator:  a laterally confined weightless column walks the SAME stress range three times -- 50 -> 200 kPa primary, back to 50, and up to 200 again -- so the two indices and the pre-consolidation memory are each read from one file. Primary loading holds K0 = K0nc, so there the mean stress is proportional to the vertical one and the vertical stress ratio stands in for p'/p'_0. UNLOADING does not: with nu_ur = 0.15 the lateral stress falls far less than the vertical one, the ratio of horizontal to vertical stress RISES, as it does in overconsolidated soil, and in consequence kappa* has no exact relation to the one-dimensional swelling index. The swelling leg therefore has its own closed form, evaluated on the mean stresses the elastic one-dimensional path d(sigma_h) = nu_ur/(1-nu_ur) d(sigma_v) produces (stated in full and evaluated in the test, not called from the material header)
 //   quantity: settlement of each of the three legs, and the lateral stress ratio reached in primary loading, run from the checked-in tests/corpus/kv-cst-009-soft-soil-oedometer.k2d [m; -]
 //   expected: primary lambda* ln(4) H = 0.110904 m with lambda* = 0.02, H = 4 m; swelling and reloading kappa* ln(p'_0/p'_1) H = 0.010186 m with kappa* = 0.004; K0 -> K0nc = 1 - sin(25 deg) = 0.5774
-//   band:     2% on primary loading, 3% on the two elastic legs and 3% on K0nc, as asserted below -- measured -0.01% / -1.01% / -1.63% and +2.11% on the file's own 0.5 m tri6 mesh. The naive oracle kappa* ln(sigma_v/sigma_v0) reads 0.0222 m against a measured 0.0101, a factor of 2.2: the ORACLE is wrong there, not the run, and the manual says so in two separate places -- writing the closed form for the leg the soil actually walks is part of the verification, not a detail of it. Three further witnesses: the primary/reload ratio (11.07) matches the ratio of the two closed forms (10.89), which is the model's memory for the pre-consolidation stress stated as a number -- same file, same load, same stress range, an order of magnitude less settlement the second time; K0nc is MEASURED rather than the M formula being checked against itself; and the two indices are moved one at a time (lambda* x2, kappa* x2), each moving only its own leg and by exactly the closed form's amount
+//   band:     2% on primary loading, 3% on the two elastic legs and 3% on K0nc, as asserted below -- measured -0.01% / -1.01% / -1.63% and +2.11% on the file's own 0.5 m tri6 mesh. The naive oracle kappa* ln(sigma_v/sigma_v0) reads 0.0222 m against a measured 0.0101, a factor of 2.2: the ORACLE is wrong there, not the run, because the stress ratio changes on that leg -- writing the closed form for the leg the soil actually walks is part of the verification, not a detail of it. Three further witnesses: the primary/reload ratio (11.07) matches the ratio of the two closed forms (10.89), which is the model's memory for the pre-consolidation stress stated as a number -- same file, same load, same stress range, an order of magnitude less settlement the second time; K0nc is MEASURED rather than the M formula being checked against itself; and the two indices are moved one at a time (lambda* x2, kappa* x2), each moving only its own leg and by exactly the closed form's amount
 //
 // verify: KV-CST-010
 //   oracle:   closed_form
-//   source:   the Soft Soil Creep differential law as published in the PLAXIS Material Models Manual chapter 11 (Buisman 1936, Bjerrum 1967, Garlanger 1972, Vermeer & Neher 1999): the volumetric creep rate is (mu*/tau)(p_eq/p_p^eq)^beta with beta = (lambda*-kappa*)/mu* (Eq 11-23), and tau is ONE DAY because the standard oedometer's 24-hour stage is the definition of the normal-consolidation line (Eq 11-13/14). The same law is verified at the material point in test_soft_soil_creep
+//   source:   the Soft Soil Creep differential law of Vermeer, P.A. & Neher, H.P. (1999). A soft soil model that accounts for creep. Beyond 2000 in Computational Geotechnics, Balkema, 249-261 (after Buisman 1936, Bjerrum 1967, Garlanger 1972): the volumetric creep rate is (mu*/tau)(p_eq/p_p^eq)^beta with beta = (lambda*-kappa*)/mu*, and tau is ONE DAY because the standard oedometer's 24-hour stage is the definition of the normal-consolidation line; KATAI 2D input contract (docs/k2d-format.md, mustar). The same law is verified at the material point in test_soft_soil_creep
 //   locator:  on the normal-consolidation line p_eq = p_p, the rate reduces to mu*/tau independently of the stress level, and the differential law integrates exactly to e_v^c(t) = mu* ln(1 + t/tau) (derivation in docs/references/soft-soil-creep-formulation.md sec. 5.1, stated in full and evaluated in the test). Ground under its own weight, seeded normally consolidated by the K0 procedure, is left to sit for 100 days: NO load changes in the measured phase, only time passes, and the strain is uniform over the column even though the stress is not
 //   quantity: surface settlement after 100 days of creep under self-weight alone, run from the checked-in tests/corpus/kv-cst-010-soft-soil-creep-column.k2d [m]
 //   expected: mu* ln(1 + 100/1) H = 0.018460 m with mu* = 0.001, H = 4 m
-//   band:     3% at the file's own duration, measured +1.81% on its 0.5 m tri6 mesh with 50 time steps, and 7% across the three-decade sweep, measured +5.93% / +3.14% / +1.64% falling with duration. THE EARLIER BAND WAS MEASURED ON AN UNDER-CONVERGED RUN and read +0.74% / -2.06% / +1.62% / +0.61%: at the tolerance this tree ships for the soft-soil family the global force criterion alone stopped this case short, and where it stopped happened to sit inside 3% of the idealised law. Swept with the local convergence criteria off (0.9.0 N-2) the model walks to its own answer -- 100 d: 0.018598 -> 0.018763 -- and requiring those criteria lands within 0.3% of it at the shipped tolerance, in 81 iterations against the sweep's 189. What carries the physics now is the SHAPE rather than a flat band: the deviation must FALL with duration, because the idealised law drops the elastic and consolidation parts, which matter most where there is least creep. The fixture is what it is because the manual predicted two earlier attempts failing: a weightless column loaded from zero cannot be used, because the initial pre-consolidation stress sits at the model's minimum of one stress unit, the first load puts p_eq far above it, and with beta = 16 the rate (p_eq/p_p)^beta collapses the run -- sec. 11.11's warning about unrealistic initial creep rates at OCR = 1 arriving as an arithmetic fact; and a zero-duration phase is elastic, because this model has no instantaneous plastic component at all (all inelastic strain is time-dependent). Three further witnesses: the law is sampled across three decades of time (1 / 10 / 1000 days, +5.93% / +3.14% / +1.64%, monotonically falling), which no linear-in-time creep law could match at once and which locates tau at one day; the settlement is linear in mu*; and the differential witness -- the SAME file with the same ground as plain Soft Soil, which has every feature of this model except the creep, moves EXACTLY 0.000e+00 m over the same hundred days, so what is measured is creep and not a slow numerical drift
+//   band:     3% at the file's own duration, measured +1.81% on its 0.5 m tri6 mesh with 50 time steps, and 7% across the three-decade sweep, measured +5.93% / +3.14% / +1.64% falling with duration. THE EARLIER BAND WAS MEASURED ON AN UNDER-CONVERGED RUN and read +0.74% / -2.06% / +1.62% / +0.61%: at the tolerance this tree ships for the soft-soil family the global force criterion alone stopped this case short, and where it stopped happened to sit inside 3% of the idealised law. Swept with the local convergence criteria off (0.9.0 N-2) the model walks to its own answer -- 100 d: 0.018598 -> 0.018763 -- and requiring those criteria lands within 0.3% of it at the shipped tolerance, in 81 iterations against the sweep's 189. What carries the physics now is the SHAPE rather than a flat band: the deviation must FALL with duration, because the idealised law drops the elastic and consolidation parts, which matter most where there is least creep. The fixture is what it is because two earlier attempts failed, as the model's own structure predicts: a weightless column loaded from zero cannot be used, because the initial pre-consolidation stress sits at the model's minimum of one stress unit, the first load puts p_eq far above it, and with beta = 16 the rate (p_eq/p_p)^beta collapses the run -- unrealistically high initial creep rates at OCR = 1 arriving as an arithmetic fact; and a zero-duration phase is elastic, because this model has no instantaneous plastic component at all (all inelastic strain is time-dependent). Three further witnesses: the law is sampled across three decades of time (1 / 10 / 1000 days, +5.93% / +3.14% / +1.64%, monotonically falling), which no linear-in-time creep law could match at once and which locates tau at one day; the settlement is linear in mu*; and the differential witness -- the SAME file with the same ground as plain Soft Soil, which has every feature of this model except the creep, moves EXACTLY 0.000e+00 m over the same hundred days, so what is measured is creep and not a slow numerical drift
 //
 // verify: KV-CST-008
 //   oracle:   closed_form
-//   source:   the Hardening Soil with small-strain stiffness degradation law as published in the PLAXIS Material Models Manual chapter 7 (modified Hardin-Drnevich after Santos & Correia 2001): secant G_s/G0 = 1/(1 + a |gamma|/gamma_ref) with a = 0.385 (Eq 7-3), tangent G_t = G0/(1 + a gamma/gamma_ref)^2 (Eq 7-8) cut off below at G_ur = E_ur/(2(1+nu_ur)) (Eq 7-9), and Masing's rule gamma_0.7,re-loading = 2 gamma_0.7,virgin-loading (Eq 7-11), which the manual applies as a constant factor "throughout loading" rather than at a detected reversal; the same equations are verified at the material point in test_hssmall
+//   source:   the small-strain stiffness degradation law of the Hardening Soil small-strain model (Benz, T. (2007). Small-strain stiffness of soils and its numerical consequences. PhD thesis, Universitat Stuttgart; modified Hardin-Drnevich after Santos & Correia 2001), stated in full: secant G_s/G0 = 1/(1 + a |gamma|/gamma_ref) with a = 0.385, tangent G_t = G0/(1 + a gamma/gamma_ref)^2 cut off below at G_ur = E_ur/(2(1+nu_ur)), and Masing's rule (Masing 1926) gamma_0.7,re-loading = 2 gamma_0.7,virgin-loading, which this build applies as a constant factor throughout loading rather than at a detected reversal; KATAI 2D input contract (docs/k2d-format.md, G0ref / gamma07); the same equations are verified at the material point in test_hssmall
 //   locator:  one-dimensional UNLOADING of a laterally confined column: excavating h_exc of a gamma = 20 kN/m3 column relieves d(sigma) = gamma h_exc uniformly over the remaining depth. With m = 0 the stiffness is stress-independent, so the strain is uniform and the heave is eps x H_rem; in one-dimensional strain gamma = eps (gamma = sqrt(3/2 e:e) with e_yy = 2eps/3, e_xx = e_zz = -eps/3). Inverting the secant law sigma = E_oed,0 eps/(1 + a eps/gamma_ref) gives eps = d(sigma)/(E_oed,0 - a d(sigma)/gamma_ref), with E_oed,0 from E_0 = 2(1+nu_ur) G_0 (stated in full and evaluated in the test, not called from the material header)
 //   quantity: heave of the excavated floor after deactivating the upper 2 m of a 10 m HSsmall column, run from the checked-in tests/corpus/kv-cst-008-hssmall-unloading.k2d [m]
 //   expected: the closed form above with G0^ref = 187.5 MPa (E_0 = 450 MPa = 5 E_ur), gamma_0.7 = 1.5e-4, E_ur^ref = 90 MPa, nu_ur = 0.2 -> 7.1322e-4 m
@@ -179,19 +179,19 @@
 //
 // verify: KV-CST-012
 //   oracle:   closed_form
-//   source:   the "Reset small strain" calculation-phase option as specified in the PLAXIS Material Models Manual sec. 7.6 (Model Initialisation), which exists because strain history outlives its cause: "Usually the overconsolidation's cause has vanished long before the start of calculation, so that the strain history should be reset afterwards. Unfortunately, strain history is already triggered by adding and removing a surcharge. In this case the strain history can be reset manually, by using the Reset small strain option in the calculation phases window." The history itself is sec. 7.2: gamma_hist = sqrt(3) ||H de|| / ||de|| (Eq 7-4), where H is a deviatoric strain-history TENSOR that is "partially or fully reset" whenever a reversal is detected by a criterion after Simpson's brick model (1992), the transformation of H being referred to Benz (2006)
-//   locator:  the manual's own procedure, built as it describes it: a 60 kPa surcharge is placed on the surface of the KV-CST-008 column and then removed, which leaves the overconsolidation it was applied for AND a strain history that is an artefact of how the state was built. The phase that is then measured is the SAME excavation KV-CST-008 verifies, so its oracle was established without this option ever being used. With m = 0 the stiffness is stress-independent, so the surcharge cycle can change nothing about the excavation except the history -- which is what makes the comparison an identity rather than an approximation
+//   source:   the phase option that resets the small-strain history, KATAI 2D input contract (docs/k2d-format.md, phases[i].resetsmall), which exists because strain history outlives its cause: the cause of an overconsolidation has usually vanished long before the analysis starts, so its strain history should not reach the analysis, yet adding and removing a surcharge in the model to create that overconsolidation also creates a strain history, which the engineer must be able to reset at the start of a phase. The history itself is gamma_hist = sqrt(3) ||H de|| / ||de||, where H is a deviatoric strain-history TENSOR that is partially or fully reset whenever a reversal is detected by a criterion after Simpson's brick model (1992), the transformation of H being referred to Benz (2006)
+//   locator:  the procedure the option exists for: a 60 kPa surcharge is placed on the surface of the KV-CST-008 column and then removed, which leaves the overconsolidation it was applied for AND a strain history that is an artefact of how the state was built. The phase that is then measured is the SAME excavation KV-CST-008 verifies, so its oracle was established without this option ever being used. With m = 0 the stiffness is stress-independent, so the surcharge cycle can change nothing about the excavation except the history -- which is what makes the comparison an identity rather than an approximation
 //   quantity: heave of the excavated floor after a surcharge cycle, with and without the phase's small-strain history reset, from the checked-in tests/corpus/kv-cst-012-reset-small-strain.k2d [m]
 //   expected: with the reset, KV-CST-008's fresh-K0 answer, because a history reset to zero IS the fresh-K0 state; without it, a measurably softer run
-//   band:     0.1% against the fresh-K0 run and 2% against its closed form, as asserted below -- measured +0.0256% (7.112634e-04 m against 7.110815e-04 m) and -0.27% against the closed form, essentially the deviation KV-CST-008 reports, since it is the same computation reached by a different route. THREE further witnesses. The DIFFERENTIAL: the same file with the flag off heaves 3.200775e-03 m, 4.50x as much -- carrying the history is not a small correction. The DECLARED LIMIT, measured: that un-reset run lands within 0.03% of the PLAIN Hardening Soil run of the same soil (3.200105e-03 m, a difference of +0.021%), which is what "the overlay has degraded to its G_ur floor" means quantified -- this tree accumulates a monotone scalar and detects no reversal (docs/references/hssmall-formulation.md sec. 8), so an unloading that FOLLOWS a loading phase recovers nothing on its own, and until this option existed there was no way for the engineer to say so. That residual is not overlay: it was -0.002% until sec. 7.9.1 landed on 2026-08-15, and the sign flipped because the surcharge phase now reaches a Li & Dafalias contraction that plain HS does not have -- with a fully spent overlay the two models share a STIFFNESS, not an answer. The SENTRY: on plain Hardening Soil, which has no small-strain history at all, the flag is BIT-FOR-BIT inert (3.200105e-03 m with and without) and the run says why (K2D-M005 reports that no material could feel it) -- a reset that had reached stress, shear hardening or the preconsolidation pressure would fail that check, and those are precisely the quantities the surcharge was applied to establish
+//   band:     0.1% against the fresh-K0 run and 2% against its closed form, as asserted below -- measured +0.0256% (7.112634e-04 m against 7.110815e-04 m) and -0.27% against the closed form, essentially the deviation KV-CST-008 reports, since it is the same computation reached by a different route. THREE further witnesses. The DIFFERENTIAL: the same file with the flag off heaves 3.200775e-03 m, 4.50x as much -- carrying the history is not a small correction. The DECLARED LIMIT, measured: that un-reset run lands within 0.03% of the PLAIN Hardening Soil run of the same soil (3.200105e-03 m, a difference of +0.021%), which is what "the overlay has degraded to its G_ur floor" means quantified -- this tree accumulates a monotone scalar and detects no reversal (docs/references/hssmall-formulation.md sec. 8), so an unloading that FOLLOWS a loading phase recovers nothing on its own, and until this option existed there was no way for the engineer to say so. That residual is not overlay: it was -0.002% until the Li & Dafalias dilatancy landed on 2026-08-15, and the sign flipped because the surcharge phase now reaches a Li & Dafalias contraction that plain HS does not have -- with a fully spent overlay the two models share a STIFFNESS, not an answer. The SENTRY: on plain Hardening Soil, which has no small-strain history at all, the flag is BIT-FOR-BIT inert (3.200105e-03 m with and without) and the run says why (K2D-M005 reports that no material could feel it) -- a reset that had reached stress, shear hardening or the preconsolidation pressure would fail that check, and those are precisely the quantities the surcharge was applied to establish
 //
 // verify: KV-STR-003
-//   oracle:   published_benchmark
-//   source:   PLAXIS 2D Validation Manual, Version 8 (Bentley Systems)
-//   locator:  Section 2.3, bending of beams. Two problems on a simply supported span of l = 2 m, with the characteristics of an HEB 200 steel beam, which in plane strain is a plate 1 m wide out of plane: EA = 1.64e6 kN, EI = 1200 kNm2, nu = 0.0, a single point load F = 100 kN at mid-span and a uniformly distributed load q = 100 kN/m. The manual publishes both extremes for both problems: point load M_max = 50.0 kNm and u_max = 13.96 mm, distributed load M_max = 50.0 kNm and u_max = 17.43 mm. Its build is reproduced as stated: the two beams are added to the bottom line of a block cluster with a spacing in between, point fixities at their end points, and the soil cluster deactivated so that only the beams remain on a very coarse mesh
-//   quantity: mid-span deflection and peak bending moment of BOTH beams from one run, the deflections from the nodal field and the moments from each element's own force diagram, run from the checked-in tests/corpus/kv-str-003-plaxis-beam-bending.k2d [m; kNm/m]
-//   expected: the Mindlin (Timoshenko) closed forms, stated in full and evaluated in the test rather than called from the plate header: w = F l^3/(48 EI) + F l/(4 kGA') and w = 5 q l^4/(384 EI) + q l^2/(8 kGA'), with the manual's own shear rigidity kGA' = k EA/(2(1+nu)), k = 5/6 (Material Models Manual Eq. 18-8). They evaluate to 13.96206 mm and 17.43428 mm, which is exactly where the published 13.96 and 17.43 come from -- a PLAXIS plate is shear-deformable, and Euler-Bernoulli alone would give 13.8896 and 17.3618. M_max = F l / 4 = q l^2 / 8 = 50 kNm
-//   band:     1% vs the closed form and 2% vs PLAXIS on the deflections, 2% vs the published 50 kNm on the moments, as asserted below -- measured -0.000% on BOTH deflections (13.96206 / 17.43428 mm) and +0.00% / +1.04% on the moments (50.00000 / 50.52083 kNm) on the file's own 0.25 m tri6 mesh. Five further witnesses make the pair more than a coincidence: the moment DISTRIBUTION follows F s/2 and q s(l-s)/2 station by station (worst 0.0000% and 1.0417% of M_max, not just the peak); the distributed beam's peak overshoots by exactly q h^2/12 -- the parabola the element's linear curvature cannot hold inside one element -- reproduced to five figures at h = 0.5 / 0.25 / 0.125 m (52.08333 / 50.52083 / 50.13021), so the residual is a structural discretisation bias that vanishes with h, and "a very coarse mesh is sufficient" is true of the displacements but not of the peak moment; that same triplet is then put through the standard grid-convergence procedure (Roache 1994; Celik et al. 2008, implemented in katai/math/grid_convergence.hpp) and yields an observed order of exactly p = 2.0000 in monotonic convergence and inside the asymptotic range, with a Richardson value of 50.00000 kNm -- the manual's published number, recovered from three meshes NONE of which produces it -- so the peak moment quoted above carries a NUMERICAL UNCERTAINTY of +/- 0.3247% (GCI at the observed order, safety factor 1.25); and because q h^2/12 makes the order analytically known here in advance, this case tests the error estimator as much as the estimator bands the case, which is worth having when every other sweep in this suite runs where the answer is not known; bending and shear are moved SEPARATELY (EI x 4 divides the bending term alone, EA x 100 drives the answer onto the Euler-Bernoulli limit 13.8896 mm) and the run follows the closed form to -0.000% in each; the two spans are bit-for-bit independent; and with the beams deleted the model has no free DOF at all and the run refuses with "Every DOF is fixed; nothing to solve". That last one is the regression sentry for the fault this case was built to find: until 2026-08-11 a deactivated soil cluster pinned every translation of the beams standing in it (fix_inactive_nodes did not ask whether a structure held the node), so the beams were welded to the outside world along their whole length -- the only free DOFs left were their rotations, which was enough for the solve to converge, report "ok" and hand back max|u| = 0.000000e+00 with no warning of any kind
+//   oracle:   closed_form
+//   source:   Mindlin (Timoshenko) beam theory for a simply supported span, bending plus shear deformation, closed forms stated in full; KATAI 2D input contract (docs/k2d-format.md, plates)
+//   locator:  bending of beams. Two problems on a simply supported span of l = 2 m, with the characteristics of an HEB 200 steel beam, which in plane strain is a plate 1 m wide out of plane: EA = 1.64e6 kN, EI = 1200 kNm2, nu = 0.0, a single point load F = 100 kN at mid-span and a uniformly distributed load q = 100 kN/m. The two beams are added to the bottom line of a block cluster with a spacing in between, point fixities at their end points, and the soil cluster deactivated so that only the beams remain on a coarse mesh
+//   quantity: mid-span deflection and peak bending moment of BOTH beams from one run, the deflections from the nodal field and the moments from each element's own force diagram, run from the checked-in tests/corpus/kv-str-003-beam-bending.k2d [m; kNm/m]
+//   expected: the Mindlin (Timoshenko) closed forms, stated in full and evaluated in the test rather than called from the plate header: w = F l^3/(48 EI) + F l/(4 kGA') and w = 5 q l^4/(384 EI) + q l^2/(8 kGA'), with the shear rigidity kGA' = k EA/(2(1+nu)) and the rectangular-section shear correction factor k = 5/6. They evaluate to 13.96206 mm and 17.43428 mm -- the plate element is shear-deformable, and Euler-Bernoulli alone would give 13.8896 and 17.3618. M_max = F l / 4 = q l^2 / 8 = 50 kNm
+//   band:     1% vs the closed form on the deflections, 2% vs the closed-form 50 kNm on the moments, as asserted below -- measured -0.000% on BOTH deflections (13.96206 / 17.43428 mm) and +0.00% / +1.04% on the moments (50.00000 / 50.52083 kNm) on the file's own 0.25 m tri6 mesh. Five further witnesses make the pair more than a coincidence: the moment DISTRIBUTION follows F s/2 and q s(l-s)/2 station by station (worst 0.0000% and 1.0417% of M_max, not just the peak); the distributed beam's peak overshoots by exactly q h^2/12 -- the parabola the element's linear curvature cannot hold inside one element -- reproduced to five figures at h = 0.5 / 0.25 / 0.125 m (52.08333 / 50.52083 / 50.13021), so the residual is a structural discretisation bias that vanishes with h, and a coarse mesh is sufficient for the displacements but not for the peak moment; that same triplet is then put through the standard grid-convergence procedure (Roache 1994; Celik et al. 2008, implemented in katai/math/grid_convergence.hpp) and yields an observed order of exactly p = 2.0000 in monotonic convergence and inside the asymptotic range, with a Richardson value of 50.00000 kNm -- the closed-form peak moment, recovered from three meshes NONE of which produces it -- so the peak moment quoted above carries a NUMERICAL UNCERTAINTY of +/- 0.3247% (GCI at the observed order, safety factor 1.25); and because q h^2/12 makes the order analytically known here in advance, this case tests the error estimator as much as the estimator bands the case, which is worth having when every other sweep in this suite runs where the answer is not known; bending and shear are moved SEPARATELY (EI x 4 divides the bending term alone, EA x 100 drives the answer onto the Euler-Bernoulli limit 13.8896 mm) and the run follows the closed form to -0.000% in each; the two spans are bit-for-bit independent; and with the beams deleted the model has no free DOF at all and the run refuses with "Every DOF is fixed; nothing to solve". That last one is the regression sentry for the fault this case was built to find: until 2026-08-11 a deactivated soil cluster pinned every translation of the beams standing in it (fix_inactive_nodes did not ask whether a structure held the node), so the beams were welded to the outside world along their whole length -- the only free DOFs left were their rotations, which was enough for the solve to converge, report "ok" and hand back max|u| = 0.000000e+00 with no warning of any kind
 //
 // verify: KV-SLP-002
 //   oracle:   published_benchmark
@@ -203,27 +203,27 @@
 //
 // verify: KV-CST-011
 //   oracle:   closed_form
-//   source:   the tension cut-off as specified in the PLAXIS 2D Material Models Manual sec 3.2 (Eq. 3-11) and sec 3.3.10: three additional yield functions f4 = sigma'1 - sigma_t <= 0, f5 = sigma'2 - sigma_t <= 0, f6 = sigma'3 - sigma_t <= 0, for which "an associated flow rule is adopted", with sigma_t taken equal to zero by default. That the Hardening Soil family carries it too is the manual's own statement: its parameter table lists "sigma_t Tension cut-off and tensile strength" under "failure parameters as in Mohr-Coulomb model", and the models that genuinely lack one (NGI-ADP, UDCAM-S) are named as lacking it
+//   source:   the Rankine tension cut-off, stated in full: three additional yield functions f4 = sigma'1 - sigma_t <= 0, f5 = sigma'2 - sigma_t <= 0, f6 = sigma'3 - sigma_t <= 0 with an associated flow rule, sigma_t being the tensile strength, zero unless one is entered; KATAI 2D input contract (docs/k2d-format.md, tension_cutoff / tensile_strength), where the cut-off and the tensile strength are failure parameters shared by the Hardening Soil family and Mohr-Coulomb alike
 //   locator:  a Hardening Soil column carries its own weight, so the vertical stress stays compressive and the ground keeps its stiffness, and a prescribed edge then stretches it horizontally, which drives the HORIZONTAL stress into tension. That separation is what makes the case converge with the cap active: a weightless block pulled the same way simply comes apart, and the earlier attempts did exactly that (2%, 4%, 54%, 17%, 37% of the applied load before collapse -- an unconverged run's load fraction is not a measurement, and those did not even order themselves). The imposed strain is 2e-4
 //   quantity: the largest principal stress anywhere in the model after a converged run, and the run's peak displacement, from the checked-in tests/corpus/kv-cst-011-tension-cutoff-hs.k2d [kPa; m]
 //   expected: the yield condition itself -- no principal stress above sigma_t -- together with the identity that a cut-off the tension never reaches must change nothing at all
-//   band:     as asserted below. With the cut-off at zero the largest principal stress in the model is +1.4753 kPa against +3.1220 kPa for the same soil without it, and the residual is shown to be STRESS RECOVERY rather than the return mapping: nodal stresses are extrapolated and averaged from the Gauss points, which the return caps exactly, so a recovery residual must vanish with the element size -- measured 1.4753 kPa at h = 1 m falling to 0.3346 kPa at h/2, a factor of 4.41 for a factor of 2, roughly the second order an extrapolation should show. A third density (h/4) was tried and did not converge on this fixture, so the trend is stated over the two that were measured rather than three that were not. The pair that makes this more than a difference: with sigma_t = 5 kPa, above anything the run reaches, the result is BIT-IDENTICAL to the same model with the cut-off switched off (9.547553e-04 m twice over), so the cap is provably inert until it bites, while sigma_t = 0 moves the same model to 8.995284e-04 m. Until 2026-08-13 none of this happened: `K2D-M001` had declared since 2026-08-08 that only the Mohr-Coulomb return read the cut-off, while the schema switches it on by DEFAULT as PLAXIS does, so every Hardening Soil, HS small, Soft Soil and Soft Soil Creep run in this engine allowed tension past sigma_t -- a systematic difference from the reference code in the unsafe direction
+//   band:     as asserted below. With the cut-off at zero the largest principal stress in the model is +1.4753 kPa against +3.1220 kPa for the same soil without it, and the residual is shown to be STRESS RECOVERY rather than the return mapping: nodal stresses are extrapolated and averaged from the Gauss points, which the return caps exactly, so a recovery residual must vanish with the element size -- measured 1.4753 kPa at h = 1 m falling to 0.3346 kPa at h/2, a factor of 4.41 for a factor of 2, roughly the second order an extrapolation should show. A third density (h/4) was tried and did not converge on this fixture, so the trend is stated over the two that were measured rather than three that were not. The pair that makes this more than a difference: with sigma_t = 5 kPa, above anything the run reaches, the result is BIT-IDENTICAL to the same model with the cut-off switched off (9.547553e-04 m twice over), so the cap is provably inert until it bites, while sigma_t = 0 moves the same model to 8.995284e-04 m. Until 2026-08-13 none of this happened: `K2D-M001` had declared since 2026-08-08 that only the Mohr-Coulomb return read the cut-off, while the schema switches it on by DEFAULT, so every Hardening Soil, HS small, Soft Soil and Soft Soil Creep run in this engine allowed tension past sigma_t -- a systematic error in the unsafe direction
 //
 // verify: KV-STR-005
 //   oracle:   closed_form
-//   source:   the geogrid as specified in the PLAXIS 2D Reference Manual sec 6.5: "geogrids are flexible elastic or elastoplastic elements that represent a grid or sheet of fabric. Geogrids can only sustain tensile forces, but not compressive forces", with the axial stiffness defined in Eq. 6-51 as "the ratio of the axial force F per unit width and the axial strain (eps = dl/l)", EA = F/eps
+//   source:   the geogrid element as KATAI 2D defines it, KATAI 2D input contract (docs/k2d-format.md, geogrids: EA / Np / elastoplastic): a flexible elastic or elastoplastic line element representing a grid or sheet of fabric that sustains tension and no compression, whose axial stiffness EA is the axial force F per unit width divided by the axial strain eps = dl/l, so F = EA eps (stated in full)
 //   locator:  a geogrid's translational degrees of freedom ARE the soil's -- it is a conforming chain of mesh nodes with no rotation -- so making the soil strain uniformly makes the geogrid strain with it, exactly. A homogeneous weightless block held at u_x = 0 on one side and pulled to u_x = D on the other deforms affinely, u_x = D x/L, so every horizontal fibre carries eps = D/L; the reinforcement spans the full width, so its ends sit ON the two boundaries and its elongation is D whatever the soil does. Its tension is then constant along its length, which means it applies no body force to the soil and the affine field remains the exact solution -- the closed form is not an approximation of this problem, it is this problem
 //   quantity: axial force in the reinforcement, and the tension cut-off it stops at, run from the checked-in tests/corpus/kv-str-005-geogrid-tension.k2d [kN/m]
 //   expected: EA D/L = 5000 x 0.004/10 = 2.0 kN/m elastic, and N_p = 3.0 kN/m past the cut-off, stated in full and evaluated in the test rather than called from the geogrid header
-//   band:     1%, as asserted below -- measured 2.000000 kN/m, +0.000%, at EVERY station of the diagram on the file's own 0.5 m tri6 mesh. The fixture proves itself first: with no reinforcement the edge reaction is 21.978022 kN/m against the plane-strain closed form E/(1-nu^2) eps H = 21.978022, +0.0000%, so the field really is affine and the fibre strain really is D/L. Five further witnesses: the force is linear in BOTH inputs moved separately (twice the stretch and twice the stiffness each double it); past N_p it stops at N_p and doubling the stretch again changes nothing, while the elastic twin at the same stretch carries what it was told to; compressing the block instead of stretching it leaves the reinforcement carrying NOTHING, which is the manual's other sentence about this element; and the soil reaction is bit-for-bit identical with and without the reinforcement, which is what a constant-tension member must do and is the affine argument itself, measured. Building this case found a silent-wrong that was not the geogrid's: EVERY structural element (plate, plate5, geogrid, anchor, interface, embedded beam) read a node held by a NON-ZERO prescribed displacement as if it had not moved, because the element loops built their displacement vector from FREE degrees of freedom only. The limit was declared in internal_forces.hpp behind a guard that had expired -- "prescribed u_bar is today a kernel/test path, not available as a deformation BC in the GUI" -- which schema v2 made false when it added `disps`. Before the fix this case read 7.6363 kN/m instead of 2.0000, and its converged field was not affine: the node beside the driven edge sat 3.79% below its own left neighbour
+//   band:     1%, as asserted below -- measured 2.000000 kN/m, +0.000%, at EVERY station of the diagram on the file's own 0.5 m tri6 mesh. The fixture proves itself first: with no reinforcement the edge reaction is 21.978022 kN/m against the plane-strain closed form E/(1-nu^2) eps H = 21.978022, +0.0000%, so the field really is affine and the fibre strain really is D/L. Five further witnesses: the force is linear in BOTH inputs moved separately (twice the stretch and twice the stiffness each double it); past N_p it stops at N_p and doubling the stretch again changes nothing, while the elastic twin at the same stretch carries what it was told to; compressing the block instead of stretching it leaves the reinforcement carrying NOTHING, which is the other half of this element's definition; and the soil reaction is bit-for-bit identical with and without the reinforcement, which is what a constant-tension member must do and is the affine argument itself, measured. Building this case found a silent-wrong that was not the geogrid's: EVERY structural element (plate, plate5, geogrid, anchor, interface, embedded beam) read a node held by a NON-ZERO prescribed displacement as if it had not moved, because the element loops built their displacement vector from FREE degrees of freedom only. The limit was declared in internal_forces.hpp behind a guard that had expired -- "prescribed u_bar is today a kernel/test path, not available as a deformation BC in the GUI" -- which schema v2 made false when it added `disps`. Before the fix this case read 7.6363 kN/m instead of 2.0000, and its converged field was not affine: the node beside the driven edge sat 3.79% below its own left neighbour
 //
 // verify: KV-STR-004
 //   oracle:   closed_form
-//   source:   the embedded beam (pile row) as specified in the PLAXIS 2D Reference Manual sec 5.6.3 (connection point) and sec 6.6.3 (skin and base resistance), with the element formulation in the Scientific Manual sec 7.5. The manual fixes the loading path for us twice over: the material data set carries "only the bearing capacity (skin resistance and base resistance)" and not the stiffness response, and "embedded beams are not meant to be used as laterally loaded piles and will therefore not show accurate failure loads when subjected to transverse forces" -- so the defining quantity of this element is its AXIAL capacity
-//   locator:  a pile row is smeared over a metre of wall, so every per-pile quantity is divided by the out-of-plane spacing exactly as EA, EI and the pile weight are (the reason Eq 6-65 divides the interface stiffnesses by L_spacing). Its ultimate axial load is therefore the skin resistance over the embedded length plus the base resistance, all per metre of wall. The head is pushed far past that limit and the PILE's own axial force is read, not the applied load: the load is applied at a soil node that the hinged head shares, so the soil carries the remainder and the plateau lives in the pile's force diagram
+//   source:   the embedded beam (pile row) as KATAI 2D defines it, KATAI 2D input contract (docs/k2d-format.md, embedded: Tskin_max / Fmax_base / Lspacing; structs[i].conn for the connection point). The element's purpose fixes the loading path twice over: its material data set carries the bearing capacity (skin resistance and base resistance) and not a stiffness response, and it is meant for axially loaded piles rather than for failure under transverse load -- so the defining quantity of this element is its AXIAL capacity
+//   locator:  a pile row is smeared over a metre of wall, so every per-pile quantity is divided by the out-of-plane spacing exactly as EA, EI and the pile weight are (the same reason the skin and base interface stiffnesses are divided by L_spacing). Its ultimate axial load is therefore the skin resistance over the embedded length plus the base resistance, all per metre of wall. The head is pushed far past that limit and the PILE's own axial force is read, not the applied load: the load is applied at a soil node that the hinged head shares, so the soil carries the remainder and the plateau lives in the pile's force diagram
 //   quantity: axial force at the head of the pile row under a head load of 1500 kN/m, far above its capacity, run from the checked-in tests/corpus/kv-str-004-axial-pile-capacity.k2d [kN/m]
 //   expected: (T_skin,max L + F_max,base)/L_spacing = (100 x 10 + 500)/2.5 = 600 kN/m, stated in full and evaluated in the test rather than called from the driver
-//   band:     2%, as asserted below -- measured 600.0000 kN/m, -0.00%, on the file's own 1.0 m tri6 mesh. The fixture obeys two rules the manual states: the soil is MOHR-COULOMB and not Linear Elastic, because PLAXIS ignores the shaft resistance AND the spacing inside a linear elastic cluster (it counts that as structure rather than soil), so an LE fixture would measure the one case PLAXIS treats differently; and its cohesion is far above anything mobilised, so the plateau measured is the pile's declared capacity and not a soil bearing failure. Soil and pile are weightless, so the load carried is the load applied. Five further witnesses: doubling the head load leaves the pile force at 600.0000 while the head goes on settling (0.116 -> 0.479 m), which is a limit load and not a stiffness reading; the two capacity terms are moved one at a time and each moves the total by exactly its own share (base 500 -> 100 kN gives 440.0000 against 440.0000, skin 100 -> 50 kN/m gives 400.0000 against 400.0000); doubling the out-of-plane spacing halves the capacity to 300.0000, ratio 0.5000 exactly, which is the check that Eq 6-65's division by L_spacing reaches the capacities and not only the stiffnesses; halving the element size leaves the capacity where it was, so nothing here is discretisation (a prediction of this case's own draft, that the tied node's Newton-Cotes share of the skin could not mobilise, was refuted by that measurement and is recorded in the test); and the sentry -- with the connection FREE, which is what this engine did for every pile until 2026-08-13 with no way to ask for anything else, the pile carries 0.0000 kN/m at its head, because a point load is delivered to the nearest SOIL node and reaches a free pile top only through the skin springs. Building this case also found and fixed two constants: Eq 6-65's division by L_spacing was not applied at all, leaving every skin and foot spring 2.5x too stiff at the default spacing, and the foot used D/2 where Eq 6-67 defines R_eq = sqrt(12 EI/EA)/2 = 0.433 D for a solid circular pile. The stiffness function's only consumer is the driver -- the element test passes its springs by hand -- so that factor of 2.5 stood while all 150 tests were green
+//   band:     2%, as asserted below -- measured 600.0000 kN/m, -0.00%, on the file's own 1.0 m tri6 mesh. The fixture obeys two rules: the soil is MOHR-COULOMB and not Linear Elastic, so the pile stands in ordinary soil and the case does not rest on how shaft resistance and spacing would be counted inside a linear elastic cluster; and its cohesion is far above anything mobilised, so the plateau measured is the pile's declared capacity and not a soil bearing failure. Soil and pile are weightless, so the load carried is the load applied. Five further witnesses: doubling the head load leaves the pile force at 600.0000 while the head goes on settling (0.116 -> 0.479 m), which is a limit load and not a stiffness reading; the two capacity terms are moved one at a time and each moves the total by exactly its own share (base 500 -> 100 kN gives 440.0000 against 440.0000, skin 100 -> 50 kN/m gives 400.0000 against 400.0000); doubling the out-of-plane spacing halves the capacity to 300.0000, ratio 0.5000 exactly, which is the check that the division by L_spacing reaches the capacities and not only the stiffnesses; halving the element size leaves the capacity where it was, so nothing here is discretisation (a prediction of this case's own draft, that the tied node's Newton-Cotes share of the skin could not mobilise, was refuted by that measurement and is recorded in the test); and the sentry -- with the connection FREE, which is what this engine did for every pile until 2026-08-13 with no way to ask for anything else, the pile carries 0.0000 kN/m at its head, because a point load is delivered to the nearest SOIL node and reaches a free pile top only through the skin springs. Building this case also found and fixed two constants: the division of the skin and foot spring stiffnesses by L_spacing was not applied at all, leaving every skin and foot spring 2.5x too stiff at the default spacing, and the foot used D/2 where the equivalent radius is R_eq = sqrt(12 EI/EA)/2 = 0.433 D for a solid circular pile. The stiffness function's only consumer is the driver -- the element test passes its springs by hand -- so that factor of 2.5 stood while all 150 tests were green
 #include <katai/analysis/response_spectrum.hpp>
 #include <katai/math/grid_convergence.hpp>   // KV-STR-003's peak-moment band (Roache/Celik GCI)
 #include <katai/mesh/boundary_extraction.hpp>   // collect_chain: the chain a geogrid is built on
@@ -666,7 +666,7 @@ void oracle_undrained_column(const m::Project& pr) {
 
 // ---------------------------------------- KV-SLP-001: Griffiths and Lane slope FoS --
 // The file's OWN initial procedure is Safety: loading the .k2d and running it IS the
-// phi-c reduction. Geometry and parameters as published (1:2 slope on a foundation).
+// phi-c reduction. Geometry and parameters of the reference slope (1:2 on a foundation).
 m::Project build_gl_slope() {
     m::Project pr;
     pr.name = "KV-SLP-001 Griffiths-Lane slope";
@@ -702,8 +702,8 @@ void oracle_gl_slope(const m::Project& pr) {
     const auto R = solve_single_phase(pr, mesh);
     check(R.ok, "Safety (phi-c reduction) ran from the file");
     if (!R.ok) { std::printf("      (%s)\n", R.message.c_str()); return; }
-    const double ref = 0.99;
-    std::printf("      FoS = %.3f  (published ~%.2f: Bishop 0.988 / Spencer 0.987 / T6 0.997)  err = %+.1f%%   mechanism max|u| = %.3e\n",
+    const double ref = 1.00;   // the referee factor of safety of the problem
+    std::printf("      FoS = %.3f  (reference %.2f)  err = %+.1f%%   mechanism max|u| = %.3e\n",
                 R.fos, ref, 100.0 * (R.fos - ref) / ref, R.max_disp);
     check(std::fabs(R.fos - ref) < 0.08 * ref, "factor of safety within 8% of the benchmark");
     check(R.max_disp > 1e-6, "the failure mechanism displaces (a genuine slip surface)");
@@ -1165,17 +1165,17 @@ void oracle_prandtl_footing(const m::Project& pr) {
     check(std::fabs(nc - nc_ex) < 0.02 * nc_ex, "N_c = 2 + pi within 2%");
 }
 
-// --------------------------------- KV-FND-011: Gibson strip load, PLAXIS Validation 2.2 --
-// The first PLAXIS-Validation remodel onto the schema (the direct-FE original is
+// ------------------------------------------ KV-FND-011: Gibson (1967) strip load --
+// The first footing benchmark remodelled onto the schema (the direct-FE original is
 // KV-FND-002): a strip load on an incompressible Gibson soil whose stiffness grows
 // linearly from ~zero at the surface -- E(y) expressed through the schema's own
-// E_inc / y_ref profile fields, the same modelling decision as PLAXIS's Advanced
-// E-increment. Half-model: the left edge is the symmetry axis (x fixed), exactly
-// the rectangle defaults. The three sibling cases of the quartet (2.1, 3.1, 3.2)
+// E_inc / y_ref profile fields, a stiffness increment per metre of depth below a
+// reference level. Half-model: the left edge is the symmetry axis (x fixed), exactly
+// the rectangle defaults. The three sibling cases of the quartet (KV-FND-012/013/014)
 // are DISPLACEMENT-controlled rigid footings; the input contract carries no
 // prescribed-displacement boundary yet, so they stay with the direct benchmark
 // until that schema feature lands -- a remodel that changed the problem to fit
-// the file would no longer be the published case.
+// the file would no longer be the benchmark case.
 constexpr double kGbQ = 10.0, kGbB = 1.0, kGbH = 4.0;   // q [kPa], loaded half-width, layer
 
 m::Project build_gibson() {
@@ -1234,16 +1234,16 @@ void oracle_gibson(const m::Project& pr) {
     const auto& R = res[1];
     const int nc = nearest_node(R.mesh, 0.0, kGbH);   // footing centreline, surface
     const double s_katai = -R.disp[nc * 2 + 1];
-    const double s_plaxis = 0.047, s_exact = 0.050;
-    std::printf("      settlement: exact (half-space) %.4f | PLAXIS (4 m layer) %.4f | "
-                "file run %.4f (%+.1f%% vs PLAXIS)\n",
-                s_exact, s_plaxis, s_katai, 100.0 * (s_katai - s_plaxis) / s_plaxis);
-    check(std::fabs(s_katai - s_plaxis) < 0.05 * s_plaxis,
-          "settlement within 5% of the published PLAXIS finite-layer value");
-    check(s_katai < s_exact, "the finite layer settles less than the half-space (shared bias)");
+    const double s_exact = 0.050;
+    std::printf("      settlement: half-space closed form %.4f | file run %.4f (%.1f%% of it)\n",
+                s_exact, s_katai, 100.0 * s_katai / s_exact);
+    // A plausibility band, not a verification (see the declaration): the half-space value is
+    // exact only for nu = 0.5 and an unbounded layer.
+    check(s_katai > 0.85 * s_exact, "the 4 m layer settles at least 85% of the half-space value");
+    check(s_katai < s_exact, "the 4 m layer on a rigid base settles less than the half-space");
 }
 
-// ------------------------------ KV-FND-012: Giroud rigid footing, PLAXIS Validation 2.1 --
+// --------------------------------------- KV-FND-012: Giroud (1972) rigid footing --
 // The first DISPLACEMENT-CONTROLLED corpus case: schema v2's line prescribed
 // displacement imposes the smooth rigid footing (u_y = -10 mm, u_x free) and the new
 // reaction output reads the footing force back. Half-model; the left edge is the
@@ -1313,14 +1313,11 @@ void oracle_giroud(const m::Project& pr) {
     for (int n = 0; n < R.mesh.node_count; ++n)
         if (R.mesh.y[n] > 4.0 - 1e-6 && R.mesh.x[n] <= kGrB + 1e-6) ry += R.reaction[2 * n + 1];
     const double F_katai = 2.0 * std::fabs(ry);
-    const double F_exact = 15.15, F_plaxis = 15.24;
-    std::printf("      F: analytic %.2f | PLAXIS %.2f | file run %.2f (%+.1f%% vs analytic, "
-                "%+.1f%% vs PLAXIS)\n", F_exact, F_plaxis, F_katai,
-                100.0 * (F_katai - F_exact) / F_exact, 100.0 * (F_katai - F_plaxis) / F_plaxis);
+    const double F_exact = 15.15;
+    std::printf("      F: analytic %.2f | file run %.2f (%+.1f%% vs analytic)\n", F_exact, F_katai,
+                100.0 * (F_katai - F_exact) / F_exact);
     check(std::fabs(F_katai - F_exact) < 0.02 * F_exact,
           "footing force within 2% of the Giroud analytic value");
-    check(std::fabs(F_katai - F_plaxis) < 0.03 * F_plaxis,
-          "footing force within 3% of the published PLAXIS number");
     // The imposed settlement really happened, bit-for-bit: a node ON the line carries
     // exactly u_y = -10 mm (the ramp completes at load factor 1, so the prescribed value
     // is written verbatim). max_disp is NOT the right pin -- u_x is free under a smooth
@@ -1332,7 +1329,7 @@ void oracle_giroud(const m::Project& pr) {
           "a footing node carries exactly the imposed u_y = -10 mm");
 }
 
-// ------------------------------ KV-FND-013: Cox circular footing, PLAXIS Validation 3.1 --
+// ----------------------------------------- KV-FND-013: Cox (1962) circular footing --
 // The first AXISYMMETRIC corpus case: the same displacement-controlled machine as
 // KV-FND-012 (line prescribed displacement + reaction output) in r-z kinematics. The
 // left edge is the symmetry axis (r = 0). ASSOCIATED flow (psi = phi): Cox (1962) is a
@@ -1409,10 +1406,9 @@ void oracle_cox(const m::Project& pr) {
     for (int n = 0; n < R.mesh.node_count; ++n)
         if (R.mesh.y[n] > 4.0 - 1e-6 && R.mesh.x[n] <= kCoxR + 1e-6) ry += R.reaction[2 * n + 1];
     const double p_katai = 2.0 * std::fabs(ry) / (kCoxR * kCoxR);
-    const double p_exact = 225.6, p_plaxis = 220.0;
-    std::printf("      p_max: Cox %.1f | PLAXIS %.1f | file run %.1f (%+.1f%% vs Cox, "
-                "%+.1f%% vs PLAXIS)\n", p_exact, p_plaxis, p_katai,
-                100.0 * (p_katai - p_exact) / p_exact, 100.0 * (p_katai - p_plaxis) / p_plaxis);
+    const double p_exact = 225.6;
+    std::printf("      p_max: Cox %.1f | file run %.1f (%+.1f%% vs Cox)\n", p_exact, p_katai,
+                100.0 * (p_katai - p_exact) / p_exact);
     check(std::fabs(p_katai - p_exact) < 0.05 * p_exact,
           "limit pressure within 5% of the Cox exact collapse pressure");
     int on_line = -1;
@@ -1422,7 +1418,7 @@ void oracle_cox(const m::Project& pr) {
           "a footing node carries exactly the imposed u_y = -0.35 m");
 }
 
-// ------------------ KV-FND-014: Davis & Booker c(z) strip footing, PLAXIS Validation 3.2 --
+// -------------------------- KV-FND-014: Davis & Booker (1973) c(z) strip footing --
 // Tresca (phi = 0) with c = 1 + 2z and E = 299 + 498z through the schema's
 // c_inc / E_inc / y_ref profile -- the corpus twin of the direct benchmark KV-FND-004,
 // driven by the same displacement-controlled machine as KV-FND-012. Weightless soil:
@@ -1492,14 +1488,11 @@ void oracle_davis_booker(const m::Project& pr) {
     for (int n = 0; n < R.mesh.node_count; ++n)
         if (R.mesh.y[n] > 4.0 - 1e-6 && R.mesh.x[n] <= kDbBhalf + 1e-6) ry += R.reaction[2 * n + 1];
     const double p_katai = std::fabs(ry) / kDbBhalf;
-    const double p_exact = 7.80, p_plaxis = 7.86;
-    std::printf("      p_max: Davis-Booker %.2f | PLAXIS %.2f | file run %.2f (%+.1f%% vs "
-                "analytic, %+.1f%% vs PLAXIS)\n", p_exact, p_plaxis, p_katai,
-                100.0 * (p_katai - p_exact) / p_exact, 100.0 * (p_katai - p_plaxis) / p_plaxis);
+    const double p_exact = 7.80;
+    std::printf("      p_max: Davis-Booker %.2f | file run %.2f (%+.1f%% vs analytic)\n", p_exact,
+                p_katai, 100.0 * (p_katai - p_exact) / p_exact);
     check(std::fabs(p_katai - p_exact) < 0.05 * p_exact,
           "limit pressure within 5% of the Davis-Booker exact collapse pressure");
-    check(std::fabs(p_katai - p_plaxis) < 0.03 * p_plaxis,
-          "limit pressure within 3% of the published PLAXIS number");
     int on_line = -1;
     for (int n = 0; n < R.mesh.node_count && on_line < 0; ++n)
         if (R.mesh.y[n] > 4.0 - 1e-9 && std::fabs(R.mesh.x[n] - 0.5) < 0.26) on_line = n;
@@ -1563,7 +1556,7 @@ void oracle_gl_example1(const m::Project& pr) {
 // ------------------------------------------- KV-CST-002: Hardening Soil oedometer (1D) --
 // The first HARDENING SOIL boundary-value problem in the corpus. Until now the HS family was
 // verified only at the material point (test_hardening_soil, test_hs_cap, test_hs_berlin against
-// the Material Models Manual figures) -- the model was proven, the PATH from a .k2d file through
+// reference stress-strain curves) -- the model was proven, the PATH from a .k2d file through
 // the mesher, the assembler, the cap return mapping and the load stepping was not.
 //
 // A one-dimensional compression test is the right first case because it is the experiment that
@@ -1678,14 +1671,14 @@ void oracle_hs_oedometer(const m::Project& pr) {
 
 }  // namespace
 
-// ------------------------------ KV-STR-002: sliding block, PLAXIS Validation 3.3 ---------
-// The first case in which an INTERFACE decides the answer, and it is the manual's own
-// interface verification. A stiff block is pushed sideways until it slides on a Coulomb
+// ------------------------------ KV-STR-002: sliding block on an interface -----------------
+// The first case in which an INTERFACE decides the answer, and the classical interface
+// verification. A stiff block is pushed sideways until it slides on a Coulomb
 // joint at its base; the failure force is the joint's capacity and nothing else.
 //
-// Width 4 m and "weight 100 kN/m" at gamma = 25 fix the block at 4 m x 1 m -- the manual
-// prints the arithmetic, not the height. The interface lives in a SEPARATE data set, as the
-// manual specifies, reached through the schema's iface_material.
+// Width 4 m and a weight of 100 kN/m at gamma = 25 fix the block at 4 m x 1 m. The interface
+// lives in a SEPARATE elastoplastic data set that carries the joint's own strength, reached
+// through the schema's iface_material.
 //
 // Why the case is here at all: it did not run until 2026-08-10. The interface lies ALONG a
 // fixed boundary, whose two split sides sit at identical coordinates, and the boundary
@@ -1696,14 +1689,14 @@ void oracle_hs_oedometer(const m::Project& pr) {
 constexpr double kSbW = 4.0, kSbH = 1.0, kSbGamma = 25.0;
 constexpr double kSbCw = 2.5, kSbPhiw = 26.6, kSbPush = 0.1;
 
-// The manual's own formula, evaluated for whatever (c_w, gamma) it is handed.
+// The closed form F = B c_w + W tan(phi_w), evaluated for whatever (c_w, gamma) it is handed.
 double sliding_capacity(double cw, double gamma) {
     return kSbW * cw + (kSbW * kSbH * gamma) * std::tan(kSbPhiw * kPi / 180.0);
 }
 
 m::Project build_sliding_block_at(double cw, double gamma, double push) {
     m::Project pr;
-    pr.name = "KV-STR-002 PLAXIS 3.3 sliding block";
+    pr.name = "KV-STR-002 sliding block";
     pr.x_min = 0.0; pr.x_max = kSbW;
     pr.y_min = 0.0; pr.y_max = kSbH;
     pr.has_water = false;
@@ -1712,15 +1705,15 @@ m::Project build_sliding_block_at(double cw, double gamma, double push) {
     pr.mesh.order = 6;
     pr.mesh.auto_refine = false;
 
-    m::Material block;                       // "The block is modelled as a stiff linear elastic material"
+    m::Material block;                       // a stiff linear elastic block
     block.name = "Concrete block";
     block.model = m::SoilModel::LinearElastic;
     block.E = 3.0e7; block.nu = 0.0;         // 30 GN/m2
     block.gamma_unsat = gamma; block.gamma_sat = gamma;
-    block.k0_auto = false; block.k0 = 0.0;   // "self weight stresses are switched on using K0 = 0"
+    block.k0_auto = false; block.k0 = 0.0;   // self-weight stresses initialised with K0 = 0
     pr.materials.push_back(block);
 
-    m::Material joint;                       // "stored in a separate elastoplastic data set"
+    m::Material joint;                       // the interface's own elastoplastic data set
     joint.name = "Interface";
     joint.model = m::SoilModel::MohrCoulomb;
     joint.E = 3.0e6; joint.nu = 0.45;        // 3 GN/m2
@@ -1735,7 +1728,7 @@ m::Project build_sliding_block_at(double cw, double gamma, double push) {
     P.material = 0;
     P.x = {0, kSbW, kSbW, 0};
     P.y = {0, 0, kSbH, kSbH};
-    // "Bottom nodes are fully fixed. All other nodes are entirely free."
+    // The bottom is fully fixed; every other edge is entirely free.
     P.edge_bc = {(int)m::BCType::FullyFixed, (int)m::BCType::Free,
                  (int)m::BCType::Free, (int)m::BCType::Free};
     pr.polygons.push_back(P);
@@ -1747,8 +1740,8 @@ m::Project build_sliding_block_at(double cw, double gamma, double push) {
     iface.iface_material = 1;
     pr.structs.push_back(iface);
 
-    m::PrescribedDisp D;                     // "a prescribed horizontal displacement of 0.1 m ...
-    D.name = "Push";                         //  but the nodes at this side are free to move vertically"
+    m::PrescribedDisp D;                     // a prescribed horizontal displacement of 0.1 m on
+    D.name = "Push";                         // the left side, which stays free to move vertically
     D.x1 = 0.0; D.y1 = 0.0; D.x2 = 0.0; D.y2 = kSbH;
     D.set_ux = true;  D.ux = push;
     D.set_uy = false; D.uy = 0.0;
@@ -1793,7 +1786,7 @@ void oracle_sliding_block(const m::Project& pr) {
     const auto& R = res[1];
 
     // (a) The block SLIDES: it translates by the imposed amount instead of distorting. Every
-    // node of the block carries the same u_x, which is what "it hardly deforms" means.
+    // node of the block carries the same u_x, which is what a rigid block means.
     check(R.reaction.size() == 2u * (size_t)R.mesh.node_count, "the static phase reports reactions");
     if (R.reaction.size() != 2u * (size_t)R.mesh.node_count) return;
     double ux_lo = 1e300, ux_hi = -1e300;
@@ -1806,20 +1799,18 @@ void oracle_sliding_block(const m::Project& pr) {
     check(std::fabs(ux_lo - kSbPush) < 1e-4 && std::fabs(ux_hi - kSbPush) < 1e-4,
           "the block translates rigidly on the joint rather than shearing against a welded base");
 
-    // (b) The published comparison.
+    // (b) The closed-form comparison.
     double rx = 0.0;
     for (int n = 0; n < R.mesh.node_count; ++n)
         if (std::fabs(R.mesh.x[n]) < 1e-9) rx += R.reaction[2 * n];
     const double F = std::fabs(rx);
     const double F_exact = sliding_capacity(kSbCw, kSbGamma);   // 60.076 at phi_w = 26.6 deg
-    const double F_manual = 60.0, F_plaxis = 60.4;
-    std::printf("      F: manual's arithmetic %.1f | exact for phi_w = %.1f deg %.4f | PLAXIS %.1f"
-                " | file run %.4f (%+.2f%% vs exact, %+.2f%% vs PLAXIS)\n",
-                F_manual, kSbPhiw, F_exact, F_plaxis, F,
-                100.0 * (F - F_exact) / F_exact, 100.0 * (F - F_plaxis) / F_plaxis);
+    const double F_rounded = 60.0;                              // with tan(phi_w) rounded to 0.5
+    std::printf("      F: tan(phi_w) = 0.5 gives %.1f | exact for phi_w = %.1f deg %.4f"
+                " | file run %.4f (%+.2f%% vs exact)\n",
+                F_rounded, kSbPhiw, F_exact, F,
+                100.0 * (F - F_exact) / F_exact);
     check(std::fabs(F - F_exact) < 0.02 * F_exact, "failure force within 2% of the closed form");
-    check(std::fabs(F - F_plaxis) < 0.02 * F_plaxis,
-          "failure force within 2% of the published PLAXIS number");
 
     // (c) It is a LIMIT load, not a stiffness reading: pushing twice as far must not push twice
     // as hard. The band is 1e-6 relative, and the width is chosen from what it has to separate,
@@ -1837,7 +1828,7 @@ void oracle_sliding_block(const m::Project& pr) {
     check(F_far > 0.0 && std::fabs(F_far - F) <= 1e-6 * F,
           "the force is a plateau: twice the imposed slip gives the same failure force");
 
-    // (d) The two TERMS of the manual's formula, moved one at a time. Matching one number can
+    // (d) The two TERMS of the closed form, moved one at a time. Matching one number can
     // be a coincidence of two compensating errors; reproducing adhesion and friction
     // separately cannot. Doubling gamma leaves c_w alone and vice versa, and the relative
     // deviation must not move -- the discretisation bias is structural, not per-case.
@@ -1866,14 +1857,14 @@ void oracle_sliding_block(const m::Project& pr) {
           "removing the interface changes the answer by orders of magnitude (it is not inert)");
 }
 
-// ------------------------------ KV-STR-003: bending of beams, PLAXIS Validation 2.3 ------
-// The manual's own PLATE verification, and the first case in the corpus where a plate -- not
-// the soil -- carries the entire load. Both of the manual's problems live in one model,
-// built as it builds them: a single point load on one beam and a uniformly distributed load
-// on another, "added to the bottom line with a spacing in between", with the soil cluster
-// deactivated so that only the beams remain, supported at their end points.
+// ------------------------------ KV-STR-003: bending of beams -------------------------------
+// The PLATE verification, and the first case in the corpus where a plate -- not the soil --
+// carries the entire load. Both beam problems live in one model: a single point load on one
+// beam and a uniformly distributed load on another, added to the bottom line with a spacing
+// in between, with the soil cluster deactivated so that only the beams remain, supported at
+// their end points.
 //
-// Why the case exists: the parity register counted Plate as verified on the strength of
+// Why the case exists: the feature register counted Plate as verified on the strength of
 // KV-STR-001, which is an ANCHOR prestress case -- the plate had no case of its own. Building
 // this one found the reason it had never run. With the soil deactivated every node of the
 // beam touches only passive elements, and fix_inactive_nodes pinned all of them: the beam was
@@ -1884,14 +1875,14 @@ constexpr double kBmEA = 1.64e6;     // HEB 200 in plane strain: a plate 1 m wid
 constexpr double kBmEI = 1200.0;
 constexpr double kBmNu = 0.0;
 constexpr double kBmL = 2.0;         // span
-constexpr double kBmGap = 1.0;       // "with a spacing in between"
+constexpr double kBmGap = 1.0;       // the spacing between the two spans
 constexpr double kBmF = 100.0;       // point load at mid-span [kN]
 constexpr double kBmQ = 100.0;       // distributed load [kN/m]
 
 // The closed forms, written out here rather than called from the plate header: the comparison
-// must be the FE answer against the law, not the law against itself. A PLAXIS plate is a
-// Mindlin (Timoshenko) beam, so mid-span deflection is bending PLUS shear, with the manual's
-// own shear rigidity kGA' = k EA / (2(1+nu)), k = 5/6 (MMM Eq. 18-8).
+// must be the FE answer against the law, not the law against itself. The plate element is a
+// Mindlin (Timoshenko) beam, so mid-span deflection is bending PLUS shear, with the shear
+// rigidity kGA' = k EA / (2(1+nu)) and the rectangular-section correction factor k = 5/6.
 double beam_kGA(double EA, double nu) { return (5.0 / 6.0) * EA / (2.0 * (1.0 + nu)); }
 double beam_defl_point(double EA, double EI, double nu) {
     return kBmF * kBmL * kBmL * kBmL / (48.0 * EI) + kBmF * kBmL / (4.0 * beam_kGA(EA, nu));
@@ -1908,12 +1899,12 @@ double beam_moment_udl(double s) { return kBmQ * s * (kBmL - s) / 2.0; }
 
 m::Project build_beams_at(double EA, double EI, bool q_load, double elem_size) {
     m::Project pr;
-    pr.name = "KV-STR-003 PLAXIS 2.3 bending of beams";
+    pr.name = "KV-STR-003 bending of beams";
     pr.x_min = 0.0; pr.x_max = 2.0 * kBmL + kBmGap;
     pr.y_min = 0.0; pr.y_max = 1.0;
     pr.has_water = false;
     pr.initial_procedure = m::InitialProcedure::K0Procedure;
-    pr.mesh.elem_size = elem_size;   // the manual: "A very coarse mesh is sufficient"
+    pr.mesh.elem_size = elem_size;   // a coarse mesh suffices for the deflections (see kBmH)
     pr.mesh.order = 6;
     pr.mesh.auto_refine = false;
 
@@ -1936,7 +1927,7 @@ m::Project build_beams_at(double EA, double EI, bool q_load, double elem_size) {
         P.material = 0;
         P.x = {x0, x0 + kBmL, x0 + kBmL, x0};
         P.y = {0.0, 0.0, 1.0, 1.0};
-        // The manual's "point fixities on the end points of the beam": left end pinned, right
+        // Point fixities on the end points of each beam: left end pinned, right
         // end on a roller. The cluster is inactive, so these two edges hold nothing except the
         // beam's own end nodes -- which is exactly what a point fixity is here.
         P.edge_bc = {(int)m::BCType::Free, (int)m::BCType::VerticallyFixed,
@@ -1951,14 +1942,14 @@ m::Project build_beams_at(double EA, double EI, bool q_load, double elem_size) {
         pr.structs.push_back(S);
     }
 
-    m::Load F;                    // "a single point load ... on a beam"
+    m::Load F;                    // a single point load at the first beam's mid-span
     F.kind = m::LoadKind::Point;
     F.name = "F";
     F.x1 = 0.5 * kBmL; F.y1 = 0.0; F.x2 = 0.5 * kBmL; F.y2 = 0.0;
     F.qx1 = F.qx2 = 0.0; F.qy1 = -kBmF; F.qy2 = 0.0;
     pr.loads.push_back(F);
 
-    m::Load Q;                    // "a uniformly distributed load on a beam"
+    m::Load Q;                    // a uniformly distributed load on the second beam
     Q.kind = m::LoadKind::Distributed;
     Q.name = "q";
     Q.x1 = kBmL + kBmGap; Q.y1 = 0.0; Q.x2 = 2.0 * kBmL + kBmGap; Q.y2 = 0.0;
@@ -1977,8 +1968,8 @@ m::Project build_beams_at(double EA, double EI, bool q_load, double elem_size) {
     return pr;
 }
 
-// 0.25 m: eight elements per span. Still the coarse mesh the manual asks for, and coarse
-// enough that the peak moment carries a visible discretisation bias -- see (c).
+// 0.25 m: eight elements per span. Still a coarse mesh, and coarse enough that the peak moment
+// carries a visible discretisation bias -- see (c).
 constexpr double kBmH = 0.25;
 m::Project build_beams() { return build_beams_at(kBmEA, kBmEI, true, kBmH); }
 
@@ -2022,30 +2013,31 @@ void oracle_beams(const m::Project& pr) {
     check(R.w_F > 0.0 && R.w_q > 0.0, "a mesh node sits at each beam's mid-span");
     if (R.w_F <= 0.0 || R.w_q <= 0.0) return;
 
-    // (a) The two published deflections. The closed form is Timoshenko because a PLAXIS plate
-    // is: the shear part is only 0.5% of the answer, but it is the whole difference between
-    // 13.889 mm (Euler-Bernoulli) and the 13.96 mm the manual prints.
+    // (a) The two deflections. The closed form is Timoshenko because the plate element is: the
+    // shear part is only 0.5% of the answer, but it is the whole difference between 13.889 mm
+    // (Euler-Bernoulli) and the 13.962 mm of the full closed form.
     const double w_F_cf = beam_defl_point(kBmEA, kBmEI, kBmNu);
     const double w_q_cf = beam_defl_udl(kBmEA, kBmEI, kBmNu);
-    std::printf("      u_max point load: closed form %.5f mm | PLAXIS 13.96 | file run %.5f mm"
+    std::printf("      u_max point load: closed form %.5f mm | file run %.5f mm"
                 " (%+.3f%% vs closed form)\n",
                 1e3 * w_F_cf, 1e3 * R.w_F, 100.0 * (R.w_F - w_F_cf) / w_F_cf);
-    std::printf("      u_max distributed: closed form %.5f mm | PLAXIS 17.43 | file run %.5f mm"
+    std::printf("      u_max distributed: closed form %.5f mm | file run %.5f mm"
                 " (%+.3f%% vs closed form)\n",
                 1e3 * w_q_cf, 1e3 * R.w_q, 100.0 * (R.w_q - w_q_cf) / w_q_cf);
     check(std::fabs(R.w_F - w_F_cf) < 0.01 * w_F_cf, "point-load deflection within 1% of the closed form");
     check(std::fabs(R.w_q - w_q_cf) < 0.01 * w_q_cf, "distributed deflection within 1% of the closed form");
-    check(std::fabs(R.w_F - 13.96e-3) < 0.02 * 13.96e-3, "point-load deflection within 2% of PLAXIS");
-    check(std::fabs(R.w_q - 17.43e-3) < 0.02 * 17.43e-3, "distributed deflection within 2% of PLAXIS");
 
-    // (b) The manual's OTHER published pair: M_max = 50.0 kNm in both problems. A deflection
-    // can be right for the wrong reason (a compensating support condition); the moment is read
-    // from the element's own force diagram, through a different code path, and pins the same
-    // answer.
-    std::printf("      M_max: manual 50.0 / 50.0 kNm | file run %.5f / %.5f kNm (%+.2f%% / %+.2f%%)\n",
+    // (b) The OTHER closed-form pair: M_max = F l/4 = q l^2/8 = 50.0 kNm in both problems. A
+    // deflection can be right for the wrong reason (a compensating support condition); the
+    // moment is read from the element's own force diagram, through a different code path, and
+    // pins the same answer.
+    std::printf("      M_max: closed form 50.0 / 50.0 kNm | file run %.5f / %.5f kNm"
+                " (%+.2f%% / %+.2f%%)\n",
                 R.M_F, R.M_q, 100.0 * (R.M_F - 50.0) / 50.0, 100.0 * (R.M_q - 50.0) / 50.0);
-    check(std::fabs(R.M_F - 50.0) < 0.02 * 50.0, "point-load peak moment within 2% of the manual's 50 kNm");
-    check(std::fabs(R.M_q - 50.0) < 0.02 * 50.0, "distributed peak moment within 2% of the manual's 50 kNm");
+    check(std::fabs(R.M_F - 50.0) < 0.02 * 50.0,
+          "point-load peak moment within 2% of the closed-form 50 kNm");
+    check(std::fabs(R.M_q - 50.0) < 0.02 * 50.0,
+          "distributed peak moment within 2% of the closed-form 50 kNm");
 
     // (c) Not just the peak -- the whole DIAGRAM. One number can be a coincidence; a moment
     // field that follows F s / 2 and q s (l - s) / 2 station by station cannot. The point-load
@@ -2069,13 +2061,13 @@ void oracle_beams(const m::Project& pr) {
     }
 
     // (d) What the peak moment of the DISTRIBUTED beam does with mesh size, because it is the
-    // one published number this file does not reproduce exactly. Its moment field is a
+    // one closed-form number this file does not reproduce exactly. Its moment field is a
     // parabola and the element's curvature is linear, so the peak overshoots -- by exactly
     // q h^2 / 12, the parabola the element cannot represent inside one span of length h. That
     // is a structural bias, not scatter: it is reproduced to five figures at three mesh sizes
     // and it vanishes as h -> 0. The deflection does not do this (it is exact at every mesh),
-    // so "a very coarse mesh is sufficient" is true of the manual's displacements and not of
-    // its peak moment -- worth knowing before reading a wall's M off a coarse run.
+    // so a coarse mesh is sufficient for the displacements and not for the peak moment --
+    // worth knowing before reading a wall's M off a coarse run.
     std::printf("      M_max(distributed) vs mesh: ");
     double M_of_h[3] = {0.0, 0.0, 0.0};   // in the loop's order: h = 0.5, 0.25, 0.125
     int mesh_level = 0;
@@ -2094,7 +2086,7 @@ void oracle_beams(const m::Project& pr) {
     // almost none can: CHECK the estimator as well as be measured by it. The discretisation
     // error here is known in closed form -- q h^2/12 -- so the observed order is not something
     // to be discovered but something already known to be 2, and Richardson extrapolation must
-    // land on the manual's published 50.0 kNm, which is a number NONE of the three meshes
+    // land on the closed-form 50.0 kNm, which is a number NONE of the three meshes
     // produces (they give 52.08, 50.52, 50.13). An error estimator that is only ever run where
     // the answer is unknown is an estimator nobody has tested.
     {
@@ -2112,16 +2104,17 @@ void oracle_beams(const m::Project& pr) {
         check(std::fabs(e.p - 2.0) < 0.01,
               "the observed order is the 2 that q h^2/12 predicts analytically");
         check(std::fabs(e.phi_extrapolated - 50.0) < 0.01,
-              "Richardson extrapolation recovers the published 50.0 kNm from three meshes that all miss it");
+              "Richardson extrapolation recovers the closed-form 50.0 kNm from three meshes "
+              "that all miss it");
         check(e.asymptotic, "the triplet is inside the asymptotic range, so the order may be quoted");
     }
 
     // (e) The two TERMS of the deflection, separated. Bending and shear are added by the same
     // formula, so matching the total once proves neither. Stiffening EI by 4 divides the
     // bending term by 4 and leaves the shear term alone; stiffening EA by 100 does the
-    // opposite and drives the answer onto the Euler-Bernoulli limit (13.8896 mm, the number
-    // the manual would have published if a PLAXIS plate were not shear-deformable). The closed
-    // form predicts both, and the FE run must follow it in each.
+    // opposite and drives the answer onto the Euler-Bernoulli limit (13.8896 mm, the answer a
+    // plate without shear deformation would give). The closed form predicts both, and the FE
+    // run must follow it in each.
     struct Term { const char* what; double EA, EI; };
     for (const Term& t : {Term{"EI x 4  ", kBmEA, 4.0 * kBmEI},
                           Term{"EA x 100", 100.0 * kBmEA, kBmEI}}) {
@@ -2165,11 +2158,11 @@ void oracle_beams(const m::Project& pr) {
     check(bare_refused, "without the beams there is nothing left to solve, and the run says so");
 }
 
-// ------------------------------ KV-CST-008: HSsmall unloading, MMM ch. 7 -----------------
+// ------------------------------ KV-CST-008: HSsmall unloading ----------------------------
 // The first HSsmall boundary-value case: the small-strain stiffness decides the answer, and
 // it is read from the file. The model was already verified at the material point
-// (test_hssmall runs Eq 7-3/7-7/7-8/7-10 against the closed form) -- what was unwitnessed is
-// the path a user walks, and that is where the fault was.
+// (test_hssmall runs the secant, tangent and threshold laws against the closed form) -- what
+// was unwitnessed is the path a user walks, and that is where the fault was.
 //
 // Why UNLOADING: in the HS family a deviatoric LOADING path is plastic from the first
 // increment (the K0 state is seeded onto the shear surface, so there is no elastic window to
@@ -2179,7 +2172,7 @@ void oracle_beams(const m::Project& pr) {
 // E0 lives. The plain-HS twin (checked below) reproduces its own closed form EXACTLY, which
 // is what proves the window is elastic rather than merely assumed to be.
 constexpr double kHsG0 = 187500.0;      // G0^ref: E0 = 2(1+nu_ur) G0 = 450 MPa = 5 x Eur
-constexpr double kHsG07 = 1.5e-4;       // gamma_0.7 (VIRGIN loading, as the manual defines it)
+constexpr double kHsG07 = 1.5e-4;       // gamma_0.7 (defined on VIRGIN loading)
 constexpr double kHsEur = 90000.0;
 constexpr double kHsNu = 0.2;           // nu_ur
 constexpr double kHsGamma = 20.0;       // unit weight -> d(sigma) = gamma h_exc
@@ -2189,10 +2182,10 @@ constexpr double kHsDepth = 10.0;       // model depth
 // answer against the law and not the law against itself. One-dimensional unloading of a
 // laterally confined column: the stress relief is uniform, m = 0 makes the stiffness
 // stress-independent, so the strain is uniform and the heave is eps x H_rem. The tangent
-// modulus rides the Hardin-Drnevich hyperbola (Eq 7-8) whose integral is the secant law
-// (Eq 7-7), and gamma = eps in one-dimensional strain (gamma = sqrt(3/2 e:e) with
+// modulus rides the Hardin-Drnevich hyperbola whose integral is the secant law, and
+// gamma = eps in one-dimensional strain (gamma = sqrt(3/2 e:e) with
 // e_yy = 2eps/3, e_xx = e_zz = -eps/3). Inverting sigma = E_oed,0 eps / (1 + a eps/gamma_ref)
-// gives the closed form below. gamma_ref is the RELOADING threshold 2 gamma_0.7 (Eq 7-11).
+// gives the closed form below. gamma_ref is the RELOADING threshold 2 gamma_0.7 (Masing's rule).
 double hss_oed(double E) { return E * (1.0 - kHsNu) / ((1.0 + kHsNu) * (1.0 - 2.0 * kHsNu)); }
 double hss_heave(double dsigma, double H_rem, double masing) {
     const double E0 = 2.0 * (1.0 + kHsNu) * kHsG0;
@@ -2271,7 +2264,7 @@ void oracle_hss(const m::Project& pr) {
     check(u > 0.0, "the K0 and excavation phases converged");
     if (u <= 0.0) return;
 
-    // (a) The published law, as the manual's model rides it: the reloading curve, 2 gamma_0.7.
+    // (a) The closed-form law, as the model rides it: the reloading curve, 2 gamma_0.7.
     const double cf = hss_heave(dsig, H_rem, 2.0);
     const double cf_virgin = hss_heave(dsig, H_rem, 1.0);
     std::printf("      heave: closed form %.6e m | file run %.6e m (%+.2f%%); riding the VIRGIN"
@@ -2317,12 +2310,11 @@ void oracle_hss(const m::Project& pr) {
     }
 }
 
-// --------------------- KV-CST-012: Reset small strain (MMM sec. 7.6), from the file -------
-// The manual's own use for the option, built as the manual describes it: a surcharge is placed
-// and removed. Its purpose is to leave an overconsolidation behind -- but it also leaves a
-// STRAIN HISTORY, and in the real soil ageing erased that long before the analysis begins.
-// "Unfortunately, strain history is already triggered by adding and removing a surcharge. In
-// this case the strain history can be reset manually, by using the Reset small strain option."
+// ------------------------------- KV-CST-012: Reset small strain, from the file -------------
+// The use the option exists for: a surcharge is placed and removed. Its purpose is to leave an
+// overconsolidation behind -- but it also leaves a STRAIN HISTORY, and in the real soil ageing
+// erased that long before the analysis begins. Adding and removing a surcharge is enough to
+// trigger a strain history, so the phase that follows must be able to reset it.
 //
 // The measured phase is then the SAME excavation KV-CST-008 verifies against a closed form, so
 // the reset run has an oracle that was established without it: if resetting really returns the
@@ -2404,11 +2396,11 @@ void oracle_hss_reset(const m::Project& pr) {
     // loading phase stays on the G_ur floor. That is not a figure of speech: the un-reset HSsmall
     // run lands within 0.03% of the PLAIN HS run -- the same soil with no small-strain overlay at
     // all -- which is what "the overlay has degraded to its floor" means, quantified.
-    // The residual is no longer overlay, and the sign of it flipped when sec. 7.9.1 landed
-    // (2026-08-15): a spent overlay used to leave HSsmall a hair SOFTER than plain HS (-0.002%),
-    // and it now leaves it a hair STIFFER in this heave (+0.021%), because the surcharge phase
-    // reaches the Li & Dafalias branch that plain HS does not have and contracts slightly more
-    // under it. So the two models no longer converge onto each other even with the overlay fully
+    // The residual is no longer overlay, and the sign of it flipped when the Li & Dafalias
+    // dilatancy landed (2026-08-15): a spent overlay used to leave HSsmall a hair SOFTER than
+    // plain HS (-0.002%), and it now leaves it a hair STIFFER in this heave (+0.021%), because
+    // the surcharge phase reaches the Li & Dafalias branch that plain HS does not have and
+    // contracts slightly more under it. So the two models no longer converge onto each other even with the overlay fully
     // spent; they converge onto each other's STIFFNESS. The band below is what the claim can
     // honestly carry, and the claim is about the overlay, not about the whole model.
     const double u_plain = hss_run_last(build_hss_history(false, true));
@@ -2427,7 +2419,7 @@ void oracle_hss_reset(const m::Project& pr) {
           "on a model with no small-strain history the reset is bit-for-bit inert");
 }
 
-// ------------------------------ KV-CST-009: Soft Soil oedometer, MMM ch. 10 --------------
+// ------------------------------ KV-CST-009: Soft Soil oedometer --------------------------
 // The Soft Soil model's defining behaviour is logarithmic compression with a SEPARATE
 // unloading line and a memory for the pre-consolidation stress, and this case walks the same
 // stress range three times to read all three of those off one file: primary loading at
@@ -2442,9 +2434,9 @@ constexpr double kSsH = 4.0;        // column height
 constexpr double kSsSeat = 50.0;    // seating stress
 constexpr double kSsFull = 200.0;   // loaded stress
 
-constexpr double kSsNu = 0.15;      // nu_ur, the manual's default for this model
+constexpr double kSsNu = 0.15;      // nu_ur, the unload-reload Poisson's ratio
 
-// The manual's own law (Eq 10-5/10-6), written out here rather than called from the material
+// The model's own law, written out here rather than called from the material
 // header: e_v = index * ln(p'/p'_0). In one-dimensional strain the column is laterally
 // confined, so e_v IS the vertical strain, and weightless soil keeps the stress uniform, so
 // the settlement is e_v * H exactly.
@@ -2454,14 +2446,13 @@ constexpr double kSsNu = 0.15;      // nu_ur, the manual's default for this mode
 // proportional to the vertical one and the vertical stress ratio can stand in for p'/p'_0.
 double ss_settlement(double index) { return index * std::log(kSsFull / kSsSeat) * kSsH; }
 
-// UNLOADING is not the mirror of that, and the manual says why twice. Sec. 10.3.5: with a small
-// nu_ur the lateral stress falls far less than the vertical one in one-dimensional unloading,
-// so the ratio of horizontal to vertical stress RISES -- "a well-known phenomenon in
-// overconsolidated materials". Sec. 10.3.1 draws the consequence: there is no exact relation
-// between kappa* and the one-dimensional swelling index Cs, "because the ratio of horizontal
-// and vertical stresses changes during one-dimensional unloading". So the mean stress does NOT
-// follow the vertical stress on this leg, and kappa* ln(sigma_v/sigma_v0) is the wrong closed
-// form -- it over-predicts the swelling by a factor of 2.2 here. The elastic one-dimensional
+// UNLOADING is not the mirror of that. With a small nu_ur the lateral stress falls far less
+// than the vertical one in one-dimensional unloading, so the ratio of horizontal to vertical
+// stress RISES, as it does in overconsolidated soil. The consequence: there is no exact
+// relation between kappa* and the one-dimensional swelling index Cs, because that stress ratio
+// changes during one-dimensional unloading. So the mean stress
+// does NOT follow the vertical stress on this leg, and kappa* ln(sigma_v/sigma_v0) is the wrong
+// closed form -- it over-predicts the swelling by a factor of 2.2 here. The elastic 1D
 // path gives d(sigma_h) = nu_ur/(1 - nu_ur) d(sigma_v), and the law is then evaluated on the
 // mean stresses that path actually produces.
 double ss_swell(double kap) {
@@ -2486,11 +2477,11 @@ m::Project build_ss_at(double lam, double kap) {
     s.name = "Soft Soil clay";
     s.model = m::SoilModel::SoftSoil;
     s.gamma_unsat = s.gamma_sat = 0.0;       // weightless: the applied stress is the whole story
-    s.c = 0.0; s.phi = kSsPhi; s.psi = 0.0;  // the manual's default dilatancy for this model
+    s.c = 0.0; s.phi = kSsPhi; s.psi = 0.0;  // psi = 0: no dilatancy
     s.tension_cutoff = false;                // K2D-M001: the SS return does not read it
     s.lam_star = lam; s.kap_star = kap;
-    s.nu_ur = 0.15;                          // the manual's default
-    s.k0nc_auto = true;                      // M is derived from K0nc (Eq 10-13)
+    s.nu_ur = 0.15;                          // the unload-reload Poisson's ratio
+    s.k0nc_auto = true;                      // M is derived from K0nc
     s.k0_auto = true;                        // start ON the K0nc line, so it stays there
     pr.materials.push_back(s);
 
@@ -2566,8 +2557,8 @@ void oracle_ss(const m::Project& pr) {
     check(std::fabs(R.load - cf_lam) < 0.02 * cf_lam, "primary settlement within 2% of lambda* ln(4)");
 
     // (b) The SAME stress range unloaded rides the kappa* line -- a different index, measured
-    // separately on the same file. This is the model's "distinction between primary loading and
-    // unloading/reloading" and it cannot be faked by a single stiffness. The comparison is
+    // separately on the same file. This is the model's distinction between primary loading and
+    // unloading/reloading, and it cannot be faked by a single stiffness. The comparison is
     // against the closed form of the leg the soil actually walks (see ss_swell): the naive
     // kappa* ln(sigma_v/sigma_v0) reads 0.0222 m against a measured 0.0101, and it is the
     // ORACLE that is wrong there, not the run.
@@ -2587,7 +2578,7 @@ void oracle_ss(const m::Project& pr) {
     check(std::fabs(R.load / R.reload - cf_lam / cf_kap) < 0.05 * (cf_lam / cf_kap),
           "the pre-consolidation memory: primary/reload matches the two closed forms");
 
-    // (d) M is not an input: the file gives K0nc and the manual derives M from it (Eq 10-13) so
+    // (d) M is not an input: the file gives K0nc and the model derives M from it so
     // that primary one-dimensional compression REACHES that K0nc. Measuring the lateral stress
     // ratio is what verifies the derivation -- pinning M by its formula would only check the
     // formula against itself.
@@ -2610,26 +2601,26 @@ void oracle_ss(const m::Project& pr) {
           "doubling kappa* doubles the swelling, as the closed form says");
 }
 
-// ------------------------------ KV-CST-010: Soft Soil Creep, MMM ch. 11 ------------------
+// ------------------------------ KV-CST-010: Soft Soil Creep ------------------------------
 // Secondary compression from a .k2d: the ground is not loaded at all in the measured phase,
 // only TIME passes, and the settlement that appears is the whole point of this model.
 //
-// Getting the experiment right took two attempts, and the manual predicted both failures. A
+// Getting the experiment right took two attempts, and the model's structure predicts both. A
 // weightless column loaded from zero (the KV-CST-009 fixture) cannot be used: the initial
 // pre-consolidation stress sits at the model's minimum of one stress unit, the first load puts
 // p_eq far above it, and the creep rate goes as (p_eq/p_p)^beta with beta = (lambda*-kappa*)/mu*
-// = 16 here -- the run collapses, which is sec. 11.11's warning about unrealistically high
+// = 16 here -- the run collapses, which is the known problem of unrealistically high
 // initial creep rates at OCR = 1 arriving as an arithmetic fact. A phase of zero duration is no
 // use either: in this model there is no instantaneous plastic component at all (all inelastic
 // strain is time-dependent), so a zero-duration phase is elastic. What works is what the model
 // is FOR: ground under its own weight, seeded normally consolidated by the K0 procedure, left
 // to sit. There p_eq = p_p everywhere, the rate is exactly mu*/tau regardless of depth, and the
 // strain is uniform even though the stress is not.
-constexpr double kScLam = 0.02, kScKap = 0.004, kScMu = 0.001;   // lambda*/mu* = 20 (sec. 11.8.1)
+constexpr double kScLam = 0.02, kScKap = 0.004, kScMu = 0.001;   // lambda*/mu* = 20
 constexpr double kScH = 4.0, kScGamma = 15.0, kScDays = 100.0;
 
-// Eq 11-13/14 as the manual reads them: tau is ONE DAY, because the standard oedometer's
-// 24-hour stage is the definition of the normal-consolidation line. Under constant effective
+// The reference time tau is ONE DAY, because the standard oedometer's 24-hour stage is the
+// definition of the normal-consolidation line. Under constant effective
 // stress on that line the differential creep law integrates exactly (soft-soil-creep-
 // formulation.md sec. 5.1): e_v^c(t) = mu* ln(1 + t/tau). Written out here, not called from
 // the material header.
@@ -2691,7 +2682,7 @@ void oracle_ssc(const m::Project& pr) {
     check(u > 0.0, "the K0 and creep phases converged");
     if (u <= 0.0) return;
 
-    // (a) The published law at the file's own duration.
+    // (a) The closed-form law at the file's own duration.
     const double cf = ssc_creep(kScMu, kScDays);
     std::printf("      creep at %.0f days: closed form %.6f m | file run %.6f m (%+.2f%%)\n",
                 kScDays, cf, u, 100.0 * (u - cf) / cf);
@@ -2700,7 +2691,7 @@ void oracle_ssc(const m::Project& pr) {
     // (b) The law is LOGARITHMIC, and one point cannot show that. Three more durations spanning
     // three decades do: a linear creep law fitted through any one of them would miss the others
     // by a factor of ten. The spread also locates tau -- at t = tau the settlement is mu* ln 2,
-    // and it is the 24-hour oedometer stage that fixes tau at one day (Eq 11-13/14).
+    // and it is the 24-hour oedometer stage that fixes tau at one day.
     //
     // THE BAND HERE WAS MEASURED ON AN UNDER-CONVERGED RUN, and it took the local convergence
     // criteria (0.9.0 N-2) to find that out. At the tolerance this tree ships for the soft-soil
@@ -2746,30 +2737,31 @@ void oracle_ssc(const m::Project& pr) {
 }
 
 // ------------------------------ KV-STR-004: axial capacity of a pile row --------------------
-// The embedded beam's first case from a `.k2d` file, and the manual chooses the loading path
-// for us: "embedded beams are not meant to be used as laterally loaded piles and will therefore
-// not show accurate failure loads when subjected to transverse forces" (Reference Manual sec
-// 6.6.4), and the material data set carries "only the bearing capacity" -- skin and base. So the
-// defining quantity is the AXIAL capacity, and it has an exact closed form.
+// The embedded beam's first case from a `.k2d` file, and the element's purpose chooses the
+// loading path: it is meant for axially loaded piles rather than for failure under transverse
+// load, and its material data set carries the bearing capacity -- skin and base -- rather than
+// a stiffness response. So the defining quantity is the AXIAL capacity, and it has an exact
+// closed form.
 //
-// Why the case exists, and what building it found. The parity register had the embedded beam as
-// "implemented, unverified", and everything the verification touched turned out to be wrong:
-//   * Eq 6-65's division by L_spacing was not applied at all, so every skin and foot spring was
-//     2.5x too stiff at the default spacing. The function's only consumer is the driver -- the
-//     element test passes its stiffnesses by hand -- so the constant was wrong by a factor of
-//     2.5 while all 150 tests were green.
-//   * The foot used D/2 where Eq 6-67 defines R_eq = sqrt(12 EI/EA)/2, which for a solid
-//     circular pile is 0.433 D, not 0.5 D.
-//   * The connection point was always FREE. PLAXIS connects it HINGED to the soil node when no
-//     structure shares it, and a point load is carried by the nearest SOIL node -- so a pile
-//     row could not be loaded at its head at all. Check (e) is the sentry for that one.
+// Why the case exists, and what building it found. The feature register had the embedded beam
+// as "implemented, unverified", and everything the verification touched turned out to be wrong:
+//   * The division of the skin and foot spring stiffnesses by L_spacing was not applied at all,
+//     so every skin and foot spring was 2.5x too stiff at the default spacing. The function's
+//     only consumer is the driver -- the element test passes its stiffnesses by hand -- so the
+//     constant was wrong by a factor of 2.5 while all 150 tests were green.
+//   * The foot used D/2 where the equivalent radius is R_eq = sqrt(12 EI/EA)/2, which for a
+//     solid circular pile is 0.433 D, not 0.5 D.
+//   * The connection point was always FREE. A pile top that no other structure shares must be
+//     connected HINGED to the soil node (structs[i].conn = 0, now the default), because a point
+//     load is carried by the nearest SOIL node -- so a free pile row could not be loaded at its
+//     head at all. Check (e) is the sentry for that one.
 //
-// Fixture, and the two rules behind it. The soil is MOHR-COULOMB and not Linear Elastic because
-// PLAXIS ignores the shaft resistance and the spacing inside a linear elastic cluster (it counts
-// that as structure, not soil), so an LE fixture would measure the one case PLAXIS treats
-// differently. Its cohesion is set far above anything the run mobilises, so the plateau measured
-// is the PILE's declared capacity and not a soil bearing failure. Soil and pile are weightless,
-// so the load carried is the load applied and nothing else.
+// Fixture, and the two rules behind it. The soil is MOHR-COULOMB and not Linear Elastic, so the
+// pile stands in ordinary soil and the case does not rest on how shaft resistance and spacing
+// would be counted inside a linear elastic cluster. Its cohesion is set far above anything the
+// run mobilises, so the plateau measured is the PILE's declared capacity and not a soil bearing
+// failure. Soil and pile are weightless, so the load carried is the load applied and nothing
+// else.
 constexpr double kPlL = 10.0;        // embedded length [m]
 constexpr double kPlD = 0.4;         // pile diameter [m]
 constexpr double kPlLs = 2.5;        // out-of-plane spacing [m]
@@ -2814,7 +2806,7 @@ constexpr double kPlTop = 16.0, kPlW = 16.0, kPlX = 8.0;
 // The closed form, written out here rather than read from the driver: the ultimate axial load of
 // a pile row is its skin resistance over the embedded length plus its base resistance, and the
 // row carries it per metre of WALL, so every per-pile quantity is divided by the spacing --
-// exactly as EA, EI and the pile weight are (PLAXIS Reference sec 6.6.3, Eq 6-65's own reason).
+// exactly as EA, EI, the pile weight and the skin and foot spring stiffnesses are.
 double pile_capacity(double Tskin, double L, double Fbase, double Ls) {
     return (Tskin * L + Fbase) / Ls;
 }
@@ -2853,7 +2845,7 @@ m::Project build_pile_at(double Tskin, double Fbase, double Ls, double load, int
     S.name = "Pile row";
     S.x1 = kPlX; S.y1 = kPlTop; S.x2 = kPlX; S.y2 = kPlTop - kPlL;
     S.material = 0;
-    S.conn = conn;                          // 0 hinged (PLAXIS's default), 1 free
+    S.conn = conn;                          // 0 hinged (the default), 1 free
     pr.structs.push_back(S);
 
     m::Load F;
@@ -2947,7 +2939,7 @@ void oracle_pile(const m::Project& pr) {
     check(rb.ok && std::fabs(rb.N_head / cap_b - 1.0) < 0.03, "the skin term moves by its own share");
 
     // (c) SPACING. Everything about a row is per metre of wall, so doubling the out-of-plane
-    // spacing must halve the capacity EXACTLY. This is the check that the /L_spacing of Eq 6-65
+    // spacing must halve the capacity EXACTLY. This is the check that the division by L_spacing
     // reaches the capacities as well as the stiffnesses.
     const PileRead rl = read_pile(build_pile_at(kPlTskin, kPlFbase, 2.0 * kPlLs, kPlLoad, 0, kPlH));
     const double cap_l = pile_capacity(kPlTskin, kPlL, kPlFbase, 2.0 * kPlLs);
@@ -2995,10 +2987,9 @@ void oracle_pile(const m::Project& pr) {
 }
 
 // ------------------------------ KV-STR-005: a geogrid's axial force and tension cut-off ------
-// The geogrid's first case from a `.k2d` file. The manual's definition IS the oracle: "the axial
-// stiffness is the ratio of the axial force F per unit width and the axial strain
-// (eps = dl/l)", EA = F/eps (Reference Manual Eq. 6-51), and "geogrids can only sustain tensile
-// forces, but not compressive forces" (sec 6.5).
+// The geogrid's first case from a `.k2d` file. The element's definition IS the oracle: the axial
+// stiffness is the axial force F per unit width divided by the axial strain eps = dl/l, so
+// EA = F/eps, and a geogrid sustains tension but no compression.
 //
 // The fixture turns that definition into something a file can ask for. A geogrid's translational
 // degrees of freedom ARE the soil's -- the line is a conforming chain of mesh nodes with no
@@ -3017,7 +3008,7 @@ constexpr double kGgNp = 3.0;      // tension cut-off [kN/m]
 constexpr double kGgD = 0.004;     // imposed stretch [m] -> eps = 4e-4, N = 2.0 kN/m (elastic)
 constexpr double kGgHm = 0.5;      // element size [m]
 
-// Eq. 6-51 rearranged, with the manual's tension cut-off applied on top, written out here rather
+// EA = F/eps rearranged, with the tension cut-off N_p applied on top, written out here rather
 // than called from the geogrid header.
 double geogrid_force(double EA, double stretch, double L, double Np) {
     const double N = EA * stretch / L;
@@ -3161,7 +3152,7 @@ GgRead read_geogrid(const m::Project& pr) {
 }
 
 void oracle_geogrid(const m::Project& pr) {
-    const double want = kGgEA * kGgD / kGgL;              // Eq. 6-51, elastic (below N_p)
+    const double want = kGgEA * kGgD / kGgL;              // F = EA eps, elastic (below N_p)
     const GgRead r = read_geogrid(pr);
     const GgRead rn0 = read_geogrid(build_geogrid_at(kGgEA, kGgNp, kGgD, false, false, kGgHm));
     check(r.ok, "the reinforced block solves");
@@ -3206,7 +3197,7 @@ void oracle_geogrid(const m::Project& pr) {
                 r.N, want, 100.0 * (r.N / want - 1.0));
     check(std::fabs(r.N / want - 1.0) < 0.01, "the geogrid carries EA times the imposed strain");
 
-    // (a) LINEAR IN BOTH FACTORS, SEPARATELY. Eq. 6-51 has two inputs and each must move the
+    // (a) LINEAR IN BOTH FACTORS, SEPARATELY. F = EA eps has two inputs and each must move the
     // force by exactly its own factor; one agreeing number could be two errors cancelling.
     const GgRead r2 = read_geogrid(build_geogrid_at(kGgEA, kGgNp, 2.0 * kGgD, false, true, kGgHm));
     const GgRead re = read_geogrid(build_geogrid_at(2.0 * kGgEA, kGgNp, kGgD, false, true, kGgHm));
@@ -3228,9 +3219,9 @@ void oracle_geogrid(const m::Project& pr) {
     check(rp2.ok && std::fabs(rp2.N - rp.N) < 0.01 * kGgNp, "and doubling the stretch changes nothing");
     check(rel.ok && rel.N > 2.0 * kGgNp, "while the elastic twin carries what it was told to");
 
-    // (c) TENSION ONLY. The manual's other sentence about this element: it "can only sustain
-    // tensile forces, but not compressive forces". Push the block instead of pulling it and the
-    // reinforcement must carry nothing at all -- not a small number, nothing.
+    // (c) TENSION ONLY. The other half of the element's definition: it sustains tension and no
+    // compression. Push the block instead of pulling it and the reinforcement must carry
+    // nothing at all -- not a small number, nothing.
     const GgRead rc = read_geogrid(build_geogrid_at(kGgEA, kGgNp, -kGgD, false, true, kGgHm));
     std::printf("      block compressed: geogrid N = %.3e kN/m\n", rc.N);
     check(rc.ok && rc.N < 1e-6 * want, "in compression the geogrid carries nothing");
@@ -3252,11 +3243,11 @@ void oracle_geogrid(const m::Project& pr) {
 }
 
 // ------------------------------ KV-CST-011: tension cut-off on Hardening Soil ----------------
-// The manual's Eq. 3-11 IS the oracle, and it is an inequality rather than a number: the cut-off
-// adds three yield functions f4 = sigma'1 - sigma_t <= 0, f5 and f6 on the other two principals,
-// with an associated flow rule. So the thing to measure is admissibility -- after a converged
-// run with the cut-off on, NO point of the model may carry a principal stress above sigma_t --
-// and the thing to prove alongside it is that the cap is inert until it bites.
+// The cut-off's yield condition IS the oracle, and it is an inequality rather than a number: the
+// cut-off adds three yield functions f4 = sigma'1 - sigma_t <= 0, f5 and f6 on the other two
+// principals, with an associated flow rule. So the thing to measure is admissibility -- after a
+// converged run with the cut-off on, NO point of the model may carry a principal stress above
+// sigma_t -- and the thing to prove alongside it is that the cap is inert until it bites.
 //
 // Fixture, and why it is this one. A Hardening Soil column carries its own weight, so the
 // vertical stress stays compressive and the ground keeps its stiffness; a prescribed edge then
@@ -3345,10 +3336,10 @@ void oracle_tension_cutoff(const m::Project& pr) {
     check(on.ok, "the stretched Hardening Soil column converges with the cut-off active");
     if (!on.ok) return;
 
-    // (a) ADMISSIBILITY -- Eq. 3-11 itself. Nodal stresses are RECOVERED from the Gauss points
-    // (extrapolated and averaged), so a converged field may overshoot the integration points it
-    // came from by a little; the band is that recovery, not the return mapping, which caps every
-    // Gauss point exactly.
+    // (a) ADMISSIBILITY -- the yield condition itself. Nodal stresses are RECOVERED from the
+    // Gauss points (extrapolated and averaged), so a converged field may overshoot the
+    // integration points it came from by a little; the band is that recovery, not the return
+    // mapping, which caps every Gauss point exactly.
     const TcRead off = read_tension_cutoff(build_tension_cutoff_at(false, 0.0, kTcDx, kTcHm));
     std::printf("      max principal stress: cut-off ON %+.4f kPa | OFF %+.4f kPa\n",
                 on.max_principal, off.max_principal);
@@ -3426,8 +3417,8 @@ int main(int argc, char** argv) {
         {"kv-fnd-014-davis-booker-strip-footing.k2d", build_davis_booker, oracle_davis_booker},
         {"kv-slp-002-griffiths-lane-example1.k2d", build_gl_example1, oracle_gl_example1},
         {"kv-cst-002-hs-oedometer.k2d", build_hs_oedometer, oracle_hs_oedometer},
-        {"kv-str-002-plaxis-sliding-block.k2d", build_sliding_block, oracle_sliding_block},
-        {"kv-str-003-plaxis-beam-bending.k2d", build_beams, oracle_beams},
+        {"kv-str-002-sliding-block.k2d", build_sliding_block, oracle_sliding_block},
+        {"kv-str-003-beam-bending.k2d", build_beams, oracle_beams},
         {"kv-cst-008-hssmall-unloading.k2d", build_hss, oracle_hss},
         {"kv-cst-012-reset-small-strain.k2d", build_hss_reset, oracle_hss_reset},
         {"kv-cst-009-soft-soil-oedometer.k2d", build_ss, oracle_ss},

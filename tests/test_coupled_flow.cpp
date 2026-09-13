@@ -1,4 +1,4 @@
-// Fully-coupled flow-deformation (W3) verification. PLAXIS 2D's most general analysis; unsaturated van Genuchten/
+// Fully-coupled flow-deformation (W3) verification. The most general analysis type; unsaturated van Genuchten/
 // Mualem + Bishop χ=S_eff — the generalization of Biot consolidation.
 //   (1) SATURATED-LIMIT BIT-FOR-BIT REGRESSION: on a problem that stays saturated,
 //       W3 == solve_consolidation (a core already Terzaghi-verified to <2.3%) → the whole
@@ -7,7 +7,7 @@
 //   (3) UNSATURATED ACTIVATION + BISHOP: initial suction (negative pore) → van Genuchten
 //       S_eff<1; with drainage pore→0 → resaturation (S_eff→1 monotone); the nonlinear
 //       Picard converges. The Bishop χ=S_eff coupling is engaged.
-// See docs/references/transient-unsaturated-flow-formulation.md (W3); PLAXIS Sci.Man §3 Eq 3-8 + §4 (Biot).
+// See docs/references/transient-unsaturated-flow-formulation.md (W3); Biot (1941); van Genuchten (1980).
 #include <katai/analysis/consolidation.hpp>
 #include <katai/analysis/coupled_flow_deformation.hpp>
 #include <katai/fem/assembly/dof_map.hpp>

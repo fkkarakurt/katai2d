@@ -1,5 +1,5 @@
 // K0 procedure: geostatic initial stress + solver prestress seeding (P2.2 / staged
-// construction foundation). Two PLAXIS initial-stress methods are exercised:
+// construction foundation). Two initial-stress methods are exercised:
 //
 // (a) K0 PROCEDURE -- prescribe sigma'_v = -gamma'(z_surf - y), sigma'_h = K0 sigma'_v
 //     directly at every Gauss point (K0 = Jaky 1-sin(phi'), a free value, NOT tied to
@@ -7,7 +7,7 @@
 //     ONE load step. Because horizontal layering makes this field self-equilibrated for
 //     ANY K0, the body is already in equilibrium with its weight -> the initial phase
 //     produces ZERO displacement (round-off) and the committed stress stays the K0
-//     field. This is exactly PLAXIS's "K0 initial phase yields no displacement" rule and
+//     field. This is exactly the "K0 initial phase yields no displacement" rule and
 //     the prestress-carrying hook that staged construction needs.
 //
 // (b) GRAVITY LOADING -- no prestress; apply self-weight and solve elastically. The

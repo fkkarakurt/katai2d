@@ -2,7 +2,7 @@
 
 This document walks three well-known published problems through KATAI 2D
 exactly the way a user would run them: every material parameter, geometry
-dimension and reference value is taken letter for letter from the source,
+dimension and reference value is written out in full,
 the input is a checked-in `.k2d` file, and the run is the public `katai`
 command line. Nothing here is a one-off study — each case is part of the
 verification corpus, re-solved from its file by `test_input_corpus` on
@@ -20,26 +20,21 @@ engine must get right: a **collapse load in axisymmetry** (Cox), a
 | Davis & Booker (1973) — strip footing on c(z) clay, limit pressure | 7.80 kPa (analytic) | 7.91 kPa | +1.4% |
 | Griffiths & Lane (1999) Example 1 — slope factor of safety | 1.380 (Bishop–Morgenstern charts) / 1.4 (their FE) | 1.384 | +0.3% / −1.1% |
 
-Both bearing cases are also published finite-element benchmarks: the
-PLAXIS 2D Validation Manual (Version 8, Bentley Systems) runs the same two
-problems and publishes its own results next to the analytic values — 220.0
-kPa (−2.5%) for Cox and 7.86 kPa (+0.8%) for Davis & Booker. Those numbers
-are quoted below alongside KATAI's so the reader can see where an
-independent, established FE implementation lands on the same problem.
 Displacement-type finite elements approach a slip-line limit load from
 either side depending on discretisation and formulation choices; deviations
 of a few percent against an exact collapse load are the expected class of
-result for both programs.
+result.
 
 ---
 
 ## 1. Bearing capacity of a smooth rigid circular footing — Cox (1962)
 
-**Source.** Cox (1962) slip-line solution for the indentation of a
-ponderable c–φ soil, as published in Section 3.1 of the PLAXIS 2D
-Validation Manual, Version 8: limit pressure `p_max = 141 c = 225.6 kPa`.
+**Source.** A. D. Cox, *Axially-symmetric plastic deformation in soils — II.
+Indentation of ponderable soils*, Int. J. Mech. Sci. 4(5):371–380 (1962):
+slip-line solution for the indentation of a ponderable c–φ soil, limit
+pressure `p_max = 141 c = 225.6 kPa`.
 
-**The problem, verbatim.** Axisymmetric Mohr–Coulomb soil cylinder, 5 m
+**The problem.** Axisymmetric Mohr–Coulomb soil cylinder, 5 m
 radius × 4 m deep; footing radius `R = 1 m`, smooth and rigid.
 `E = 2400 kPa`, `ν = 0.20`, `c = 1.6 kPa`, `φ = 30°`, `γ = 16 kN/m³`,
 `K0 = 0.5`. The flow rule is **associated** (`ψ = φ = 30°`): a slip-line
@@ -96,7 +91,6 @@ print(f"p_max = {2*abs(Ry):.1f} kPa")   # 233.9
 | | p_max [kPa] | vs analytic |
 |---|---|---|
 | Cox (1962), slip-line (exact) | 225.6 | — |
-| PLAXIS 2D (published, same manual) | 220.0 | −2.5% |
 | **KATAI 2D** (file's own 0.25 m tri15 mesh) | **233.9** | **+3.7%** |
 
 **What the suite additionally asserts.** The K0 initial phase displaces by
@@ -110,12 +104,13 @@ bearing-capacity bias.
 
 ## 2. Strip footing on clay with strength increasing with depth — Davis & Booker (1973)
 
-**Source.** Davis & Booker (1973) analytic solution for a smooth strip
-footing on clay whose undrained strength grows linearly with depth, as
-published in Section 3.2 of the PLAXIS 2D Validation Manual, Version 8:
+**Source.** E. H. Davis and J. R. Booker, *The effect of increasing strength
+with depth on the bearing capacity of clays*, Géotechnique 23(4):551–563
+(1973): analytic solution for a smooth strip footing on clay whose undrained
+strength grows linearly with depth,
 `p_max = ρ [(2 + π) c₀ + B c_inc / 4] = 7.80 kPa`.
 
-**The problem, verbatim.** Plane strain, Tresca (`φ = 0`), weightless.
+**The problem.** Plane strain, Tresca (`φ = 0`), weightless.
 `c(z) = 1 + 2z` kPa (`c₀ = 1 kPa` at the surface, `c_inc = 2 kPa/m`),
 `E(z) = 299 + 498z` kPa, `ν = 0.3`. Footing half-width 1 m (`B = 2 m`),
 smooth and rigid, pushed 30 mm. In the `.k2d` schema the two depth profiles
@@ -146,13 +141,11 @@ solved 2 phase(s) in 3.70 s
 | | p_max [kPa] | vs analytic |
 |---|---|---|
 | Davis & Booker (1973), analytic | 7.80 | — |
-| PLAXIS 2D (published, same manual) | 7.86 | +0.8% |
-| **KATAI 2D** (file's own 0.5 m tri15 mesh) | **7.91** | **+1.4%** (+0.6% vs the PLAXIS number) |
+| **KATAI 2D** (file's own 0.5 m tri15 mesh) | **7.91** | **+1.4%** |
 
 **What the suite additionally asserts.** The weightless initial phase
 displaces by exactly zero; a footing node carries exactly the imposed
-`u_y = −30 mm`; the limit pressure sits within 5% of the analytic value
-*and* within 3% of the published PLAXIS number.
+`u_y = −30 mm`; the limit pressure sits within 5% of the analytic value.
 
 ---
 

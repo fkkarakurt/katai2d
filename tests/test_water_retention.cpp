@@ -3,7 +3,7 @@
 // (3) asymptotic S_e ~ (g_a·ψ)^{−(g_n−1)} (large suction); (4) Mualem-vG special case n=2
 // closed-form cross-check; (5) CRITICAL: analytic moisture capacity dS/dψ = central finite
 // difference (algorithmic correctness).
-// Kaynaklar: van Genuchten (1980) SSSAJ 44:892; Mualem (1976) WRR 12:513; PLAXIS MMM.
+// Sources: van Genuchten (1980) SSSAJ 44:892; Mualem (1976) WRR 12:513.
 #include <katai/materials/water_retention.hpp>
 
 #include <cmath>

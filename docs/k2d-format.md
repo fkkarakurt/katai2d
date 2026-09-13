@@ -19,7 +19,7 @@ numerical controls (`tol`, `loadsteps`, `maxiter`), so that a published run carr
 numerics it was computed with, **v8** the staged-construction target and the undrained
 switch (`mstage`, `ignoreund`) and **v9** the per-material undrained stiffness
 (`materials[i].und_mode`, `nu_u`, `skempton_B`), which an older build would replace with
-PLAXIS's default of 0.495 for every undrained material in the file, and **v10** the
+a fixed undrained Poisson's ratio of 0.495 for every undrained material in the file, and **v10** the
 Undrained (C) drainage type (`materials[i].drainage` = 4), which an older build would load
 "for display as Drained" and solve with undrained parameters read as effective ones, and **v11**
 wells and drains (`hydros`, `phases[i].hydro`), which an older build would ignore and solve the
@@ -150,7 +150,7 @@ flagged places differs from the in-memory default of a freshly created object.
 |---|---|---|---|---|
 | `name` | str | — | `"New material"` | Data set name |
 | `model` | int | — | `0` | Soil model: 0 Linear elastic, 1 Mohr-Coulomb, 2 Hardening Soil, 3 HS small, 4 Soft Soil, 5 Soft Soil Creep. NOTE: an absent key loads 0, although a freshly created material defaults to 1 |
-| `drainage` | int | — | `0` | 0 Drained, 1 Undrained (A), 2 Non-porous, 3 Undrained (B), 4 Undrained (C) — the last is a **total stress** analysis: `E`/`nu` are the undrained pair, `c` is s_u with φ = 0, and no pore pressure is generated or carried (PLAXIS MMM §2.7) |
+| `drainage` | int | — | `0` | 0 Drained, 1 Undrained (A), 2 Non-porous, 3 Undrained (B), 4 Undrained (C) — the last is a **total stress** analysis: `E`/`nu` are the undrained pair, `c` is s_u with φ = 0, and no pore pressure is generated or carried |
 | `color` | num[] | — | `[0.85,0.78,0.55]` | Display colour, RGB in 0..1 (3 values) |
 | `gamma_unsat` | num | kN/m³ | `17` | Unit weight above the phreatic level |
 | `gamma_sat` | num | kN/m³ | `20` | Unit weight below the phreatic level |
@@ -163,8 +163,8 @@ flagged places differs from the in-memory default of a freshly created object.
 | `E_inc` | num | kN/m²/m | `0` | Stiffness increase per metre depth below `y_ref` |
 | `c_inc` | num | kN/m²/m | `0` | Cohesion increase per metre depth below `y_ref` |
 | `y_ref` | num | m | `0` | Reference level for the increments |
-| `tension_cutoff` | bool | — | `true` | Rankine tension cut-off active. For a **Hoek-Brown** material it is not Rankine but the criterion's own tensile limit σ_t (MMM §4.3.7): the pair below caps σ_t and can only LOWER it, so the schema default (on, σ_t = 0) gives a rock that carries no tension — switch it off to keep the σ_t the criterion derives from σ_ci, s and m_b |
-| `dilatancy_cutoff` | bool | — | `false` | Stop dilatancy at the critical void ratio (PLAXIS MMM Eq. 5.16b) |
+| `tension_cutoff` | bool | — | `true` | Rankine tension cut-off active. For a **Hoek-Brown** material it is not Rankine but the criterion's own tensile limit σ_t: the pair below caps σ_t and can only LOWER it, so the schema default (on, σ_t = 0) gives a rock that carries no tension — switch it off to keep the σ_t the criterion derives from σ_ci, s and m_b |
+| `dilatancy_cutoff` | bool | — | `false` | Stop dilatancy at the critical void ratio: once the void ratio reaches `e_max`, the mobilised dilatancy angle is set to zero |
 | `e_max` | num | — | `1` | Critical (maximum) void ratio; read when `dilatancy_cutoff` is set |
 | `tensile_strength` | num | kN/m² | `0` | Allowed tensile strength σ_t |
 | `E50ref` | num | kN/m² | `3e4` | HS: secant stiffness at p_ref |
@@ -181,14 +181,14 @@ flagged places differs from the in-memory default of a freshly created object.
 | `lamstar` | num | — | `0.10` | Soft Soil: modified compression index λ* |
 | `kapstar` | num | — | `0.02` | Soft Soil: modified swelling index κ* |
 | `mustar` | num | — | `0.005` | Soft Soil Creep: modified creep index μ* |
-| `sigci` | num | kPa | `50000` | Hoek-Brown: uni-axial compressive strength of the INTACT rock, |σ_ci| > 0 (MMM §4.3.3). Written only by a Hoek-Brown material |
-| `mi` | num | — | `10` | Hoek-Brown: intact rock parameter m_i (MMM Fig 4-5: ~4 claystone, ~33 granite). Written only by a Hoek-Brown material |
-| `gsi` | num | — | `50` | Hoek-Brown: Geological Strength Index, 0–100 (MMM Fig 4-6; 100 = intact rock). Written only by a Hoek-Brown material |
-| `hbD` | num | — | `0` | Hoek-Brown: disturbance factor, 0–1 (MMM Fig 4-7; 0 undisturbed, 1 heavily blasted). Written only by a Hoek-Brown material |
-| `sigpsi` | num | kPa | `0` | Hoek-Brown: the confining stress at which dilatancy has died out (MMM Eq 4-13). The dilatancy angle itself is the shared `psi`, its value at σ′₃ = 0. Written only by a Hoek-Brown material |
+| `sigci` | num | kPa | `50000` | Hoek-Brown: uni-axial compressive strength of the INTACT rock, |σ_ci| > 0. Written only by a Hoek-Brown material |
+| `mi` | num | — | `10` | Hoek-Brown: intact rock parameter m_i (typically ~4 for claystone, ~33 for granite). Written only by a Hoek-Brown material |
+| `gsi` | num | — | `50` | Hoek-Brown: Geological Strength Index, 0–100 (100 = intact rock). Written only by a Hoek-Brown material |
+| `hbD` | num | — | `0` | Hoek-Brown: disturbance factor, 0–1 (0 undisturbed, 1 heavily blasted). Written only by a Hoek-Brown material |
+| `sigpsi` | num | kPa | `0` | Hoek-Brown: the confining stress at which dilatancy has died out: the mobilised dilatancy angle falls linearly from `psi` at σ′₃ = 0 to zero at a confinement of `sigpsi` (0 = no decay). The dilatancy angle itself is the shared `psi`, its value at σ′₃ = 0. Written only by a Hoek-Brown material |
 | `kx` | num | m/day | `1` | Horizontal permeability |
 | `ky` | num | m/day | `1` | Vertical permeability |
-| `und_mode` | int | — | `0` | How the pore fluid's stiffness is defined for Undrained (A)/(B): 0 = `nu_u` entered, 1 = Skempton's `skempton_B` (PLAXIS MMM §2.4) |
+| `und_mode` | int | — | `0` | How the pore fluid's stiffness is defined for Undrained (A)/(B): 0 = `nu_u` entered, 1 = Skempton's `skempton_B` |
 | `nu_u` | num | — | `0.495` | Equivalent undrained Poisson ratio (read when `und_mode` = 0); must satisfy ν' < ν_u < 0.5 |
 | `skempton_B` | num | — | `0` | Skempton's B (read when `und_mode` = 1); must lie in (0, 1) |
 | `gw_ga` | num | 1/m | `14.5` | van Genuchten g_a (inverse air-entry) |
@@ -252,8 +252,8 @@ with `name` (default `"Embedded beam"`), `color`, `E` (default `3e7` kN/m²) and
 #### Soil layer object (`strata[i]`)
 
 The layer list is GLOBAL: every layer exists at every borehole, and a layer that is not present at
-some location is a zero thickness there rather than a missing row (PLAXIS 2D Reference Manual
-sec. 4.2 and 4.3.1.1). `strata[i]` is the top-down layer order, so `strata[0]` is the uppermost.
+some location is a zero thickness there rather than a missing row. `strata[i]` is the top-down
+layer order, so `strata[0]` is the uppermost.
 
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
@@ -268,7 +268,7 @@ with `name` (default `"Layer"`) as above.
 | `x` | num | m | `0` | Where the log was taken |
 | `level` | num[] | m | `[]` | Layer-boundary levels top down: `level[j]` is the top of `strata[j]`, `level[j+1]` its base, so the length is `strata.length + 1`. Must not increase going down; equal consecutive values are a layer that pinches out here |
 | `has_head` | bool | — | `true` | Whether this log records a water level |
-| `head` | num | m | `0` | The phreatic level at this borehole. Several heads combine into a sloped water surface; one head is horizontal to the model edges (sec. 7.10.1.1) |
+| `head` | num | m | `0` | The phreatic level at this borehole. Several heads combine into a sloped water surface; one head is horizontal to the model edges |
 
 with `name` (default `"BH"`) as above.
 
@@ -306,8 +306,8 @@ with `name` (default `"Soil"`) as above.
 | `iface_pos` | bool | — | `false` | Positive-side interface attached |
 | `iface_neg` | bool | — | `false` | Negative-side interface attached |
 | `iface_material` | int | — | `-1` | Soil material override for the interfaces (−1 = adjacent soil) |
-| `conn` | int | — | `0` | **Embedded beam only** — how the connection point (the pile top: the end with the highest y, or for an exactly horizontal pile the lowest x) is attached (PLAXIS Reference §5.6.3). `0` hinged: the beam's top translations *are* the soil's there, "the same displacement, but not necessarily the same rotation" — PLAXIS's default when no structure shares the point, and what makes a pile loadable at its head. `1` free: coupled to the soil through the skin springs only, which is what PLAXIS sets for a grout body so a ground anchor does not shed axial force at the connection. The mesher carries the connection point as a node either way, so switching this changes the physics and not the mesh |
-| `flow_barrier` | int | — | `0` | Cross permeability in a groundwater calculation: 0 fully permeable (no effect on flow), 1 impermeable (the two sides get separate pore-pressure DOFs), 2 semi-permeable (PLAXIS Ref Table 5-2). Plates and interfaces only |
+| `conn` | int | — | `0` | **Embedded beam only** — how the connection point (the pile top: the end with the highest y, or for an exactly horizontal pile the lowest x) is attached. `0` hinged: the beam's top translations *are* the soil's there — the same displacement, with the rotation left free — the setting for a pile top that no other structure shares, and what makes a pile loadable at its head. `1` free: coupled to the soil through the skin springs only, which is the setting for a grout body, so a ground anchor does not shed axial force at the connection. The mesher carries the connection point as a node either way, so switching this changes the physics and not the mesh |
+| `flow_barrier` | int | — | `0` | Cross permeability in a groundwater calculation: 0 fully permeable (no effect on flow), 1 impermeable (the two sides get separate pore-pressure DOFs), 2 semi-permeable (a hydraulic resistance `hyd_res` across the line). Plates and interfaces only |
 | `hyd_res` | num | day | `0` | Hydraulic resistance d/k of a semi-permeable barrier: the head difference divided by the discharge per unit area of wall |
 
 with `name` (default `"Element"`), `material` (index into the kind's material list, default `-1`)
@@ -345,7 +345,7 @@ with `name` (default `"Displacement"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as 
 
 #### Hydraulic-condition object (`hydros[i]`)
 
-A well or a drain drawn *inside* the model (PLAXIS Reference §5.9). Its line is embedded in the
+A well or a drain drawn *inside* the model. Its line is embedded in the
 mesh like a load line. A **well** prescribes a discharge spread along it and stops extracting once
 the head reaches `h_min`; a **drain** holds the head at `head` — a *normal* drain only takes water
 away, a *vacuum* drain holds its head in both directions. Activated per phase through the phase
@@ -397,16 +397,16 @@ with `name` (default `"Well"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
 | `water_override` | bool | — | `false` | Use this phase's own phreatic line instead of the project's |
 | `wx` | num[] | m | `[]` | Phase phreatic polyline, x (used when `water_override`) |
 | `wy` | num[] | m | `[]` | Phase phreatic polyline, y (used when `water_override`) |
-| `mstage` | num | — | `1` | Fraction of this phase's staged change to apply (PLAXIS Σ Mstage). Staged (non-initial) phases only. Written only when below 1 |
-| `ignoreund` | bool | — | `false` | Solve Undrained (A)/(B) materials as drained in this phase (PLAXIS "Ignore und. behaviour"); strength parameters unchanged. Written only when true |
-| `resetsmall` | bool | — | `false` | Clear the Hardening Soil small-strain history at the start of this phase (PLAXIS "Reset small strain", Material Models Manual sec. 7.6), so the soil meets the phase at G0 instead of the stiffness earlier phases degraded it to. Stress, shear hardening `gamma_p` and the preconsolidation pressure are carried over untouched — the option resets the *history*, not the state. Staged (non-initial) phases only; raises `K2D-M005` saying how many stress points it cleared, or that no small-strain material was present to clear. Written only when true |
-| `tol` | num | — | *by material class* | Tolerated relative force residual (PLAXIS "Tolerated error"). Written only when set |
-| `loadsteps` | int | — | *by material class* | Load increments for this phase. Not PLAXIS's "Max steps": KATAI splits the load into a fixed number of increments (with adaptive cut-back), it does not step automatically to a cap. Written only when set |
-| `maxiter` | int | — | *by phase strategy* | Newton iterations per increment (PLAXIS "Max iterations"). Written only when set |
+| `mstage` | num | — | `1` | Fraction of this phase's staged change to apply. Staged (non-initial) phases only. Written only when below 1 |
+| `ignoreund` | bool | — | `false` | Solve Undrained (A)/(B) materials as drained in this phase; strength parameters unchanged. Written only when true |
+| `resetsmall` | bool | — | `false` | Clear the Hardening Soil small-strain history at the start of this phase, so the soil meets the phase at G0 instead of the stiffness earlier phases degraded it to. Stress, shear hardening `gamma_p` and the preconsolidation pressure are carried over untouched — the option resets the *history*, not the state. Staged (non-initial) phases only; raises `K2D-M005` saying how many stress points it cleared, or that no small-strain material was present to clear. Written only when true |
+| `tol` | num | — | *by material class* | Tolerated relative force residual. Written only when set |
+| `loadsteps` | int | — | *by material class* | Load increments for this phase. Not a cap on automatic steps: KATAI splits the load into a fixed number of increments (with adaptive cut-back), it does not step automatically to a cap. Written only when set |
+| `maxiter` | int | — | *by phase strategy* | Newton iterations per increment. Written only when set |
 | `cstop` | int | — | `0` | How a Consolidation phase ENDS: 0 time interval (`duration`/`steps`), 1 minimum excess pore pressure, 2 degree of consolidation. With 1 or 2 the time interval is not used at all — the phase marches until the state is reached and reports how long it took. Written only when non-zero |
-| `cminp` | num | kPa | `1` | `cstop`=1 threshold on the maximum \|excess pore pressure\| (PLAXIS default: 1 stress unit; applies to suction as much as to pressure) |
-| `cdeg` | num | % | `90` | `cstop`=2 target degree of consolidation, defined as PLAXIS defines it: the PRESSURE ratio \|p\|max(t) / \|p\|max,initial, **not** Terzaghi's settlement ratio. On the 1-D column the settlement ratio reaches 90% at Tv = 0.848 and the pressure ratio only at Tv = 1.031 — the same name, 21% apart in time |
-| `cfirst` | num | day | `0` | First time step of the march; 0 = automatic (the Vermeer-Verruijt critical step, PLAXIS's own default). Written only when set |
+| `cminp` | num | kPa | `1` | `cstop`=1 threshold on the maximum \|excess pore pressure\| (default 1 kPa; applies to suction as much as to pressure) |
+| `cdeg` | num | % | `90` | `cstop`=2 target degree of consolidation, defined as the PRESSURE ratio \|p\|max(t) / \|p\|max,initial, **not** Terzaghi's settlement ratio. On the 1-D column the settlement ratio reaches 90% at Tv = 0.848 and the pressure ratio only at Tv = 1.031 — the same name, 21% apart in time |
+| `cfirst` | num | day | `0` | First time step of the march; 0 = automatic (the Vermeer-Verruijt critical step). Written only when set |
 | `cmaxstep` | int | — | `1000` | Cap on the number of time steps the march may take. Reaching it REFUSES the phase — it never reports a time as if the target had been met. Written only when changed |
 | `substol` | double | — | *by material class* | Constitutive integration error tolerance (STOL) for this phase — the accuracy of the substepping that walks a stress point along its material law INSIDE one increment, as distinct from `tol`, which is the equilibrium residual BETWEEN increments. Read only by models with an error-controlled integrator (Hardening Soil, default 1e-5); ignored, not rejected, by the others. Written only when set |
 

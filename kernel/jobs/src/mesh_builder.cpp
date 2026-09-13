@@ -35,7 +35,7 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
     for (const auto& s : pr.structs) {
         using SK = model::StructKind;
         // Plates/geogrids AND standalone interfaces become conforming constraints: the interface line
-        // must lie on mesh edges so split_mesh_at_segment can duplicate its nodes (PLAXIS slip surface).
+        // must lie on mesh edges so split_mesh_at_segment can duplicate its nodes (a slip surface).
         if (s.kind == SK::Plate || s.kind == SK::Geogrid || s.kind == SK::Interface)
             raw.push_back({s.x1, s.y1, s.x2, s.y2, false, true});
     }
@@ -160,8 +160,9 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
     if (px.size() < 3 || outline.size() < 3) { R.message = "Degenerate geometry."; return R; }
 
     // 2) Local mesh density: build the sizing field from the per-object coarseness factors
-    // (PLAXIS semantics). When everything is at the default (no factors, no auto-refine), the
-    // field is skipped entirely and the constant-max_area mesher runs -- bit-identical meshes.
+    // (a factor scales the target element size). When everything is at the default (no factors,
+    // no auto-refine), the field is skipped entirely and the constant-max_area mesher runs --
+    // bit-identical meshes.
     const auto clampf = [](double f) { return std::clamp(f, 1.0 / 16.0, 4.0); };
     struct SizeSrc { double ax, ay, bx, by, h; };   // segment source (point: a == b)
     std::vector<SizeSrc> srcs;

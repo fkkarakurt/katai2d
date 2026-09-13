@@ -117,7 +117,7 @@ def _one(r, name, fields, structures, diagnostics):
         # and the backend). The engine records which, so the line says it instead of leaving the
         # reader to assume the one reading that flatters the run.
         # 'stalled line search' is ambiguous by itself and the stiffness parameter decides it,
-        # with PLAXIS's 0.5: the same ending is a verified bearing capacity at 0.00010 and a
+        # with a threshold of 0.5: the same ending is a verified bearing capacity at 0.00010 and a
         # confined column that cannot form a mechanism at 0.65550. The rule is the engine's
         # (abandonment_establishes_a_limit_load, static_phase.hpp); this reads the same two
         # values rather than inventing a second opinion.

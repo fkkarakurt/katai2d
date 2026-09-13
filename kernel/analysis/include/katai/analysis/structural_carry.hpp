@@ -5,7 +5,7 @@
 // a chained phase inherits the parent's structural state only if it is given
 // (a) the converged displacement DATUM and (b) the committed plastic states.
 // Without them every phase restarts its structures at u = 0 with zero plastic
-// memory, and the SumMstage imbalance re-ramps the parent's structural
+// memory, and the staged-construction imbalance re-ramps the parent's structural
 // tractions -- measured: an unchanged nil phase drifted the wall moment by 32%.
 //
 // Every size must match EXACTLY (same mesh, same DofMap layout, same structure

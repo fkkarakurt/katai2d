@@ -1,7 +1,7 @@
 // Hoek-Brown through the calculation path -- the step that makes the model REACHABLE. The core
 // and its closed forms are KV-CST-014; what is asked here is whether a `.k2d` file that names the
-// model produces the rock the manual describes, which is a different question and the one the
-// parity register counts.
+// model produces the rock the published criterion describes, which is a different question and
+// the one a user of the program depends on.
 //
 // THE EXPERIMENT IS A TRIAXIAL ELEMENT TEST, run twice at two cell pressures, because that is
 // where a rock model differs from a soil model and where a Mohr-Coulomb fit cannot follow. A block
@@ -27,10 +27,10 @@
 //
 // verify: KV-CST-015
 //   oracle:   closed_form
-//   source:   PLAXIS 2D Material Models Manual (2025.1) §4, Eq 4-1 with the rock-mass constants of Eq 4-2/4-3/4-4 -- the same criterion KV-CST-014 checks at the material point, asked here of the assembled FE path from a project file
+//   source:   Hoek, E., Carranza-Torres, C. & Corkum, B. (2002). Hoek-Brown failure criterion -- 2002 edition. Proc. NARMS-TAC Conference, Toronto, 267-273 -- the generalised criterion with its rock-mass constants m_b, s and a; the same criterion KV-CST-014 checks at the material point, asked here of the assembled FE path from a project file (KATAI 2D input contract, docs/k2d-format.md, sigci / mi / gsi / hbD)
 //   locator:  sigma_1 = sigma_3 - |sigma_ci| (m_b (-sigma_3/|sigma_ci|) + s)^a, compression negative, with m_b = m_i exp((GSI-100)/(28-14D)), s = exp((GSI-100)/(9-3D)), a = 1/2 + (exp(-GSI/15) - exp(-20/3))/6
 //   quantity: the axial effective stress a displacement-driven triaxial specimen carries on the plastic plateau [kPa], at two cell pressures, and the ratio between the two
-//   expected: the Eq 4-1 envelope evaluated at the lateral stress the specimen is carrying, and a ratio that is the curve's, not a line's
+//   expected: the Hoek-Brown envelope evaluated at the lateral stress the specimen is carrying, and a ratio that is the curve's, not a line's
 //   band:     0.1% on each plateau and on their ratio -- MEASURED: -0.0000% at both cell pressures (sigma_1 = -10490.7 against the envelope's -10490.7, and -33891.4 against -33891.4), with the block 0.05% / 0.02% from homogeneous and the phase carrying the full imposed settlement (lambda = 1.000). The band is the margin over that measurement, not a tolerance the answer needs; the load-controlled version of this same fixture needed 3% and used all of it.
 #include <katai/io/project_io.hpp>
 #include <katai/io/validate.hpp>
@@ -57,7 +57,7 @@ constexpr double kW = 1.0, kH = 1.0;      // the specimen [m] -- see the note in
 constexpr double kSigCi = 50000.0;        // intact rock, 50 MPa
 constexpr double kMi = 10.0, kGsi = 50.0, kD = 0.0;
 
-// The manual's own envelope, written here rather than taken from the header under test.
+// The published envelope, written here rather than taken from the header under test.
 double envelope_sigma1(double sigma3) {
     const double mb = kMi * std::exp((kGsi - 100.0) / (28.0 - 14.0 * kD));
     const double s = std::exp((kGsi - 100.0) / (9.0 - 3.0 * kD));
@@ -135,11 +135,11 @@ m::Project specimen(double conf, double squeeze) {
 bool element_test(double conf, double squeeze, double& sxx, double& syy, double& spread,
                   double& lam) {
     // THROUGH THE FILE, not past it. The headline of this test is that a `.k2d` naming
-    // Hoek-Brown gets the manual's rock, and a programmatic project would only have shown that
-    // the ENGINE does -- the five rock keys are written only by a material that uses the model,
-    // so a writer or reader that dropped one would leave a default-parameter rock behind and
-    // every number below would still be a rock's. So the project is serialised, parsed back, and
-    // it is the PARSED one that is meshed and solved.
+    // Hoek-Brown gets the published criterion's rock, and a programmatic project would only have
+    // shown that the ENGINE does -- the five rock keys are written only by a material that uses
+    // the model, so a writer or reader that dropped one would leave a default-parameter rock
+    // behind and every number below would still be a rock's. So the project is serialised,
+    // parsed back, and it is the PARSED one that is meshed and solved.
     const auto built = specimen(conf, squeeze);
     const std::string text = m::project_to_json(built);
     m::Project pr;
@@ -199,7 +199,7 @@ int main() {
     // and SMALL: at 1 m tall the self-weight reaches 25 kPa, which is 0.24% of the smallest
     // failure stress measured below and well inside the band.
     std::printf("Hoek-Brown through the calculation path\n\n");
-    std::printf("   cell press.   sigma_1 plateau   Eq 4-1 at sigma_3        error   sigma_3 read"
+    std::printf("   cell press.   sigma_1 plateau   envelope at sigma_3      error   sigma_3 read"
                 "   spread   lambda\n");
     double reached[2] = {0.0, 0.0}, envel[2] = {0.0, 0.0};
     const double confs[2] = {1000.0, 8000.0};
@@ -221,15 +221,15 @@ int main() {
                     100.0 * spread, lam);
         check(spread < 0.005, "and it stayed homogeneous, so the reading is the material's");
         check(std::fabs(reached[i] / envel[i] - 1.0) < 0.001,
-              "the stress it carries is the Eq 4-1 envelope at that confinement, within 0.1%");
+              "the stress it carries is the Hoek-Brown envelope at that confinement, within 0.1%");
     }
     // ---- AND THE ANALYSIS THIS MODEL CANNOT BE ASKED FOR --------------------------------
     // phi-c reduction divides c and phi; Hoek-Brown reads neither, so every trial would run the
     // rock at full strength, nothing would ever bring it down, and the search would report its
     // cap itself -- "FoS > 3.0", whatever the rock. The refusal is what is checked here,
     // because a wrong number in the safe-looking direction is the worst kind this program can
-    // produce. (The strength reduction that IS defined for this model reformulates the Hoek-Brown
-    // yield function itself -- Reference Manual sec 7.4.5.2 -- and this build does not have it.)
+    // produce. (A strength reduction that is defined for this model has to reformulate the
+    // Hoek-Brown yield function itself, and this build does not have it.)
     {
         auto pr = specimen(1000.0, 0.001);
         m::Phase sf; sf.name = "FoS"; sf.type = m::PhaseType::Safety;
@@ -333,7 +333,7 @@ int main() {
           "and the two runs reproduce the CURVE's ratio, which a straight line cannot");
 
     if (g_failures == 0) {
-        std::printf("\nOK: a .k2d file that names Hoek-Brown gets the manual's rock\n");
+        std::printf("\nOK: a .k2d file that names Hoek-Brown gets the published rock criterion\n");
         return 0;
     }
     std::fprintf(stderr, "\n%d check(s) failed\n", g_failures);

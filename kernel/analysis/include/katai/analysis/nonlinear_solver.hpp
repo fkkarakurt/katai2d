@@ -48,9 +48,9 @@ struct NewtonOptions {
     double tolerance = 1e-9;  // relative convergence threshold on ||r|| / ||f_ext||
     Kinematics kinematics = Kinematics::PlaneStrain;
     // Time interval of the phase [days] — for time-dependent constitutive models
-    // (SoftSoilCreep); distributed over the increments in proportion to Δλ (PLAXIS: time
-    // advances together with SumMstage). 0 = timeless phase (no creep accumulates; all old
-    // callers bit-for-bit).
+    // (SoftSoilCreep); distributed over the increments in proportion to Δλ (time advances
+    // together with the staged-construction multiplier). 0 = timeless phase (no creep accumulates; all old callers
+    // bit-for-bit).
     double time_interval = 0.0;
     // Line-search memory. 1 = a trial step must beat the CURRENT residual (Armijo, monotone).
     // W > 1 judges it against the WORST of the last W residual norms (Grippo, Lampariello and
@@ -99,8 +99,9 @@ struct NewtonOptions {
     // error that no stopping rule could detect). 0 = the material class's own default, measured
     // at 1e-5 for Hardening Soil.
     double substep_tolerance = 0.0;
-    // Require the LOCAL convergence criteria (NewtonResult::Convergence, Scientific Manual
-    // §9.1.2) as well as the global force residual before an increment is called converged.
+    // Require the LOCAL convergence criteria (NewtonResult::Convergence: the local stress errors
+    // at the stress points) as well as the global force residual before an increment is called
+    // converged.
     //
     // ON, since 2026-08-24, by measurement rather than by preference. The global criterion alone
     // stops a Hardening Soil oedometer 0.179% away from its own converged answer at the tolerance
@@ -133,8 +134,8 @@ struct PlateElement {
     std::array<int, 6> trans_dof = {-1, -1, -1, -1, -1, -1};  // [A_x,A_y, B_x,B_y, mid_x,mid_y]
 };
 
-// Anchor — one-directional AXIAL spring (normal force only, NO rotation). PLAXIS MMM Eq 18-1:
-// N = (EA/L)·U. The two types share the SAME element technology (PLAXIS Reference Manual):
+// Anchor — one-directional AXIAL spring (normal force only, NO rotation): N = (EA/L)·U, U the
+// elongation along the anchor axis. The two types share the SAME element technology:
 //  - node-to-node: between two mesh nodes (strut/internal support); L = equivalent length
 //    (≤0 ⇒ geometric distance). The spring acts along the geometry direction.
 //  - fixed-end: one mesh node + a fixed far end (node_b<0 ⇒ fixed_point); ground anchor (bond
@@ -156,8 +157,8 @@ struct AnchorElement {
     // almost never installed slack: it is tensioned against the wall, and that force is what
     // holds the excavation before any further movement occurs. The anchor then behaves as an
     // elastic spring FROM that state — N = N0 + (EA/L)·(U − U_p) with U measured from the
-    // installation datum the phase chain carries — which is the PLAXIS reading of a prestressed
-    // anchor: the lock-off force is applied once, and afterwards the force follows the wall.
+    // installation datum the phase chain carries — which is what a prestressed anchor means in
+    // this program: the lock-off force is applied once, and afterwards the force follows the wall.
     // 0 ⇒ installed slack, i.e. what every KATAI anchor was before this field existed.
     double prestress = 0.0;
 };
@@ -186,7 +187,7 @@ struct InterfaceElement {
     std::array<double, 3> sigma_n0 = {0.0, 0.0, 0.0};
 };
 
-// 5-NODE (quartic) plate — sits on a tri15 edge (counterpart of the PLAXIS 15-node soil
+// 5-NODE (quartic) plate — sits on a tri15 edge (the structural partner of the 15-node soil
 // element). Same semantics as the 3-node one: nodes=geometry (mesh nodes), rot_dof=rotational
 // extra DOFs, trans_dof=translations (≥0 extra-DOF/embedded wall, −1 share the mesh node).
 // 15 DOFs. Math: structural-plate-formulation.md.
@@ -223,7 +224,7 @@ struct Structures {
 // formulated (f = f(u_total, plastic state)) → the parent's structural state carries over
 // only if (a) the converged displacement DATUM and (b) the committed plastic states are
 // provided. Then the Coulomb cap / anchor capacity / geogrid slack is checked on the TOTAL
-// effect and an UNCHANGED (nil) phase is a true no-op — without the carry-over, the SumMstage
+// effect and an UNCHANGED (nil) phase is a true no-op — without the carry-over, the staged-construction
 // imbalance re-ramps the parent's structural tractions every phase (measured: wall M drifted
 // 32% across a nil phase). Empty members = start from zero (old behaviour BIT-FOR-BIT).
 // A WRONG size does not fall through silently: std::invalid_argument (silently starting from
@@ -334,16 +335,17 @@ struct NewtonResult {
     //
     // Until this existed the tree checked exactly one thing -- a global force residual against
     // a FIXED scale -- and reported "converged" as though that one thing were the whole
-    // question. It is not the whole question anywhere else: the reference codes each check at
-    // least two independent quantities, and the reason is that global equilibrium and local
+    // question. It is not the whole question: a complete convergence test checks at least two
+    // independent quantities, and the reason is that global equilibrium and local
     // constitutive accuracy fail in different places. A run can balance every nodal force
     // around stresses that its own material law would not return; the force residual cannot
     // see that, by construction, because those stresses are what it assembled the forces from.
     //
     // Two structural differences from the old single check, both of them measurable:
     //
-    //  * The normalisation is no longer fixed. Eq. 9-1 divides by ||f_int|| + CSP*||f_inact||,
-    //    and CSP falls towards zero as the body plastifies -- so the criterion TIGHTENS as a
+    //  * The normalisation is no longer fixed. The stiffness-weighted global force error divides
+    //    the residual by ||f_int|| + CSP*||f_inact||, and CSP (the current stiffness parameter,
+    //    below) falls towards zero as the body plastifies -- so the criterion TIGHTENS as a
     //    mechanism forms, which is exactly where a load fraction is about to be published as a
     //    capacity. Dividing by a constant does the opposite.
     //  * There are local criteria at all. See LocalErrorProbe in internal_forces.hpp for the
@@ -353,27 +355,29 @@ struct NewtonResult {
     // decision that moves published numbers, and this project makes that kind of decision on
     // purpose, with the measurement in hand, rather than as the side effect of adding a check.
     struct Convergence {
-        // Current Stiffness Parameter, Reference Manual Eq. 7-22: the work this increment did
-        // against the stress increment, over the work the same strain would have done had the
-        // response stayed elastic. Unity while elastic, towards zero at failure.
+        // Current Stiffness Parameter (CSP): the work this increment did against the stress
+        // increment, over the work the same strain would have done had the response stayed
+        // elastic. Unity while elastic, towards zero at failure.
         //
-        // NOTE, and it matters: Scientific Manual Eq. 9-2 prints this ratio the OTHER WAY UP
-        // (elastic over total). The two official manuals of the same release disagree, and
-        // only the Reference Manual's orientation is consistent with the behaviour both of
-        // them describe -- "when the solution is fully elastic the Stiffness is equal to
-        // unity, whereas at failure the Stiffness approaches zero" -- and with the uses built
-        // on it there (arc-length engages below 0.5, collapse is reported below 0.015). The
-        // inverted form is >= 1 and grows without bound as a mechanism forms, which would make
-        // Eq. 9-1 LOOSEN towards failure. Implemented from Eq. 7-22, deliberately.
+        // NOTE, and it matters: the same ratio also appears written the OTHER WAY UP (elastic
+        // over total). Only total-over-elastic is consistent with the behaviour the parameter
+        // exists to show -- exactly unity while the solution is fully elastic, approaching zero
+        // at failure -- and with the thresholds read from it (kMechanismCsp in results.hpp asks
+        // whether it has fallen below 0.5). The inverted form is >= 1 and grows without bound as
+        // a mechanism forms, which would make the stiffness-weighted force error LOOSEN towards
+        // failure. Implemented as total over elastic, deliberately.
         double csp = 1.0;
-        double force_error = 0.0;      // Eq. 9-1
+        // Stiffness-weighted global force error: ||r|| / (||f_int|| + CSP*||f_const||).
+        double force_error = 0.0;
         // The number the DEFAULT gate actually uses: ||r|| over a FIXED scale,
-        // max(||f_ext||, ||f_const||, 1). Reported next to Eq. 9-1 because the two are not the
-        // same question and the tree used to publish only the one it does NOT gate on -- so a
-        // run could say "force error 3e-2, tolerance 1e-1" while the quantity that let it stop
-        // was a different ratio entirely.
+        // max(||f_ext||, ||f_const||, 1). Reported next to the stiffness-weighted force error
+        // because the two are not the same question and the tree used to publish only the one it
+        // does NOT gate on -- so a run could say "force error 3e-2, tolerance 1e-1" while the
+        // quantity that let it stop was a different ratio entirely.
         double global_error = 0.0;
-        double moment_error = 0.0;     // Eq. 9-3; meaningless unless has_moment
+        // Moment error: the largest |residual| on a rotational equation over the sum of absolute
+        // nodal moment contributions (floored at 1 kNm/m); meaningless unless has_moment.
+        double moment_error = 0.0;
         // The DENOMINATOR of that ratio, BEFORE the floor: the sum of absolute nodal moment
         // contributions over every rotational freedom in the model. Reported, not just used,
         // because this is a ratio that can blow up from below -- a structure nothing bends
@@ -384,18 +388,21 @@ struct NewtonResult {
         double moment_ref = 0.0;
         bool has_moment = false;       // something in the model carries a rotational DOF
         double tolerated = 0.0;        // the tolerated error all of these are measured against
-        // Local criteria (Eq. 9-5, 9-7), counted over the active soil stress points.
+        // Local criteria, counted over the active soil stress points: the local error at a
+        // plastic stress point, and at an elastic point whose stiffness depends on stress.
         int plastic_points = 0, plastic_inaccurate = 0;
         int elastic_points = 0, nl_elastic_points = 0, nl_elastic_inaccurate = 0;
         double worst_plastic_error = 0.0, worst_nl_elastic_error = 0.0;
-        // Interfaces (Eq. 9-8). The embedded beam's SKIN coupling springs are counted here too,
-        // which is what the source does -- it draws no distinction between a soil-structure
-        // interface and the special interface a pile skin is.
+        // Interfaces: the local error at a plastic interface point, the traction difference over
+        // the point's own shear capacity. The embedded beam's SKIN coupling springs are counted
+        // here too, deliberately -- no distinction is drawn between a soil-structure interface
+        // and the special interface a pile skin is.
         int iface_points = 0, iface_inaccurate = 0;
         double worst_iface_error = 0.0;
-        // Embedded-beam foot force (Eq. 9-9): one ratio over every foot in the model, not a
-        // per-point count, and tolerated at FIVE times the tolerated error -- the source's
-        // factor, kept rather than rounded to the same bar as everything else.
+        // Embedded-beam foot force error: sum |F_foot,eq - F_foot,c| over the largest of sum
+        // |F_foot,c|, 1% of sum |F_foot,max| and 1. One ratio over every foot in the model, not a
+        // per-point count, and tolerated at FIVE times the tolerated error -- a looser bar kept
+        // on purpose rather than rounded to the same bar as everything else.
         double foot_force_error = 0.0;
         int feet = 0;
         static constexpr double kFootToleranceFactor = 5.0;
@@ -409,10 +416,11 @@ struct NewtonResult {
         // What it means: the Hardening Soil integrator subdivides an increment until its own
         // error estimate is under STOL, but it is allowed at most hs_max_substeps() pieces, and
         // when it runs out it returns the best it has. Nothing in the equilibrium iteration can
-        // see that -- the two stresses of Fig. 9-1 are both computed from the same cut-short
-        // walk, so they agree with each other and the local criteria pass. Until 2026-08-25 the
-        // integrator's own flag was dropped between the material and the solver, so a run that
-        // hit the ceiling was reported exactly like one that met its tolerance.
+        // see that -- the equilibrium and constitutive stresses of a point (LocalErrorProbe) are
+        // both computed from the same cut-short walk, so they agree with each other and the
+        // local criteria pass. Until 2026-08-25 the integrator's own flag was dropped between the
+        // material and the solver, so a run that hit the ceiling was reported exactly like one
+        // that met its tolerance.
         int saturated_points = 0;      // most points saturated in any one committed iterate
         int saturated_increments = 0;  // increments whose committed iterate had any
         bool integration_met_tolerance() const { return saturated_increments == 0; }
@@ -447,7 +455,7 @@ struct NewtonResult {
         // reason that is not symmetry: the global gate is ||r||, a Euclidean norm taken over a
         // vector whose entries are forces AND moments. Adding kN and kNm in quadrature is not a
         // norm of anything, and the rotational rows are the part of it that no force scale can
-        // read back out. Eq. 9-3 is the dimensionally honest question about those rows.
+        // read back out. The moment error is the dimensionally honest question about those rows.
         //
         // MEASURED before it was switched on (2026-08-25), because a criterion that binds where
         // nothing was wrong is a regression:
@@ -464,8 +472,8 @@ struct NewtonResult {
         bool enforced_ok() const { return local_ok() && moment_ok(); }
     };
     Convergence convergence;
-    // Wall-clock breakdown of the computation (seconds) + call counters. The counterpart of
-    // PLAXIS's calculation-time report; the base measurement for performance studies.
+    // Wall-clock breakdown of the computation (seconds) + call counters: the calculation-time
+    // report, and the base measurement for performance studies.
     // Instrumentation is at iteration granularity (one chrono call per iteration) → the cost
     // is negligible, always on.
     struct Timings {
@@ -510,7 +518,7 @@ struct NewtonResult {
 // cutback). Empty = 0.
 // profile: optional depth gradient (by material id; see materials/material_model.hpp
 // MaterialProfile). Empty OR all uniform() ⇒ the old constant-E/c path BIT-FOR-BIT. If
-// given, E' and c' are evaluated PER STRESS (Gauss) POINT (as PLAXIS does).
+// given, E' and c' are evaluated PER STRESS (Gauss) POINT.
 // init_struct: parent STRUCTURAL datum + plastic state (static generalization of Track 1a;
 // empty = old behaviour bit-for-bit). If given, constant_force MUST INCLUDE
 // structural_internal_force(init_struct) — otherwise residual(0) ≠ 0 and the first

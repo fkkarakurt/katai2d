@@ -12,7 +12,7 @@
 }
 
 @misc{d,
-  title = {1D elastic unloading of a laterally confined column (oedometric heave) under the staged-construction SumMstage rule},
+  title = {1D elastic unloading of a laterally confined column (oedometric heave) when a staged phase applies its full change (KATAI 2D input contract, docs/k2d-format.md, mstage = 1)},
   note  = {cited by KV-EXC-001},
 }
 
@@ -21,18 +21,43 @@
   note  = {cited by KV-FLW-001},
 }
 
+@misc{coulomb,
+  title = {Coulomb friction with adhesion on a planar joint: the horizontal force that makes a rigid block slide on its base is the joint's adhesion over the contact width plus the block's weight times the tangent of the joint friction angle; KATAI 2D input contract (docs/k2d-format.md, iface_material)},
+  note  = {cited by KV-STR-002},
+}
+
+@misc{cox1962,
+  title = {Cox, A.D. (1962). Axially-symmetric plastic deformation in soils -- II. Indentation of ponderable soils. Int. J. Mech. Sci. 4(5), 371-380 (slip-line solution); KATAI 2D input contract (docs/k2d-format.md, disps)},
+  note  = {cited by KV-FND-013},
+}
+
+@misc{cox1962b,
+  title = {Cox, A.D. (1962). Axially-symmetric plastic deformation in soils -- II. Indentation of ponderable soils. Int. J. Mech. Sci. 4(5), 371-380.},
+  note  = {cited by KV-FND-003},
+}
+
 @misc{d1999,
   title = {D. V. Griffiths and P. A. Lane (1999), "Slope stability analysis by finite elements", Geotechnique 49(3):387-403, Example 1 and its Table 2 (read from the authors' copy at inside.mines.edu); A. W. Bishop and N. R. Morgenstern (1960), "Stability coefficients for earth slopes", Geotechnique 10(4):129-153; discretisation-error estimation per Roache (1994) and Celik et al. (2008) as implemented in katai/math/grid_convergence.hpp},
   note  = {cited by KV-SLP-003},
 }
 
-@misc{darcy2025,
-  title = {Darcy's law for one-dimensional steady flow through a homogeneous column; the boundary term itself is PLAXIS 2D 2025.1 Scientific Manual Eqs. 3-31 and 3-34 (prescribed recharge on the boundary), with the sign convention of §3.2.7 (positive = into the soil) and the scope limit of Ch. 4 (consolidation carries no non-zero prescribed outflow)},
+@misc{darcy,
+  title = {Darcy's law for one-dimensional steady flow through a homogeneous column; the boundary term itself is the Galerkin weak form of steady groundwater flow, in which a prescribed normal flux q_n contributes the surface integral of N q_n over the boundary to the right-hand side; KATAI 2D input contract (docs/k2d-format.md, edge_flow = 3 / edge_flux), with the sign convention positive = into the soil and the scope limit that consolidation carries no non-zero prescribed outflow},
   note  = {cited by KV-FLW-002},
 }
 
-@misc{dupuit2025,
-  title = {Dupuit-Forchheimer one-dimensional confined flow (Darcy's law integrated across a strip of aquifer), the classical basis of the well and trench formulae; PLAXIS 2D 2025.1 Reference Manual sec. 5.9.1-5.9.2 for what the two objects mean -- a well prescribes "the discharge of the well in the unit of volume per unit of time, per unit of width" and stops at h_min ("when the groundwater head reduces below the h_min level no further extraction will occur"), a drain prescribes a head where "the pore pressure in all nodes of the drain is reduced such that it is equivalent to the given head", and a NORMAL drain leaves ground that is already drier alone ("pore pressures lower than the equivalent to the given head are not affected by the drain")},
+@misc{davis1973,
+  title = {Davis, E.H. & Booker, J.R. (1973). The effect of increasing strength with depth on the bearing capacity of clays. Geotechnique 23(4), 551-563 (analytic solution); KATAI 2D input contract (docs/k2d-format.md, c_inc / E_inc / y_ref)},
+  note  = {cited by KV-FND-014},
+}
+
+@misc{davis1973b,
+  title = {Davis, E.H. & Booker, J.R. (1973). The effect of increasing strength with depth on the bearing capacity of clays. Geotechnique 23(4), 551-563.},
+  note  = {cited by KV-FND-004},
+}
+
+@misc{dupuit,
+  title = {Dupuit-Forchheimer one-dimensional confined flow (Darcy's law integrated across a strip of aquifer), the classical basis of the well and trench formulae; KATAI 2D input contract (docs/k2d-format.md, hydros / kind / behaviour / q / h_min / head) for what the two objects mean -- a well prescribes a discharge in volume per unit time per unit width out of plane and stops extracting once the groundwater head at it has fallen to h_min; a drain prescribes a head, reducing the pore pressure in all its nodes to the value equivalent to that head; and a NORMAL drain leaves ground that is already drier alone, since pore pressures below the equivalent of its head are not affected},
   note  = {cited by KV-FLW-003},
 }
 
@@ -51,99 +76,94 @@
   note  = {cited by KV-FND-007, KV-FND-009},
 }
 
+@misc{giam1989,
+  title = {Giam, P.S.K. & Donald, I.B. (1989). Example problems for testing soil slope stability programs. Civil Engineering Research Report 8/1989, Monash University -- the simple homogeneous slope of that referee set (c' = 3.0 kPa, phi' = 19.6 deg, gamma = 20.0 kN/m3), for which the study publishes a referee factor of safety of 1.00; the finite-element strength-reduction procedure itself is Griffiths, D.V. & Lane, P.A. (1999). Slope stability analysis by finite elements. Geotechnique 49(3), 387-403},
+  note  = {cited by KV-SLP-001},
+}
+
+@misc{gibson1967,
+  title = {Gibson, R.E. (1967). Some results concerning displacements and stresses in a non-homogeneous elastic half-space. Geotechnique 17(1), 58-67 (the half-space closed form); KATAI 2D input contract (docs/k2d-format.md, E_inc / y_ref)},
+  note  = {cited by KV-FND-011},
+}
+
+@misc{gibson1967b,
+  title = {Gibson, R.E. (1967). Some results concerning displacements and stresses in a non-homogeneous elastic half-space. Geotechnique 17(1), 58-67.},
+  note  = {cited by KV-FND-002},
+}
+
+@misc{giroud1972,
+  title = {Giroud, J.P. (1972). Settlement of rectangular foundation on soil layer. J. Soil Mech. Found. Div., ASCE, 98(SM1), 149-154 (analytic solution); KATAI 2D input contract (docs/k2d-format.md, disps)},
+  note  = {cited by KV-FND-012},
+}
+
+@misc{giroud1972b,
+  title = {Giroud, J.P. (1972). Settlement of rectangular foundation on soil layer. J. Soil Mech. Found. Div., ASCE, 98(SM1), 149-154.},
+  note  = {cited by KV-FND-001},
+}
+
 @misc{griffiths1999,
   title = {Griffiths and Lane (1999), "Slope stability analysis by finite elements", Geotechnique 49(3), Example 1},
   note  = {cited by KV-SLP-002},
 }
 
-@misc{griffiths1999b,
-  title = {Griffiths and Lane (1999), "Slope stability analysis by finite elements", Geotechnique 49(3); Rocscience Slide verification problem 1},
-  note  = {cited by KV-SLP-001},
+@misc{hoek2002,
+  title = {Hoek, E., Carranza-Torres, C. & Corkum, B. (2002). Hoek-Brown failure criterion -- 2002 edition. Proc. NARMS-TAC Conference, Toronto, 267-273 -- the generalised criterion with its rock-mass constants m_b, s and a; the same criterion KV-CST-014 checks at the material point, asked here of the assembled FE path from a project file (KATAI 2D input contract, docs/k2d-format.md, sigci / mi / gsi / hbD)},
+  note  = {cited by KV-CST-015},
+}
+
+@misc{hoek2002b,
+  title = {Hoek, E., Carranza-Torres, C. & Corkum, B. (2002). Hoek-Brown failure criterion -- 2002 edition. Proc. NARMS-TAC Conference, Toronto, 267-273 -- the generalised criterion, the rock-mass constants m_b, s and a, and the rock-mass compressive and tensile strengths; KATAI 2D input contract (docs/k2d-format.md, sigci / mi / gsi / hbD / psi / sigpsi / tension_cutoff / tensile_strength) for the non-associated flow, the mobilised dilatancy and the optional tension cut-off. The Tresca degeneration is checked against this tree's own verified Mohr-Coulomb return (mohr_coulomb.cpp, P1.2b)},
+  note  = {cited by KV-CST-014},
 }
 
 @misc{katai,
+  title = {KATAI 2D input contract (docs/k2d-format.md, anchors[i].prestress): for node-to-node and fixed-end anchors a lock-off force is applied when the anchor is activated, after which the anchor behaves as an elastic spring from that state; the equivalence used as the oracle is the statement that a constant internal force N0 along the anchor axis is, in the residual, an external force of the same magnitude and direction -- so the same problem can be built twice from different primitives},
+  note  = {cited by KV-STR-001},
+}
+
+@misc{kataib,
+  title = {KATAI 2D input contract (docs/k2d-format.md, dilatancy_cutoff / e_max / e_init): the dilatancy cut-off sets the mobilised dilatancy to zero once the void ratio reaches the critical (maximum) void ratio; a minimum void ratio plays no part in the rule, which is why KATAI does not carry one},
+  note  = {cited by KV-CST-004},
+}
+
+@misc{kataic,
+  title = {KATAI 2D input contract (docs/k2d-format.md, ignoreund): in a phase that ignores undrained behaviour, the undrained response of Undrained (A)/(B) materials is temporarily excluded so that no excess pore pressure is generated, while the strength parameters stay as declared. The independent path is the same model with the material DECLARED drained: if the option means what the contract says, the two must be the same calculation},
+  note  = {cited by KV-CST-005},
+}
+
+@misc{kataid,
+  title = {KATAI 2D input contract (docs/k2d-format.md, strata / boreholes / level / head) -- (R1) with several boreholes the soil-layer positions are interpolated between the logs; every soil layer is used throughout the whole model contour, so all layers appear in all boreholes, and the top and bottom of a layer may vary between boreholes, which gives non-horizontal layers of non-uniform thickness and layers that locally have zero thickness; (R2) a layer that does not exist at a borehole is given zero thickness there (bottom level equal to top level); (R3) a single borehole head gives a horizontal water surface extending to the model boundaries, and several heads combine into a non-horizontal one},
+  note  = {cited by KV-GEO-001},
+}
+
+@misc{kataie,
+  title = {KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res) -- a barrier is Fully permeable (no effect on flow), Impermeable (a full separation of the pore-pressure degrees of freedom of the interface node pairs, zero cross permeability), or Semi-permeable with a HYDRAULIC RESISTANCE d/k in units of time, the head difference dh across the wall divided by the average discharge q through it per unit area, d/k = dh/q. Read against Darcy's law in series: the two halves of a confined aquifer and the screen between them are three resistances the same discharge passes through},
+  note  = {cited by KV-FLW-004},
+}
+
+@misc{kataif,
+  title = {KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res) for the three cross-permeability cases and what each means (fully permeable, the default: no effect on flow; impermeable: separate pore-pressure degrees of freedom on the two sides; semi-permeable: a hydraulic resistance d/k); and the drained limit of Biot consolidation, as in KV-STR-006 -- once the excess pore pressure is gone the coupled problem IS the drained problem, which this program solves by an independent path (solve_nonlinear, with a real Coulomb return on the joint)},
+  note  = {cited by KV-STR-007},
+}
+
+@misc{kataig,
+  title = {KATAI 2D input contract (docs/k2d-format.md, tol) for the tolerated error every criterion is measured against; the deformation convergence criteria as a FAMILY are stated in full in the locator (and in kernel/analysis/include/katai/analysis/nonlinear_solver.hpp, NewtonResult::Convergence, and internal_forces.hpp, LocalErrorProbe). THE SAME STIFFNESS PARAMETER CAN BE WRITTEN AS EITHER OF TWO RECIPROCALS: elastic work over total, or total over elastic. Only total over elastic has the behaviour the parameter exists to show -- exactly unity while the solution is fully elastic, approaching zero at failure -- and supports the uses built on it (a mechanism is suspected below CSP 0.5, collapse below 0.015). The inverted form is >= 1 and GROWS without bound as a mechanism forms, which would make the stiffness-weighted force error loosen towards failure instead of tightening. Implemented as total over elastic, deliberately, and this case is what holds it there},
+  note  = {cited by KV-NUM-013},
+}
+
+@misc{kataih,
   title = {KATAI 2D input-safety property (no input may be discarded in silence): the independent path is the same problem with the object drawn where the mesh actually takes it, plus global vertical equilibrium of the support reactions},
   note  = {cited by KV-DIA-001},
+}
+
+@misc{mindlin,
+  title = {Mindlin (Timoshenko) beam theory for a simply supported span, bending plus shear deformation, closed forms stated in full; KATAI 2D input contract (docs/k2d-format.md, plates)},
+  note  = {cited by KV-STR-003},
 }
 
 @misc{p1994,
   title = {P. J. Roache (1994), "Perspective: A Method for Uniform Reporting of Grid Refinement Studies", ASME J. Fluids Eng. 116(3):405-413 (the Grid Convergence Index and its factor of safety); I. B. Celik, U. Ghia, P. J. Roache, C. J. Freitas, H. Coleman, P. E. Raad (2008), "Procedure for Estimation and Reporting of Uncertainty Due to Discretization in CFD Applications", ASME J. Fluids Eng. 130(7):078001 (the procedure and the unequal-ratio form of the observed order); ASME V&V 20-2009 and V&V 10-2006 for the solution-verification framework},
   note  = {cited by KV-NUM-004},
-}
-
-@misc{plaxis2025,
-  title = {PLAXIS 2D 2025.1 Material Models Manual section 2.4 (Undrained effective stress analysis), read from the manual: Eq. 2-50 Kw/n = 3(nu_u - nu')/((1 - 2 nu_u)(1 + nu')) K' = ((0.495 - nu')/(1 + nu')) 300 K' >= 30 K' for alpha_Biot = 1; Eq. 2-54 Ku = 2G(1 + nu_u)/(3(1 - 2 nu_u)); Eq. 2-55 nu_u = (3 nu' + alpha B (1 - 2 nu'))/(3 - alpha B (1 - 2 nu')); Eq. 2-57 B = alpha/(alpha + n(K'/Kw + alpha - 1)), which at alpha = 1 is B = (Kw/n)/(K' + Kw/n). With the 1D confined closed form u = -q H / M_u, M_u = M' + Kw/n (docs/references/effective-stress-formulation.md)},
-  note  = {cited by KV-CST-006},
-}
-
-@misc{plaxis2025b,
-  title = {PLAXIS 2D 2025.1 Material Models Manual section 2.7 (Undrained total stress analysis) and section 2.4: an undrained Young's modulus converts to an effective one by Eq. 2-59, E' = 2(1 + nu')Eu/3, because the shear modulus is the same in both descriptions of the same soil. The two analyses of that soil must therefore agree, and the manual says exactly how far apart they are allowed to be: the total-stress route is exactly incompressible only at nu_u = 0.5, which "is not possible, since this would lead to singularity", so the difference is the compressibility that nu_u < 0.5 leaves behind. Reference Manual section 6.2.3 for the rest of the type's behaviour ("Pore pressures are not generated"; K0 refers to total stress; a consolidation calculation does not affect such a material)},
-  note  = {cited by KV-CST-007},
-}
-
-@misc{plaxis2025c,
-  title = {PLAXIS 2D 2025.1 Reference Manual Table 5-2 and sec. 6.1.7.4, Scientific Manual sec. 3.4 -- an interface is Impermeable ("a full separation of the pore pressure degrees-of-freedom of the interface node pairs", zero cross permeability), Semi-permeable with a HYDRAULIC RESISTANCE d/k in units of time ("to determine d/k, one needs to measure the average discharge q through a wall (per unit of area) for a given head difference dh, so d/k = dh/q"), or Fully permeable. Read against Darcy's law in series: the two halves of a confined aquifer and the screen between them are three resistances the same discharge passes through},
-  note  = {cited by KV-FLW-004},
-}
-
-@misc{plaxis2025d,
-  title = {PLAXIS 2D 2025.1 Reference Manual, "Ignore und. behaviour (A,B)": the undrained response of Undrained (A)/(B) clusters is temporarily excluded so that no excess pore pressure is generated, while the strength parameters stay as declared. The independent path is the same model with the material DECLARED drained: if the option means what the manual says, the two must be the same calculation},
-  note  = {cited by KV-CST-005},
-}
-
-@misc{plaxis2025e,
-  title = {PLAXIS 2D 2025.1 Reference Manual, sec. 4.2 "Creating boreholes" -- "If multiple boreholes are defined, PLAXIS 2D will automatically interpolate between boreholes, and derive the position of the soil layers from the borehole information. Each defined soil layer is used throughout the whole model contour. In other words, all soil layers appear in all boreholes. The top and the bottom boundaries of the layers may vary through boreholes, making it possible to define non-horizontal soil layers of non-uniform thickness as well as layers that locally have a zero thickness." -- with sec. 4.3.1.1 ("If a certain soil layer does not exist at the position indicated by a model borehole, it should be assigned a zero thickness (bottom level equal to top level) in the relevant borehole") and sec. 7.10.1.1 ("A single borehole can be used to create a horizontal water surface that extends to the model boundaries. When multiple boreholes are used, a non-horizontal water surface can be created by combining the heads in the various boreholes")},
-  note  = {cited by KV-GEO-001},
-}
-
-@misc{plaxis2025f,
-  title = {PLAXIS 2D Material Models Manual (2025.1) §4, Eq 4-1 with the rock-mass constants of Eq 4-2/4-3/4-4 -- the same criterion KV-CST-014 checks at the material point, asked here of the assembled FE path from a project file},
-  note  = {cited by KV-CST-015},
-}
-
-@misc{plaxis2025g,
-  title = {PLAXIS 2D Material Models Manual (2025.1) §4, the generalised Hoek-Brown criterion of Hoek, Carranza-Torres & Corkum (2002): yield Eq 4-1 and 4-8, the rock-mass constants m_b (Eq 4-2), s (Eq 4-3) and a (Eq 4-4), the rock-mass compressive strength Eq 4-5 and tensile strength Eq 4-6, the non-associated flow of Eq 4-10/4-12 and the mobilised dilatancy of Eq 4-13/4-14. The Tresca degeneration is checked against this tree's own verified Mohr-Coulomb return (mohr_coulomb.cpp, P1.2b)},
-  note  = {cited by KV-CST-014},
-}
-
-@misc{plaxis,
-  title = {PLAXIS 2D Material Models Manual, dilatancy cut-off: Eq. 5.16a for the mobilised dilatancy, Eq. 5.16b "for e >= e_max: psi_m = 0", Eq. 5.17 for the void ratio, Fig. 5.6 for the resulting drained-triaxial strain curve; the manual also states that e_min "is not used within the context of the Hardening-Soil model", which is why KATAI does not carry it},
-  note  = {cited by KV-CST-004},
-}
-
-@misc{plaxisb,
-  title = {PLAXIS 2D Reference Manual Table 5-2 / Scientific Manual sec. 3.4 for the three cross-permeability cases and what each means (the model's own field comment quotes them, and its default is fully permeable); and the drained limit of Biot consolidation, as in KV-STR-006 -- once the excess pore pressure is gone the coupled problem IS the drained problem, which this program solves by an independent path (solve_nonlinear, with a real Coulomb return on the joint)},
-  note  = {cited by KV-STR-007},
-}
-
-@misc{plaxis2025h,
-  title = {PLAXIS 2D Scientific Manual 2025.1 sec 9.1 -- the deformation convergence criteria as a FAMILY: Eq. 9-1 the CSP-normalised global force error, Eq. 9-3/9-4 the moment residual, Eq. 9-5 the local error at a plastic soil stress point and Eq. 9-7 at a non-linear elastic one, with the equilibrium/constitutive stress pair of Fig. 9-1 and Eq. 9-6; and PLAXIS 2D Reference Manual 2025.1 sec 7.13.8, Eq. 7-21/7-22 for the same global check and for CSP itself. THE TWO MANUALS PRINT CSP AS RECIPROCALS OF EACH OTHER: Scientific Eq. 9-2 gives elastic energy over total, Reference Eq. 7-22 gives total over elastic. Only the Reference orientation matches the behaviour BOTH manuals state in words -- "when the solution is fully elastic the Stiffness is equal to unity, whereas at failure the Stiffness approaches zero" -- and the uses built on it there (arc-length engages below CSP 0.5, collapse is reported below 0.015). The inverted form is >= 1 and GROWS without bound as a mechanism forms, which would make Eq. 9-1 loosen towards failure instead of tightening. Implemented from Eq. 7-22, deliberately, and this case is what holds it there},
-  note  = {cited by KV-NUM-013},
-}
-
-@misc{plaxisc,
-  title = {PLAXIS 2D Validation Manual, Version 8 (Bentley Systems)},
-  note  = {cited by KV-STR-002, KV-STR-003},
-}
-
-@misc{plaxis1973,
-  title = {PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); analytic solution Davis & Booker (1973)},
-  note  = {cited by KV-FND-004, KV-FND-014},
-}
-
-@misc{plaxis1967,
-  title = {PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); analytic solution Gibson (1967)},
-  note  = {cited by KV-FND-002, KV-FND-011},
-}
-
-@misc{plaxis1972,
-  title = {PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); analytic solution Giroud (1972)},
-  note  = {cited by KV-FND-001, KV-FND-012},
-}
-
-@misc{plaxis1962,
-  title = {PLAXIS 2D Validation Manual, Version 8 (Bentley Systems); slip-line solution Cox (1962)},
-  note  = {cited by KV-FND-003, KV-FND-013},
 }
 
 @misc{prandtl1921,
@@ -156,6 +176,16 @@
   note  = {cited by KV-DIA-002},
 }
 
+@misc{schanz1999,
+  title = {Schanz, T., Vermeer, P.A. & Bonnier, P.G. (1999). The Hardening Soil model: formulation and verification. Beyond 2000 in Computational Geotechnics, Balkema, 281-296 -- the Hardening Soil oedometric stiffness law, integrated over one-dimensional primary loading -- the same closed form KV-CST-002 is measured against; the error-decomposition procedure is the solution-verification one this program already applies to meshes (Roache 1994; Celik et al. 2008, ASME J. Fluids Eng. 130(7):078001), here applied on the axis a path-dependent model actually discretises},
+  note  = {cited by KV-NUM-009},
+}
+
+@misc{skempton1954,
+  title = {Skempton, A.W. (1954). The pore-pressure coefficients A and B. Geotechnique 4(4), 143-147, for B; Biot, M.A. (1941). General theory of three-dimensional consolidation. J. Appl. Phys. 12, 155-164, for the Biot coefficient alpha; the undrained relations of isotropic linear elasticity as recorded in docs/references/effective-stress-formulation.md; KATAI 2D input contract (docs/k2d-format.md, und_mode / nu_u / skempton_B)},
+  note  = {cited by KV-CST-006},
+}
+
 @misc{terzaghi1943,
   title = {Terzaghi (1943) one-dimensional consolidation, degree-of-consolidation series U(Tv) = 1 - sum_j (2/M^2) exp(-M^2 Tv), M = (2j+1) pi/2, Tv = cv t / H_dr^2, cv = k Eoed / gamma_w -- the same closed form KV-CON-002 is measured against; the estimator is the solution-verification procedure of Roache (1994) and Celik et al. (2008), ASME J. Fluids Eng. 130(7):078001, applied on the TIME axis, whose order is fixed in advance by the scheme: katai/analysis/consolidation.hpp integrates fully implicitly (alpha = 1), i.e. backward Euler, whose global error is O(dt)},
   note  = {cited by KV-NUM-010},
@@ -166,24 +196,24 @@
   note  = {cited by KV-CON-002},
 }
 
-@misc{terzaghi1943c,
-  title = {Terzaghi (1943) one-dimensional consolidation; the stop criterion and the definition of its target are PLAXIS 2D Reference Manual (2025.1) sec. 7.5, which states that the degree of consolidation is the target minimum excess pore pressure over the maximum initial excess pore pressure, not the settlement ratio the name suggests. Series derivation recorded in docs/references/consolidation-formulation.md},
-  note  = {cited by KV-CON-003},
-}
-
 @misc{terzaghi,
   title = {Terzaghi effective stress with a hydrostatic water table (docs/references/effective-stress-formulation.md); the axisymmetric equilibrium of a horizontally layered state -- with sigma_r = sigma_theta the (sigma_r - sigma_theta)/r term of the radial equation vanishes, so the K0 state is in equilibrium in r-z exactly as it is in plane strain; and the one-dimensional compression of a laterally confined column under the effective-stress increase that lowering a water table produces. Axisymmetric kinematics: strain [eps_r, eps_z, gamma_rz, eps_theta], r-weighted integration, kernel/fem/elements/axisymmetric.hpp},
   note  = {cited by KV-CST-013},
 }
 
 @misc{terzaghib,
-  title = {Terzaghi one-dimensional consolidation theory; derivation recorded in docs/references/consolidation-formulation.md (cites PLAXIS 2D Scientific Manual ch. 4)},
+  title = {Terzaghi's effective-stress principle (sigma' = sigma - u) applied to a change of phreatic level in a laterally confined column; the per-phase water condition itself follows KATAI 2D input contract (docs/k2d-format.md, phases[i].water_override / wx / wy: a phase may use its own phreatic line instead of the project's), and the case that required it is the DGGT / Schweiger triple-anchored excavation, which dewaters before excavating},
+  note  = {cited by KV-CST-003},
+}
+
+@misc{terzaghi1943c,
+  title = {Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley -- one-dimensional consolidation theory; derivation recorded in docs/references/consolidation-formulation.md},
   note  = {cited by KV-CON-001},
 }
 
-@misc{terzaghic,
-  title = {Terzaghi's effective-stress principle (sigma' = sigma - u) applied to a change of phreatic level in a laterally confined column; the per-phase water condition itself follows the PLAXIS staged-construction contract ("water conditions per phase"), and the case that required it is the DGGT / Schweiger triple-anchored excavation, which dewaters before excavating},
-  note  = {cited by KV-CST-003},
+@misc{terzaghi1943d,
+  title = {Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley -- one-dimensional consolidation; the stop criterion and the definition of its target are KATAI 2D input contract (docs/k2d-format.md, cstop / cdeg / cminp), which defines the degree of consolidation as the maximum excess pore pressure over the maximum initial excess pore pressure, not the settlement ratio the name suggests. Series derivation recorded in docs/references/consolidation-formulation.md},
+  note  = {cited by KV-CON-003},
 }
 
 @misc{classical,
@@ -207,46 +237,31 @@
 }
 
 @misc{incremental,
-  title = {incremental limit analysis as this solver implements it (PLAXIS 2D Reference Manual, "Tolerated error" and "Max iterations"): the equilibrated fraction of a load-controlled solve is the incremental collapse load ONLY when no increment of the remaining load can be equilibrated at any step size. "Max iterations" is documented there as a patience setting -- an increment that needs more is cut back and retried, not solved differently -- so a fraction reached because that setting ran out is a statement about the setting, not about the soil},
+  title = {incremental limit analysis as this solver implements it; KATAI 2D input contract (docs/k2d-format.md, tol / maxiter / loadsteps): the equilibrated fraction of a load-controlled solve is the incremental collapse load ONLY when no increment of the remaining load can be equilibrated at any step size. The iteration limit is a patience setting -- an increment that needs more is cut back and retried, not solved differently -- so a fraction reached because that setting ran out is a statement about the setting, not about the soil},
   note  = {cited by KV-NUM-012},
 }
 
-@misc{linear2025,
-  title = {linear superposition: for a linear-elastic soil the staged-construction ramp is a linear operator on the configuration imbalance, so applying a fraction of it must give exactly that fraction of the response -- the definition of PLAXIS's Sum-Mstage as "the proportion of the unbalanced force that has been applied" (PLAXIS 2D 2025.1 Reference Manual, staged construction), stated as a testable equality},
+@misc{isotropic,
+  title = {isotropic linear elasticity with a shear modulus common to the drained and undrained descriptions of one soil (docs/references/effective-stress-formulation.md); KATAI 2D input contract (docs/k2d-format.md, drainage = 4, Undrained (C)): a total stress analysis in which E/nu are the undrained pair, c is s_u with phi = 0, no pore pressure is generated or carried, K0 refers to total stress, and a consolidation calculation does not affect such a material. The total-stress route is exactly incompressible only at nu_u = 0.5, which the stiffness matrix cannot represent (it is singular there), so the difference between the two routes is the compressibility that nu_u < 0.5 leaves behind},
+  note  = {cited by KV-CST-007},
+}
+
+@misc{linear,
+  title = {linear superposition: for a linear-elastic soil the staged-construction ramp is a linear operator on the configuration imbalance, so applying a fraction of it must give exactly that fraction of the response -- the definition of the staged fraction as the proportion of the phase's unbalanced force that has been applied, KATAI 2D input contract (docs/k2d-format.md, mstage), stated as a testable equality},
   note  = {cited by KV-EXC-002},
 }
 
-@misc{the1992,
-  title = {the "Reset small strain" calculation-phase option as specified in the PLAXIS Material Models Manual sec. 7.6 (Model Initialisation), which exists because strain history outlives its cause: "Usually the overconsolidation's cause has vanished long before the start of calculation, so that the strain history should be reset afterwards. Unfortunately, strain history is already triggered by adding and removing a surcharge. In this case the strain history can be reset manually, by using the Reset small strain option in the calculation phases window." The history itself is sec. 7.2: gamma_hist = sqrt(3) ||H de|| / ||de|| (Eq 7-4), where H is a deviatoric strain-history TENSOR that is "partially or fully reset" whenever a reversal is detected by a criterion after Simpson's brick model (1992), the transformation of H being referred to Benz (2006)},
-  note  = {cited by KV-CST-012},
-}
-
-@misc{the1994,
-  title = {the Hardening Soil oedometric stiffness law as published in the PLAXIS 2D Material Models Manual, E_oed = E_oed^ref ((c cos(phi) + sigma_1 sin(phi))/(c cos(phi) + p_ref sin(phi)))^m, integrated over one-dimensional primary loading -- the same closed form KV-CST-002 is measured against; the error-decomposition procedure is the solution-verification one this program already applies to meshes (Roache 1994; Celik et al. 2008, ASME J. Fluids Eng. 130(7):078001), here applied on the axis a path-dependent model actually discretises},
-  note  = {cited by KV-NUM-009},
-}
-
 @misc{the,
-  title = {the Hardening Soil oedometric stiffness law as published in the PLAXIS Material Models Manual: E_oed = E_oed^ref ((c cos(phi) + sigma_1 sin(phi))/(c cos(phi) + p_ref sin(phi)))^m, integrated over one-dimensional primary loading; the same law is verified at the material point against the manual's own figures in test_hardening_soil and test_hs_berlin},
-  note  = {cited by KV-CST-002},
+  title = {the Rankine tension cut-off, stated in full: three additional yield functions f4 = sigma'1 - sigma_t <= 0, f5 = sigma'2 - sigma_t <= 0, f6 = sigma'3 - sigma_t <= 0 with an associated flow rule, sigma_t being the tensile strength, zero unless one is entered; KATAI 2D input contract (docs/k2d-format.md, tension_cutoff / tensile_strength), where the cut-off and the tensile strength are failure parameters shared by the Hardening Soil family and Mohr-Coulomb alike},
+  note  = {cited by KV-CST-011},
 }
 
-@misc{the2001,
-  title = {the Hardening Soil with small-strain stiffness degradation law as published in the PLAXIS Material Models Manual chapter 7 (modified Hardin-Drnevich after Santos & Correia 2001): secant G_s/G0 = 1/(1 + a |gamma|/gamma_ref) with a = 0.385 (Eq 7-3), tangent G_t = G0/(1 + a gamma/gamma_ref)^2 (Eq 7-8) cut off below at G_ur = E_ur/(2(1+nu_ur)) (Eq 7-9), and Masing's rule gamma_0.7,re-loading = 2 gamma_0.7,virgin-loading (Eq 7-11), which the manual applies as a constant factor "throughout loading" rather than at a detected reversal; the same equations are verified at the material point in test_hssmall},
-  note  = {cited by KV-CST-008},
-}
-
-@misc{the1936,
-  title = {the Soft Soil Creep differential law as published in the PLAXIS Material Models Manual chapter 11 (Buisman 1936, Bjerrum 1967, Garlanger 1972, Vermeer & Neher 1999): the volumetric creep rate is (mu*/tau)(p_eq/p_p^eq)^beta with beta = (lambda*-kappa*)/mu* (Eq 11-23), and tau is ONE DAY because the standard oedometer's 24-hour stage is the definition of the normal-consolidation line (Eq 11-13/14). The same law is verified at the material point in test_soft_soil_creep},
+@misc{the1999,
+  title = {the Soft Soil Creep differential law of Vermeer, P.A. & Neher, H.P. (1999). A soft soil model that accounts for creep. Beyond 2000 in Computational Geotechnics, Balkema, 249-261 (after Buisman 1936, Bjerrum 1967, Garlanger 1972): the volumetric creep rate is (mu*/tau)(p_eq/p_p^eq)^beta with beta = (lambda*-kappa*)/mu*, and tau is ONE DAY because the standard oedometer's 24-hour stage is the definition of the normal-consolidation line; KATAI 2D input contract (docs/k2d-format.md, mustar). The same law is verified at the material point in test_soft_soil_creep},
   note  = {cited by KV-CST-010},
 }
 
 @misc{theb,
-  title = {the Soft Soil logarithmic compression law as published in the PLAXIS Material Models Manual chapter 10: e_v = lambda* ln(p'/p'_0) in primary loading (Eq 10-5) and e_v^e = kappa* ln(p'/p'_0) in unloading/reloading (Eq 10-6, with the tangent bulk modulus K_ur = p'/kappa* of Eq 10-7); M is not an input but is derived from K0nc (Eq 10-13) so that primary one-dimensional compression reaches that K0nc. The same equations are verified at the material point and through a hand-built BVP in test_soft_soil},
-  note  = {cited by KV-CST-009},
-}
-
-@misc{thec,
   title = {the analysis driver's former inline SoilModel construction (build_problem.hpp before commit b35bb9a), duplicated verbatim in this test as the oracle},
   note  = {cited by KV-NUM-001},
 }
@@ -256,23 +271,28 @@
   note  = {cited by KV-STR-006},
 }
 
-@misc{the1999,
+@misc{the1999b,
   title = {the elasto-plastic solution for a circular opening in a Hoek-Brown medium under hydrostatic in-situ stress (Carranza-Torres & Fairhurst 1999, IJRMMS 36(6) 777-809; generalised a >= 1/2 in Carranza-Torres 2004, IJRMMS 41(S1) 629-639), derived from radial equilibrium in this file rather than quoted, and checked by reducing to their scaled forms at a = 1/2. Rock mass and stress state: case D1 of Table A1.1 in Hoek, Carranza-Torres, Diederichs & Corkum (2008), Integration of geotechnical and structural design in tunnelling, 56th Annual Geotechnical Engineering Conference, University of Minnesota},
   note  = {cited by KV-CST-016},
 }
 
-@misc{thed,
-  title = {the embedded beam (pile row) as specified in the PLAXIS 2D Reference Manual sec 5.6.3 (connection point) and sec 6.6.3 (skin and base resistance), with the element formulation in the Scientific Manual sec 7.5. The manual fixes the loading path for us twice over: the material data set carries "only the bearing capacity (skin resistance and base resistance)" and not the stiffness response, and "embedded beams are not meant to be used as laterally loaded piles and will therefore not show accurate failure loads when subjected to transverse forces" -- so the defining quantity of this element is its AXIAL capacity},
+@misc{thec,
+  title = {the embedded beam (pile row) as KATAI 2D defines it, KATAI 2D input contract (docs/k2d-format.md, embedded: Tskin_max / Fmax_base / Lspacing; structs[i].conn for the connection point). The element's purpose fixes the loading path twice over: its material data set carries the bearing capacity (skin resistance and base resistance) and not a stiffness response, and it is meant for axially loaded piles rather than for failure under transverse load -- so the defining quantity of this element is its AXIAL capacity},
   note  = {cited by KV-STR-004},
 }
 
-@misc{thee,
-  title = {the geogrid as specified in the PLAXIS 2D Reference Manual sec 6.5: "geogrids are flexible elastic or elastoplastic elements that represent a grid or sheet of fabric. Geogrids can only sustain tensile forces, but not compressive forces", with the axial stiffness defined in Eq. 6-51 as "the ratio of the axial force F per unit width and the axial strain (eps = dl/l)", EA = F/eps},
+@misc{thed,
+  title = {the geogrid element as KATAI 2D defines it, KATAI 2D input contract (docs/k2d-format.md, geogrids: EA / Np / elastoplastic): a flexible elastic or elastoplastic line element representing a grid or sheet of fabric that sustains tension and no compression, whose axial stiffness EA is the axial force F per unit width divided by the axial strain eps = dl/l, so F = EA eps (stated in full)},
   note  = {cited by KV-STR-005},
 }
 
-@misc{the2025,
-  title = {the method of consistent deformations (force method) for a statically indeterminate beam with a support settlement, and the linear axial spring of an anchor, both stated in full in the locator; the plate's shear rigidity kGA' = k EA / (2 (1 + nu)), k = 5/6, is PLAXIS 2D Material Models Manual (2025.1) Eq. 18-8, the same expression KV-STR-003 verifies its deflections with},
+@misc{thee,
+  title = {the logarithmic compression law of the Soft Soil model, stated in full: e_v = lambda* ln(p'/p'_0) in primary loading and e_v^e = kappa* ln(p'/p'_0) in unloading/reloading, with the tangent bulk modulus K_ur = p'/kappa*; M is not an input but is derived from K0nc so that primary one-dimensional compression reaches that K0nc; KATAI 2D input contract (docs/k2d-format.md, lamstar / kapstar / k0nc_auto). The same equations are verified at the material point and through a hand-built BVP in test_soft_soil},
+  note  = {cited by KV-CST-009},
+}
+
+@misc{thef,
+  title = {the method of consistent deformations (force method) for a statically indeterminate beam with a support settlement, and the linear axial spring of an anchor, both stated in full in the locator; the plate is a Timoshenko beam whose shear rigidity is kGA' = k EA / (2 (1 + nu)) with the rectangular-section shear coefficient k = 5/6, the same expression KV-STR-003 verifies its deflections with},
   note  = {cited by KV-STR-009},
 }
 
@@ -281,13 +301,18 @@
   note  = {cited by KV-NUM-006},
 }
 
-@misc{thef,
-  title = {the prestressed-anchor contract of PLAXIS 2D (Reference Manual, node-to-node and fixed-end anchors: a lock-off force is applied when the anchor is activated, after which the anchor behaves as an elastic spring from that state); the equivalence used as the oracle is the statement that a constant internal force N0 along the anchor axis is, in the residual, an external force of the same magnitude and direction -- so the same problem can be built twice from different primitives},
-  note  = {cited by KV-STR-001},
+@misc{the1999c,
+  title = {the oedometric stiffness law of the Hardening Soil model (Schanz, T., Vermeer, P.A. & Bonnier, P.G. (1999). The Hardening Soil model: formulation and verification. Beyond 2000 in Computational Geotechnics, Balkema, 281-296), in the form this build implements: E_oed = E_oed^ref ((c cos(phi) + sigma_1 sin(phi))/(c cos(phi) + p_ref sin(phi)))^m, integrated over one-dimensional primary loading; KATAI 2D input contract (docs/k2d-format.md, Eoedref / p_ref / m); the same law is verified at the material point in test_hardening_soil and test_hs_berlin},
+  note  = {cited by KV-CST-002},
 }
 
-@misc{the2025b,
-  title = {the same numerical control applied through two independent routes -- the .k2d file (model::Phase::tolerance / load_steps / max_iterations since io v7, and substep_tolerance since io v15) and the jobs-layer seam (app::NumericalControls, the route KV-NUM-007 measures with) -- must reach the same solver and produce the same run; the controls themselves are the phase-level numerical control parameters of PLAXIS 2D 2025.1 Reference Manual (Tolerated error, Max iterations), whose per-phase presence in the input is what makes a calculation reproducible by a third party},
+@misc{the1992,
+  title = {the phase option that resets the small-strain history, KATAI 2D input contract (docs/k2d-format.md, phases[i].resetsmall), which exists because strain history outlives its cause: the cause of an overconsolidation has usually vanished long before the analysis starts, so its strain history should not reach the analysis, yet adding and removing a surcharge in the model to create that overconsolidation also creates a strain history, which the engineer must be able to reset at the start of a phase. The history itself is gamma_hist = sqrt(3) ||H de|| / ||de||, where H is a deviatoric strain-history TENSOR that is partially or fully reset whenever a reversal is detected by a criterion after Simpson's brick model (1992), the transformation of H being referred to Benz (2006)},
+  note  = {cited by KV-CST-012},
+}
+
+@misc{theg,
+  title = {the same numerical control applied through two independent routes -- the .k2d file (model::Phase::tolerance / load_steps / max_iterations since io v7, and substep_tolerance since io v15) and the jobs-layer seam (app::NumericalControls, the route KV-NUM-007 measures with) -- must reach the same solver and produce the same run; the controls themselves are the phase-level numerical control parameters of KATAI 2D input contract (docs/k2d-format.md, tol / loadsteps / maxiter / substol), whose per-phase presence in the input is what makes a calculation reproducible by a third party},
   note  = {cited by KV-NUM-008},
 }
 
@@ -296,14 +321,14 @@
   note  = {cited by KV-NUM-007},
 }
 
-@misc{theg,
+@misc{theh,
   title = {the saturated limit of the fully-coupled (unsaturated Biot + Bishop) formulation is the consolidation (saturated Biot) formulation -- kernel/analysis/coupled_flow_deformation.hpp states the reduction and test_coupled_flow measures it for soil alone; here the same reduction is asked for with a structure in the system. The drained limit is the one KV-STR-006 uses: once the excess pore pressure is gone, the coupled problem IS the drained problem, which solve_nonlinear solves by a different path},
   note  = {cited by KV-STR-008},
 }
 
-@misc{theh,
-  title = {the tension cut-off as specified in the PLAXIS 2D Material Models Manual sec 3.2 (Eq. 3-11) and sec 3.3.10: three additional yield functions f4 = sigma'1 - sigma_t <= 0, f5 = sigma'2 - sigma_t <= 0, f6 = sigma'3 - sigma_t <= 0, for which "an associated flow rule is adopted", with sigma_t taken equal to zero by default. That the Hardening Soil family carries it too is the manual's own statement: its parameter table lists "sigma_t Tension cut-off and tensile strength" under "failure parameters as in Mohr-Coulomb model", and the models that genuinely lack one (NGI-ADP, UDCAM-S) are named as lacking it},
-  note  = {cited by KV-CST-011},
+@misc{the2007,
+  title = {the small-strain stiffness degradation law of the Hardening Soil small-strain model (Benz, T. (2007). Small-strain stiffness of soils and its numerical consequences. PhD thesis, Universitat Stuttgart; modified Hardin-Drnevich after Santos & Correia 2001), stated in full: secant G_s/G0 = 1/(1 + a |gamma|/gamma_ref) with a = 0.385, tangent G_t = G0/(1 + a gamma/gamma_ref)^2 cut off below at G_ur = E_ur/(2(1+nu_ur)), and Masing's rule (Masing 1926) gamma_0.7,re-loading = 2 gamma_0.7,virgin-loading, which this build applies as a constant factor throughout loading rather than at a detected reversal; KATAI 2D input contract (docs/k2d-format.md, G0ref / gamma07); the same equations are verified at the material point in test_hssmall},
+  note  = {cited by KV-CST-008},
 }
 
 @misc{undrained,

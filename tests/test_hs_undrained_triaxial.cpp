@@ -1,16 +1,15 @@
-// Hardening Soil -- quantitative parity against the documented PLAXIS Berlin Sand III
-// UNDRAINED triaxial test (Rocscience/PLAXIS 2014 "Hardening Soil Model", Table 15.1 +
-// Fig 15.5; the drained companion Fig 15.4 is test_hs_berlin). This is the harder, more
-// discriminating benchmark: the effective-stress path is governed by the cap (early
-// contraction) handing over to the dilatant shear surface (psi=6 deg), and PLAXIS Fig 15.5
-// documents the pore-pressure signature: u rises to ~ +100 kPa, then turns strongly NEGATIVE
-// reaching ~ -200 kPa at 3% axial strain (dilation), with q climbing PAST the drained qf.
+// Hardening Soil -- the Berlin Sand III parameter set in an UNDRAINED triaxial test (the
+// drained companion is test_hs_berlin). This is the harder, more discriminating case: the
+// effective-stress path is governed by the cap (early contraction) handing over to the
+// dilatant shear surface (psi=6 deg), and the pore pressure carries a characteristic
+// signature: u rises to a positive peak of about +100 kPa, then turns strongly NEGATIVE at
+// larger axial strain (dilation), with q climbing PAST the drained qf.
 //
 // Undrained = constant-volume of the skeleton (incompressible pore water), so at the material
 // point the strain path is [eps1, -eps1/2, -eps1/2] (eps_v = 0). hs_integrate returns the
 // EFFECTIVE stress on this path; with the cell pressure (total sigma3) held at the
 // consolidation stress, the excess pore pressure is u = sigma3_cell - sigma3' and the deviator
-// q = sigma1' - sigma3' (invariant under the isotropic u). This is the textbook/PLAXIS
+// q = sigma1' - sigma3' (invariant under the isotropic u). This is the textbook
 // effective-stress-path construction (no Kw/n needed -- the kinematic eps_v=0 IS the undrained
 // condition). See docs/references/hardening-soil-formulation.md.
 #include <katai/materials/hardening_soil_plastic.hpp>
@@ -73,24 +72,24 @@ void test_undrained_triaxial() {
                 on.u_peak, on.u_min, on.q1, on.q3, on.p3);
     std::printf("    cap OFF: u peak=%+.1f  min=%+.1f  q@1%%=%.1f q@3%%=%.1f p'@3%%=%.1f\n",
                 off.u_peak, off.u_min, off.q1, off.q3, off.p3);
-    std::printf("    (PLAXIS Fig 15.5: u peak ~ +100, min ~ -200 at 3%% axial)\n");
+    std::printf("    (expected signature: u peak ~ +100, then negative at larger axial strain)\n");
 
-    // Effective-stress-path SIGNATURE checks (Fig 15.5) -- the features we match quantitatively:
+    // Effective-stress-path SIGNATURE checks -- the features we match quantitatively:
     //  (1) the pore pressure rises to a positive peak ~ +100 kPa (early cap contraction);
     //  (2) it then reverses to NEGATIVE (shear dilation, psi=6) -- the undrained dilatancy sign;
     //  (3) q climbs PAST the drained qf as p' rises (dilatant strengthening).
     check(on.u_peak > 70.0 && on.u_peak < 130.0,
-          "pore-pressure peak = +92 kPa matches PLAXIS Fig 15.5 (~ +100)");
+          "pore-pressure peak = +92 kPa, inside the +70..+130 kPa band around ~ +100");
     check(on.u_min < -50.0,
           "pore pressure reverses to negative (undrained dilation, correct sign)");
     check(on.q3 > on.q1 && on.q3 > qf_drained,
           "undrained q rises past the drained qf (dilatant strengthening: p' up as u<0)");
     // KNOWN gap (documented): the dilation MAGNITUDE depends on the cap deviatoric measure.
-    // We use a von Mises cap (q^2=3J2); PLAXIS uses the Lode-dependent q~=q/f(theta) (Eq 15.12),
-    // which in triaxial compression engages the cap differently. Our cap-ON u_min=-84 vs PLAXIS
-    // -200 (bracketed by cap-OFF -352): the cap over-contracts in the dilation phase. This is the
-    // documented cap-Lode-coupling refinement (hardening-soil-formulation.md). We assert only the
-    // bracket + monotone cap effect here, not the exact -200.
+    // We use a von Mises cap (q^2=3J2); a Lode-dependent measure q~ = q/f(theta) engages the cap
+    // differently in triaxial compression. Our cap-ON u_min=-84 is bracketed by cap-OFF -352:
+    // the cap over-contracts in the dilation phase. This is the documented cap-Lode-coupling
+    // refinement (hardening-soil-formulation.md). We assert only the monotone cap effect here,
+    // not a dilation magnitude.
     check(on.u_min > off.u_min,
           "cap reduces undrained dilation vs cap-off (cap volumetric contraction is active)");
 }
@@ -100,7 +99,7 @@ void test_undrained_triaxial() {
 int main() {
     test_undrained_triaxial();
     if (g_failures == 0) {
-        std::printf("OK: Hardening Soil undrained triaxial matches PLAXIS Berlin Sand III Fig 15.5\n");
+        std::printf("OK: Hardening Soil undrained triaxial (Berlin Sand III) signature verified\n");
         return 0;
     }
     std::fprintf(stderr, "%d check(s) failed\n", g_failures);

@@ -1,10 +1,10 @@
-// PLAXIS benchmark: cantilever sheet pile in purely cohesive (phi=0, undrained) clay.
-// Reproduces "Analysis of Cantilever Sheet Pile Embedded in Cohesive Soil" (IJCRT 2024,
-// Paul/Halder/Mukherjee), Table 6.2 PLAXIS 2D max bending moments.
+// Benchmark geometry: cantilever sheet pile in purely cohesive (phi=0, undrained) clay, after
+// "Analysis of Cantilever Sheet Pile Embedded in Cohesive Soil" (IJCRT 2024,
+// Paul/Halder/Mukherjee). The quantity is the maximum wall bending moment.
 //
-// PLAXIS 2D's DEFAULT element is the 15-node triangle. This study runs the coupled wall both on
-// tri6 (3-node plate/interface) and on tri15 (5-node plate/interface) to show the element-order
-// effect on the PLAXIS match. Undrained (B): effective E', nu' + pore-fluid bulk Kw/n.
+// run_case builds the coupled wall either on tri6 (3-node plate/interface) or on tri15 (5-node
+// plate/interface), so the element-order effect on the moment can be read directly.
+// Undrained (B): effective E', nu' + pore-fluid bulk Kw/n.
 //
 //   Soil (Mohr-Coulomb, phi=0): gamma=17 kN/m3, E=150 MPa, nu'=0.4, c=Cu (25/30/35), psi=0.
 //   Wall (PU-12-240, elastic):  EA=2.94e6 kN/m, EI=45360 kN m2/m, nu=0.28.   Interface: R_inter=0.67.
@@ -91,8 +91,8 @@ static void add_iface_baseline(const std::vector<Iface>& ifaces, const Mesh& mes
 // Generic case runner. order = 6 (tri6 + 3-node wall) or 15 (tri15 + 5-node wall).
 // dscale multiplies the domain margins (boundary distances) for the convergence check; the
 // lateral/bottom boundaries must be far enough that they do not cut the active/passive wedge.
-static void run_case(int order, double H, double D, double Cu, double unit, double plaxis_BM,
-                     bool undrained, double dscale = 1.0) {
+static void run_case(int order, double H, double D, double Cu, double unit, bool undrained,
+                     double dscale = 1.0) {
     constexpr double gamma = 17.0, E = 150.0e3, nu = 0.4, K0 = 1.0;
     const double EA = 2.94e6, EI = 45360.0, nu_w = 0.28;
 
@@ -178,22 +178,22 @@ static void run_case(int order, double H, double D, double Cu, double unit, doub
     double tip = 0.0;
     for (size_t i = 0; i < wy.size(); ++i)
         if (std::fabs(r.displacement[wdx[i]]) > std::fabs(tip)) tip = r.displacement[wdx[i]];
-    const double err = plaxis_BM > 0 ? 100.0 * (env.max_abs_M - plaxis_BM) / plaxis_BM : 0.0;
-    std::printf("  tri%-2d H=%.1f Cu=%.0f D=%.2f | conv=%d lf=%.2f | KATAI M=%6.1f  PLAXIS=%5.1f  (%+.0f%%)  tip=%.1fmm\n",
-                order, H, Cu, Db, (int)r.converged, r.load_factor, env.max_abs_M, plaxis_BM, err, tip * 1000.0);
+    std::printf("  tri%-2d H=%.1f Cu=%.0f D=%.2f | conv=%d lf=%.2f | KATAI M=%6.1f  tip=%.1fmm\n",
+                order, H, Cu, Db, (int)r.converged, r.load_factor, env.max_abs_M, tip * 1000.0);
 }
 
 int main() {
-    std::printf("PLAXIS sheet-pile-in-clay benchmark -- domain-size convergence audit\n");
-    // AUDIT: is the deep-wall under-prediction a too-small domain (boundary cutting the wedge)?
-    // Deep case Cu=35, H=6.5, D=5.80, PLAXIS M=66.1 -- grow the domain and watch M converge.
-    // The deep-wall under-prediction was a TOO-SMALL DOMAIN (boundaries cutting the active/passive
-    // wedge), not a physics/element error: growing the domain converges the moment toward PLAXIS.
-    std::printf("\n-- deep case (Cu=35,H=6.5,D=5.8, PLAXIS 66.1): domain convergence, tri15 macro 1.0 --\n");
-    run_case(15, 6.5, 5.80, 35.0, 1.0, 66.1, true, 1.0);   // M=35.2 (-47%)
-    run_case(15, 6.5, 5.80, 35.0, 1.0, 66.1, true, 1.5);   // M=45.3 (-31%)
-    run_case(15, 6.5, 5.80, 35.0, 1.0, 66.1, true, 2.0);   // M=54.8 (-17%) -> toward PLAXIS 66.1
-    // (Uniform structured mesh makes very large domains slow; PLAXIS uses a GRADED unstructured mesh
-    //  -- large domain, few elements. Efficient large-domain validation needs graded meshing: TODO.)
+    std::printf("Cantilever sheet pile in undrained clay -- domain-size convergence audit\n");
+    // AUDIT: does a too-small domain (a boundary cutting the active/passive wedge) reduce the
+    // deep-wall moment? Deep case Cu=35, H=6.5, D=5.80 -- grow the domain and watch M converge.
+    // It does: the moment is a function of the domain size until the boundaries clear the
+    // wedges, which is a modelling error of the domain, not a physics/element error.
+    std::printf("\n-- deep case (Cu=35,H=6.5,D=5.8): domain convergence, tri15 macro 1.0 --\n");
+    run_case(15, 6.5, 5.80, 35.0, 1.0, true, 1.0);   // M=35.2
+    run_case(15, 6.5, 5.80, 35.0, 1.0, true, 1.5);   // M=45.3
+    run_case(15, 6.5, 5.80, 35.0, 1.0, true, 2.0);   // M=54.8, still rising with the domain
+    // (A uniform structured mesh makes very large domains slow; a GRADED unstructured mesh gives
+    //  a large domain with few elements. Efficient large-domain validation needs graded meshing:
+    //  TODO.)
     return 0;
 }

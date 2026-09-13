@@ -7,7 +7,7 @@
 //       end for t>0; h(d,t)/hs = erfc( d / (2√(Dt)) ), d = distance to the end. (Time-constant
 //       Dirichlet jump.)
 //   (C) Steady-state regression: constant head gradient → long time → linear profile (= steady seepage).
-// See docs/references/transient-unsaturated-flow-formulation.md (W1); PLAXIS 2D Sci.Man §3.1-3.3.
+// See docs/references/transient-unsaturated-flow-formulation.md (W1).
 #include <katai/analysis/transient_flow.hpp>
 #include <katai/geometry/rectangular_domain.hpp>
 #include <katai/mesh/mesh.hpp>

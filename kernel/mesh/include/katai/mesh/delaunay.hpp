@@ -18,7 +18,7 @@ namespace katai::mesh {
 
 // Position-dependent sizing field: the MAXIMUM triangle area [m^2] allowed at point
 // (x, y). Returning <= 0 means no area bound at that point (angle quality only). A
-// constant max_area is its special case. Local refinement (the PLAXIS coarseness factor /
+// constant max_area is its special case. Local refinement (a per-region coarseness factor /
 // refine) is done through this field; the field must have a POSITIVE lower bound
 // (Ruppert's termination guarantee).
 using SizeField = std::function<double(double x, double y)>;

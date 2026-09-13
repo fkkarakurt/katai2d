@@ -1,7 +1,7 @@
 #pragma once
 // Consolidation phase strategy (Stage B9). Time-dependent Biot consolidation,
-// PLAXIS "Consolidation": the configuration's load increment dF = f - B (the
-// SumMstage imbalance) is applied at t = 0+, generating an undrained excess
+// the "Consolidation" phase: the configuration's load increment dF = f - B (the
+// staged-construction imbalance) is applied at t = 0+, generating an undrained excess
 // pore pressure that dissipates over the phase's time interval -- the classic
 // settlement-time (Terzaghi U-t) development. v1: soil-only.
 //
@@ -50,10 +50,10 @@ struct ConsolidationPhaseMaterial {
     // editor already warns below. 0 = unknown, which makes the automatic step refuse rather than
     // guess.
     double eoed = 0.0;
-    // Undrained (C) is a TOTAL stress material: it has no pore pressures to consolidate.
-    // PLAXIS states the same fact as "a Consolidation calculation does not affect Undrained (C)
-    // materials"; this build refuses the phase rather than solving part of the mesh in total
-    // stress and the rest in effective stress with one Kw/n between them.
+    // Undrained (C) is a TOTAL stress material: it has no pore pressures to consolidate, so a
+    // consolidation calculation has nothing to act on in it. This build refuses the phase rather
+    // than solving part of the mesh in total stress and the rest in effective stress with one
+    // Kw/n between them.
     bool total_stress = false;
 };
 
@@ -63,8 +63,8 @@ struct ConsolidationPhase {
     std::vector<FlowEdge> flow_edges;                   // B4 vocabulary, Closed edges included
     bool have_flow_bcs = false;                         // unfiltered declaration scan (B4 rule)
     std::vector<char> active;                           // element activity; empty = everything active
-    // Nodes of the DRAINS active in this phase. "In consolidation analysis, drains reduce the
-    // excess pore pressure to zero and the specified head is ignored" (PLAXIS Ref sec. 5.9.2) --
+    // Nodes of the DRAINS active in this phase. In a consolidation phase a drain sets the excess
+    // pore pressure to zero and its specified head is not used (docs/k2d-format.md, `hydros`) --
     // which is exactly what this solver's drained-node mask means, so a drain enters here rather
     // than as a new kind of boundary condition.
     std::vector<int> drain_nodes;
@@ -72,7 +72,7 @@ struct ConsolidationPhase {
     // enter it; interfaces and embedded beams are refused below, and the refusal says why.
     bool has_embedded_beams = false;     // embedded beam rows (skin + foot springs)
     // An interface SPLITS the mesh, so the joint has two node sets at one place and what the water
-    // does between them is an INPUT (PLAXIS Ref Table 5-2 / Sci sec. 3.4): fully permeable = one
+    // does between them is an INPUT (docs/k2d-format.md, `flow_barrier`): fully permeable = one
     // pressure (the two share a pore equation, `pore_tie` below), impermeable = two. The third,
     // semi-permeable, is a CONDUCTANCE dh/R between them and is not expressible as either -- it is
     // refused rather than rounded to whichever neighbour looks closer.
@@ -90,12 +90,12 @@ struct ConsolidationPhase {
     double duration_day = 1.0;                          // <= 0 falls back to 1 day
     int time_steps = 25;                                // clamped to [1, 2000]
     double yscale = 1.0;                                // model height, for the top-drain tolerance
-    // How the phase ENDS (katai/analysis/results.hpp ConsolidationStop; PLAXIS Ref sec. 7.5).
-    // TimeInterval uses duration_day / time_steps above and is the historical path, untouched.
-    // The other two ignore both -- "the input of a Time interval is not applicable in this case" --
-    // and march until the state is reached, reporting the time it took.
+    // How the phase ENDS (katai/analysis/results.hpp ConsolidationStop; docs/k2d-format.md,
+    // `cstop`). TimeInterval uses duration_day / time_steps above and is the historical path,
+    // untouched. The other two ignore both -- a time interval does not apply to a phase that ends
+    // on a state -- and march until the state is reached, reporting the time it took.
     ConsolidationStop stop = ConsolidationStop::TimeInterval;
-    double stop_min_pore = 1.0;   // [kPa] MinExcessPore threshold on |p|max (PLAXIS default: 1 stress unit)
+    double stop_min_pore = 1.0;   // [kPa] MinExcessPore threshold on |p|max (default 1 kPa)
     double stop_degree = 0.9;     // [-]  DegreeOfConsolidation target, as a PRESSURE ratio (default 90%)
     double first_dt = 0.0;        // [day] first time step; <= 0 = automatic (Vermeer-Verruijt dt_crit)
     int max_steps = 1000;         // safety cap on the march; reaching it REFUSES, it does not report
@@ -119,7 +119,7 @@ inline bool solve_consolidation_phase(
     // carried one, and which of them the water sees is the interface's own cross-permeability
     // input -- fully permeable (the default: the two share a pore equation, so continuity and the
     // flux balance across the joint hold by construction) or impermeable (two separate pressures,
-    // which is what the bare split gives). Both are the manual's own two cases.
+    // which is what the bare split gives). Both are values of that input.
     //
     // Semi-permeable is the third, and it is not a blend of the two: it is a conductance, the
     // joint passing q_n = dh / R per unit area, which needs a term in H that this solver does not
@@ -184,8 +184,8 @@ inline bool solve_consolidation_phase(
         if (used_np && in.materials[mi].total_stress) {
             R.message = "Material '" + in.materials[mi].name + "' is Undrained (C), a total "
                         "stress analysis: it carries no pore pressure, so there is nothing in it "
-                        "to consolidate (PLAXIS: \"a Consolidation calculation does not affect "
-                        "Undrained (C) materials\"). Solving the phase would put part of the mesh "
+                        "to consolidate, and a consolidation calculation has nothing to act on in "
+                        "it. Solving the phase would put part of the mesh "
                         "in total stress and the rest in effective stress. Give the material "
                         "effective parameters with Drained or Undrained (A)/(B) for the "
                         "consolidating phases.";
@@ -205,7 +205,7 @@ inline bool solve_consolidation_phase(
             return false;
         }
     }
-    // Pore-fluid stiffness Kw/n from the real water bulk modulus (Verruijt; PLAXIS Sci.Man sec. 4):
+    // Pore-fluid stiffness Kw/n from the real water bulk modulus (Verruijt):
     // near-incompressible -> cv = k Eoed / gamma_w. v1 uses one representative porosity.
     constexpr double kWaterBulk = 2.0e6;   // bulk modulus of water [kPa]
     double porosity = 0.3;
@@ -347,7 +347,7 @@ inline bool solve_consolidation_phase(
         commit(c);
         R.consol_stop_met = true;   // a time interval always ends: it is a duration, not a target
     } else {
-        // --- Ending on a STATE (PLAXIS Ref sec. 7.5) -----------------------------------------
+        // --- Ending on a STATE ---------------------------------------------------------------
         // No duration is given, so the step size cannot come from one. The march starts from the
         // Vermeer-Verruijt critical step (docs/references/consolidation-formulation.md sec. 4) and
         // then DOUBLES every kStepsPerLevel steps, which holds dt/t ~ 1/kStepsPerLevel for the
@@ -417,7 +417,7 @@ inline bool solve_consolidation_phase(
 
         // Is the criterion met at this state? MinExcessPore is an ABSOLUTE threshold on |p| (it
         // applies to suction as much as to pressure, which is why the magnitude is taken).
-        // DegreeOfConsolidation is the PRESSURE ratio PLAXIS defines (see ConsolidationStop):
+        // DegreeOfConsolidation is defined as a PRESSURE ratio (see ConsolidationStop):
         // |p|max(t) <= (1 - U) * |p|max,initial.
         // A ratio needs a denominator that is a pressure. Where the staged change generated
         // nothing (a phase that activates no load, or one whose change is already in the ground),

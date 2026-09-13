@@ -3,7 +3,7 @@
 //
 // The gap was found the way the plan says to find gaps -- by trying to build a problem the
 // industry actually uses as a reference. The DGGT / Schweiger triple-anchored excavation in
-// Berlin sand (Schweiger 2002, reproduced in vendor verification manuals) locks its three anchor
+// Berlin sand (Schweiger 2002) locks its three anchor
 // rows off at 768, 945 and 980 kN. KATAI had no field for that force at all: an anchor could be
 // stiff, it could yield, it could not be TENSIONED. A model of an anchored wall built from those
 // primitives is a model of a wall with slack anchors, which deflects far more than the real one
@@ -22,7 +22,7 @@
 //
 // verify: KV-STR-001
 //   oracle:   independent_path
-//   source:   the prestressed-anchor contract of PLAXIS 2D (Reference Manual, node-to-node and fixed-end anchors: a lock-off force is applied when the anchor is activated, after which the anchor behaves as an elastic spring from that state); the equivalence used as the oracle is the statement that a constant internal force N0 along the anchor axis is, in the residual, an external force of the same magnitude and direction -- so the same problem can be built twice from different primitives
+//   source:   KATAI 2D input contract (docs/k2d-format.md, anchors[i].prestress): for node-to-node and fixed-end anchors a lock-off force is applied when the anchor is activated, after which the anchor behaves as an elastic spring from that state; the equivalence used as the oracle is the statement that a constant internal force N0 along the anchor axis is, in the residual, an external force of the same magnitude and direction -- so the same problem can be built twice from different primitives
 //   locator:  N = N0 + (EA/L)(U - U_p) with U the elongation measured from the installation datum; for a fixed-end anchor the only mesh node carries f_int += N*(-dir), so the N0 term is exactly an external nodal force +N0*dir (stated in full)
 //   quantity: the full nodal displacement field of an elastic block anchored by a prestressed fixed-end anchor, against the same block with a slack anchor and an equivalent point load; and the reported anchor force against the lock-off force on a soil made rigid [m; kN]
 //   expected: the two displacement fields identical to solver round-off; the anchor force equal to the lock-off force as the soil stiffness grows, since a wall that cannot move leaves the anchor at exactly the force it was tensioned to; and a prestressed run distinguishable from a slack one, so the field is not silently inert

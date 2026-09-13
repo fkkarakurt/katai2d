@@ -1,7 +1,7 @@
 #pragma once
-// Biot coupled consolidation (time-dependent deformation + pore-water flow) -- PLAXIS 2D 2025.1
-// Scientific Manual sec 4 (Biot 1956). Linear-elastic skeleton, fully implicit (alpha=1) time
-// integration. Block system (Eq 4-18/19):  [K  L; L' -S*] [dv;dp] = [df; dt.H.p_n],  S* = dt.H + S.
+// Biot coupled consolidation (time-dependent deformation + pore-water flow; Biot 1956).
+// Linear-elastic skeleton, fully implicit (alpha=1) time integration. Block system of the
+// time-discretised coupled equations:  [K  L; L' -S*] [dv;dp] = [df; dt.H.p_n],  S* = dt.H + S.
 //   K=int B'MB, L=int B'm N, H=int G'(k/gamma_w)G, S=int (n/Kw)N'N.  Element-generic (tri6/tri15);
 //   the same N serves both u and p.
 // Pore pressure p is the EXCESS (steady part removed), tension-positive. Consolidation (df=0): the
@@ -33,7 +33,7 @@ inline double oedometer_modulus(double E, double nu) {
 }
 
 // Vermeer & Verruijt (1981) critical (minimum) time step for the coupled u-p consolidation solve
-// (PLAXIS 2D Sci.Man §4.4; docs/references/consolidation-formulation.md §4):
+// (docs/references/consolidation-formulation.md §4):
 //     Δt_crit = h²·γ_w / (η·k_y) · (1/E_oed + n/K_w)
 // A step far below this leaves the backward-Euler diffusion Δt·H unable to damp the element-local
 // pore mode, so the equal-order tri6 (P2-P2) pore field can show a checkerboard at the near-undrained
@@ -63,7 +63,7 @@ inline double mean_element_size(const mesh::Mesh& mesh) {
 }
 
 // Interpolation-order factor eta of the Vermeer-Verruijt criterion: 40 for the 6-noded, 80 for the
-// 15-noded triangle (PLAXIS 2D Sci.Man sec. 4.4).
+// 15-noded triangle.
 inline double consolidation_eta(const mesh::Mesh& mesh) {
     return mesh.nodes_per_element == 15 ? 80.0 : 40.0;
 }
@@ -113,7 +113,7 @@ using ConsolidationSolveFactory =
     std::function<std::function<Eigen::VectorXd(const Eigen::VectorXd&)>(const math::CsrMatrix&)>;
 
 
-// --- ELASTOPLASTIC (MC/HS) Biot consolidation (PLAXIS Sci.Man sec 4.3) ------------------------
+// --- ELASTOPLASTIC (MC/HS) Biot consolidation --------------------------------------------------
 // The nonlinear generalisation of the LE core above: effective stress comes from the constitutive
 // return mapping (integrate_point) and the tangent K_T is state-dependent; every time step
 // iterates a MONOLITHIC coupled Newton
@@ -138,7 +138,7 @@ struct ConsolidationPlasticResult {
 //     pressure at the joint: the two nodes share an equation, so continuity and the flux balance
 //     across the seam both hold by construction rather than by a constraint equation;
 //   impermeable -- two pressures: no tie, which is what the bare split already gives.
-// PLAXIS states the same two in the same words (Reference Table 5-2, Scientific Manual sec. 3.4).
+// These are two of the values of the cross-permeability input (docs/k2d-format.md, `flow_barrier`).
 // Semi-permeable is a third thing -- a conductance dh/R between the two -- and is not this
 // parameter; the phase strategy refuses it rather than rounding it to one of the two neighbours.
 // null = every node owns its pore equation, and the numbering is BIT-FOR-BIT what it was.

@@ -1,7 +1,7 @@
 #pragma once
 // The groundwater-flow driver (layer 2, katai/jobs; historical name build_flow.hpp).
 // Turn a project's groundwater-flow boundary conditions into a steady-state seepage solve
-// on the FE mesh (PLAXIS "Groundwater flow" calculation). Confined and unconfined regimes are
+// on the FE mesh (a steady-state groundwater flow calculation). Confined and unconfined regimes are
 // both handled by the variable-k_rel free-surface solver with seepage-face active sets (a fully
 // saturated domain simply keeps k_rel = 1 everywhere). Returns the nodal head / pore fields for
 // display and for coupling into the mechanical solve (assemble_pore_load_from_head +
@@ -47,7 +47,7 @@ struct FlowResult {
 inline constexpr double kFlowGammaWater = 9.81;
 
 // Definition in kernel/jobs/src/flow_driver.cpp (section 5.2). `phase` selects which wells and
-// drains are switched on (PLAXIS activates hydraulic conditions per calculation phase); nullptr
+// drains are switched on (hydraulic conditions are activated per calculation phase); nullptr
 // means the project as drawn, with every hydraulic condition active -- which is what the standalone
 // "calculate groundwater flow" action asks for and what every caller written before wells existed
 // gets, unchanged.

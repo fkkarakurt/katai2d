@@ -76,7 +76,7 @@ void test_isotropic_cap() {
 }
 
 void test_berlin_sand_oedometer_robust() {
-    // Berlin Sand III (Rocscience/PLAXIS Table 15.1): the HIGH-stiffness case that broke
+    // Berlin Sand III: the HIGH-stiffness case that broke
     // the previous implicit both-active solver. Here it must integrate robustly.
     HardeningSoilParams p;
     p.p_ref = 100.0; p.E50_ref = 105.0e3; p.Eur_ref = 315.0e3; p.Eoed_ref = 105.0e3;

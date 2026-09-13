@@ -44,10 +44,10 @@ void assemble_seepage(const mesh::Mesh& mesh, const DofMap& dofs,
 // f += ∫ Bᵀ u·m dV (plane strain m=[1,1,0]) into the MECHANICAL dof map.
 // In the confined (fully saturated, ψ≥0) case u is exactly interpolated. The computed
 // effective stress σ'=σ_total+u·m thus reflects the seepage pore field (Terzaghi). `head`
-// is indexed by node (1-DOF flow solution); `dofs` is the mechanical (2-DOF) map. PLAXIS's
+// is indexed by node (1-DOF flow solution); `dofs` is the mechanical (2-DOF) map. The
 // flow→effective-stress hand-over. The element type is picked from mesh.nodes_per_element.
 // active_element: staged/porosity mask (empty = all) — NonPorous elements receive NO
-// pore-pressure load (PLAXIS: a non-porous material has neither initial nor excess pore
+// pore-pressure load (a non-porous material has neither initial nor excess pore
 // pressure).
 void assemble_pore_load_from_head(const mesh::Mesh& mesh, const DofMap& dofs,
                                   const Eigen::VectorXd& head, double gamma_w,
@@ -90,14 +90,13 @@ void assemble_seepage_flux(const mesh::Mesh& mesh, const DofMap& dofs,
 // are fixed), so a prescribed flux has to survive as nodal data and be scattered again on every
 // rebuild. `nodal` is size node_count and is ADDED to, so several flux edges accumulate.
 //
-// PLAXIS 2D 2025.1 Scientific Manual, groundwater flow: the discretised system carries a term
-// "q, the prescribed recharges that are given by the boundary conditions", where the boundary
-// contribution is the surface integral of the prescribed flux (Eqs. 3-31, 3-34). The manual
-// writes its q-bar as the OUTFLOW flux; the sign convention here is the one the wells use in
-// the same chapter -- "the source term is positive for a recharge well" (§3.2.7) -- so q_n > 0
-// means water entering the soil. Note also what the manual rules out elsewhere: in the
-// CONSOLIDATION formulation "it is not possible to have boundaries with non-zero prescribed
-// outflow" (Ch. 4), so this belongs to the flow problem and is not wired into consolidation.
+// Groundwater flow: the discretised system carries a right-hand-side term for the prescribed
+// recharge given by the boundary conditions, and its boundary contribution is the surface
+// integral of the prescribed flux, q = int N q_n ds. A prescribed flux is often written as the
+// OUTFLOW; the sign convention here is the one the wells use -- a source term is positive for a
+// recharge well -- so q_n > 0 means water entering the soil. Note also what is ruled out
+// elsewhere: the CONSOLIDATION formulation admits no boundary with a non-zero prescribed
+// outflow, so this belongs to the flow problem and is not wired into consolidation.
 void accumulate_boundary_flux(const mesh::Mesh& mesh,
                               const std::vector<int>& ordered_boundary_nodes,
                               double q_n, std::vector<double>& nodal);
@@ -144,7 +143,7 @@ struct UnconfinedResult {
 // Unconfined steady-state seepage. Fixed mesh, variable relative permeability k_rel(ψ)
 // (pressure head ψ=h−y; ψ≥0 saturated → k_rel=1, ψ<0 unsaturated → drops to k_min): the
 // phreatic surface forms by itself on the ψ=0 contour (Bathe & Khoshgoftaar 1979; the
-// relative-permeability approach of the PLAXIS flow module). Picard iteration
+// relative-permeability approach). Picard iteration
 // (under-relaxed) — k_rel is updated each step, the SPD system is solved via
 // `linear_solve`. `head_prescribed`: Dirichlet nodal values (reservoir head; free nodes
 // are ignored).

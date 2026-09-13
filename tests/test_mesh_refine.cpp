@@ -1,4 +1,4 @@
-// Local mesh density (PLAXIS coarseness factors) through the sizing-field mesher.
+// Local mesh density (per-region coarseness factors) through the sizing-field mesher.
 // docs/references/mesh-sizing.md: target edge h0 = sqrt(2 max_area); per-region factor caps the
 // area inside a polygon; structural lines / loads become sources h_src = h0 * f with Lipschitz
 // grading h(d) = h_src + g d. Checks: (A) defaults are bit-identical to the legacy constant-area

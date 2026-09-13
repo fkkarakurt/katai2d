@@ -6,18 +6,17 @@
 // class as the anchor lock-off force: a capability the input contract cannot express is a
 // capability the user does not have.
 //
-// WHAT THE MANUAL SAYS, and where the scope comes from. PLAXIS 2D 2025.1 Scientific Manual,
-// groundwater flow: the discretised system carries "the prescribed recharges that are given by
-// the boundary conditions" (Eq. 3-31), whose boundary term is the surface integral of the
-// prescribed flux (Eq. 3-34). The sign here follows the wells of the same chapter -- "the source
-// term is positive for a recharge well" (§3.2.7) -- so a positive flux is water entering the
-// soil. And the limit is the manual's too: in the CONSOLIDATION formulation (Ch. 4) "it is not
-// possible to have boundaries with non-zero prescribed outflow", so this is wired into the flow
-// problem only, exactly as PLAXIS does it.
+// WHAT THE CONTRACT SAYS, and where the scope comes from. In the discretised groundwater flow
+// system the prescribed recharge enters the right-hand side as a boundary term, the surface
+// integral of the prescribed flux times the head shape functions. The sign follows the wells:
+// a source term is positive for a recharge well, so a positive flux is water entering the soil
+// (docs/k2d-format.md, `edge_flux`: inflow positive). And the scope is deliberate: this program's
+// CONSOLIDATION formulation carries no boundary with a non-zero prescribed outflow, so this is
+// wired into the flow problem only.
 //
 // verify: KV-FLW-002
 //   oracle:   closed_form
-//   source:   Darcy's law for one-dimensional steady flow through a homogeneous column; the boundary term itself is PLAXIS 2D 2025.1 Scientific Manual Eqs. 3-31 and 3-34 (prescribed recharge on the boundary), with the sign convention of §3.2.7 (positive = into the soil) and the scope limit of Ch. 4 (consolidation carries no non-zero prescribed outflow)
+//   source:   Darcy's law for one-dimensional steady flow through a homogeneous column; the boundary term itself is the Galerkin weak form of steady groundwater flow, in which a prescribed normal flux q_n contributes the surface integral of N q_n over the boundary to the right-hand side; KATAI 2D input contract (docs/k2d-format.md, edge_flow = 3 / edge_flux), with the sign convention positive = into the soil and the scope limit that consolidation carries no non-zero prescribed outflow
 //   locator:  a column of height H and width B, head h = h0 prescribed at the base, a uniform inflow q [m/day] prescribed on the top edge, everything else closed: continuity gives the same specific discharge at every level, so Darcy q = k dh/dy integrates to h(y) = h0 + (q/k) y -- a straight line of slope q/k -- and the total inflow is q*B (stated in full)
 //   quantity: the nodal head profile of the column and the total discharge recovered from the solution [m; m3/day per metre of wall]
 //   expected: h(y) = h0 + (q/k) y at every node, and the recovered inflow equal to q*B

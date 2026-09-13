@@ -61,7 +61,7 @@ McReturn mc_return_mapping(const PlaneStrainStress& trial,
         (1.0 + sphi) * std::fabs(s1) + (1.0 - sphi) * std::fabs(s3) + 2.0 * c * cphi + 1.0;
 
     // Rankine tension cap (formulation doc sec 7): with sorted principals the three
-    // PLAXIS planes (MMM Eq 3-11, associated flow) reduce to s1 <= st. st is clamped
+    // planes s_i - st <= 0 (associated flow) reduce to s1 <= st. st is clamped
     // to the MC apex bound c*cot(phi) -- the most tensile principal the MC set admits
     // -- so the cap is never redundant and the corner geometry below stays well-posed
     // (sm <= st). Off => every path below is the bit-identical pure-MC return.

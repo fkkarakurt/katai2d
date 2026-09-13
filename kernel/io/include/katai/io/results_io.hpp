@@ -361,7 +361,7 @@ inline bool load_results(const std::string& path, std::uint64_t model_hash,
             cv.worst_plastic_error = r.get<double>();
             cv.worst_nl_elastic_error = r.get<double>();
         }
-        if (ver >= 8) {   // absent in v7: interfaces (Eq. 9-8) and the foot force (Eq. 9-9)
+        if (ver >= 8) {   // absent in v7: interface local errors and the embedded-beam foot force
             auto& cv = R.convergence;
             cv.iface_points = r.get<std::int32_t>();
             cv.iface_inaccurate = r.get<std::int32_t>();

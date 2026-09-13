@@ -24,7 +24,7 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
     if (pr.materials.empty())    { R.message = "No materials."; return R; }
 
     // Permeability per material [m/day]. Any material actually used by the mesh must have a
-    // positive kx and ky (PLAXIS Groundwater tab); guard honestly instead of solving a singular
+    // positive kx and ky (its Groundwater tab); guard honestly instead of solving a singular
     // or silently-impermeable system.
     std::vector<katai::core::Permeability> perm(pr.materials.size(), {1.0, 1.0});
     std::vector<char> used(pr.materials.size(), 0);
@@ -42,16 +42,16 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
         perm[m] = {pr.materials[m].kx, pr.materials[m].ky};
         ret[m] = {pr.materials[m].gw_ga, pr.materials[m].gw_gn, pr.materials[m].gw_gl,
                   pr.materials[m].gw_Sres, 1.0};
-        // NonPorous = IMPERMEABLE barrier (PLAXIS: no flow through a non-porous region).
+        // NonPorous = IMPERMEABLE barrier (no flow through a non-porous region).
         // Removing its elements from the assembly would leave isolated nodes and make H
         // singular; instead the conductivity is pinned to a negligible floor (a fixed
         // 1e-8 m/day, >= 1e6 times below neighbouring soil) -- the flow net routes AROUND
         // the barrier and the system stays well-posed. The user's kx/ky on this material
         // is NOT read in flow (so the k > 0 requirement is lifted too).
         // Undrained (C) joins it: a total-stress cluster takes no part in a flow calculation, and
-        // PLAXIS does not offer its permeability for entry at all ("the input field for
-        // permeabilities are greyed out when the drainage type is either Non-porous or
-        // Undrained C"). Reading kx/ky there would be reading a number nobody was asked for.
+        // its permeability is not an input at all -- the permeability fields do not apply when
+        // the drainage type is Non-porous or Undrained (C). Reading kx/ky there would be reading
+        // a number nobody was asked for.
         if (pr.materials[m].drainage == model::Drainage::NonPorous ||
             pr.materials[m].drainage == model::Drainage::UndrainedC) {
             perm[m] = {1e-8, 1e-8};
@@ -64,14 +64,13 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
         }
     }
 
-    // --- Walls and interfaces as flow barriers (PLAXIS Ref Table 5-2, Sci. Man. sec. 3.4) -------
+    // --- Walls and interfaces as flow barriers (docs/k2d-format.md, `flow_barrier`) -------------
     // A line the water cannot cross has to be a line the MESH cannot cross: the two sides need
-    // pore-pressure degrees of freedom of their own. PLAXIS words it exactly that way -- an
-    // impermeable interface is "a full separation of the pore pressure degrees-of-freedom of the
-    // interface node pairs" -- and the deformation path already splits a wall this way, so the
-    // same splitter does it here. The manual's "the end points of an interface are always
-    // permeable" comes for free: the splitter keeps the end nodes shared, so water goes around
-    // the ends of a screen exactly as it does in the ground.
+    // pore-pressure degrees of freedom of their own. An impermeable interface is a full separation
+    // of the pore-pressure degrees of freedom of the interface node pairs, and the deformation
+    // path already splits a wall this way, so the same splitter does it here. The end points of
+    // an interface stay permeable, and that comes for free: the splitter keeps the end nodes
+    // shared, so water goes around the ends of a screen exactly as it does in the ground.
     struct SeamEdge { int r0, r1, l0, l1; double length, resistance; };
     std::vector<SeamEdge> seam_edges;    // semi-permeable coupling, one per seam segment
     std::vector<int> twin_of;            // caller-node -> its twin (or -1), for reporting both sides
@@ -97,7 +96,7 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
         if (st.flow_barrier != 2) continue;   // impermeable: separated DOFs ARE the whole rule
         any_leaky = true;
         // Semi-permeable: the sides are rejoined by a leaky line passing q_n = dh / R per unit
-        // area, R = d/k the hydraulic resistance in units of time (Ref sec. 6.1.7.4). Sorted by
+        // area, R = d/k the hydraulic resistance in units of time. Sorted by
         // arc length, so consecutive entries are the two ends of one seam segment.
         std::sort(seam.begin(), seam.end(),
                   [](const katai::core::SegSeam& a, const katai::core::SegSeam& b) { return a.s < b.s; });
@@ -143,10 +142,10 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
         if (has_head)      { fixed_nodes.push_back(node); fixed_values.push_back(hval); }
         else if (has_seep) { seepage_nodes.push_back(node); }
     }
-    // Prescribed-flux (Neumann) edges: the manual's boundary term q (Scientific Manual Eqs.
-    // 3-31/3-34). Each edge is integrated ONCE, node-indexed, and the solvers scatter it into
-    // whatever equation numbering they currently have -- they rebuild it as the free surface and
-    // the seepage-face active set move.
+    // Prescribed-flux (Neumann) edges: the boundary flux term q of the weak form, the integral of
+    // q N_i along the edge. Each edge is integrated ONCE, node-indexed, and the solvers scatter it
+    // into whatever equation numbering they currently have -- they rebuild it as the free surface
+    // and the seepage-face active set move.
     std::vector<double> nodal_flux(mesh.node_count, 0.0);
     bool any_flux = false;
     for (const auto& P : pr.polygons) {
@@ -163,11 +162,11 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
         }
     }
 
-    // Hydraulic conditions drawn INSIDE the model (PLAXIS Reference sec. 5.9). A well prescribes a
-    // discharge along its line; a drain prescribes the head at its nodes. Both are one-sided in
-    // general -- a well stops extracting once the head reaches h_min, a Normal drain does nothing
-    // where the ground is already drier than the drain -- so both are resolved by an active set
-    // around the solve rather than by a single pass.
+    // Hydraulic conditions drawn INSIDE the model (docs/k2d-format.md, `hydros`). A well
+    // prescribes a discharge along its line; a drain prescribes the head at its nodes. Both are
+    // one-sided in general -- a well stops extracting once the head reaches h_min, a Normal drain
+    // does nothing where the ground is already drier than the drain -- so both are resolved by an
+    // active set around the solve rather than by a single pass.
     //
     //   level[i] = a node that MAY be held at a head, with which way it clamps:
     //     from_above (a drain): active while the free head would rise ABOVE the level
@@ -197,9 +196,9 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
                 level.push_back({n, H.head, true, vacuum, hi});
         } else {
             any_well = true;
-            // How the discharge is spread along the line. PLAXIS: "When a well intersects
-            // multiple soil layers the prescribed flux for each soil layer is a function of the
-            // saturated permeability and the intersected depth" -- water comes out of the layers
+            // How the discharge is spread along the line. When a well crosses several soil
+            // layers, each layer's share of the prescribed flux follows its saturated
+            // permeability and the length of well it intersects -- water comes out of the layers
             // that can deliver it. Each edge of the chain therefore carries a share proportional
             // to (k_n x its length), k_n being the permeability of the element it lies in,
             // resolved NORMAL to the well (which is the direction the water arrives from, and
@@ -314,8 +313,8 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
                 katai::core::assemble_seepage(mesh, fdofs, perm, hp, builder, rhs);
                 // Semi-permeable seams: a conductance 1/R between the two sides, integrated over
                 // each seam segment (the consistent 2-node line matrix). With a uniform head
-                // difference this transmits exactly dh L / R, which is the manual's definition of
-                // the hydraulic resistance read back out.
+                // difference this transmits exactly dh L / R, which is the definition of the
+                // hydraulic resistance (d/k = dh/q) read back out.
                 for (const SeamEdge& se : seam_edges) {
                     const double c = se.length / (6.0 * se.resistance);
                     const int nd[4] = {se.r0, se.r1, se.l0, se.l1};
@@ -350,7 +349,7 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
             }
         }
         opt.nodal_flux.clear();
-        if (with_flux) opt.nodal_flux = flux;   // the manual's boundary term q
+        if (with_flux) opt.nodal_flux = flux;   // the boundary flux term q
         if (!have_head && any_leaky) {
             // The Picard/active-set solver rebuilds its own system, so the leaky seam would be
             // dropped from every rebuild -- a semi-permeable wall silently turning into an
@@ -396,9 +395,9 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
             fx.push_back(level[i].node);
             fv.push_back(level[i].level);
         }
-        // A well node held at h_min no longer receives its share of the discharge -- the manual's
-        // "when the groundwater head reduces below the h_min level no further extraction will
-        // occur". What the ground can still give at that head is then the clamp's own flux.
+        // A well node held at h_min no longer receives its share of the discharge -- once the
+        // groundwater head has fallen to h_min, no further extraction occurs. What the ground can
+        // still give at that head is then the clamp's own flux.
         for (int n = 0; n < mesh.node_count; ++n)
             if (clamped[n] && well_flux[n] != 0.0) flux[n] -= well_flux[n];
         if (!solve_once(fx, fv, flux, any_flux)) return R;
@@ -420,8 +419,8 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
             } else if (level[i].from_above) {
                 // A Normal drain only takes water away. If holding its head would push water INTO
                 // the ground, the ground is already drier than the drain and the drain does
-                // nothing: "pore pressures lower than the equivalent to the given head are not
-                // affected by the drain".
+                // nothing: pore pressures below the value that corresponds to the drain's head
+                // are left untouched.
                 if (Qc[n] > qtol) { on[i] = 0; changed = true; }
             } else {
                 // The h_min clamp is a limit, not a target: once the ground can supply the well's

@@ -1,7 +1,7 @@
-// Hardening Soil cap calibration (P2.3d-2b) -- the PLAXIS-parity step for the
+// Hardening Soil cap calibration (P2.3d-2b) -- the calibration step for the
 // compression side. A user enters the standard HS inputs (E50_ref, Eoed_ref, Eur_ref, m,
 // c, phi, psi, p_ref) and K0^NC; (alpha, beta) are derived so an oedometer reproduces
-// BOTH K0^NC and Eoed_ref. The cap hardening modulus is anchored by the Itasca/PLAXIS
+// BOTH K0^NC and Eoed_ref. The cap hardening modulus is anchored by the elastic-plastic
 // closed form K_p = K1 K2/(K1-K2) (K1=Eur_ref/(3(1-2nu)), K2=Eoed_ref(1+2K0nc)/3), and the
 // cap deviatoric measure is the SYMMETRIC von Mises q (q^2=3J2) -- the asymmetric
 // delta-qtilde broke the oedometer K0. For a general soil (Eoed_ref < E50_ref) both
@@ -42,7 +42,8 @@ void test_calibrate_general_soil() {
 }
 
 void test_closed_form_Kp() {
-    // The Itasca/PLAXIS cap hardening anchor K_p = K1 K2/(K1-K2).
+    // The cap hardening anchor K_p = K1 K2/(K1-K2): the plastic bulk modulus that, in series
+    // with the elastic K1, gives the oedometric bulk modulus K2.
     HardeningSoilParams p;
     p.Eur_ref = 3.15e5; p.Eoed_ref = 1.05e5; p.nu_ur = 0.2;
     const double K0 = 0.38;
@@ -54,14 +55,13 @@ void test_closed_form_Kp() {
 
 // Berlin Sand III (Eoed_ref = E50_ref, very stiff cap, phi=38deg): the K0^NC = 0.38 input is
 // at the edge of / outside the HS model's achievable (K0^NC, Eoed_ref) set. This is NOT a
-// solver defect -- it is the DOCUMENTED PLAXIS behaviour: "Depending on E50, Eoed, Eur there
-// happens to be a certain range of valid K0^NC values. K0^NC values outside this range are
-// rejected by PLAXIS [...] the program shows the nearest possible value" (PLAXIS 2D Material
-// Models Manual sec 6.4.3). The von Mises cap == the axisymmetric reduction of PLAXIS's
-// asymmetric qtilde cap (MMM Eq 6-26) on the oedometer path, so the achievable set is the
-// same. Our calibration matches Eoed_ref EXACTLY (the primary stiffness) and reports the
-// nearest-feasible K0 (~0.42 > 0.38), exactly as PLAXIS would. (See hardening-soil-
-// formulation.md sec 4e.)
+// solver defect -- it is a property of the model: E50, Eoed and Eur together admit only a
+// certain range of K0^NC, and an input outside that range cannot be reproduced; the nearest
+// achievable value is the honest answer. The von Mises cap coincides with the axisymmetric
+// reduction of a Lode-dependent qtilde cap on the oedometer path, so the achievable set does
+// not depend on that choice. Our calibration matches Eoed_ref EXACTLY (the primary stiffness)
+// and reports the nearest-feasible K0 (~0.42 > 0.38). (See hardening-soil-formulation.md
+// sec 4e.)
 void test_berlin_k0nc_intrinsic_limit() {
     HardeningSoilParams p;
     p.p_ref = 100; p.E50_ref = 105e3; p.Eur_ref = 315e3; p.Eoed_ref = 105e3;
@@ -74,10 +74,10 @@ void test_berlin_k0nc_intrinsic_limit() {
                 " Eoed=%.0f (target 105000)\n", p.cap_alpha, p.cap_beta, K0, Eoed);
     // Eoed (primary stiffness) reproduced exactly.
     check(close(Eoed, p.Eoed_ref, 1e-2), "Berlin: Eoed_ref reproduced exactly");
-    // K0 cannot reach the input 0.38 (intrinsic restricted-range, PLAXIS MMM 6.4.3): it sits
-    // at the nearest-feasible floor (~0.42). Assert it is the documented behaviour, not 0.38.
+    // K0 cannot reach the input 0.38 (the model's intrinsic restricted range): it sits at the
+    // nearest-feasible floor (~0.42). Assert it is that behaviour, not 0.38.
     check(K0 > 0.40 && K0 < 0.45, "Berlin: K0 = nearest-feasible ~0.42 (NOT input 0.38)");
-    check(K0 > 0.38, "Berlin: reproduced K0 exceeds input 0.38 (restricted range, MMM 6.4.3)");
+    check(K0 > 0.38, "Berlin: reproduced K0 exceeds input 0.38 (restricted K0^NC range)");
 }
 
 } // namespace

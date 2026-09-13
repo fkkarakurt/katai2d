@@ -5,22 +5,19 @@
 // mobilises, so the computed bearing capacity is too HIGH -- an unsafe number, produced quietly,
 // on exactly the soil (dense sand) where a practitioner would trust it most.
 //
-// The rule is the Material Models Manual's, quoted rather than paraphrased (V8 edition, §5.4,
-// Fig. 5.6): "After extensive shearing, dilating materials arrive in a state of critical density
-// where dilatancy has come to an end... In order to specify this behaviour, the initial void
-// ratio, e_init, and the maximum void ratio, e_max, of the material must be entered as general
-// parameters. As soon as the volume change results in a state of maximum void, the mobilised
-// dilatancy angle, psi_m, is automatically set back to zero." Equation 5.16b is that last
-// sentence: for e >= e_max, psi_m = 0.
+// The rule: after extensive shearing, dilating materials arrive in a state of critical density
+// where dilatancy has come to an end. To express it the material carries its initial void ratio
+// e_init and its maximum void ratio e_max, and as soon as the volume change brings the void ratio
+// to e_max the mobilised dilatancy angle is set back to zero: for e >= e_max, psi_m = 0
+// (docs/k2d-format.md, `dilatancy_cutoff` / `e_max`).
 //
 // KATAI states the void ratio through the volume change, 1 + e = (1 + e_init) exp(eps_v) with
-// expansion positive, rather than through the manual's Eq. 5.17, whose printed sign convention
-// is ambiguous. The two say the same thing; only one of them says it once.
+// expansion positive, so the sign convention is fixed once and cannot be read two ways.
 //
 // verify: KV-CST-004
 //   oracle:   closed_form
-//   source:   PLAXIS 2D Material Models Manual, dilatancy cut-off: Eq. 5.16a for the mobilised dilatancy, Eq. 5.16b "for e >= e_max: psi_m = 0", Eq. 5.17 for the void ratio, Fig. 5.6 for the resulting drained-triaxial strain curve; the manual also states that e_min "is not used within the context of the Hardening-Soil model", which is why KATAI does not carry it
-//   locator:  1 + e = (1 + e_init) exp(eps_v), expansion positive, so dilation stops at the volumetric strain eps_v,cut = ln((1 + e_max)/(1 + e_init)); beyond it the return mapping runs with psi = 0 and the plastic flow is isochoric (stated in full)
+//   source:   KATAI 2D input contract (docs/k2d-format.md, dilatancy_cutoff / e_max / e_init): the dilatancy cut-off sets the mobilised dilatancy to zero once the void ratio reaches the critical (maximum) void ratio; a minimum void ratio plays no part in the rule, which is why KATAI does not carry one
+//   locator:  the model's own psi_m (for Mohr-Coulomb, psi) while e < e_max, and psi_m = 0 for e >= e_max; 1 + e = (1 + e_init) exp(eps_v), expansion positive, so dilation stops at the volumetric strain eps_v,cut = ln((1 + e_max)/(1 + e_init)); beyond it the return mapping runs with psi = 0 and the plastic flow is isochoric (stated in full)
 //   quantity: the accumulated volumetric strain of a Mohr-Coulomb stress point sheared far past its cut-off, and the same point's response with the cut-off switched off [-]
 //   expected: with the cut-off ON the volumetric strain stops at eps_v,cut and does not grow afterwards; with it OFF the same shearing keeps dilating; and the switch changes nothing at all before the cut-off is reached
 //   band:     MEASURED on this tree with e_init = 0.60, e_max = 0.63 (eps_v,cut = 0.018576) on a drained biaxial at 100 kPa cell pressure, 400 increments of 2e-4 axial strain: the cut-off run stops at 0.018635 -- inside one loading increment of the closed form -- while the same soil without it reaches 0.027139, 1.46x as much. After the cut-off the volumetric strain grows by 1.4e-16 over 80 further increments, i.e. the flow is isochoric to round-off; before it the two runs are bit-for-bit identical
@@ -67,8 +64,8 @@ struct History {
     double last = 0.0;
 };
 
-// A DRAINED BIAXIAL element test, which is the plane-strain sibling of the drained triaxial the
-// manual draws in Fig. 5.6: the axial strain is imposed and the lateral strain is solved for so
+// A DRAINED BIAXIAL element test, which is the plane-strain sibling of the drained triaxial
+// test: the axial strain is imposed and the lateral strain is solved for so
 // that the lateral stress stays at the cell pressure. The volume change is then the soil's
 // answer rather than the test's assumption -- imposing a strain path with zero trace, as the
 // first version of this test did, makes dilation arithmetically impossible and proves nothing.
@@ -153,7 +150,7 @@ int main() {
     check(identical,
           "before the cut-off is reached the two runs are bit-for-bit identical");
 
-    // And the switch is OFF by default, as in PLAXIS: a file that says nothing gets the old
+    // And the switch is OFF by default: a file that says nothing gets the old
     // behaviour, which is what makes the schema bump the honest way to introduce this.
     const core::MaterialModel fresh;
     check(!fresh.dilatancy_cutoff, "the cut-off is off by default");

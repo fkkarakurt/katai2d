@@ -4,7 +4,7 @@
 // 3 nodes). 3 DOFs per node: (u_x, u_y, φ) — the two translations are SHARED with the
 // soil, the rotation φ is plate-specific.
 //
-// Constitutive law (PLAXIS 2D Material Models Manual §18.3, Eq 18-6…18-9):
+// Constitutive law (per unit width; linear elastic in N, M and Q):
 //   N = EA·ε ,   M = EI·κ ,   Q = kGA'·γ ,   kGA' = k·EA/(2(1+ν)) ,  k = 5/6
 // Kinematics (local: s = plate axis, n = normal):
 //   ε = du_s/ds ,   κ = dφ/ds ,   γ = du_n/ds − φ   (Mindlin: φ independent of the transverse slope)
@@ -51,7 +51,7 @@ struct PlateProps {
     // √(12EI/EA), rectangular section). 0 = massless (no plate inertia in dynamics).
     double rho_A = 0.0;
     double rho_I = 0.0;
-    // Elastoplastic capacities (the PLAXIS MMM §18.3 diamond;
+    // Elastoplastic capacities (the M-N diamond |N|/Np + |M|/Mp <= 1;
     // structural-plate-formulation.md §10): Mp = plastic moment [kNm/m], Np = plastic axial
     // force [kN/m]. ≤0 ⇒ UNBOUNDED in that direction; both ≤0 ⇒ purely elastic (old
     // behaviour bit-for-bit — plastic() false, the assembly stays on the K·u path).
@@ -66,7 +66,7 @@ struct PlateProps {
 // does not reach upward for a constant):
 //   rho_A = w/g            mass per unit length            [Mg/m]
 //   rho_I = rho_A d^2/12   rotary inertia per unit length  [Mg m],  d = sqrt(12 EI/EA)
-// d is PLAXIS's equivalent thickness (Ref. Man. sec. 5.6: a rectangular section with the
+// d is the plate's equivalent thickness (the rectangular section with the
 // same EA and EI), so rho_I is that section's second moment of mass. Static paths never
 // read these fields; a plate with w = 0 stays massless (its stiffness still takes part
 // in the dynamic system). Call AFTER EA/EI are set.
@@ -151,10 +151,10 @@ inline PlateForces forces(const NodeCoords& X, const PlateProps& p, const Dof& u
 }
 
 // ===========================================================================================
-// ELASTOPLASTIC M-N HINGE (the PLAXIS MMM §18.3 diamond; structural-plate-formulation.md §10).
+// ELASTOPLASTIC M-N HINGE (the linear M-N diamond; structural-plate-formulation.md §10).
 // Generalized-stress perfect plasticity at the bending/axial Gauss (stress) points:
 //   f = |N|/Np + |M|/Mp − 1 ≤ 0  (1/cap := 0 if unbounded), associated flow, Koiter corner
-// return. Shear Q is NOT on the yield surface (PLAXIS: M and N only) — stays elastic.
+// return. Shear Q is NOT on the yield surface (only M and N are capped) — stays elastic.
 // State = [ε_p, κ_p] per Gauss point; the return map is a PURE function of the committed
 // state (line-search safe).
 // ===========================================================================================
@@ -164,7 +164,7 @@ inline constexpr int kBendGaussCount5 = 5;                       // 5-node
 inline constexpr int kPlasticStateSize = kBendGaussCount * kPlasticPerPoint;    // 6 doubles/element
 inline constexpr int kPlasticStateSize5 = kBendGaussCount5 * kPlasticPerPoint;  // 10 doubles/element
 // Bending/axial Gauss locations (the SAME literals as in stiffness) — the diagram Lagrange
-// expansion (PLAXIS: "extrapolation of the values at the stress points") uses these ξ.
+// expansion (nodal values extrapolated from the stress points) uses these ξ.
 inline constexpr std::array<double, 3> kBendGaussXi{-0.7745966692414834, 0.0, 0.7745966692414834};
 inline constexpr std::array<double, 5> kBendGaussXi5{
     -0.9061798459386640, -0.5384693101056831, 0.0, 0.5384693101056831, 0.9061798459386640};
@@ -263,9 +263,9 @@ inline void internal_force_plastic(const NodeCoords& X, const PlateProps& p, con
 }
 
 // For the diagram: the capped (N, M) at the bending/axial Gauss points with the committed
-// state — the stations expand from these by Lagrange (PLAXIS: nodal output is
-// stress-point extrapolation; the cap CAN be exceeded at a station, PLAXIS does not check
-// either — §10.2 honest declaration).
+// state — the stations expand from these by Lagrange (nodal output is stress-point
+// extrapolation; the cap CAN be exceeded at a station and is not checked there — §10.2
+// honest declaration).
 inline void gauss_forces_plastic(const NodeCoords& X, const PlateProps& p, const Dof& u,
                                  const double* state_c, std::array<double, 3>& Ng,
                                  std::array<double, 3>& Mg) {
@@ -281,7 +281,7 @@ inline void gauss_forces_plastic(const NodeCoords& X, const PlateProps& p, const
 
 // ===========================================================================================
 // 5-NODE QUARTIC Timoshenko beam — sits on a tri15 edge (tri15 edge = 5 nodes,
-// quarter-spaced). The counterpart of the 5-node plate element PLAXIS 2D uses with the
+// quarter-spaced). The 5-node plate element that pairs with the
 // 15-node soil. NATURAL node order: ξ = −1, −0.5, 0, +0.5, +1 (nodes 0..4). (u_x,u_y,φ)
 // per node → 15 DOFs. Constitutive law + kinematics as the 3-node one; SELECTIVE REDUCED
 // INTEGRATION: axial+bending 5-point Gauss, shear 4-point Gauss (one degree lower → no

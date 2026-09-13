@@ -1,9 +1,9 @@
 """Slope stability with KATAI 2D, end to end -- a first script.
 
-The problem: a homogeneous 1:2 slope on a foundation layer, the classic
-verification case of Griffiths & Lane (1999), "Slope stability analysis by
-finite elements", Geotechnique 49(3). Published factor of safety: ~0.99
-(Bishop 0.988, Spencer 0.987, finite elements 0.997).
+The problem: a homogeneous 1:2 slope on a foundation layer, the simple slope of
+the referee problems in Giam & Donald (1989), "Example problems for testing soil
+slope stability programs", Monash University report 8/1989. Referee factor of
+safety: 1.00. Strength reduction by finite elements after Griffiths & Lane (1999).
 
 Units everywhere: kN, m, day. Run with the built package on PYTHONPATH::
 
@@ -33,12 +33,12 @@ job = prj.run(on_phase=lambda i, n, name: print(f"  phase {i + 1}/{n}: {name}"))
 res = job.results()[-1]
 
 sign = ">" if res.fos_is_lower_bound else "="
-print(f"Factor of safety {sign} {res.fos:.3f}   (published: ~0.99)")
+print(f"Factor of safety {sign} {res.fos:.3f}   (referee value: 1.00)")
 print(f"Mechanism max displacement: {res.max_disp:.3e} m (unit-less shape)")
 
 # The same analysis, saved for the GUI or the command line:
 #   prj.save("slope.k2d")        ->  katai solve slope.k2d
 
 # The corpus band for this exact case, on this exact mesh (KV-SLP-001).
-if abs(res.fos - 0.99) > 0.08 * 0.99:
+if abs(res.fos - 1.00) > 0.08 * 1.00:
     raise SystemExit("FoS drifted outside the corpus band -- investigate")

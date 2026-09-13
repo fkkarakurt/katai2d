@@ -2,10 +2,11 @@
 //
 // The generator is a pure schema-to-schema function, so it is checked the way a closed form is:
 // every expected level here can be computed by hand from the logs, and the test states the rule it
-// is checking rather than the number alone. Source for every rule: PLAXIS 2D 2025.1 Reference
-// Manual sec. 4.2 (interpolate between boreholes; all layers appear in all boreholes; local zero
-// thickness is legal), sec. 4.3.1.1 (a layer absent at a location is a zero thickness there) and
-// sec. 7.10.1.1 (a single head is a horizontal water surface reaching the model boundaries).
+// is checking rather than the number alone. Source for every rule: the borehole contract of
+// docs/k2d-format.md (`strata`, `boreholes[i].level`, `boreholes[i].head`) -- (R1) levels are
+// interpolated between boreholes and all layers appear in all boreholes, so local zero thickness
+// is legal; (R2) a layer absent at a location is a zero thickness there; and (R3) a single head is
+// a horizontal water surface reaching the model boundaries.
 //
 // The reason this file exists at all is that a wrong stratigraphy is INVISIBLE downstream: the
 // mesher will happily mesh the wrong ground, every phase will converge on it, and the answer will
@@ -13,11 +14,11 @@
 //
 // verify: KV-GEO-001
 //   oracle:   closed_form
-//   source:   PLAXIS 2D 2025.1 Reference Manual, sec. 4.2 "Creating boreholes" -- "If multiple boreholes are defined, PLAXIS 2D will automatically interpolate between boreholes, and derive the position of the soil layers from the borehole information. Each defined soil layer is used throughout the whole model contour. In other words, all soil layers appear in all boreholes. The top and the bottom boundaries of the layers may vary through boreholes, making it possible to define non-horizontal soil layers of non-uniform thickness as well as layers that locally have a zero thickness." -- with sec. 4.3.1.1 ("If a certain soil layer does not exist at the position indicated by a model borehole, it should be assigned a zero thickness (bottom level equal to top level) in the relevant borehole") and sec. 7.10.1.1 ("A single borehole can be used to create a horizontal water surface that extends to the model boundaries. When multiple boreholes are used, a non-horizontal water surface can be created by combining the heads in the various boreholes")
+//   source:   KATAI 2D input contract (docs/k2d-format.md, strata / boreholes / level / head) -- (R1) with several boreholes the soil-layer positions are interpolated between the logs; every soil layer is used throughout the whole model contour, so all layers appear in all boreholes, and the top and bottom of a layer may vary between boreholes, which gives non-horizontal layers of non-uniform thickness and layers that locally have zero thickness; (R2) a layer that does not exist at a borehole is given zero thickness there (bottom level equal to top level); (R3) a single borehole head gives a horizontal water surface extending to the model boundaries, and several heads combine into a non-horizontal one
 //   locator:  the rule stated in full, which is what is evaluated here rather than called from the generator's header: a boundary level between two logs at x_a < x < x_b is z(x) = z_a + (x - x_a)/(x_b - x_a) (z_b - z_a); outside the outermost log it is that log's own level, HELD rather than continued on its slope; and the water surface follows the same two rules applied to the heads. The boundaries break slope at a borehole and nowhere else, so the generated polygon has vertices at the model edges and at each log, and no others
 //   quantity: the generated layer-boundary levels and phreatic level of a 40 m x 20 m model, read back off the produced polygons and water polyline, for one log, for two logs with different levels and heads, and for a three-layer section whose middle layer pinches out [m]
 //   expected: one log -> every boundary at its own level at x = 0, 12 and 40; two logs at x = 10 and 30 -> the midpoint is the mean (20 and 18 give 19; 16 and 10 give 13) while x = 0 reads 20 and x = 40 reads 18, NOT the extrapolated 21 and 17; the pinching layer is 2.000 m thick at one log and exactly 0.000 m at the other, with the layer beneath rising to meet the one above so the ground has no gap; the water surface is 12 at x <= 10, 16 at x >= 30 and linear between
-//   band:     1e-12 m, i.e. exact to round-off, as asserted below -- these are not measurements of a physical process but evaluations of a stated interpolation, so any deviation beyond arithmetic noise is a defect rather than a discretisation. Every expected value above is computable by hand from the logs in the test, which is the point: the oracle is the manual's rule, not this program's own output recorded once
+//   band:     1e-12 m, i.e. exact to round-off, as asserted below -- these are not measurements of a physical process but evaluations of a stated interpolation, so any deviation beyond arithmetic noise is a defect rather than a discretisation. Every expected value above is computable by hand from the logs in the test, which is the point: the oracle is the stated rule, not this program's own output recorded once
 #include <katai/model/project.hpp>
 #include <katai/model/stratigraphy.hpp>
 
@@ -70,7 +71,7 @@ double bottom_of_polygon_at(const m::SoilPolygon& P, double x) {
 
 // ------------------------------------------------------------------ (1) one borehole is flat --
 void case_single_borehole() {
-    std::printf("\n== one borehole: horizontal layers reaching both model edges (sec. 7.10.1.1) ==\n");
+    std::printf("\n== one borehole: horizontal layers reaching both model edges (R3) ==\n");
     m::Project pr = base_project();
     pr.boreholes = {{"BH-1", 12.0, {}, true, 14.0}};
     pr.boreholes[0].level = {20.0, 15.0, 0.0};   // Fill 20->15, Clay 15->0
@@ -81,7 +82,7 @@ void case_single_borehole() {
     check(R.polygons.size() == 2, "two layers give two regions");
     if (R.polygons.size() != 2) return;
 
-    // The borehole is at x = 12, but the layers must reach x = 0 and x = 40 unchanged: the manual
+    // The borehole is at x = 12, but the layers must reach x = 0 and x = 40 unchanged: the rule
     // says a single borehole's surface extends to the model boundaries, and nothing is sloped
     // because there is nothing to slope towards.
     for (double x : {0.0, 12.0, 40.0}) {
@@ -105,7 +106,7 @@ void case_single_borehole() {
 
 // ------------------------------------------- (2) two boreholes: linear between, held outside --
 void case_two_boreholes() {
-    std::printf("\n== two boreholes: linear between them, HELD outside them (sec. 4.2) ==\n");
+    std::printf("\n== two boreholes: linear between them, HELD outside them (R1) ==\n");
     m::Project pr = base_project();
     pr.boreholes = {{"BH-1", 10.0, {}, true, 12.0}, {"BH-2", 30.0, {}, true, 16.0}};
     pr.boreholes[0].level = {20.0, 16.0, 0.0};
@@ -150,9 +151,9 @@ void case_two_boreholes() {
     }
 }
 
-// -------------------------------------------------- (3) a layer that runs out (sec. 4.3.1.1) --
+// ----------------------------------------------------------- (3) a layer that runs out (R2) --
 void case_pinch_out() {
-    std::printf("\n== a layer that pinches out: zero thickness is legal, not an error (sec. 4.3.1.1) ==\n");
+    std::printf("\n== a layer that pinches out: zero thickness is legal, not an error (R2) ==\n");
     m::Project pr = base_project();
     pr.strata = {{"Fill", 0}, {"Peat", 1}, {"Clay", 0}};
     pr.boreholes = {{"BH-1", 0.0, {}, false, 0.0}, {"BH-2", 40.0, {}, false, 0.0}};
@@ -262,7 +263,7 @@ int main() {
     case_refusals();
     case_apply();
     if (g_failures == 0) {
-        std::printf("\nOK: borehole logs generate the ground the manual's rules describe\n");
+        std::printf("\nOK: borehole logs generate the ground the stated rules describe\n");
         return 0;
     }
     std::fprintf(stderr, "\n%d check(s) failed\n", g_failures);

@@ -35,7 +35,7 @@ struct MohrCoulombParams {
     double cohesion = 0.0;         // c >= 0
     double friction_angle = 0.0;   // phi  [rad]
     double dilatancy_angle = 0.0;  // psi  [rad], psi <= phi
-    // Rankine tension cap (PLAXIS MMM sec 3.2 Eq 3-11 / sec 3.3.10): three extra yield
+    // Rankine tension cap (tension cut-off with tensile strength sigma_t): three extra yield
     // planes f_t,i = sigma_i - sigma_t <= 0 with ASSOCIATED flow; with sorted principals
     // they reduce to sigma_1 <= sigma_t. Internally clamped to sigma_t <= c*cot(phi)
     // (the most tensile principal the MC set admits). Off by default so every existing
@@ -49,15 +49,13 @@ inline constexpr double kNoTensionCap = 1e300;
 
 // The tension cut-off as a STANDALONE principal-space return, for the models whose own return
 // mapping already produced an admissible stress: Hardening Soil, HS small, Soft Soil and Soft
-// Soil Creep. PLAXIS applies the cut-off to those models too -- the Material Models Manual lists
-// "sigma_t Tension cut-off and tensile strength" among the Hardening Soil's failure parameters
-// ("as in Mohr-Coulomb model"), and where a model does NOT have one it says so by name (NGI-ADP,
-// UDCAM-S). Mohr-Coulomb keeps its own fully-coupled cascade in mc_return_mapping and does not
-// come through here, so that path stays bit-identical.
+// Soil Creep. Those models take the tension cut-off and the tensile strength sigma_t among their
+// failure parameters exactly as Mohr-Coulomb does. Mohr-Coulomb keeps its own fully-coupled
+// cascade in mc_return_mapping and does not come through here, so that path stays bit-identical.
 //
-// Eq. 3-11, verbatim: f4 = sigma'1 - sigma_t <= 0, f5 = sigma'2 - sigma_t <= 0,
-// f6 = sigma'3 - sigma_t <= 0, "for these three yield functions an associated flow rule is
-// adopted", sigma_t zero by default. Tension positive.
+// The three yield functions: f4 = sigma'1 - sigma_t <= 0, f5 = sigma'2 - sigma_t <= 0,
+// f6 = sigma'3 - sigma_t <= 0, each with an associated flow rule, sigma_t zero by default.
+// Tension positive.
 //
 // With isotropic elasticity D_e = lambda (1 x 1) + 2 mu I in principal space, the associated
 // multi-surface return is closed form. For an active set A of size n, d(sigma_j) = -(lambda S +
@@ -179,8 +177,8 @@ inline double mc_yield(const PrincipalStresses& p, double cohesion,
 struct McReturn {
     PlaneStrainStress stress;  // admissible (returned) stress
     bool plastic = false;      // whether a plastic correction was applied
-    bool tension = false;      // whether a tension cut-off plane was active (PLAXIS
-                               // "tension point" classification; subset of plastic)
+    bool tension = false;      // whether a tension cut-off plane was active (a
+                               // "tension point" in the output; subset of plastic)
     // In-plane consistent (algorithmic) tangent D_T = d(sigma_inplane)/d(eps),
     // 3x3 in Voigt [sxx, syy, sxy] x [exx, eyy, gxy]. Only meaningful when
     // plastic == true; for an elastic step the caller uses the elastic operator.
@@ -287,7 +285,7 @@ inline PrincipalTangent principal_consistent_tangent(
 // equations are catalogued in docs/references/mohr-coulomb-formulation.md.
 //
 // With params.tension_cutoff the admissible set becomes MC intersected with the
-// Rankine cap sigma_1 <= sigma_t (three associated planes, PLAXIS MMM Eq 3-11).
+// Rankine cap sigma_1 <= sigma_t (three associated planes sigma_i - sigma_t <= 0).
 // The return then runs a validity-cascaded region selection (formulation doc
 // sec 7): pure-MC regions (unchanged, bit-identical when the cap is inactive),
 // the tension face / tension-tension edge / tension apex, the MC-tension line

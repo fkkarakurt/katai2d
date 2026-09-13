@@ -37,8 +37,8 @@ m::Project build_full() {
     a.m = 0.55; a.nu_ur = 0.21; a.p_ref = 110; a.Rf = 0.87;
     a.k0nc_auto = false; a.k0nc = 0.43;
     a.G0ref = 1.1e5; a.gamma07 = 1.3e-4;
-    a.lam_star = 0.123; a.kap_star = 0.0321;   // Soft Soil (MMM 10) fields
-    a.mu_star = 0.0061;                        // Soft Soil Creep (MMM 11) field
+    a.lam_star = 0.123; a.kap_star = 0.0321;   // Soft Soil fields
+    a.mu_star = 0.0061;                        // Soft Soil Creep field
     a.kx = 0.86; a.ky = 0.043;
     a.rinter_rigid = false; a.Rinter = 0.67;
     a.k0_auto = false; a.k0 = 0.61; a.oc_mode = 2; a.OCR = 1.8; a.POP = 35.0;

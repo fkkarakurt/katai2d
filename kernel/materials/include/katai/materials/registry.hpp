@@ -32,7 +32,7 @@ namespace katai::core {
 // Drainage condition of the constitutive input, independent of the project
 // schema's enum (the materials module cannot see katai/model). The caller maps
 // its schema value; the mapping is a plain switch at the seam.
-// UndrainedC = a TOTAL stress analysis (MMM section 2.7): undrained stiffness and undrained
+// UndrainedC = a TOTAL stress analysis: undrained stiffness and undrained
 // strength, no pore pressure at all. It shares nothing with (A)/(B) but its name -- there is
 // no Kw/n, because there is no separation of water from skeleton to make one for.
 enum class DrainageClass { Drained, UndrainedA, UndrainedB, NonPorous, UndrainedC };
@@ -46,24 +46,24 @@ struct MaterialParams {
     double c = 0.0;              // cohesion c' (Undrained (B): su)
     double phi_rad = 0.0;        // friction angle phi' [rad]
     double psi_rad = 0.0;        // dilatancy angle psi [rad]
-    bool tension_cutoff = false; // Rankine tension cut-off (MMM Eq 3-11)
+    bool tension_cutoff = false; // Rankine tension cut-off (sigma_i <= sigma_t)
     double tensile_strength = 0.0;  // sigma_t [kN/m2]; negative input clamps to 0
-    // Dilatancy cut-off (MMM Eq 5.16b): a dilating soil arrives at a critical void ratio where
+    // Dilatancy cut-off: a dilating soil arrives at a critical void ratio where
     // dilatancy ends. e_init is the in-situ void ratio, e_max the critical one; when the volume
     // change has taken the soil to e_max the mobilised dilatancy angle is set to zero.
     bool dilatancy_cutoff = false;
     double e_init = 0.5, e_max = 1.0;
 
-    // Hardening Soil (+ HSsmall) stiffness law (MMM sections 6-7).
+    // Hardening Soil (+ HSsmall) stiffness law (Schanz, Vermeer & Bonnier 1999; Benz 2007).
     double E50_ref = 0.0, Eur_ref = 0.0, Eoed_ref = 0.0;
     double m = 0.0, p_ref = 0.0, Rf = 0.0, nu_ur = 0.0;
     double G0_ref = 0.0, gamma07 = 0.0;   // HSsmall only
 
-    // Soft Soil (Creep) modified indices (MMM sections 10-11).
+    // Soft Soil (Creep) modified indices (creep: Vermeer & Neher 1999).
     double lam_star = 0.0, kap_star = 0.0, mu_star = 0.0;
-    // Hoek-Brown (MMM §4): the geologist's own vocabulary rather than a fitted c'/phi'.
-    // The elastic pair is E / nu above -- rock keeps Hooke's law -- and the dilatancy angle
-    // is psi_rad, its value at sigma'_3 = 0.
+    // Hoek-Brown (Hoek, Carranza-Torres & Corkum 2002): the geologist's own vocabulary rather
+    // than a fitted c'/phi'. The elastic pair is E / nu above -- rock keeps Hooke's law -- and
+    // the dilatancy angle is psi_rad, its value at sigma'_3 = 0.
     double sig_ci = 0.0, mi = 0.0, gsi = 0.0, hb_D = 0.0, sig_psi = 0.0;
 
     // K0^NC memory shared by the HS cap and the SS/SSC preconsolidation law:
@@ -71,9 +71,10 @@ struct MaterialParams {
     bool k0nc_auto = true;
     double k0nc = 0.0;
 
-    // Pore-fluid stiffness for Undrained (A)/(B) (MMM section 2.4). Either the equivalent
-    // undrained Poisson ratio is given directly (skempton_mode = false, PLAXIS default 0.495)
-    // or Skempton's B is, and nu_u follows from Eq. 2-55. Kw/n comes from Eq. 2-50 either way.
+    // Pore-fluid stiffness for Undrained (A)/(B). Either the equivalent undrained Poisson ratio
+    // is given directly (skempton_mode = false, 0.495 by default: nearly incompressible) or
+    // Skempton's B is, and nu_u = (3 nu' + B (1 - 2 nu')) / (3 - B (1 - 2 nu')). Kw/n follows
+    // from nu_u either way (MaterialModel::kw_over_n).
     bool skempton_mode = false;
     double nu_u = 0.495;
     double skempton_B = 0.0;
@@ -87,12 +88,12 @@ struct ModelEntry {
     MaterialType type;     // the tag integrate_point dispatches on
     bool nonlinear;        // drives load stepping and solver selection
     // Solver step/tolerance family: the hardening family (HS, HSsmall) needs
-    // PLAXIS-realistic tolerances, the soft-soil family (SS, SSC) additionally
-    // the FD-tangent step class. Read by the driver exactly like its former
+    // its own realistic step and tolerance settings, the soft-soil family (SS, SSC)
+    // additionally the FD-tangent step class. Read by the driver exactly like its former
     // has_hardening / has_softsoil flags.
     bool hardening_family;
     bool softsoil_family;
-    // Which depth-gradient inputs the model actually reads (PLAXIS E'_inc /
+    // Which depth-gradient inputs the model actually reads (the increments E'_inc /
     // c'_inc about y_ref): E'_inc only means anything where E' itself is an
     // input (Linear elastic, Mohr-Coulomb -- Hardening Soil derives stiffness
     // from E50/Eoed/Eur plus its own stress dependency), and c'_inc only where

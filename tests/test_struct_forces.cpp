@@ -1,5 +1,5 @@
-// Structural internal-force OUTPUTS (structural_forces.hpp) verification — the PLAXIS
-// Output counterpart (N/Q/M diagram + anchor/geogrid axial force). All closed-form, no MKL
+// Structural internal-force OUTPUTS (structural_forces.hpp) verification — the structural
+// output (N/Q/M diagram + anchor/geogrid axial force). All closed-form, no MKL
 // needed (pure post-processing + a small dense solve).
 //
 //  (1) Cantilever plate beam, transverse tip load P → M(s)=P(L−s) LINEAR (PL at the root,

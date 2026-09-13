@@ -5,9 +5,9 @@
 //
 // The nonlinear generalization of the linear `solve_newmark` (dynamics.hpp): the internal
 // force is no longer K·u but f_int(u) from the constitutive return mapping → the interface
-// CAN slip, the geogrid can slacken, the anchor can yield, the soil can plastify (PLAXIS
-// Dynamics is FULLY NONLINEAR too — Ref §11.10.4: the SAME convergence criteria as plastic
-// analysis). At each time step the residual
+// CAN slip, the geogrid can slacken, the anchor can yield, the soil can plastify (a FULLY
+// NONLINEAR dynamic analysis: every time step is an equilibrium iteration of the same kind as
+// a plastic analysis). At each time step the residual
 //     r = F(t_{n+1}) − M·a_{n+1} − C·v_{n+1} − (f_int(u_{n+1}) − f_int₀)
 // is driven to zero by Newton; a_{n+1},v_{n+1} are written in terms of u via the Newmark
 // relations →

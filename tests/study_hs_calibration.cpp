@@ -1,17 +1,17 @@
 // HS cap calibration study (NOT a CI test; EXCLUDE_FROM_ALL). Diagnoses the K0^NC
-// reproduction against the AUTHORITATIVE PLAXIS Material Models Manual closed forms:
-//   - cap surface f_c = qtilde^2/M^2 + p^2 - pp^2          (MMM Eq 6-26)
-//   - M <-> K0^NC via Brinkgreve (1994)                    (MMM Eq 10-13, Eq 6-29)
+// reproduction of the Hardening Soil cap (Schanz, Vermeer & Bonnier 1999) against closed forms:
+//   - cap surface f_c = qtilde^2/M^2 + p^2 - pp^2
+//   - M <-> K0^NC via Brinkgreve (1994)
 //       M = 3*sqrt[ (1-K0)^2/(1+2K0)^2
 //                   + (1-K0)(1-2nu)(L-1) / ((1+2K0)(1-2nu)L - (1-K0)(1+nu)) ],  L = lambda*/kappa*
-//     approx: M ~= 3.0 - 2.8 K0^NC                          (MMM Eq 10-14)
+//     approx: M ~= 3.0 - 2.8 K0^NC
 //   - for HS, lambda*/kappa* = Ks/Kc                        (Soft Soil = compression/swelling slope)
-//       Ks/Kc ~= (Eur_ref/Eoed_ref) * K0 / ((1+2K0)(1-2nu)) (MMM Eq 6-30)
+//       Ks/Kc ~= (Eur_ref/Eoed_ref) * K0 / ((1+2K0)(1-2nu))
 // Goal: show that the von Mises cap with alpha = M(Brinkgreve) reproduces K0^NC in a
-// CAP-ONLY oedometer (proving von Mises == PLAXIS qtilde cap on the symmetric oedometer
-// path), and quantify how much the shear mechanism (also active in HS) deviates K0 --
-// the documented PLAXIS HS K0^NC limitation (MMM sec 6.4.3: K0^NC has a valid range; out
-// of range values are rejected and replaced by the nearest possible value).
+// CAP-ONLY oedometer (proving the von Mises cap equals the qtilde cap on the symmetric
+// oedometer path), and quantify how much the shear mechanism (also active in HS) deviates K0 --
+// a known HS limitation: K0^NC is attainable only within a range set by the stiffness
+// parameters, and a value outside it cannot be reproduced by any cap shape.
 //   cmake --build ... --target study_hs_calibration
 #include <katai/materials/hardening_soil_plastic.hpp>
 
@@ -26,12 +26,12 @@ using katai::core::HsIntegrated;
 namespace {
 constexpr double kPi = 3.14159265358979323846;
 
-// MMM Eq 6-30: Ks/Kc for HS (= lambda*/kappa*).
+// Ks/Kc for HS (= lambda*/kappa*): (Eur_ref/Eoed_ref) K0 / ((1+2K0)(1-2nu_ur)).
 double ks_over_kc(const HardeningSoilParams& p, double K0) {
     return (p.Eur_ref / p.Eoed_ref) * K0 / ((1.0 + 2.0 * K0) * (1.0 - 2.0 * p.nu_ur));
 }
 
-// MMM Eq 10-13 (Brinkgreve 1994): exact M <-> K0^NC, with L = lambda*/kappa*.
+// Brinkgreve (1994): exact M <-> K0^NC, with L = lambda*/kappa*.
 double brinkgreve_M(double K0, double nu, double L) {
     const double a = (1.0 - K0) * (1.0 - K0) / ((1.0 + 2.0 * K0) * (1.0 + 2.0 * K0));
     const double num = (1.0 - K0) * (1.0 - 2.0 * nu) * (L - 1.0);
@@ -65,17 +65,17 @@ void diagnose(const char* name, HardeningSoilParams p, double K0nc) {
     const double M_exact = brinkgreve_M(K0nc, p.nu_ur, L);
     const double M_approx = 3.0 - 2.8 * K0nc;
     std::printf("\n=== %s (target K0nc=%.4f) ===\n", name, K0nc);
-    std::printf("  Ks/Kc (Eq 6-30) = %.4f ; M_exact (Eq 10-13) = %.4f ; M_approx (Eq 10-14) = %.4f\n",
+    std::printf("  Ks/Kc = %.4f ; M_exact (Brinkgreve) = %.4f ; M_approx (3.0 - 2.8 K0nc) = %.4f\n",
                 L, M_exact, M_approx);
 
     const double Ks_ref = p.Eur_ref / (3.0 * (1.0 - 2.0 * p.nu_ur));
-    const double beta_plaxis = p.p_ref * (L - 1.0) / Ks_ref;
+    const double beta_formula = p.p_ref * (L - 1.0) / Ks_ref;
     const double Kp = katai::core::hs_cap_Kp(p, K0nc);
-    std::printf("  Ks_ref=%.0f beta_plaxis=%.3e  beta_Kp(pref/Kp)=%.3e\n",
-                Ks_ref, beta_plaxis, p.p_ref / Kp);
+    std::printf("  Ks_ref=%.0f beta_L(pref(L-1)/Ks_ref)=%.3e  beta_Kp(pref/Kp)=%.3e\n",
+                Ks_ref, beta_formula, p.p_ref / Kp);
     // von Mises cap (= axisymmetric qtilde), M from Brinkgreve, over a beta sweep.
     std::printf("  --- von Mises cap ; M=M_approx=%.4f --- (Eoed=Eoed_ref <-> K0 floor)\n", M_approx);
-    for (double b : {beta_plaxis, p.p_ref / Kp, 2.0 * beta_plaxis, 5.0 * beta_plaxis}) {
+    for (double b : {beta_formula, p.p_ref / Kp, 2.0 * beta_formula, 5.0 * beta_formula}) {
         HardeningSoilParams q = p; q.cap_alpha = M_approx; q.cap_beta = b;
         double s1, s2, s3, eo; full_oedometer(q, s1, s2, s3, eo);
         std::printf("     beta=%.3e -> K0=%.4f  Eoed=%.0f (t %.0f)\n",
@@ -85,9 +85,9 @@ void diagnose(const char* name, HardeningSoilParams p, double K0nc) {
 } // namespace
 
 // Berlin Sand III drained triaxial at sigma3=200 WITH cap on -- prints q, axial stress and
-// VOLUMETRIC strain vs axial strain to compare against PLAXIS Fig 15.4 (contraction then
-// dilation, psi=6deg). Cap shape M from Brinkgreve (PLAXIS's own cap), pp initialised to the
-// isotropic consolidation stress sigma3.
+// VOLUMETRIC strain vs axial strain to check the expected shape (contraction then dilation,
+// psi=6deg). Cap shape M from Brinkgreve (1994), pp initialised to the isotropic consolidation
+// stress sigma3.
 void berlin_triaxial_capon(double M, double beta) {
     HardeningSoilParams p;
     p.p_ref = 100; p.E50_ref = 105e3; p.Eur_ref = 315e3; p.Eoed_ref = 105e3;
@@ -124,7 +124,7 @@ int main() {
     sand.m = 0.55; sand.nu_ur = 0.2; sand.friction = 38 * kPi / 180;
     sand.dilatancy = 6 * kPi / 180; sand.cohesion = 1.0; sand.Rf = 0.9;
     diagnose("Berlin Sand III", sand, 0.38);
-    // Berlin triaxial volumetric vs Fig 15.4: sweep cap aspect M (with calibrated beta from
+    // Berlin triaxial volumetric response: sweep cap aspect M (with calibrated beta from
     // hs_calibrate_cap so Eoed matches), find which gives net dilation (psi=6deg).
     {
         HardeningSoilParams cal = sand;

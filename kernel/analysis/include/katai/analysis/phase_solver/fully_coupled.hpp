@@ -1,6 +1,6 @@
 #pragma once
-// Fully-coupled flow-deformation phase strategy (Stage B9). PLAXIS "Fully
-// coupled flow-deformation": Biot consolidation generalized with unsaturated
+// Fully-coupled flow-deformation phase strategy (Stage B9). The "Fully
+// coupled flow-deformation" phase: Biot consolidation generalized with unsaturated
 // van Genuchten/Mualem retention + Bishop effective stress (chi = S_eff).
 // Saturated zones reduce bit-for-bit to consolidation; unsaturated (suction)
 // zones use the SWCC. v1: soil-only.
@@ -52,8 +52,8 @@ struct FullyCoupledPhase {
     std::vector<FlowEdge> flow_edges;                   // B4 vocabulary, Closed edges included
     bool have_flow_bcs = false;                         // unfiltered declaration scan (B4 rule)
     std::vector<char> active;                           // element activity; empty = everything active
-    // Nodes of the DRAINS active in this phase. "In consolidation analysis, drains reduce the
-    // excess pore pressure to zero and the specified head is ignored" (PLAXIS Ref sec. 5.9.2) --
+    // Nodes of the DRAINS active in this phase. In a consolidation phase a drain sets the excess
+    // pore pressure to zero and its specified head is not used (docs/k2d-format.md, `hydros`) --
     // which is exactly what this solver's drained-node mask means, so a drain enters here rather
     // than as a new kind of boundary condition.
     std::vector<int> drain_nodes;
@@ -140,8 +140,8 @@ inline bool solve_fully_coupled_phase(
         if (used_np && in.materials[mi].total_stress) {
             R.message = "Material '" + in.materials[mi].name + "' is Undrained (C), a total "
                         "stress analysis: it carries no pore pressure, so there is nothing in it "
-                        "to consolidate (PLAXIS: \"a Consolidation calculation does not affect "
-                        "Undrained (C) materials\"). Solving the phase would put part of the mesh "
+                        "to consolidate, and a consolidation calculation has nothing to act on in "
+                        "it. Solving the phase would put part of the mesh "
                         "in total stress and the rest in effective stress. Give the material "
                         "effective parameters with Drained or Undrained (A)/(B) for the "
                         "consolidating phases.";
@@ -166,7 +166,7 @@ inline bool solve_fully_coupled_phase(
             return false;
         }
     }
-    // Pore-fluid stiffness Kw/n from the real water bulk modulus (Verruijt; PLAXIS Sci.Man sec. 4):
+    // Pore-fluid stiffness Kw/n from the real water bulk modulus (Verruijt):
     // near-incompressible -> cv = k Eoed / gamma_w. v1 uses one representative porosity.
     constexpr double kWaterBulk = 2.0e6;   // bulk modulus of water [kPa]
     double porosity = 0.3;

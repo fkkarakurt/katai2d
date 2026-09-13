@@ -1,4 +1,4 @@
-// SOFT SOIL model -- Stage 1 material-point V&V (PLAXIS MMM sec 10; locked formulation in
+// SOFT SOIL model -- Stage 1 material-point V&V (locked formulation in
 // docs/references/soft-soil-formulation.md). Oracles are the model's own DEFINING closed forms,
 // none of which share code with the kernel's return mapping:
 //   (a) isotropic VIRGIN loading follows eps_v = lam* ln(p/p0) (the ln-law that defines lam*);
@@ -6,9 +6,9 @@
 //   (c) reloading past p_p REJOINS the virgin line (pre-consolidation memory);
 //   (d) on the virgin isotropic line p == p_p identically (the cap top rides the stress);
 //   (e) OEDOMETER primary loading develops sigma_h/sigma_v == K0NC -- the BEHAVIOURAL pin of the
-//       M(K0NC) formula (MMM: "M can be chosen such that a known value of K0nc is matched");
+//       M(K0NC) formula (M is chosen so that a known value of K0nc is matched);
 //   (f) drained TRIAXIAL compression fails exactly on the Mohr-Coulomb line (M is NOT the failure
-//       criterion in Soft Soil -- the manual is explicit about that).
+//       criterion in Soft Soil -- failure is governed by Mohr-Coulomb alone).
 // STAGE 2 -- FE constitutive wiring (integrate_point / ss_return_core). The kernel is pinned by
 // (a)-(f); these pin the WIRING around it (Voigt trial, spectral decomposition, rank pairing,
 // coaxial reconstruction, FD tangent, assembler/solver):
@@ -348,7 +348,7 @@ void test_g4_fe_oedometer_bvp() {
 }  // namespace
 
 int main() {
-    std::printf("SOFT SOIL (PLAXIS MMM sec 10) -- Stage 1 material-point closed-form V&V\n\n");
+    std::printf("SOFT SOIL -- Stage 1 material-point closed-form V&V\n\n");
     test_isotropic_lnlaw();
     std::printf("\n");
     test_oedometer_k0nc();

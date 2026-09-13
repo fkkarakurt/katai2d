@@ -1,4 +1,4 @@
-// Plate M-N plastic hinge (the Mp/Np diamond, PLAXIS MMM sec 18.3;
+// Plate M-N plastic hinge (the Mp/Np diamond |N|/Np + |M|/Mp <= 1;
 // structural-plate-formulation.md sec 10) -- exact-class V&V:
 //   (1) Return-map sweep: f <= 0, idempotence, and an INDEPENDENT oracle = energy-norm
 //       nearest-point comparison against a coarse sampling of the diamond boundary
@@ -8,7 +8,7 @@
 //   (3) Element elastic-limit identity: caps unbounded -> quadrature f_int == K*u (round-off).
 //   (4) BVP yield ONSET + saturation (the test_plate_soil harness): simple beam on soft
 //       soil + central load. Closed form P_lim = 2*Mp/s_g, s_g = the critical GAUSS
-//       point's distance from the support (PLAXIS: the check is AT THE STRESS POINT, not
+//       point's distance from the support (the capacity check is AT THE STRESS POINT, not
 //       the node). At 0.9*P_lim the plastic state is BIT-ZERO, at 1.1*P_lim it yields
 //       (the onset bracket = verification of the closed form); at 1.5*P_lim the Gauss |M|
 //       saturates EXACTLY at Mp + large softening. NOTE: on an elastic soil bed a single
@@ -439,8 +439,8 @@ void test_bvp_mn_interaction() {
 }
 
 // ------------------------------------------------------------------------------------------
-// (6) Diagram: the capped Gauss M expand to the stations by Lagrange (the PLAXIS
-// stress-point extrapolation rule); an empty plastic state = an elastic report (D6b, the
+// (6) Diagram: the capped Gauss M expand to the stations by Lagrange (stress-point
+// values extrapolated to the nodes); an empty plastic state = an elastic report (D6b, the
 // linear dynamic envelope rule).
 // ------------------------------------------------------------------------------------------
 void test_bvp_diagram() {
@@ -562,7 +562,7 @@ void test_bvp_tri15_limit() {
     check(close(maxM, pr.Mp, 1e-9), "tri15: critical Gauss |M| saturated EXACTLY at Mp");
 }
 
-// (8) The MOMENT criterion (Eq. 9-3/9-4) where it is ALIVE. On an elastic plate the
+// (8) The MOMENT criterion (the rotational-row residual) where it is ALIVE. On an elastic plate the
 // rotational rows are linear and the linear solve zeroes them, so the criterion reads round-off
 // no matter how wrong the answer is (test_excavation_wall records that). Here the plate has an
 // M-N hinge: f_p(u) is nonlinear, the rotational rows have to be iterated like everything else,
@@ -576,7 +576,7 @@ void test_bvp_tri15_limit() {
 //       as fast as the translational ones. That is the measurement that made binding the
 //       criterion (Convergence::enforced_ok, 2026-08-25) free on everything this tree runs.
 void test_moment_criterion() {
-    std::printf("\n-- (8) moment criterion (Eq. 9-3/9-4) on the PLASTIC plate: alive, and not binding --\n");
+    std::printf("\n-- (8) moment criterion on the PLASTIC plate: alive, and not binding --\n");
     const double E = 3.0e7, d = 0.4, nu = 0.15;
     plate::PlateProps pr;
     pr.EA = E * d; pr.EI = E * d * d * d / 12.0; pr.nu = nu;
@@ -604,7 +604,8 @@ void test_moment_criterion() {
                  "so it is a residual and m_ref has not collapsed");
     check(never_binds,
           "the rotational rows converge at least as fast as the translational ones (measured "
-          "ratio <= 0.06 over 15 load/tolerance pairs) -- which is why binding Eq. 9-3 is free");
+          "ratio <= 0.06 over 15 load/tolerance pairs) -- which is why binding the moment "
+          "criterion is free");
 }
 
 }  // namespace

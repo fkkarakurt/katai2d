@@ -1,6 +1,6 @@
 #pragma once
 // Safety phase strategy (Stage B9). Phi-c reduction / strength reduction
-// method, PLAXIS "Safety": bisect the strength reduction factor to the slope's
+// method, the "Safety" phase: bisect the strength reduction factor to the slope's
 // factor of safety, and show the FAILURE MECHANISM (displacement localized
 // along the slip surface). Needs shear strength (Mohr-Coulomb); linear-elastic
 // soil never fails.
@@ -85,21 +85,21 @@ inline bool solve_safety_phase(
     // and the search would walk to its cap and report the cap itself -- "FoS > 3.0", for any
     // rock mass whatever, however weak. Nothing here would say so.
     //
-    // The reference formulation DOES define strength reduction for this model, and it is not a
-    // conversion. Reference Manual (2025.1) sec 7.4.5.2 writes the Hoek-Brown yield function with
-    // the strength reduction factor inside it (Eq 7-10 .. 7-13, after Benz, Schwab, Vermeer &
-    // Kauther 2007), evaluated at each stress point's own sigma'_3, and states that the factor it
-    // gives "does not correspond to the safety factor obtained for Mohr-Coulomb material with
-    // equivalent strength properties". This build does not implement that form, so the analysis
-    // is refused. (Until 2026-09 this comment said the manual gives no rule. It had been read from
-    // the Material Models Manual alone, whose sec 4.3.7 defines only the tension cut-off's
-    // reduction; the rule is in the Reference Manual.)
+    // Strength reduction IS defined for this model, and it is not a conversion: the Hoek-Brown
+    // yield function is rewritten with the strength reduction factor inside it, evaluated at
+    // each stress point's own sigma'_3 (Benz, Schwab, Kauther & Vermeer 2008, Int. J. Rock
+    // Mech. Min. Sci. 45(2), 210-222). The factor that gives is in general not the factor of
+    // safety of a Mohr-Coulomb material fitted to the same envelope, because the two strength
+    // curves are reduced differently. This build does not implement that form, so the
+    // analysis is refused. (Until 2026-09 this comment said no rule exists. It had been drawn from
+    // a description that defines only the tension cut-off's reduction; the rule for the yield
+    // function itself is the reformulation above.)
     //
     // What the refusal offers instead is a Mohr-Coulomb fit, and it has to say what that is. The
-    // conversion (MMM Eq 4-15/4-16, the balanced fit of Hoek, Carranza-Torres & Corkum 2002) is a
-    // fit over a confining range whose upper limit sigma'_3max the manual leaves to the caller --
-    // "The upper limit of the confining stress depends on the application" -- and by the sentence
-    // quoted above its factor of safety is not the Hoek-Brown one. It is the engineer's
+    // conversion (the equivalent c'/phi' of Hoek, Carranza-Torres & Corkum 2002, a linear fit that
+    // balances the areas above and below the curve) is a fit over a confining range whose upper
+    // limit sigma'_3max is left to the engineer, because it depends on the application -- and, as
+    // stated above, its factor of safety is not the Hoek-Brown one. It is the engineer's
     // approximation, stated with the range it was made over, not a stand-in for the rule.
     for (const auto& m : models)
         if (m.type == MaterialType::HoekBrown) {
@@ -108,12 +108,12 @@ inline bool solve_safety_phase(
                 "build: its strength is the Hoek-Brown curve, not a c'/phi' pair, so reducing c' and "
                 "phi' would leave the rock at full strength through every trial and the factor of "
                 "safety reported would be too HIGH, not merely imprecise. The strength reduction "
-                "defined for this model reformulates the Hoek-Brown yield function itself "
-                "(Reference Manual sec 7.4.5.2), and this build does not implement it yet. A "
-                "Mohr-Coulomb material fitted to the envelope over the confining range your problem "
-                "actually spans (MMM Eq 4-15/4-16) will run a Safety phase, but the factor it gives "
-                "belongs to that fit: it does not correspond to the Hoek-Brown factor of safety, so "
-                "state it as an approximation, with the range it was made over.";
+                "defined for this model reformulates the Hoek-Brown yield function itself, and "
+                "this build does not implement it yet. A Mohr-Coulomb material fitted to the "
+                "envelope over the confining range your problem actually spans will run a Safety "
+                "phase, but the factor it gives belongs to that fit: it does not correspond to the "
+                "Hoek-Brown factor of safety, so state it as an approximation, with the range it "
+                "was made over.";
             return false;
         }
     StrengthReductionOptions sopt;

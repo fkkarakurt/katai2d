@@ -4,7 +4,7 @@
 // nodes, base DOFs) and the structure side (coincident nodes, extra ux,uy via
 // DofMap::add_extra_dof). 12 DOFs (6 soil + 6 structure).
 //
-// Constitutive law (PLAXIS interface; tension-positive): elastic τ=k_s·Δu_s, σ_n=k_n·Δu_n
+// Constitutive law (tension-positive): elastic τ=k_s·Δu_s, σ_n=k_n·Δu_n
 // (tension cut-off σ_t); Coulomb shear τ_max = c_i − σ_n·tanφ_i; at yield plastic slip
 // Δu_s^p (perfectly plastic, ψ_i=0).
 // INTEGRATION: Newton-Cotes (nodal, Day & Potts 1994) — prevents the high-k_n oscillation,
@@ -31,7 +31,7 @@ struct InterfaceProps {
     double sigma_t = 0.0;   // tensile strength (tension cut-off); default 0
 };
 
-// PLAXIS virtual-thickness stiffness: G_i=R²G_soil, ν_i=0.45, E_oed,i=2G_i(1−ν_i)/(1−2ν_i),
+// Virtual-thickness stiffness: G_i=R²G_soil, ν_i=0.45, E_oed,i=2G_i(1−ν_i)/(1−2ν_i),
 // t_i=δ·avg_size. k_s=G_i/t_i, k_n=E_oed,i/t_i. (caller; helper.)
 inline void interface_stiffness(double R_inter, double G_soil, double avg_size,
                                 double vt_factor, double& kn, double& ks) {
@@ -64,7 +64,7 @@ inline EdgeFrame edge_frame(const NodeCoords& X, double xi) {
     return {J, dx / J, dy / J};
 }
 
-// ---- 5-NODE interface (tri15 edge, 5 nodes quarter-spaced) — the PLAXIS 15-node soil counterpart ----
+// ---- 5-NODE interface (tri15 edge, 5 nodes quarter-spaced) — the 15-node soil counterpart ----
 inline constexpr int kNodeCount5 = 5;
 inline constexpr int kDofCount5 = 20;     // 10 soil + 10 structure
 inline constexpr int kPointCount5 = 5;    // Newton-Cotes (at the 5 nodes)

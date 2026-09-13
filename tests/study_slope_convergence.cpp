@@ -1,7 +1,8 @@
 // Mesh convergence study for the slope SRM FoS -- NOT a regression test. Runs the
-// Rocscience/Slide verification #1 slope at several mesh densities (decreasing
-// target element area) and reports the factor of safety so we can see whether the
-// reported FoS is mesh-converged. Results are recorded in docs/validation/.
+// homogeneous 1:2 foundation slope of test_slope (gamma = 20.2, c = 3 kPa, phi = 19.6 deg)
+// at several mesh densities (decreasing target element area) and reports the factor of
+// safety so we can see whether the reported FoS is mesh-converged. Results are recorded in
+// docs/validation/.
 #include <katai/analysis/strength_reduction.hpp>
 #include <katai/fem/assembly/assembler.hpp>
 #include <katai/fem/assembly/dof_map.hpp>
@@ -65,7 +66,7 @@ static double run_fos(double max_area, int load_steps, bool associated,
 }
 
 int main() {
-    std::printf("Slope FoS (ref: Bishop 0.988, Spencer 0.987, Phase2 T6 0.997)\n");
+    std::printf("Slope FoS (ref: referee value 1.00, Giam & Donald 1989)\n");
     // Non-associated (psi=0, the benchmark) vs associated (psi=phi) mesh
     // convergence. Non-associated perfect plasticity lacks strict mesh objectivity
     // (shear-band localization without regularization); associated flow is far more

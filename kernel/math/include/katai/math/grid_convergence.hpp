@@ -6,13 +6,11 @@
 // WHY THIS IS HERE, AND WHERE IT COMES FROM
 // ----------------------------------------
 // A benchmark reported at a single mesh density -- "Cox +3.7% on the file's own 0.25 m mesh" --
-// leaves a reader unable to separate the MODEL's error from the MESH's. The geotechnical finite
-// element codes this program is measured against do not answer that question either: PLAXIS,
-// MIDAS GTS NX and GEO5 all provide mesh refinement CONTROLS and qualitative advice ("finer is
-// more accurate; balance accuracy against run time"), and PLAXIS's Scientific Manual chapter 9
-// governs ITERATIVE convergence -- when a Newton loop may stop -- which is a different question
-// from how far a converged answer sits from the exact solution of the same equations. No
-// vendor manual in this field defines a discretisation-error estimator.
+// leaves a reader unable to separate the MODEL's error from the MESH's. Mesh refinement CONTROLS
+// and qualitative advice (a finer mesh is more accurate, at a cost in run time) do not answer
+// that question, and neither does an ITERATIVE convergence criterion -- when a Newton loop may
+// stop -- which is a different question from how far a converged answer sits from the exact
+// solution of the same equations.
 //
 // The procedure implemented here therefore comes from the verification literature, where it is
 // standardised:

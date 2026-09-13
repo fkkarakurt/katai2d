@@ -337,15 +337,15 @@ void test_radial_confined_flow() {
           "recovered discharge matches k(h1-h2)theta/ln(r2/r1) within 2%");
 }
 
-// Confined flow under a flat-bottom dam (the canonical PLAXIS confined-seepage
+// Confined flow under a flat-bottom dam (the canonical confined-seepage
 // problem). Along the impermeable base the head follows the EXACT arccos law for a
 // homogeneous isotropic semi-infinite foundation (Harr 1962; Polubarinova-Kochina,
 // Theory of Groundwater Movement; Das, Principles of Geotechnical Engineering):
 //     h(x) = (H/pi) * arccos(x/b),   -b <= x <= b   (upstream H at -b, 0 at +b)
 // The dam base is modelled as an impermeable segment on the TOP boundary (no internal
 // slit). The exit gradient is SINGULAR at the dam edges x=+-b (the physical infinite
-// exit gradient at the toe -- inherently mesh-sensitive for any FE code, PLAXIS
-// included; engineering practice uses integral/averaged quantities). So validate the
+// exit gradient at the toe -- inherently mesh-sensitive for any FE code;
+// engineering practice uses integral/averaged quantities). So validate the
 // smooth central base against arccos (converging), with the edge region reported.
 // Note: uplift force int_base h dx = H*b and h(0)=H/2 hold by ANTISYMMETRY (h(x)+
 // h(-x)=H), so they are exact regardless of mesh -- the arccos SHAPE is the real test.
@@ -522,7 +522,7 @@ void test_unconfined_dam_van_genuchten() {
     dofs.finalize();
 
     const std::vector<Permeability> perm = {{k, k}};
-    // van Genuchten "sand" (Carsel & Parrish 1988; PLAXIS default): a steep SWCC -> sharp phreatic
+    // van Genuchten "sand" (Carsel & Parrish 1988; KATAI's default): a steep SWCC -> sharp phreatic
     // surface. {g_a, g_n, g_l, S_res, S_sat}.
     const std::vector<katai::core::WaterRetention> ret = {{14.5, 2.68, 0.5, 0.10, 1.0}};
     auto lin = [](const katai::math::CsrMatrix& A, const Eigen::VectorXd& b) {

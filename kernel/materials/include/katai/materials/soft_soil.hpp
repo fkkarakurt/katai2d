@@ -1,6 +1,6 @@
 #pragma once
-// SOFT SOIL model — STAGE 1: the material-point core (PLAXIS MMM §10 verbatim; locked
-// formulation docs/references/soft-soil-formulation.md). Cam-Clay type: ln-law compression
+// SOFT SOIL model — STAGE 1: the material-point core (locked formulation
+// docs/references/soft-soil-formulation.md). Cam-Clay type: ln-law compression
 // (λ*/κ*), ellipse cap (q̃, the same deviatoric measure as the HS cap) + exponential p_p
 // hardening (associated), Mohr-Coulomb failure (M is NOT critical-state; derived from K0NC,
 // Brinkgreve 1994).
@@ -22,7 +22,7 @@
 
 namespace katai::core::softsoil {
 
-// Manual: p' never drops below unit stress (1 kPa) — a floor against the ln-law/K=p'/κ*
+// p' never drops below unit stress (1 kPa) — a floor against the ln-law/K=p'/κ*
 // singularity. ss_step and the FE wrapper (material_model.hpp ss_return_core) must use the
 // SAME floor so the elastic-predictor invertibility (exact reconstruction of the trial)
 // is not broken.
@@ -33,14 +33,14 @@ struct Params {
     double kap_star = 0.02;  // modified swelling index κ* [-]
     double nu_ur = 0.15;     // unloading/reloading Poisson ratio
     double c = 0.0;          // effective cohesion [kPa]
-    double phi = 0.0;        // effective friction angle [rad] (0 FORBIDDEN — manual §10.3.3)
+    double phi = 0.0;        // effective friction angle [rad] (0 FORBIDDEN: c·cotφ undefined)
     double psi = 0.0;        // dilatancy [rad] (SS default 0)
     double K0nc = 0.5;       // normal-consolidation lateral pressure coefficient (→ M)
 };
 
-// M(K0NC) — Brinkgreve (1994) / MMM Eq 10-13. Behaviour pin: oedometer primary loading must
-// produce σ'_h/σ'_v → K0NC (test_soft_soil (e) measures this DIRECTLY; a transcription error
-// in the formula blows up there).
+// M(K0NC) — Brinkgreve (1994), the closed form written out below. Behaviour pin: oedometer
+// primary loading must produce σ'_h/σ'_v → K0NC (test_soft_soil (e) measures this DIRECTLY;
+// a transcription error in the formula blows up there).
 inline double M_from_K0nc(const Params& P) {
     const double K = P.K0nc, nu = P.nu_ur, R = P.lam_star / P.kap_star;
     const double a = (1.0 - K) * (1.0 - K) / ((1.0 + 2.0 * K) * (1.0 + 2.0 * K));
@@ -58,7 +58,8 @@ struct StepResult {
 };
 
 namespace detail {
-// q̃ = σ1 + (δ−1)σ2 − δσ3, sorted σ1 ≥ σ2 ≥ σ3 (compression-positive) — MMM Eq 10-11 (the HS cap measure).
+// q̃ = σ1 + (δ−1)σ2 − δσ3, sorted σ1 ≥ σ2 ≥ σ3 (compression-positive), δ = (3+sinφ)/(3−sinφ)
+// (the HS cap measure).
 inline double q_tilde(const Eigen::Vector3d& s, double delta) {
     Eigen::Vector3d o = s;
     std::sort(o.data(), o.data() + 3, std::greater<double>());
@@ -268,13 +269,13 @@ inline StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, doub
 }
 
 // FE initial preconsolidation (K0 seeding; the parallel of hs_initial_pp): pp = f̄(σ0)·OCR_eq
-// — f̄ is the equivalent pressure at which the cap passes through σ0 (the counterpart of MMM
-// §2.8 p_eq). NC (OCR_eq=1) ⇒ the state sits EXACTLY on the cap (f=0, admissible; a pp=0
-// seed would make the cap yield from the start). OCR_eq: OCR mode is the ratio directly;
-// POP mode is converted at the caller to the equivalent ratio (σ'_v0+POP)/σ'_v0 (f̄ is NOT
-// first-order homogeneous in σ (the c·cotφ shift), but the ratio scaling is the consistent
-// counterpart of PLAXIS's vertical-stress-based definition). Floor: pp ≥ max(c·cotφ, unit
-// stress) — the threshold ellipse.
+// — f̄ is the equivalent pressure at which the cap passes through σ0 (the equivalent
+// isotropic pressure p_eq). NC (OCR_eq=1) ⇒ the state sits EXACTLY on the cap (f=0,
+// admissible; a pp=0 seed would make the cap yield from the start). OCR_eq: OCR mode is the
+// ratio directly; POP mode is converted at the caller to the equivalent ratio
+// (σ'_v0+POP)/σ'_v0 (f̄ is NOT first-order homogeneous in σ (the c·cotφ shift), but the ratio
+// scaling is the consistent counterpart of OCR and POP being defined on the vertical stress).
+// Floor: pp ≥ max(c·cotφ, unit stress) — the threshold ellipse.
 inline double ss_initial_pp(const Params& P, const Eigen::Vector3d& sig_comp_pos,
                             double ocr_eq = 1.0) {
     const double sphi = std::sin(P.phi), cphi = std::cos(P.phi);

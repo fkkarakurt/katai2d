@@ -1,27 +1,28 @@
 // Two staged-construction options that decide what a phase IS, not how it is solved.
 //
-// A phase in PLAXIS carries more than a list of what is switched on. It carries Sum-Mstage -- how
-// much of the change is actually applied -- and "Ignore und. behaviour", which lets a phase treat
-// undrained soil as drained. Both are ordinary practice: an excavation lift taken half way to see
-// where the wall is going, an initial state established without generating excess pore pressures
-// that the in-situ soil never had. Neither could be asked for in a .k2d until now, and the
-// consequence was not a missing convenience: a partial stage had to be faked by editing geometry,
-// and a phase that should have been drained had to have its materials retyped -- which changes the
-// material everywhere, including in the phases where it must stay undrained.
+// A phase carries more than a list of what is switched on. It carries a staged fraction
+// (`mstage`) -- how much of the change is actually applied -- and an ignore-undrained-behaviour
+// switch (`ignoreund`), which lets a phase treat undrained soil as drained. Both are ordinary
+// practice: an excavation lift taken half way to see where the wall is going, an initial state
+// established without generating excess pore pressures that the in-situ soil never had. Neither
+// could be asked for in a .k2d until now, and the consequence was not a missing convenience: a
+// partial stage had to be faked by editing geometry, and a phase that should have been drained
+// had to have its materials retyped -- which changes the material everywhere, including in the
+// phases where it must stay undrained.
 //
 // Both are verified here by IDENTITIES rather than by tables, because both have an exact answer.
 //
 // verify: KV-EXC-002
 //   oracle:   closed_form
-//   source:   linear superposition: for a linear-elastic soil the staged-construction ramp is a linear operator on the configuration imbalance, so applying a fraction of it must give exactly that fraction of the response -- the definition of PLAXIS's Sum-Mstage as "the proportion of the unbalanced force that has been applied" (PLAXIS 2D 2025.1 Reference Manual, staged construction), stated as a testable equality
-//   locator:  an excavation on a linear-elastic soil, the digging phase run at Sum-Mstage = 1, 0.5 and 0.25, reading the heave of the excavation floor; and the same phase run in two halves (0.5 followed by the remainder) against the whole stage in one
+//   source:   linear superposition: for a linear-elastic soil the staged-construction ramp is a linear operator on the configuration imbalance, so applying a fraction of it must give exactly that fraction of the response -- the definition of the staged fraction as the proportion of the phase's unbalanced force that has been applied, KATAI 2D input contract (docs/k2d-format.md, mstage), stated as a testable equality
+//   locator:  an excavation on a linear-elastic soil, the digging phase run at mstage = 1, 0.5 and 0.25, reading the heave of the excavation floor; and the same phase run in two halves (0.5 followed by the remainder) against the whole stage in one
 //   quantity: vertical displacement of the excavation floor [m]
 //   expected: u(0.5) = 0.5 u(1) and u(0.25) = 0.25 u(1) to solver precision on a linear material; and a stage taken in two steps arrives where the single step does
 //   band:     1e-12 relative on the proportionality (a linear system solved directly twice), 1e-9 m on the two-step path -- both asserted below and measured, not inherited
 //
 // verify: KV-CST-005
 //   oracle:   independent_path
-//   source:   PLAXIS 2D 2025.1 Reference Manual, "Ignore und. behaviour (A,B)": the undrained response of Undrained (A)/(B) clusters is temporarily excluded so that no excess pore pressure is generated, while the strength parameters stay as declared. The independent path is the same model with the material DECLARED drained: if the option means what the manual says, the two must be the same calculation
+//   source:   KATAI 2D input contract (docs/k2d-format.md, ignoreund): in a phase that ignores undrained behaviour, the undrained response of Undrained (A)/(B) materials is temporarily excluded so that no excess pore pressure is generated, while the strength parameters stay as declared. The independent path is the same model with the material DECLARED drained: if the option means what the contract says, the two must be the same calculation
 //   locator:  a loaded undrained column solved (a) with drainage = Undrained (A) and the phase ignoring undrained behaviour, and (b) with drainage = Drained, same everything else
 //   quantity: settlement of the column top [m], with the steady pore field read alongside to show which part of the water response the option touches
 //   expected: bit-identical displacements between the ignoring run and the declared-drained run; the undrained run must differ substantially (otherwise the switch has nothing to switch); the hydrostatic field is untouched
@@ -173,7 +174,7 @@ int main() {
     check(whole.size() == 2 && whole[1].ok, "the whole stage solves");
     if (whole.size() != 2 || !whole[1].ok) return 1;
     const double u_full = floor_heave(whole[1]);
-    std::printf("  Sum-Mstage 1.00 -> floor heave %.9f m\n", u_full);
+    std::printf("  mstage 1.00 -> floor heave %.9f m\n", u_full);
 
     // For a linear material the ramp is a linear operator, so a fraction of the stage must give
     // exactly that fraction of the response. This is the sharpest statement the option admits,
@@ -190,7 +191,7 @@ int main() {
         if (res.size() != 2 || !res[1].ok) return 1;
         const double u = floor_heave(res[1]);
         const double rel = std::fabs(u - frac * u_full) / std::fabs(u_full);
-        std::printf("  Sum-Mstage %.2f -> floor heave %.9f m   (%.2f x the whole stage, error "
+        std::printf("  mstage %.2f -> floor heave %.9f m   (%.2f x the whole stage, error "
                     "%.2e)\n", frac, u, u / u_full, rel);
         check(rel < 1e-12, "a fraction of the stage gives exactly that fraction of the response");
         // And the run says so, rather than leaving a half-dug pit looking like a finished one.

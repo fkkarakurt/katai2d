@@ -26,7 +26,7 @@
 //
 // verify: KV-STR-009
 //   oracle:   closed_form
-//   source:   the method of consistent deformations (force method) for a statically indeterminate beam with a support settlement, and the linear axial spring of an anchor, both stated in full in the locator; the plate's shear rigidity kGA' = k EA / (2 (1 + nu)), k = 5/6, is PLAXIS 2D Material Models Manual (2025.1) Eq. 18-8, the same expression KV-STR-003 verifies its deflections with
+//   source:   the method of consistent deformations (force method) for a statically indeterminate beam with a support settlement, and the linear axial spring of an anchor, both stated in full in the locator; the plate is a Timoshenko beam whose shear rigidity is kGA' = k EA / (2 (1 + nu)) with the rectangular-section shear coefficient k = 5/6, the same expression KV-STR-003 verifies its deflections with
 //   locator:  (a) d11 = (2L)^3 / (48 EI) + (2L) / (4 kGA') = L^3 / (6 EI) + L / (2 kGA'), R = delta / d11, M_B = R L / 2, with L = 2 m, EI = 1200 kN m2/m, EA = 1.64e6 kN/m, nu = 0, delta = 0.01 m; (b) N = EA D / L with EA = 1e5 kN, L = 10 m, D = -0.01 m; (c) N = EA (-D) / L_c with L_c = 5 m, the fixed point on the +x side of the driven edge
 //   quantity: (a) the peak bending moment of the plate, at the settling support [kNm/m]; (b), (c) the reported axial force of each anchor [kN]
 //   expected: (a) M_B = 8.98816193306... kNm/m (Euler-Bernoulli alone would give 3 EI delta / L^2 = 9.0); (b) N = -100 kN (compression); (c) N = +200 kN (tension)

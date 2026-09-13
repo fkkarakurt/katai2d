@@ -1,4 +1,4 @@
-// GENERAL interface (any orientation, soil-soil / standalone) -- the engine behind PLAXIS-style
+// GENERAL interface (any orientation, soil-soil / standalone) -- the engine behind
 // interfaces on ANY structure line or a free slip surface. split_mesh_at_segment duplicates the mesh
 // nodes along an arbitrary segment; build_soil_interface joins the two sides with a Coulomb joint
 // (the duplicate nodes carry the negative side's soil). This test proves the mechanism is REAL --

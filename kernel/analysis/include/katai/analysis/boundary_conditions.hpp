@@ -49,8 +49,8 @@ inline void fix_node(DofMap& dofs, int node, EdgeFixity bc, double nx, double ny
 // interface meeting the side boundary -- belongs to BOTH edges; picking only the "nearest" one is
 // an arbitrary tie-break that can let a Free internal edge override a fixed side edge, leaving
 // e.g. the side node at a layer boundary unconstrained (a real support hole: the K0 lateral
-// traction there had nothing to push against). Union semantics match PLAXIS corner practice:
-// constraints accumulate, Free contributes nothing.
+// traction there had nothing to push against). Union semantics at a corner: constraints
+// accumulate, Free contributes nothing.
 // `free_base_ux` (compliant-base Dynamic phase only): a node on the model's BOTTOM extreme plane
 // must keep its horizontal DOF free -- the base moves there (total-motion formulation, the Lysmer
 // dashpot + upward-wave traction take over the restraint role). Only u_x is released; u_y stays

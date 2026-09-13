@@ -3,18 +3,19 @@
 // solve -- one Newton ramp about an internal-force baseline, then the result
 // assembly (committed stress recovery, structural diagrams, chain carrier).
 //
-// Ramp semantics (PLAXIS parity). K0 procedure: the geostatic state (seeded
+// Ramp semantics. K0 procedure: the geostatic state (seeded
 // soil stress + interface sigma_n0) IS the equilibrium; its internal force is
 // held as the constant baseline B and ONLY external loads ramp, so
 // residual(0) = B - f_int(0) = 0 on any mesh and self-weight is NOT
 // double-counted during the ramp (essential once the soil is plastic --
 // ramping gravity would yield spuriously). Gravity loading: B = 0, ramp the
-// full body force + loads from a stress-free start. PLAXIS K0 caveat
-// (Reference Manual): the column-overburden K0 field is in equilibrium ONLY
+// full body force + loads from a stress-free start. K0 caveat: the
+// column-overburden K0 field is in equilibrium ONLY
 // when the ground surface, layer boundaries and the water table are all
 // horizontal. On a slope the seeded field leaves a GENUINE out-of-balance
 // force d = f_body - f_int(seed) (principal directions must rotate; shear must
-// develop near the face). PLAXIS resolves it with a plastic nil-step; here
+// develop near the face). A plastic nil-step resolves it (a phase that applies
+// no change and only lets the imbalance redistribute); here
 // that step is built into the K0 phase by ramping the imbalance together with
 // the external loads, so target(1) = f exactly (true equilibrium, comparable
 // to gravity loading). It is triggered by GEOMETRY (the caller's nil_step
@@ -23,8 +24,8 @@
 // u = 0 exactly. Flow coupling always takes the nil-step (the hydrostatic K0
 // seed cannot represent a non-hydrostatic seepage pore field), and a CHAINED
 // staged phase is the same rule writ large: ramp = f(active) - B(committed)
-// is exactly the PLAXIS SumMstage (excavation unloading / fill weight / new
-// loads).
+// is exactly the staged-construction change that the stage multiplier measures the applied
+// fraction of (excavation unloading / fill weight / new loads).
 //
 // Same contract as the other phase strategies: neutral inputs resolved at the
 // caller's seam, refusal/collapse messages engine-owned and byte-identical,
@@ -142,7 +143,7 @@ struct StaticPhase {
     double tolerance = 1e-10;     // Newton tolerated error
     // Maximum Newton iterations per load increment; 0 = this strategy's own 80. A step that
     // needs more than this is not solved: the solver cuts the increment back and tries again,
-    // so the number is a patience setting, not an accuracy one (PLAXIS "Max iterations", 60).
+    // so the number is a patience setting, not an accuracy one.
     int max_iterations = 0;
     // Line-search memory handed to the Newton loop; 0 = the engine's default. See
     // NewtonOptions::line_search_window.
@@ -156,7 +157,7 @@ struct StaticPhase {
     // Tri-state: 0 = the engine's default (ON), +1 = force on, -1 = force off.
     int enforce_local_criteria = 0;
     double time_interval_day = 0.0;  // SSC creep time of a chained Plastic phase [days]
-    // PLAXIS SumMstage target: the fraction of this phase's staged change to apply (1 = all of
+    // Stage-fraction target (`mstage`): the fraction of this phase's staged change to apply (1 = all of
     // it). The ramp itself is what gets scaled, so half a stage is half of exactly the same
     // change -- the configuration imbalance, the new loads and the structural weight together --
     // rather than half of some of them. The caller passes 1.0 for any phase where a partial
@@ -189,7 +190,7 @@ inline bool solve_static_phase(
     const bool static_carry = carry_full != nullptr;
     Eigen::VectorXd ramp = in.baseline ? f_loads : f;
     if (in.nil_step) ramp += f - f_loads - B;   // ramp the configuration imbalance
-    // SumMstage: apply only this fraction of the staged change. A fraction of 1 leaves the
+    // Stage fraction: apply only this fraction of the staged change. A fraction of 1 leaves the
     // vector untouched (bit-identical to every run before the field existed).
     if (in.stage_fraction != 1.0) ramp *= in.stage_fraction;
     NewtonOptions nopt{in.load_steps, in.max_iterations > 0 ? in.max_iterations : 80,
@@ -202,11 +203,11 @@ inline bool solve_static_phase(
         nopt.enforce_local_criteria = in.enforce_local_criteria > 0;
     // SSC TIME (Stage 3): a staged Plastic phase's Time interval [days] enters the constitutive
     // path -- the solver apportions it over the increments by the delta-lambda ratio (the Stage-2
-    // contract, SumMstage parity). Only SoftSoilCreep reads it; every other model ignores it, so
-    // projects without SSC are bit-identical. The caller passes a nonzero value ONLY for chained
-    // (staged) phases: in PLAXIS the initial phase is TIMELESS -- an unconditional duration here
-    // once leaked 1 day of creep into the K0 phase and broke the geostatic identity (measured:
-    // K0 max |u| = 26 mm = exactly mu* ln2 H on an SSC column).
+    // contract: time advances together with the staged-construction multiplier). Only SoftSoilCreep reads it; every other
+    // model ignores it, so projects without SSC are bit-identical. The caller passes a nonzero
+    // value ONLY for chained (staged) phases: the initial phase is TIMELESS -- an unconditional
+    // duration here once leaked 1 day of creep into the K0 phase and broke the geostatic identity
+    // (measured: K0 max |u| = 26 mm = exactly mu* ln2 H on an SSC column).
     nopt.time_interval = in.time_interval_day;
     // The nil-step imbalance is plastic redistribution work: give the solver load steps to do it
     // gradually even when the soil model alone would not have asked for stepping.
@@ -247,7 +248,7 @@ inline bool solve_static_phase(
     if (out_states) *out_states = nr.gauss_states;   // committed -> next phase
     // TOTAL displacement for the structural elements: parent datum + this phase's increment
     // (identical to what the solver evaluated them at). Without carry it is just this phase's
-    // field, as before. R.disp stays the PHASE INCREMENT (PLAXIS convention) -- only the
+    // field, as before. R.disp stays the PHASE INCREMENT (this program's convention) -- only the
     // structural diagrams and the chain carrier need the total.
     Eigen::VectorXd disp_total = nr.displacement;
     if (static_carry) disp_total += *carry_full;
@@ -284,7 +285,7 @@ inline bool solve_static_phase(
                     R.reaction[2 * n + c] = f_int[2 * n + c];
     }
 
-    // Structural force diagrams (PLAXIS Output -> Structures): from the converged TOTAL solution
+    // Structural force diagrams (N/Q/M along each structure): from the converged TOTAL solution
     // (disp_total covers the rotation/independent extra DOFs AND the carried parent datum) + the
     // committed plastic state, via the validated post-processors in structural_forces.hpp --
     // exactly the state the solver applied its caps to (the D6b rule).
@@ -316,7 +317,7 @@ inline bool solve_static_phase(
         d.max_N = env.max_abs_N; d.max_Q = env.max_abs_Q; d.max_M = env.max_abs_M;
         R.struct_forces.push_back(std::move(d));
     }
-    // Interface results (PLAXIS Output -> Interfaces): tau / sigma_n / relative slip along each
+    // Interface results: tau / sigma_n / relative slip along each
     // Coulomb joint, recomputed from the converged TOTAL displacement + committed slip (mirrors
     // the solver).
     for (const auto& is : iface_diags) {

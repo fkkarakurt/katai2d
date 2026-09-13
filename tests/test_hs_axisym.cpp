@@ -1,5 +1,5 @@
-// Hardening Soil in AXISYMMETRY -- PLAXIS supports HS in both plane strain and axisymmetric
-// analysis, so parity ("istisnasiz") requires HS at the axisymmetric material point and BVP.
+// Hardening Soil in AXISYMMETRY -- HS is offered in both plane strain and axisymmetric
+// analysis, so it must work, without exception, at the axisymmetric material point and BVP.
 // HS was previously wired only into plane strain (integrate_point); integrate_point_axisym now
 // reuses the SAME kinematics-agnostic principal return (hs_return_core): the (r,z) block is the
 // in-plane Mohr circle and the hoop sigma_theta is the third principal, with the consistent 4x4
@@ -10,7 +10,7 @@
 //     stress path of hs_oedometer_probe (principal axis 1 loaded, 2=3 confined), so the developed
 //     K0 must match the calibrated K0^NC -- proving the principal return is identical across
 //     kinematics. Hardening is monotone and the deviator stays bounded by qf(sigma3).
-// (B) BVP -- a circular footing on HS sand (axisymmetric), the PLAXIS Tutorial L1 geometry, under
+// (B) BVP -- a circular footing on HS sand (axisymmetric), a textbook footing geometry, under
 //     a prescribed rigid settlement: the analytic 4x4 consistent tangent must drive the global
 //     Newton to convergence with a physical, bounded footing reaction.
 #include <katai/analysis/nonlinear_solver.hpp>

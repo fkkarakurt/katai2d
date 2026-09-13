@@ -77,7 +77,7 @@ LEVELS = [24500.0, 21000.0, 17500.0, 15000.0, 14000.0, 13000.0, 12000.0, 10000.0
 
 # ---- the closed form ----------------------------------------------------------
 def rock_mass_constants():
-    """m_b, s and a from GSI and D (the manual's Eq 4-2, 4-3, 4-4)."""
+    """m_b, s and a from GSI and D (Hoek, Carranza-Torres & Corkum 2002)."""
     mb = MI * math.exp((GSI - 100.0) / (28.0 - 14.0 * D))
     s = math.exp((GSI - 100.0) / (9.0 - 3.0 * D))
     a = 0.5 + (math.exp(-GSI / 15.0) - math.exp(-20.0 / 3.0)) / 6.0

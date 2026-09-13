@@ -4,7 +4,7 @@
 //   (2) EC7 DA3 returns the over-design factor ODF = FoS_characteristic / gamma_M (gamma_M = 1.25) --
 //       the exact mesh-free composition identity proven in study_design_ec7, here reached through the
 //       FULL GUI path (mesh_from_project -> solve_gravity_le with a phase carrying the design approach).
-// PLAXIS applies its Design Approaches by the identical mechanism (reduce c/phi/psi by the factor).
+// The Design Approaches are applied by exactly this mechanism (reduce c/phi/psi by the factor).
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/jobs/driver.hpp>
 #include <katai/model/project.hpp>

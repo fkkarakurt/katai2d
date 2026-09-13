@@ -12,16 +12,13 @@ measured so far.
 
 ## 1. Where the procedure comes from — and where it does not
 
-The geotechnical finite element programs this one is measured against do not define a
-discretisation-error estimator. PLAXIS, MIDAS GTS NX and GEO5 all provide mesh refinement
-*controls* (global and local coarseness factors, refinement around structures and load lines)
-and qualitative guidance — finer is more accurate, balance accuracy against run time — but none
-publishes a procedure for putting a number on the discretisation error of a result. PLAXIS's
-*Scientific Manual* chapter 9 does define a family of convergence criteria, and it is worth
-being precise about what they govern: they decide when an **iterative** (Newton) loop may stop,
-which is a different question from how far the converged answer of a given mesh sits from the
-exact solution of the same equations. KATAI's parity work against chapter 9 is a separate matter
-(see the convergence-criteria note).
+Mesh refinement *controls* (global and local coarseness factors, refinement around structures and
+load lines) and qualitative guidance — finer is more accurate, balance accuracy against run time —
+do not put a number on the discretisation error of a result, and neither do convergence criteria.
+It is worth being precise about what the latter govern: they decide when an **iterative** (Newton)
+loop may stop, which is a different question from how far the converged answer of a given mesh
+sits from the exact solution of the same equations. KATAI's convergence criteria are a separate
+matter (§11).
 
 The quantitative procedure therefore comes from the verification literature, where it is
 standardised:
@@ -171,7 +168,7 @@ not having refined far enough.
 **This is the method, not a defect, and the literature says so.** With ψ = 0 the flow rule is
 non-associated, failure localises into a shear band, and without a regularisation the band width
 is set by the elements — so refining narrows the band and lowers the computed factor. In the
-words of the group that works closest to PLAXIS: *"The result obtained from a phi/c reduction is
+words of one study of the method: *"The result obtained from a phi/c reduction is
 influenced by the mesh size, element type and convergence tolerances"* (N. Torggler, *Numerical
 Studies of Embedded Beam Row in Safety Analysis*, TU Graz, Institute of Soil Mechanics and
 Foundation Engineering, §3.1.1, citing F. Tschuchnigg, H. F. Schweiger and S. W. Sloan (2015), "Slope stability
@@ -491,12 +488,12 @@ Feeding those three moments to the same `grid_convergence_band()` that bands eve
 | 0.125 | 50.13021 | +0.13021 |
 
 - observed order **p = 2.0000**, monotonic convergence, inside the asymptotic range;
-- Richardson value **50.00000 kNm** — the manual's published number, recovered from three meshes
+- Richardson value **50.00000 kNm** — the closed-form peak moment q l²/8, recovered from three meshes
   **none of which produces it**;
 - reported band on the file's own mesh: **± 0.3247 %** (GCI at the observed order, Fs = 1.25).
 
 The order it recovers is the order the algebra already knew, and the value it extrapolates to is
-the value the reference publishes. That is a check of the estimator, not of the beam — and it
+the closed-form value. That is a check of the estimator, not of the beam — and it
 costs nothing, because the three runs were already there as a witness that the overshoot was a
 bias rather than scatter. It also puts a number on the warning attached to that witness: a peak
 moment read off a coarse run is not merely "a bit high", it is high by an amount this procedure
@@ -752,16 +749,16 @@ compositions.
 
 Every band in the sections above rests on the same sentence: *the run converged*. Until now that
 sentence meant one thing in this tree — a global force residual `||r|| <= rtol·max(||f_ext||, ||f_c||, 1)`
-— and it was reported as though it meant the whole question. It does not. The source these
-tolerances come from checks a **family** (Scientific Manual §9.1): a CSP-normalised global force
-error, a moment residual on rotational freedoms, and, separately, the local error at every soil
-stress point. Every reference code checks at least two independent things. One was the outlier.
+— and it was reported as though it meant the whole question. It does not. A complete convergence
+check is a **family**: a CSP-normalised global force error, a moment residual on rotational
+freedoms, and, separately, the local error at every soil stress point. Checking one member alone
+leaves the independent questions the others ask unasked.
 
 This section is the first measurement of the other members on this tree.
 
 ### 11.1 The two stresses of a stress point
 
-The concept under the local criteria (Fig. 9-1, Eq. 9-6) is that a stress point carries **two**
+The concept under the local criteria is that a stress point carries **two**
 stresses during an iteration:
 
 * the **constitutive** stress, what the material law returns for the strain the point was given,
@@ -769,30 +766,30 @@ stresses during an iteration:
 * the **equilibrium** stress, what the finite-element linearisation says the point carries,
   σ_eq,j = σ_c,j−1 + D_e δε_j, built from the previous iterate and this iteration's correction.
 
-Their difference, normalised by max(τ_max, c', 1 kPa) for a plastic point (Eq. 9-5) or by
-max(τ_max, c', p_ref/200) for a point whose *elastic* stiffness depends on stress (Eq. 9-7), is
+Their difference, normalised by max(τ_max, c', 1 kPa) for a plastic point (the plastic-point
+criterion) or by max(τ_max, c', p_ref/200) for a point whose *elastic* stiffness depends on stress
+(the non-linear elastic criterion), is
 the local error. It is an error and not a measure of nonlinearity: at the exact solution δε = 0
 and the two stresses coincide identically. The linear-elastic control measures it at **0.0**, and
 the first iterate of every increment measures it at 2e-16.
 
-### 11.2 A conflict between two official manuals, and which way it was resolved
+### 11.2 Two orientations of the stiffness parameter, and which way it was resolved
 
-CSP — the Current Stiffness Parameter — normalises the global force error, and it is printed
-**two different ways up** in the 2025.1 documentation set:
+CSP — the Current Stiffness Parameter — normalises the global force error, and it can be written
+**two different ways up**:
 
-| | printed as | value while elastic | value at failure |
+| | written as | value while elastic | value at failure |
 |---|---|---|---|
-| Scientific Manual Eq. 9-2 | elastic energy increment / total energy increment | 1 | **grows without bound** |
-| Reference Manual Eq. 7-22 | integral of Δε·Δσ over integral of Δε D_e Δε | 1 | **towards 0** |
+| energy ratio, elastic over total | elastic energy increment / total energy increment | 1 | **grows without bound** |
+| work ratio, actual over elastic | integral of Δε·Δσ over integral of Δε D_e Δε | 1 | **towards 0** |
 
-Only the Reference orientation is consistent with the behaviour that *both* manuals state in
-words — "when the solution is fully elastic the *Stiffness* is equal to unity, whereas at failure
-the *Stiffness* approaches zero" — and with the uses built on it there: arc-length control engages
-below CSP 0.5, and collapse is reported below CSP 0.015. Implementing the Scientific Manual's
-printed Eq. 9-2 would make the global force criterion **loosen** as a mechanism forms, which is
-precisely where a load fraction is about to be published as a bearing capacity.
+Only the work-ratio orientation is consistent with the behaviour the parameter exists to have —
+equal to unity when the solution is fully elastic, approaching zero at failure — and with the uses
+built on it: arc-length control engages below CSP 0.5, and collapse is reported below CSP 0.015.
+Implementing the energy-ratio form would make the global force criterion **loosen** as a mechanism
+forms, which is precisely where a load fraction is about to be published as a bearing capacity.
 
-Eq. 7-22 is what is implemented, deliberately, and the measurement agrees with it. On one strip
+The work ratio is what is implemented, deliberately, and the measurement agrees with it. On one strip
 footing, load rising:
 
 | footing load [kPa] | CSP | load factor |
@@ -803,7 +800,7 @@ footing, load rising:
 | 600 | 0.00012 | 0.656 |
 | 900 | 0.00009 | 0.434 |
 
-The parameter falls monotonically to below the source's own collapse value on the two loads the
+The parameter falls monotonically to below the collapse value of 0.015 on the two loads the
 model cannot carry. `test_convergence_criteria` pins that direction, so the inverted reading cannot
 be reintroduced quietly.
 
@@ -843,8 +840,8 @@ depend on.
 
 ### 11.4 Where it is not merely informative: the Hardening Soil oedometer at its shipped tolerance
 
-KV-CST-002, run three ways. 1e-2 is what this tree ships for the Hardening Soil family — inherited
-from the same source as the criteria. 1e-6 is four decades tighter and is what this record uses
+KV-CST-002, run three ways. 1e-2 is what this tree ships for the Hardening Soil family. 1e-6 is
+four decades tighter and is what this record uses
 when it wants the answer rather than a run.
 
 | run | iterations | wall clock | settlement max abs u [m] | vs the tight answer |
@@ -867,10 +864,10 @@ iterations).
 Two more members complete the family, and both are the same construction applied to a traction
 instead of a stress tensor. A slipping interface point carries an equilibrium shear
 tau_eq,j = tau_c,j-1 + k_s * delta-u_s,j and a constitutive shear tau_c,j from the Coulomb return;
-Eq. 9-8 normalises their difference by the point's own capacity. An embedded beam's SKIN coupling
-springs are counted in the SAME tally, which is what the source does — it draws no distinction
-between a soil-structure interface and the special interface a pile skin is. The foot is not a
-point at all: Eq. 9-9 forms ONE ratio over every foot in the model, tolerated at FIVE times the
+the interface criterion normalises their difference by the point's own capacity. An embedded beam's
+SKIN coupling springs are counted in the SAME tally — the criterion draws no distinction between a
+soil-structure interface and the special interface a pile skin is. The foot is not a point at all:
+the foot criterion forms ONE ratio over every foot in the model, tolerated at FIVE times the
 tolerated error.
 
 Measured on the two corpus cases that have the elements, with only the global criterion binding:
@@ -894,7 +891,7 @@ the driver. `KATAI_CONV_NOLOCAL` turns it off for a whole run, which is how ever
 this section is reproduced.
 
 It was taken on the measurement rather than on the principle. The principle would have said
-"check what the source checks"; the measurement says something stronger — that this is not a
+"check the whole family"; the measurement says something stronger — that this is not a
 stricter rule bought with iterations, but a **cheaper route to the same answer**. On KV-CST-002 it
 lands on the converged settlement in 194 iterations where tightening the global tolerance by four
 decades costs 399.
@@ -966,7 +963,7 @@ been read through the only two kinds of case in this tree that carry rotational 
 excavation fixture (`test_excavation_wall`: Mohr-Coulomb soil under K0, a 12 m bonded sheet-pile
 wall, staged excavation to 9 m), swept over the tolerance it is solved at:
 
-| tolerated | wall tip u_x [m] | iterations | moment residual | force residual (Eq. 9-1) |
+| tolerated | wall tip u_x [m] | iterations | moment residual | force residual (CSP-normalised) |
 |---|---|---|---|---|
 | 1e-1 | −5.087516e-3 | 111 | 8.51e-15 | 3.13e-2 |
 | 1e-2 | −6.459047e-3 | 206 | 1.54e-14 | 7.03e-7 |
@@ -996,17 +993,17 @@ and then the residual behaves like every other residual — it follows the toler
 
 Over 15 (load, tolerance) pairs — 1.1× to 5× the plate's limit load, tolerances 1e-1 to 1e-3 — the
 ratio never exceeded **0.063**. On everything this tree runs today the rotational rows converge at
-least as fast as the translational ones, so **binding Eq. 9-3 costs nothing**: no case in the suite
+least as fast as the translational ones, so **binding the moment criterion costs nothing**: no case in the suite
 changed by a single iteration when it was switched on.
 
 It is bound anyway, for the case the tree does not have yet. The global gate is `||r||` — a
 Euclidean norm over a vector whose entries are forces AND moments — and adding kN to kNm in
 quadrature is not a norm of anything. Where the wall is what fails and the soil around it is still
-elastic, that sum is dominated by a soil which is not being asked for much, and Eq. 9-3 is the only
+elastic, that sum is dominated by a soil which is not being asked for much, and the moment criterion is the only
 dimensionally honest question left about the rows that matter.
 
 **What binding it actually cost: exactly one case, and that case found a missing floor.** The
-claim above — that binding Eq. 9-3 is free — was made on the two fixtures and then tested against
+claim above — that binding the moment criterion is free — was made on the two fixtures and then tested against
 the whole suite, which is the only place such a claim can be tested. One test failed:
 `test_no_silent_drop`'s plate standing along the whole of a line that is pushed down. Every node
 of that plate takes the same settlement, so it translates without curving, and a plate that does
@@ -1024,25 +1021,26 @@ not curve carries no moment at all:
 
 Fourteen orders of magnitude of denominator. The ratio that refused the phase was one round-off
 divided by another. And the defect it exposed is not the binding: **every other criterion in this
-family has a floor and Eq. 9-3 did not**. Eq. 9-5 divides by `max(tau_max, c, 1 kPa)`, Eq. 9-9 by
-`max(|F_c|, 1% of |F_max|, 1 kN)`, and the manual's stated reason for them is that a point carrying
-almost nothing must not report an enormous relative error on a difference that is numerically
-nothing. A structure carrying almost no moment is that situation in different units. The floor is
-1 kNm/m — ten decades above the translated plate's reference and two below the loaded one — and it is
-recorded here as what it is: not in the manual's Eq. 9-3, adopted from the device the manual
-applies to its siblings, and forced by a measurement rather than chosen by taste.
+family has a floor and the moment criterion did not**. The plastic-point criterion divides by
+`max(tau_max, c, 1 kPa)`, the foot criterion by `max(|F_c|, 1% of |F_max|, 1 kN)`, and the reason
+for them is that a point carrying almost nothing must not report an enormous relative error on a
+difference that is numerically nothing. A structure carrying almost no moment is that situation in
+different units. The floor is 1 kNm/m — ten decades above the translated plate's reference and two
+below the loaded one — and it is recorded here as what it is: not part of the moment criterion as
+first formulated, adopted from the device its siblings use, and forced by a measurement rather than
+chosen by taste.
 
 `has_moment` changed with it. It used to mean "there is a rotational freedom **and** its reference
 is non-zero", which quietly excused the one case that needed saying; it now means what it says, and
 an unloaded structure reports a small number instead of vanishing from the report.
 
-**The same shape of answer on a different criterion: Eq. 9-7.** This document has said three times
+**The same shape of answer on a different criterion: the non-linear elastic one.** This document has said three times
 that the non-linear elastic criterion "has never been the binding count", and blamed the case list:
 the Hardening Soil oedometer is plastic everywhere the moment it loads, and the Mohr-Coulomb cases
 have no stress-dependent modulus at all. Run on the case that is nothing but such points — an
 HSsmall **unloading**, where every point leaves its yield surfaces and re-enters on `Eur`:
 
-| tolerated | non-linear elastic points | inaccurate | worst Eq. 9-7 error |
+| tolerated | non-linear elastic points | inaccurate | worst non-linear elastic error |
 |---|---|---|---|
 | 1e-2 | 96 | 0 | 1.29e-15 |
 | 1e-4 | 96 | 0 | 1.29e-15 |
@@ -1053,9 +1051,9 @@ the error is not small, it is **zero, and it does not move**. The cause is not c
 the integration scheme. `hs_frozen_Eur` evaluates the unloading modulus at the **committed** state
 and holds it for the whole increment, which is what makes the tangent consistent and the line
 search safe. A point that does not yield therefore walks the increment with a **constant** elastic
-operator, and Eq. 9-6 builds the equilibrium stress as `sigma_c,j-1 + D^e delta-eps` — exactly what
-the constitutive routine then returns. The two stresses of Fig. 9-1 coincide identically. Eq. 9-7
-measures their difference, so in this tree it measures zero **by construction**, and it is a code
+operator, and the equilibrium stress is built as `sigma_c,j-1 + D^e delta-eps` — exactly what
+the constitutive routine then returns. The two stresses of §11.1 coincide identically. The
+non-linear elastic criterion measures their difference, so in this tree it measures zero **by construction**, and it is a code
 that updates the modulus inside the iteration where it would have something to say.
 
 That makes it a live check of an identity rather than a dead criterion, and the test says so: if
@@ -1068,7 +1066,7 @@ load — the Current Stiffness Parameter reads **1.00000**, i.e. "fully elastic"
 integrals it is built from are accumulated in the soil Gauss loop and nowhere else, so a mechanism
 that forms in a structure is invisible to it. That is not an issue for the parameter's use in this
 document so far (every case it has been read on plastifies through the soil), but it bears directly
-on two things that are planned on top of it: Eq. 9-1's denominator is scaled by CSP, and the
+on two things that are planned on top of it: the force error's denominator is scaled by CSP, and the
 arc-length switch is specified to engage below CSP 0.5. Both would sit still through a wall
 collapsing.
 
@@ -1076,13 +1074,13 @@ collapsing.
 
 * **The global force criterion still uses the old normalisation as its gate — and the swap has
   now been measured, so the decision is a small one.** Both ratios are on the record at the same
-  iterate (`Convergence::force_error` for Eq. 9-1 and `Convergence::global_error` for the gate —
+  iterate (`Convergence::force_error` for the CSP-normalised ratio and `Convergence::global_error` for the gate —
   until 2026-08-25 only the one that does NOT gate was published, so a run could print "force error
   3e-2, tolerance 1e-1" while the quantity that let it stop was a different ratio entirely), and
   `KATAI_CONV_CSPGATE` swaps the gate over. What the swap is worth, measured on the Mohr-Coulomb
   footing walked to collapse:
 
-  | case | CSP | Eq. 9-1 | the gate | Eq. 9-1 is stricter by |
+  | case | CSP | CSP-normalised | the gate | CSP-normalised is stricter by |
   |---|---|---|---|---|
   | q = 100 kPa (converges) | 0.437 | 1.87e-15 | 3.31e-15 | 0.6× (looser) |
   | q = 300 kPa (converges) | 0.098 | 7.56e-12 | 8.46e-12 | 0.9× (looser) |
@@ -1096,8 +1094,9 @@ collapsing.
   5 of the 142 fast-lane tests fail** — and the clearest of them, `test_anchor_prestress`,
   equilibrates *0% of its load*.
 
-  The reason is the same defect this subsection's other half found in Eq. 9-3, in the same place:
-  **the denominator has no floor tied to what is being applied.** Eq. 9-1 divides by
+  The reason is the same defect this subsection's other half found in the moment criterion, in the
+  same place: **the denominator has no floor tied to what is being applied.** The CSP-normalised
+  ratio divides by
   `||f_int|| + CSP·||f_const||`, and its only floor is `1e-6` of the phase's load scale — six
   decades down, so it bites only when literally nothing is resisting. A phase that prestresses an
   anchor against ground which has not responded yet has very little internal force, so the
@@ -1105,9 +1104,9 @@ collapsing.
   The gate in place divides by `max(||f_ext||, ||f_const||, 1)`, which contains the load being
   applied and therefore cannot collapse that way.
 
-  So the open question is not "which normalisation do we prefer". It is that **Eq. 9-1's
-  denominator needs the floor discipline its siblings have before it can gate anything**, and until
-  that is designed against the source rather than invented, the swap is a measurement seam and not
+  So the open question is not "which normalisation do we prefer". It is that **the CSP-normalised
+  ratio's denominator needs the floor discipline its siblings have before it can gate anything**,
+  and until that floor is derived rather than invented, the swap is a measurement seam and not
   a candidate. The staged excavation this was predicted to separate on cannot show any of it: the
   only staged case in the corpus stays elastic (CSP = 1), where the two denominators differ by a
   factor of 1.45 at 1e-16.

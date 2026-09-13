@@ -1,5 +1,5 @@
 // Embedded beam (pile row) -- skin interaction, step 1 verification (Faz A.4). A vertical pile
-// (Timoshenko beam on its own DOFs) embedded in soil, coupled by skin springs (PLAXIS Sci.Man 7.5).
+// (Timoshenko beam on its own DOFs) embedded in soil, coupled to it by skin springs.
 // With the soil held fixed, the skin reduces to a distributed axial spring k_a per unit length, so
 // an axial head load P gives the classical "rod on an elastic foundation" head displacement:
 //     u_head = (P / (EA lambda)) coth(lambda L),  lambda = sqrt(k_a / EA).
@@ -168,7 +168,7 @@ void test_axial_pile_in_soil() {
           "total skin shear = head load P (load fully transferred to soil)");
     check(u_head > 0.0, "pile settles under axial load");
 
-    // Internal-force diagram (PLAXIS Output -> embedded beam N/Q/M): under a pure axial head load the
+    // Internal-force diagram (embedded beam N/Q/M output): under a pure axial head load the
     // axial force at the head equals the applied P (head equilibrium) and the bending moment ~ 0.
     const auto diag = katai::core::embedded_beam_force_diagram(beam, dofs, r.displacement);
     double Nmax = 0.0, Mmax = 0.0, N_at_head = 0.0, ytop = -1e30, N_at_toe = 0.0, ybot = 1e30;
@@ -228,7 +228,7 @@ void test_pile_capacity() {
 
 // verify: KV-NUM-012
 //   oracle:   independent_path
-//   source:   incremental limit analysis as this solver implements it (PLAXIS 2D Reference Manual, "Tolerated error" and "Max iterations"): the equilibrated fraction of a load-controlled solve is the incremental collapse load ONLY when no increment of the remaining load can be equilibrated at any step size. "Max iterations" is documented there as a patience setting -- an increment that needs more is cut back and retried, not solved differently -- so a fraction reached because that setting ran out is a statement about the setting, not about the soil
+//   source:   incremental limit analysis as this solver implements it; KATAI 2D input contract (docs/k2d-format.md, tol / maxiter / loadsteps): the equilibrated fraction of a load-controlled solve is the incremental collapse load ONLY when no increment of the remaining load can be equilibrated at any step size. The iteration limit is a patience setting -- an increment that needs more is cut back and retried, not solved differently -- so a fraction reached because that setting ran out is a statement about the setting, not about the soil
 //   locator:  one pile fixture (skin cap T_max, foot cap F_max, soil held fixed) solved three ways: past its capacity with an adequate iteration limit, at HALF its capacity with the limit set to 1, and at half its capacity with an adequate limit. The third run is the independent path that convicts the second: the same model, the same load, a different budget
 //   quantity: the abandonment reason the solver records for each run, and whether the published message claims an incremental limit load [enumeration, text]
 //   expected: past capacity -> the tangent goes singular along the mechanism (or no descent exists) and the message publishes the limit load; half capacity at limit 1 -> the iteration budget, no limit-load claim, and the limit named; half capacity at limit 50 -> converged at load factor 1, which is what makes the second run's silence the correct answer
@@ -364,7 +364,8 @@ void test_non_convergence_names_its_reason() {
               katai::core::NewtonResult::Abandonment::NoDescent, 0.65550) == false &&
           katai::core::abandonment_establishes_a_limit_load(
               katai::core::NewtonResult::Abandonment::NoDescent, 0.00010) == true,
-          "the rule itself turns on PLAXIS's 0.5, and the two measured cases fall either side");
+          "the rule itself turns on a stiffness parameter of 0.5, and the two measured cases fall "
+          "either side");
 
     // And the unrecorded ending claims nothing either, so no path reaches a capacity by default.
     katai::core::NewtonResult unknown = stalled;

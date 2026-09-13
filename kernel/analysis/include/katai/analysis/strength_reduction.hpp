@@ -5,7 +5,7 @@
 // under its full self-weight, can no longer reach static equilibrium. The
 // strength parameters are factored as
 //     c_f = c / SRF,   phi_f = atan(tan(phi) / SRF)
-// (Rocscience/Griffiths & Lane), and for each trial SRF a nonlinear Mohr-Coulomb
+// (Griffiths & Lane 1999), and for each trial SRF a nonlinear Mohr-Coulomb
 // analysis under gravity is attempted. Failure to converge is the standard
 // indicator of collapse; the critical SRF is bracketed by bisection.
 
@@ -40,7 +40,7 @@ double factor_of_safety(const mesh::Mesh& mesh, const DofMap& dofs,
 // Soil material's strength is factored by the trial SRF (c_f=c/SRF, phi_f=atan(tan phi/SRF)); the slope
 // is re-solved under gravity from the unstressed state each trial. Returns the factor of safety and the
 // NewtonResult at the highest STILL-STABLE SRF -- its displacement localizes along the slip surface, so
-// the GUI can show WHERE the slope is failing (PLAXIS "Safety" phase, incremental displacement).
+// the GUI can show WHERE the slope is failing (the Safety phase's incremental displacement).
 struct SafetyResult {
     double fos = 0.0;          // factor of safety = critical strength reduction factor
     NewtonResult mechanism;    // solve at the highest stable SRF (displacement = slip surface)

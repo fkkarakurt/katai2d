@@ -27,7 +27,7 @@ namespace {
 // file) and the nonlinear dynamic Newmark+Newton (dynamics_nonlinear.cpp) use the SAME
 // assembly → no drift.
 
-// Turn one iterate's raw measurement into the convergence family (Scientific Manual §9.1).
+// Turn one iterate's raw measurement into the convergence family (NewtonResult::Convergence).
 // Called at every ACCEPTED iterate, so what it leaves behind is what the last such iterate
 // satisfied -- including, when the solve fails, the last one that was reached.
 void measure_convergence(const detail::LocalErrorProbe& p, const Eigen::VectorXd& f_int,
@@ -36,16 +36,18 @@ void measure_convergence(const detail::LocalErrorProbe& p, const Eigen::VectorXd
     cv.measured = true;
     cv.tolerated = rtol;
 
-    // CSP, Eq. 7-22. Guarded twice, for two different reasons: an increment that has not moved
-    // yet has no energy to take a ratio of (report the elastic value, 1), and an UNLOADING
-    // increment can produce a negative or greater-than-one ratio, which is not a stiffness
-    // measure -- the parameter is defined on the interval and is clamped to it.
+    // CSP, the current stiffness parameter: the work of the increment over the work the same
+    // strain would have done elastically. Guarded twice, for two different reasons: an increment
+    // that has not moved yet has no energy to take a ratio of (report the elastic value, 1), and
+    // an UNLOADING increment can produce a negative or greater-than-one ratio, which is not a
+    // stiffness measure -- the parameter is defined on the interval and is clamped to it.
     cv.csp = p.energy_elastic > 0.0
                  ? std::min(1.0, std::max(0.0, p.energy_total / p.energy_elastic))
                  : 1.0;
 
-    // Eq. 9-1. The denominator is the force scale the model itself is carrying, plus the
-    // standing load from the phases before this one, weighted by how much stiffness is left.
+    // The stiffness-weighted global force error, ||r|| / (||f_int|| + CSP*||f_const||). The
+    // denominator is the force scale the model itself is carrying, plus the standing load from
+    // the phases before this one, weighted by how much stiffness is left.
     // The floor is 1e-6 of the phase's own load scale: it bites only when nothing is resisting
     // yet, and then a huge relative error is the honest reading.
     const double denom = std::max(f_int.norm() + cv.csp * cf_norm, 1e-6 * ref);
@@ -53,15 +55,18 @@ void measure_convergence(const detail::LocalErrorProbe& p, const Eigen::VectorXd
     // The default gate's own ratio, so that both are on the record at the same iterate.
     cv.global_error = rnorm / ref;
 
-    // Eq. 9-3/9-4. Only structural elements with rotational freedom have one.
+    // The moment error: the largest out-of-balance moment on a rotational equation over the sum
+    // of absolute nodal moment contributions. Only structural elements with rotational freedom
+    // have one.
     //
-    // THE FLOOR IS NOT IN EQ. 9-3, and it is here deliberately. Every other criterion in this
-    // family has one -- Eq. 9-5 divides by max(tau_max, c, 1 kPa), Eq. 9-9 by max(|F_c|,
-    // 1% of |F_max|, 1 kN) -- and the manual's reason for them is that a point carrying almost
-    // nothing must not report an enormous relative error on a difference that is numerically
-    // nothing. A structure carrying almost no moment is the same situation in different units,
-    // and the tree had no floor there because the criterion was never consulted: the moment
-    // reference is a sum of ABSOLUTE nodal moments, which cannot cancel, but it CAN be empty.
+    // THE FLOOR IS AN ADDITION TO THAT RATIO, and it is here deliberately. Every other criterion
+    // in this family has one -- the local error at a plastic stress point divides by
+    // max(tau_max, c, 1 kPa), the foot force error by max(|F_c|, 1% of |F_max|, 1 kN) -- and the
+    // reason for them is that a point carrying almost nothing must not report an enormous
+    // relative error on a difference that is numerically nothing. A structure carrying almost no
+    // moment is the same situation in different units, and the tree had no floor there because
+    // the criterion was never consulted: the moment reference is a sum of ABSOLUTE nodal moments,
+    // which cannot cancel, but it CAN be empty.
     //
     // Measured, on the day the criterion first gated (2026-08-25): a plate standing along the
     // whole of a line that is pushed down is driven UNIFORMLY -- every one of its nodes takes the
@@ -98,10 +103,11 @@ void measure_convergence(const detail::LocalErrorProbe& p, const Eigen::VectorXd
     cv.iface_inaccurate = p.iface_plastic_inaccurate;
     cv.worst_iface_error = p.worst_iface;
 
-    // Eq. 9-9. The denominator is the source's, floor and all: the constitutive foot forces, or
-    // one per cent of the declared capacities, or 1.0 -- whichever is largest. The middle term is
-    // what stops a pile that carries almost nothing at its toe from reporting a huge relative
-    // error while the capacity it was given says the force is negligible either way.
+    // The embedded-beam foot force error, sum |F_eq - F_c| over the denominator below, floor and
+    // all: the constitutive foot forces, or one per cent of the declared capacities, or 1.0 --
+    // whichever is largest. The middle term is what stops a pile that carries almost nothing at
+    // its toe from reporting a huge relative error while the capacity it was given says the force
+    // is negligible either way.
     cv.feet = p.feet;
     cv.foot_force_error =
         p.feet == 0 ? 0.0
@@ -281,9 +287,9 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     const double ref = std::max({f_ext_norm, cf_norm, 1.0});
     const bool debug = std::getenv("KATAI_NL_DEBUG") != nullptr;
     // An increment must satisfy the LOCAL criteria as well as the global force residual before
-    // it is called converged -- which is what the source of these criteria does. ON by default
-    // since 2026-08-24; see NewtonOptions::enforce_local_criteria for the measurement that
-    // decided it. The two environment variables are the whole-run overrides a study uses, and
+    // it is called converged -- local accuracy is part of convergence, not a report on it. ON by
+    // default since 2026-08-24; see NewtonOptions::enforce_local_criteria for the measurement
+    // that decided it. The two environment variables are the whole-run overrides a study uses, and
     // the option is what a test and the phase's numerical controls drive.
     const bool enforce_local =
         std::getenv("KATAI_CONV_LOCAL") != nullptr
@@ -292,20 +298,20 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                                                             : options.enforce_local_criteria);
     // MEASUREMENT SEAM, not a setting: which GLOBAL criterion gates the step. The default is the
     // one this tree has always used -- ||r|| against a FIXED scale, max(||f_ext||, ||f_const||, 1)
-    // -- and KATAI_CONV_CSPGATE swaps in Eq. 9-1, ||r|| / (||f_int|| + CSP*||f_const||), which is
-    // the form the criteria family already REPORTS.
+    // -- and KATAI_CONV_CSPGATE swaps in the stiffness-weighted force error,
+    // ||r|| / (||f_int|| + CSP*||f_const||), which is the form the criteria family already REPORTS.
     //
     // WHAT THE SEAM MEASURED (2026-08-25), because a seam with no reading is just an option. On
     // the footing walked to collapse the two ratios agree within ~1.5x wherever the run converges,
-    // and Eq. 9-1 is 1.4x (q=600) to 2.2x (q=900) STRICTER at collapse -- the property the CSP
-    // normalisation exists for. But swapping the gate outright FAILS 5 of the 142 fast tests, and
-    // the clearest of them equilibrates 0% of its load: a phase that prestresses an anchor against
-    // ground that has not responded has almost no internal force, so Eq. 9-1's denominator is
-    // small and the ratio never reaches the tolerance. Its only floor is 1e-6 of the phase's load
-    // scale -- six decades down. That is the SAME defect the moment criterion had (see
-    // measure_convergence): a ratio in this family whose denominator has no floor tied to what is
-    // being applied. Eq. 9-1 cannot gate until that is designed against the source, so this stays
-    // a seam.
+    // and the stiffness-weighted one is 1.4x (q=600) to 2.2x (q=900) STRICTER at collapse -- the
+    // property the CSP normalisation exists for. But swapping the gate outright FAILS 5 of the
+    // 142 fast tests, and the clearest of them equilibrates 0% of its load: a phase that
+    // prestresses an anchor against ground that has not responded has almost no internal force,
+    // so the weighted denominator is small and the ratio never reaches the tolerance. Its only
+    // floor is 1e-6 of the phase's load scale -- six decades down. That is the SAME defect the
+    // moment criterion had (see measure_convergence): a ratio in this family whose denominator
+    // has no floor tied to what is being applied. The stiffness-weighted error cannot gate until
+    // that floor is designed, so this stays a seam.
     const bool csp_gate = std::getenv("KATAI_CONV_CSPGATE") != nullptr;
 
     // Adaptive (automatic) load incrementation. The external load is advanced from
@@ -313,8 +319,8 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     // retried with a halved size (sub-stepping) instead of aborting the analysis.
     // The collapse signal -- non-convergence even at the minimum increment -- is
     // thus decoupled from the (arbitrary) initial step count, making the limit/FoS
-    // result robust across element orders and problem stiffness (cf. Crisfield;
-    // PLAXIS/ABAQUS automatic stepping). When every increment converges at the
+    // result robust across element orders and problem stiffness (cf. Crisfield,
+    // automatic load stepping). When every increment converges at the
     // initial size (no cutback) the scheme reduces exactly to fixed N-step loading,
     // so the tri6 benchmarks are unchanged.
     result.iteration_limit = options.max_iterations;
@@ -331,7 +337,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     math::SparseMatrixBuilder builder(neq);
     math::CsrPatternCache kt_cache;
 
-    // The convergence family's memory (Scientific Manual §9.1). prev_sc carries sigma_c,j-1
+    // The convergence family's memory (LocalErrorProbe). prev_sc carries sigma_c,j-1
     // and prev_deps carries Delta-eps_{j-1}; both are restarted at every increment ATTEMPT,
     // including a retried one, because sigma_0 is the increment's own committed state and a
     // cut-back increment starts its iteration afresh.
@@ -357,7 +363,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         cur_target = target_lambda;
 
         Eigen::VectorXd du_free = Eigen::VectorXd::Zero(neq);
-        prev_sc = committed;  // sigma_c,0 = sigma_0, where Fig. 9-1 starts
+        prev_sc = committed;  // sigma_c,0 = sigma_0, where the iteration's stress walk starts
         std::fill(prev_deps.begin(), prev_deps.end(), 0.0);
         // A traction has no committed value stored anywhere -- the structural elements are
         // total-displacement formulations, so the state at the start of an increment is

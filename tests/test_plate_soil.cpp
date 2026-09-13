@@ -7,7 +7,7 @@
 // (bending + shear). Recovering the soil stiffness (stiffer soil) reduces the deflection. The
 // plate develops the simply-supported midspan moment M ~ P L/4. This exercises the full
 // coupling: shared translational DOFs, extra rotation DOFs, and the solver plate assembly.
-// (See docs/references/structural-plate-formulation.md; PLAXIS MMM sec 18.3 Timoshenko plate.)
+// (See docs/references/structural-plate-formulation.md; Timoshenko plate.)
 #include <katai/analysis/nonlinear_solver.hpp>
 #include <katai/fem/assembly/assembler.hpp>
 #include <katai/fem/assembly/dof_map.hpp>

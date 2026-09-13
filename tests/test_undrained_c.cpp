@@ -3,16 +3,16 @@
 // (A) and (B) are effective-stress analyses -- the pore fluid gets a stiffness, the excess pore
 // pressure is computed, and the stresses that come out are effective. (C) is the older practice:
 // enter the UNDRAINED stiffness and the UNDRAINED strength, compute in total stress, and report
-// no pore pressure at all. PLAXIS keeps it because that is what a site investigation often hands
-// an engineer -- Eu and su, no effective parameters -- and because the NGI-ADP family is written
-// for it. KATAI had no way to say it: a total-stress model had to be entered as "Drained" with
-// undrained numbers, which then had buoyancy subtracted from it and a K0 taken on the wrong
-// stress. That is a wrong answer with nothing in the run to mark it.
+// no pore pressure at all. The practice survives because that is what a site investigation often
+// hands an engineer -- Eu and su, no effective parameters -- and because total-stress models such
+// as the NGI-ADP family are written for it. KATAI had no way to say it: a total-stress model had
+// to be entered as "Drained" with undrained numbers, which then had buoyancy subtracted from it
+// and a K0 taken on the wrong stress. That is a wrong answer with nothing in the run to mark it.
 //
 // verify: KV-CST-007
 //   oracle:   independent_path
-//   source:   PLAXIS 2D 2025.1 Material Models Manual section 2.7 (Undrained total stress analysis) and section 2.4: an undrained Young's modulus converts to an effective one by Eq. 2-59, E' = 2(1 + nu')Eu/3, because the shear modulus is the same in both descriptions of the same soil. The two analyses of that soil must therefore agree, and the manual says exactly how far apart they are allowed to be: the total-stress route is exactly incompressible only at nu_u = 0.5, which "is not possible, since this would lead to singularity", so the difference is the compressibility that nu_u < 0.5 leaves behind. Reference Manual section 6.2.3 for the rest of the type's behaviour ("Pore pressures are not generated"; K0 refers to total stress; a consolidation calculation does not affect such a material)
-//   locator:  a weightless laterally confined column loaded by a surcharge, solved twice -- (a) Undrained (A) with the effective pair (E' from Eq. 2-59, nu' = 0.3) and (b) Undrained (C) with the undrained pair (Eu, nu_u) -- for nu_u = 0.495, 0.499 and 0.4999; and a submerged K0 column of the same material read against the total-stress overburden
+//   source:   isotropic linear elasticity with a shear modulus common to the drained and undrained descriptions of one soil (docs/references/effective-stress-formulation.md); KATAI 2D input contract (docs/k2d-format.md, drainage = 4, Undrained (C)): a total stress analysis in which E/nu are the undrained pair, c is s_u with phi = 0, no pore pressure is generated or carried, K0 refers to total stress, and a consolidation calculation does not affect such a material. The total-stress route is exactly incompressible only at nu_u = 0.5, which the stiffness matrix cannot represent (it is singular there), so the difference between the two routes is the compressibility that nu_u < 0.5 leaves behind
+//   locator:  E' = 2(1 + nu')Eu/3 (equal shear moduli, G = Eu/(2(1 + nu_u)) = E'/(2(1 + nu')) with nu_u -> 0.5); a weightless laterally confined column loaded by a surcharge, solved twice -- (a) Undrained (A) with the effective pair (E' from that relation, nu' = 0.3) and (b) Undrained (C) with the undrained pair (Eu, nu_u) -- for nu_u = 0.495, 0.499 and 0.4999; and a submerged K0 column of the same material read against the total-stress overburden
 //   quantity: settlement of the column top under each route [m], and the initial vertical stress of a submerged column [kPa]
 //   expected: u(C)/u(A) = 2(1 + nu_u)/3 exactly (the closed-form ratio of the two constrained moduli), so the two routes converge as nu_u -> 0.5: 0.33% apart at 0.495, 0.067% at 0.499, 0.0067% at 0.4999; and the Undrained (C) column's initial vertical stress is the TOTAL overburden -gamma_sat (H - y) with sigma_h = K0 sigma_v, where the same column declared Drained carries the buoyant -gamma' (H - y)
 //   band:     0.2% on the ratio against its closed form, as asserted below (measured +0.00% at all three nu_u); 1e-6 relative on the total-stress overburden; the refusals are exact (message match)
@@ -47,7 +47,7 @@ constexpr double kEu = 1.5e4;     // undrained Young's modulus [kPa]
 constexpr double kNuEff = 0.3;    // effective Poisson's ratio of the same soil
 constexpr double kH = 10.0, kW = 2.0, kQ = 50.0;
 
-// MMM Eq. 2-59: E' = 2(1 + nu') Eu / 3. The shear modulus is common to both descriptions.
+// E' = 2(1 + nu') Eu / 3 (with nu_u = 0.5). The shear modulus is common to both descriptions.
 constexpr double kEeff = 2.0 * (1.0 + kNuEff) * kEu / 3.0;
 
 double constrained(double E, double nu) {
@@ -148,7 +148,7 @@ double top_settlement(const katai::app::SolveResult& R) {
 
 int main() {
     std::printf("== the same soil, described two ways (KV-CST-007) ==\n");
-    std::printf("  Eu = %.0f kPa, nu' = %.2f  ->  E' = 2(1+nu')Eu/3 = %.0f kPa (MMM Eq. 2-59)\n",
+    std::printf("  Eu = %.0f kPa, nu' = %.2f  ->  E' = 2(1+nu')Eu/3 = %.0f kPa (equal G)\n",
                 kEu, kNuEff, kEeff);
 
     const double nu_us[] = {0.495, 0.499, 0.4999};
@@ -161,7 +161,7 @@ int main() {
         const double uA = top_settlement(A), uC = top_settlement(C);
         // The closed-form ratio of the two constrained moduli. M_u(A) = E'(1 - nu_u)/((1 + nu')
         // (1 - 2 nu_u)) once Kw/n is added to M'; M_u(C) = Eu(1 - nu_u)/((1 + nu_u)(1 - 2 nu_u)).
-        // With E' from Eq. 2-59 everything cancels but 2(1 + nu_u)/3.
+        // With E' = 2(1 + nu') Eu / 3 everything cancels but 2(1 + nu_u)/3.
         const double want = 2.0 * (1.0 + nu_u) / 3.0;
         const double got = uC / uA;
         std::printf("  nu_u = %-7.4f  u(A) = %.6e m   u(C) = %.6e m   ratio %.7f "
@@ -169,7 +169,7 @@ int main() {
                     nu_u, uA, uC, got, want, 100.0 * (got - want) / want);
         check(std::fabs(got - want) < 0.002 * want,
               "u(C)/u(A) = 2(1 + nu_u)/3, the compressibility nu_u < 0.5 leaves behind");
-        // And the constrained moduli themselves, as the manual's two statements about one soil.
+        // And the constrained moduli themselves, as the two descriptions of one soil.
         const double MuC = constrained(kEu, nu_u);
         check(std::fabs(-kQ * kH / MuC - uC) < 0.02 * std::fabs(uC),
               "the (C) column settles by -q H / M_u with the UNDRAINED pair, within 2%");
@@ -203,7 +203,7 @@ int main() {
                     "  Drained      : sigma'_v = -gamma' (H - y)        worst error %.2e\n",
                     worst_tc, worst_h, worst_dr);
         check(worst_tc < 1e-6, "the (C) column carries the TOTAL overburden, unbuoyed");
-        check(worst_h < 1e-6, "and its K0 multiplies that total stress (MMM 2.7)");
+        check(worst_h < 1e-6, "and its K0 multiplies that total stress (total stress analysis)");
         check(worst_dr < 1e-6, "while the same column declared Drained carries the buoyant one");
         // The water table is still reported as a field -- it exists, the model just does not
         // subtract it from this material. Said in the diagnostics rather than left to be guessed.
@@ -222,7 +222,7 @@ int main() {
 
     // ---------------------------------------------------------------------------- the refusals --
     std::printf("\n== what Undrained (C) is refused for ==\n");
-    {   // Hardening Soil: PLAXIS offers (C) for Linear Elastic and Mohr-Coulomb only.
+    {   // Hardening Soil: (C) is offered for Linear Elastic and Mohr-Coulomb only.
         m::Project pr = column(m::Drainage::UndrainedC, kEu, 0.495, 0.495);
         pr.materials[0].model = m::SoilModel::HardeningSoil;
         pr.materials[0].c = 60.0; pr.materials[0].phi = 0.0;

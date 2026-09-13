@@ -12,11 +12,11 @@
 //   (B) Excavation: the wall deflects toward the cut, monotonically increasing with height
 //       (a cantilever rotating about its embedded toe), and the solve converges.
 //
-// Staged excavation uses the SigmaMstage ramp: target(lambda) = f_int0 + lambda*(grav-f_int0),
+// Staged excavation uses the staged-fraction ramp: target(lambda) = f_int0 + lambda*(grav-f_int0),
 // i.e. constant_force = f_int0 (initial K0 internal force, residual 0 at lambda=0) and the
 // ramped external load f_ext = grav_active - f_int0 (the excavation release). A small cohesion
 // regularises the re-entrant excavation corner so the analysis converges to full depth.
-// (Reference: PLAXIS staged construction; Terzaghi/Rankine earth pressure; cf. test_excavation.)
+// (Reference: staged construction; Terzaghi/Rankine earth pressure; cf. test_excavation.)
 #include <katai/analysis/initial_stress.hpp>
 #include <katai/analysis/nonlinear_solver.hpp>
 #include <katai/analysis/staged_construction.hpp>
@@ -81,8 +81,8 @@ struct WallResult {
     std::vector<double> y, ux;
     bool converged = false;
     // The convergence criteria family at the last accepted iterate. This fixture is here for
-    // the MOMENT criterion (Eq. 9-3/9-4): it is the only nonlinear case in the tree that
-    // carries rotational freedom, so it is the only place that criterion can be read at all.
+    // the MOMENT criterion (rotational-row residual): it is the only nonlinear case in the tree
+    // that carries rotational freedom, so it is the only place that criterion can be read at all.
     NewtonResult::Convergence conv;
     int iterations = 0;
 };
@@ -184,10 +184,10 @@ void test_excavation_wall() {
     check(std::fabs(tip) > 5.0 * max_abs_a, "excavation deflection >> no-excavation (excavation-driven)");
 }
 
-// The MOMENT criterion (Eq. 9-3/9-4), read on the only kind of case that has rotational
-// freedom at all. Until 2026-08-25 the record said this criterion "participates in the gate";
-// it did not -- the gate called local_ok(), which does not contain it -- and no case had ever
-// been examined through it. Both halves are closed here: it is in the gate now
+// The MOMENT criterion (rotational-row residual), read on the only kind of case that has
+// rotational freedom at all. Until 2026-08-25 the record said this criterion "participates in
+// the gate"; it did not -- the gate called local_ok(), which does not contain it -- and no case
+// had ever been examined through it. Both halves are closed here: it is in the gate now
 // (Convergence::enforced_ok), and this is what it reads.
 //
 // The reading is negative, and that is the point of writing it down. With an ELASTIC plate the
@@ -197,7 +197,7 @@ void test_excavation_wall() {
 // answering a different question, and a guard that does not say which question it answers will
 // eventually be read as covering the other one.
 void test_moment_criterion() {
-    std::printf("\n-- moment criterion (Eq. 9-3/9-4) on the wall: what it reads, and what it does not --\n");
+    std::printf("\n-- moment criterion on the wall: what it reads, and what it does not --\n");
     const WallResult tight = run(true, 1e-6);
     const WallResult loose = run(true, 1e-1);
     for (const auto* p : {&tight, &loose}) {

@@ -1,8 +1,8 @@
 // Nonlinear dynamic (Newmark + per-step Newton) solver -- analysis/dynamics_nonlinear.cpp. The linear
 // solve_newmark treats f_int = K u; this generalizes it to f_int(u) from the constitutive return
 // mapping, so the soil can yield (and, through the shared structural assembly, an interface can slip /
-// a geogrid go slack) DURING shaking, exactly like PLAXIS Dynamics (Ref sec 11.10.4: a dynamic phase
-// uses the same convergence criteria as a plastic phase).
+// a geogrid go slack) DURING shaking; a dynamic phase uses the same convergence criteria as a
+// plastic phase.
 //
 // Per the project directive, self-consistency is not enough: each result is pinned by an INDEPENDENT
 // route that shares no code with the driver.
@@ -259,10 +259,10 @@ void test_quasi_static_mc() {
 // ============================================================================================
 // (c) CYCLIC HYSTERESIS -- a Mohr-Coulomb material dissipates ONLY when it touches the yield surface.
 //
-// PLAXIS Material Manual sec 3.5: Mohr-Coulomb is linear-elastic INSIDE the failure surface, so a cyclic
-// stress path that stays within it stores and returns energy with NO hysteretic damping; only once the
-// path TOUCHES the surface does plastic flow open the stress-strain loop and dissipate energy. The
-// nonlinear dynamic solver must reproduce exactly this on/off behaviour.
+// Mohr-Coulomb is linear-elastic perfectly plastic: linear-elastic INSIDE the failure surface, so
+// a cyclic stress path that stays within it stores and returns energy with NO hysteretic damping;
+// only once the path TOUCHES the surface does plastic flow open the stress-strain loop and
+// dissipate energy. The nonlinear dynamic solver must reproduce exactly this on/off behaviour.
 //
 // Independent oracle: energy conservation. Set the damping matrix to ZERO, so plasticity is the ONLY
 // dissipation mechanism, and drive one full quasi-static cycle. The net work done by the external force,
@@ -272,7 +272,7 @@ void test_quasi_static_mc() {
 // the solver.
 // ============================================================================================
 void test_cyclic_hysteresis() {
-    std::printf("-- (c) cyclic hysteresis: MC dissipates ONLY on yielding (PLAXIS Mat.Man 3.5) --\n");
+    std::printf("-- (c) cyclic hysteresis: MC dissipates ONLY on yielding --\n");
     const RectangularDomain domain{0.0, 0.0, 4.0, 4.0, 0};
     const Mesh mesh = katai::mesh::generate_structured_tri6(domain, 5, 5);
     DofMap dofs(mesh.node_count, 2);

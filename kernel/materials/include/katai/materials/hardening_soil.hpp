@@ -8,8 +8,8 @@
 // pressure ≥ 0, q = σ1 − σ3 ≥ 0 deviator, −ε1 = axial compression strain. Since the
 // solver is tension-positive, the sign flips in the FE integration (σ_HS = −σ_solver).
 //
-// Sources: Schanz, Vermeer & Bonnier (1999); Duncan & Chang (1970); PLAXIS Material
-// Models Manual. Math: docs/references/hardening-soil-formulation.md.
+// Sources: Schanz, Vermeer & Bonnier (1999); Duncan & Chang (1970).
+// Math: docs/references/hardening-soil-formulation.md.
 
 #include <algorithm>
 #include <cmath>
@@ -28,19 +28,19 @@ struct HardeningSoilParams {
     double dilatancy = 0.0;  // ψ' [rad]
     // The dilatancy cut-off has ENGAGED for this Gauss point (e ≥ e_max). The caller signals it
     // here as well as by zeroing ψ, because for HSsmall those stopped being the same thing when
-    // sec. 7.9.1 landed: that rule reads ψ only through φ_cv, so a zeroed ψ moves φ_cv up to φ
-    // and switches the Li & Dafalias branch ON everywhere below failure — which would turn a
-    // "stop dilating" option into a source of contraction. The manual's cut-off says the
-    // MOBILISED angle itself "is automatically set back to zero"; this flag is what keeps
-    // ψ_m = 0 meaning ψ_m = 0.
+    // the Li & Dafalias dilatancy rule landed: that rule reads ψ only through φ_cv, so a zeroed
+    // ψ moves φ_cv up to φ and switches the Li & Dafalias branch ON everywhere below failure —
+    // which would turn a "stop dilating" option into a source of contraction. The cut-off sets
+    // the MOBILISED angle itself back to zero; this flag is what keeps ψ_m = 0 meaning ψ_m = 0.
     bool dilatancy_cut = false;
     double Rf = 0.9;         // failure ratio (qa = qf/Rf)
     double nu_ur = 0.2;      // unloading-reloading Poisson
 
-    // Cap (volumetric) yield surface parameters (Rocscience/PLAXIS HS, Eq 15.11-15.13).
-    // PLAXIS derives these from K0^NC and Eoed_ref by an oedometer simulation; cap_beta=0 ⇒
-    // cap OFF. cap_alpha = α (shape), cap_beta = β (POWER-LAW hardening parameter).
-    double cap_alpha = 1.0;  // α  (= PLAXIS cap aspect M; ellipse height M·p_c on the q axis)
+    // Cap (volumetric) yield surface parameters: f_c = q²/α² + p² − p_c², with the power-law
+    // hardening below. They are derived from K0^NC and Eoed_ref by an oedometer simulation
+    // (hs_calibrate_cap); cap_beta=0 ⇒ cap OFF. cap_alpha = α (shape), cap_beta = β
+    // (POWER-LAW hardening parameter).
+    double cap_alpha = 1.0;  // α  (cap aspect ratio; ellipse height α·p_c on the q axis)
     double cap_beta = 0.0;   // β (0 = cap off)
 
     // Elastic bulk modulus K_e = Eur/(3(1−2ν)) (at σ3).
@@ -48,7 +48,8 @@ struct HardeningSoilParams {
         return Eur(sigma3) / (3.0 * (1.0 - 2.0 * nu_ur));
     }
 
-    // Cap hardening power law (Eq 15.13): p_c ↔ ε_v^(p-cap). m=1 is the logarithmic special case.
+    // Cap hardening power law ε_v^(p-cap) = (β/(1−m))(p_c/p_ref)^(1−m). m=1 is the logarithmic
+    // special case, ε_v^(p-cap) = β·ln(p_c/p_ref).
     double cap_ev_from_pc(double pc) const {  // ε_v^(p-cap)(p_c)
         if (std::fabs(1.0 - m) < 1e-12) return cap_beta * std::log(pc / p_ref);
         return cap_beta / (1.0 - m) * std::pow(pc / p_ref, 1.0 - m);
@@ -75,39 +76,37 @@ struct HardeningSoilParams {
     double Eur(double sigma3) const { return Eur_ref * stiffness_factor(sigma3); }
     double Eoed(double sigma1) const { return Eoed_ref * stiffness_factor(sigma1); }
 
-    // --- HSsmall (Material Models Manual §7): small-strain stiffness. G0_ref=0 ⇒ OFF (plain HS).
+    // --- HSsmall (Benz 2007): small-strain stiffness. G0_ref=0 ⇒ OFF (plain HS).
     double G0_ref = 0.0;     // very-small-strain shear modulus (reference); 0 = no HSsmall
     double gamma07 = 1.0e-4; // threshold shear strain where G_s drops to 0.722·G0 (virgin)
     static constexpr double kHDa = 0.385;  // Hardin-Drnevich (Santos&Correia): G_s=0.722G0 @ γ=γ07
-    // Masing's rule, Eq 7-11: gamma_0.7,re-loading = 2 gamma_0.7,virgin-loading. The INPUT
-    // gamma07 is the virgin-loading threshold (sec. 7.4: "gamma_0.7 is to be supplied for
-    // virgin loading"); the curve the model's QUASI-ELASTIC stiffness rides on is that
-    // backbone scaled by 2. The manual is explicit that this factor is not switched on at a
-    // detected reversal: "the scaling factor for the threshold shear strain is assumed to be
-    // constant and equal to 2 throughout loading", because in HS-small the virgin response is
-    // elasto-plastic from the start of shearing and the hardening plasticity already supplies
-    // the faster virgin decay. The functions below are the BACKBONE (Eq 7-3/7-7/7-8/7-10, at
-    // the input gamma07); the FE overlay in hs_small_strain_params rides the reloading curve.
+    // Masing's rule (Masing 1926): gamma_0.7,re-loading = 2 gamma_0.7,virgin-loading. The INPUT
+    // gamma07 is the virgin-loading threshold; the curve the model's QUASI-ELASTIC stiffness
+    // rides on is that backbone scaled by 2. This factor is not switched on at a detected
+    // reversal: it is held constant and equal to 2 throughout loading, because in HS-small the
+    // virgin response is elasto-plastic from the start of shearing and the hardening plasticity
+    // already supplies the faster virgin decay. The functions below are the BACKBONE (secant
+    // G_s = G0/(1 + 0.385|γ|/γ07), its tangent, and the cut-off strain, at the input gamma07);
+    // the FE overlay in hs_small_strain_params rides the reloading curve.
     static constexpr double kMasing = 2.0;
     double gamma07_reload() const { return kMasing * gamma07; }
-    // MMM sec. 7.5: "Although Alpan suggests that the ratio E0/Eur can exceed 10 for very soft
-    // clays, the maximum ratio E0/Eur or G0/Gur permitted in the HSsmall model is limited to
-    // 20." Both moduli follow the same power law, so the ratio is stress-independent and the
-    // cap can be applied once, at the reference values.
+    // The model permits a ratio G0/Gur (equivalently E0/Eur) of at most 20. Both moduli follow
+    // the same power law, so the ratio is stress-independent and the cap can be applied once,
+    // at the reference values.
     static constexpr double kMaxG0Ratio = 20.0;
     double Gur_ref() const { return Eur_ref / (2.0 * (1.0 + nu_ur)); }
     double G0_ref_cap() const { return kMaxG0Ratio * Gur_ref(); }
 
     double G0(double sigma3) const { return G0_ref * stiffness_factor(sigma3); }     // stress-dependent
     double Gur(double sigma3) const { return Eur(sigma3) / (2.0 * (1.0 + nu_ur)); }  // lower cut-off modulus
-    double g_secant(double gamma, double sigma3) const {                            // Eq 7-3
+    double g_secant(double gamma, double sigma3) const {                            // secant
         return G0(sigma3) / (1.0 + kHDa * std::fabs(gamma) / gamma07);
     }
-    double g_tangent(double gamma, double sigma3) const {                           // Eq 7-8 (+ cut-off 7-9)
+    double g_tangent(double gamma, double sigma3) const {                           // tangent ≥ Gur
         const double d = 1.0 + kHDa * std::fabs(gamma) / gamma07;
         return std::max(G0(sigma3) / (d * d), Gur(sigma3));
     }
-    double gamma_cutoff(double sigma3) const {                                       // Eq 7-10
+    double gamma_cutoff(double sigma3) const {                                       // Gt = Gur
         return (1.0 / kHDa) * (std::sqrt(G0(sigma3) / Gur(sigma3)) - 1.0) * gamma07;
     }
     // Strain-dependent elastic (unload/reload) Young modulus: replaces HS's constant Eur.

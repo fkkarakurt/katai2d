@@ -49,6 +49,7 @@ import argparse
 import json
 import re
 import sys
+import subprocess
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -208,12 +209,27 @@ def load_policy() -> dict:
     return {"exempt_paths": [], "exempt_line_patterns": []}
 
 
+def tracked_files() -> set[Path] | None:
+    """The files git carries, or None without git. A working note git does not carry is not
+    source the project publishes, so it is not this gate's to judge -- and a baseline that
+    named such files would publish their names."""
+    try:
+        out = subprocess.run(["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
+                             capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return {(REPO_ROOT / p).resolve() for p in out.decode("utf-8", "replace").split("\0") if p}
+
+
 def iter_sources(roots: list[Path], skip: list[re.Pattern]) -> list[Path]:
     found: list[Path] = []
+    tracked = tracked_files()
     for root in roots:
         candidates = [root] if root.is_file() else sorted(root.rglob("*"))
         for path in candidates:
             if not path.is_file():
+                continue
+            if tracked is not None and path.resolve() not in tracked:
                 continue
             if comment_style(path) is None:
                 continue

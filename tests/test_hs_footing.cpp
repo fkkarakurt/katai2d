@@ -1,6 +1,6 @@
 // Hardening Soil at the FE level for a SHEAR-DOMINATED, low-confinement problem:
 // a flexible strip footing on a sand half-space under a WORKING (service) pressure.
-// This is the canonical PLAXIS HS use case (settlement prediction) and the case the
+// This is the canonical HS use case (settlement prediction) and the case the
 // fragile nested-Newton return mapping historically diverged on -- unlike the
 // laterally confined oedometer column (test_hs_fe_oedometer), the soil near the
 // footing edge is at very low confinement and the response is deviatoric (shear).
@@ -48,7 +48,7 @@ Eigen::VectorXd solve_unsym(const katai::math::CsrMatrix& k, const Eigen::Vector
     return solver->solve(r);
 }
 
-// Medium-dense sand (PLAXIS-tutorial-like), calibrated cap.
+// Medium-dense sand (typical textbook parameters), calibrated cap.
 katai::core::HardeningSoilParams sand() {
     katai::core::HardeningSoilParams p;
     p.p_ref = 100; p.E50_ref = 3.0e4; p.Eur_ref = 9.0e4; p.Eoed_ref = 3.0e4;
@@ -85,7 +85,7 @@ void test_hs_footing() {
         gs.gamma_p = katai::core::hs_initial_gamma_p(hs, sig_cp);
     }
 
-    // Unified K0 procedure (PLAXIS staged "Plastic" phase): the geostatic equilibrium
+    // Unified K0 procedure (a staged Plastic phase): the geostatic equilibrium
     // (seeded K0 stress) is held as a constant internal force B, and ONLY the footing
     // surcharge ramps. Ramping self-weight instead would carry a spurious unbalanced
     // gravity fraction at intermediate load steps and drive the low-confinement surface

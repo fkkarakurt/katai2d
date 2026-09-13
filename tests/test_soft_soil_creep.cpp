@@ -1,16 +1,16 @@
-// SOFT SOIL CREEP -- Stage 1 material-point V&V (PLAXIS MMM sec 11; locked formulation in
+// SOFT SOIL CREEP -- Stage 1 material-point V&V (Vermeer & Neher 1999; locked formulation in
 // docs/references/soft-soil-creep-formulation.md). Oracles are the model's DEFINING closed forms,
 // derived independently in the formulation doc (sec 5) and none share code with the kernel:
 //   (a) CONSTANT isotropic stress, NC start: eps_v^c(t) = mu* ln(1 + t/tau) EXACTLY
 //       (Buisman/Garlanger secondary compression, slope mu* per ln-cycle);
 //   (b) initial creep-rate ratio between OCR = 2 and NC equals OCR^-beta, beta = (lam*-kap*)/mu*
-//       (the overconsolidation kill-switch that MMM 11.11 warns about);
+//       (the overconsolidation kill-switch: creep all but stops in overconsolidated soil);
 //   (c) isotropic stress RELAXATION (zero total strain): p(t) = p0 (1 + (lam*/(kap* tau)) t)^(-mu*/lam*)
 //       and p_p grows exactly by (p0/p)^(kap*/(lam*-kap*)) -- both pinned;
 //   (d) 24-hour staged oedometer: end-of-day states advance on the lam* NC line (the tau = 1 day
-//       DEFINITION of normal consolidation, Eq 11-13/14) and develop K0NC laterally;
+//       DEFINITION of normal consolidation) and develop K0NC laterally;
 //   (e) FAST drained triaxial: failure ON the Mohr-Coulomb line (creep has no failure of its own;
-//       MC is checked AFTER the creep update, manual sec 11.7).
+//       MC is checked AFTER the creep update).
 // STAGE 2 -- FE constitutive wiring with TIME: dt enters integrate_point as a trailing
 // parameter (0 = no creep, the bit-identical legacy path); the static solver distributes the
 // phase time_interval over increments by d(lambda). The FE section pins the WIRING (the kernel
@@ -418,7 +418,7 @@ void test_g3_relaxation_bvp() {
 }  // namespace
 
 int main() {
-    std::printf("SOFT SOIL CREEP (PLAXIS MMM sec 11) -- Stage 1 material-point closed-form V&V\n\n");
+    std::printf("SOFT SOIL CREEP -- Stage 1 material-point closed-form V&V\n\n");
     test_constant_stress_creep();
     std::printf("\n");
     test_ocr_rate_ratio();

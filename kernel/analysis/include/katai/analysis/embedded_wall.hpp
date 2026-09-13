@@ -5,7 +5,7 @@
 //   - the mesh is SPLIT along the wall line with split_mesh_at_wall (right/left detached,
 //     continuous below the toe).
 //   - the wall's INDEPENDENT translational+rotational extra DOFs (add_extra_dof) → detached
-//     from the mesh (like a PLAXIS plate).
+//     from the mesh (a plate on its own degrees of freedom).
 //   - the plate element lives on the wall DOFs (geometry from the right mesh nodes); two
 //     interfaces (right soil↔wall, left soil↔wall) tie the wall to both soils (slip +
 //     separation possible).
@@ -98,7 +98,7 @@ inline WallBuild build_embedded_wall(const mesh::Mesh& mesh, std::vector<SeamPai
 // self-equilibrium at u=0, NO spurious installation movement. Since build_embedded_wall
 // flips the left interface normal, compression is σ_n<0 on both sides (tension cut-off
 // correct, single formula). In the excavation phase the staged-release load applies only
-// the excavation imbalance. (PLAXIS K0 procedure → interface initial stress;
+// the excavation imbalance. (K0 procedure → interface initial stress;
 // interface-formulation.md §6.) Call AFTER build_embedded_wall, BEFORE the solve.
 inline void seed_interface_k0(WallBuild& w, const mesh::Mesh& mesh, const K0Options& opt) {
     const auto ncp = iface::nc_points();
@@ -113,8 +113,8 @@ inline void seed_interface_k0(WallBuild& w, const mesh::Mesh& mesh, const K0Opti
 // Wall (plate elements) internal-force envelope: gathers each plate element's 9-DOF vector
 // from the global solution `disp` (translations=trans_dof, rotations=rot_dof global
 // indices), computes N,Q,M at a few ξ (plate::forces, EI·κ). Returns: max |M| (bending
-// moment, kN·m/m), max |Q|, max |N|. For wall deflection/moment verification (PLAXIS sheet-
-// pile benchmark). `disp` = NewtonResult.displacement (total_dofs).
+// moment, kN·m/m), max |Q|, max |N|. For wall deflection/moment verification (sheet-pile
+// wall benchmark). `disp` = NewtonResult.displacement (total_dofs).
 struct WallForceEnvelope { double max_abs_M = 0.0, max_abs_Q = 0.0, max_abs_N = 0.0; };
 inline WallForceEnvelope wall_force_envelope(const WallBuild& w, const mesh::Mesh& mesh,
                                              const Eigen::VectorXd& disp) {
@@ -140,7 +140,7 @@ inline WallForceEnvelope wall_force_envelope(const WallBuild& w, const mesh::Mes
 }
 
 // ===========================================================================================
-// tri15 (5-node structural) WALL — counterpart of the PLAXIS 15-node soil + 5-node
+// tri15 (5-node structural) WALL — the 15-node soil element paired with the 5-node
 // plate/interface. Same architecture as build_embedded_wall; the wall-line nodes are
 // quarter-spaced (tri15), the plate5/interface5 elements are consecutive groups of 5
 // [4e..4e+4] (one macro-element height).

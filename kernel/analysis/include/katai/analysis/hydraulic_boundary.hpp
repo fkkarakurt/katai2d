@@ -108,7 +108,7 @@ inline std::vector<char> flow_drained_nodes(const std::vector<FlowEdge>& edges, 
     return drained;
 }
 
-// Prescribed-head boundary for a transient flow phase (PLAXIS GroundwaterFlow head BC): a boundary
+// Prescribed-head boundary for a transient flow phase (a groundwater-flow head BC): a boundary
 // node on a Head flow edge is prescribed to that edge's head [m elevation]; the nearest Head edge
 // wins at corners. Fills `is_presc` (node) + `head_val` (node).
 inline void flow_head_nodes(const std::vector<FlowEdge>& edges, const katai::mesh::Mesh& mesh,

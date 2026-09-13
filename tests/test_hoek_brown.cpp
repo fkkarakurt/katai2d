@@ -1,23 +1,25 @@
-// The Hoek-Brown criterion at the material point (PLAXIS 2D Material Models Manual §4; the 2002
-// edition of Hoek, Carranza-Torres & Corkum). This tree had no rock model at all: rock had to be
+// The Hoek-Brown criterion at the material point (the 2002 edition of Hoek, Carranza-Torres &
+// Corkum). This tree had no rock model at all: rock had to be
 // entered as a Mohr-Coulomb fit, which is a straight line drawn through a curve -- it can be made
 // to match over a narrow band of confining stress and is wrong outside it in both directions.
 //
-// FOUR CLOSED FORMS AND ONE IDENTITY. The first three come from the manual's own equations and
-// check that the criterion was transcribed rather than remembered; the fourth checks the return
+// FOUR CLOSED FORMS AND ONE IDENTITY. The first three come from the published criterion's own
+// equations and check that it was transcribed rather than remembered; the fourth checks the return
 // mapping lands ON the surface; and the fifth is the one that would catch the error nothing else
 // would -- the ordering.
 //
-//  (1) the uni-axial compressive strength of the rock mass, sigma_c = -|sigma_ci| s^a (Eq 4-5):
+//  (1) the uni-axial compressive strength of the rock mass, sigma_c = -|sigma_ci| s^a:
 //      the state (s1 = 0, s3 = sigma_c) must be exactly on the surface;
-//  (2) the tensile strength, sigma_t = s |sigma_ci| / m_b (Eq 4-6): the isotropic tension point
+//  (2) the tensile strength, sigma_t = s |sigma_ci| / m_b: the isotropic tension point
 //      must be exactly on it too -- it is the apex, where the criterion's own bracket closes;
-//  (3) the envelope itself (Eq 4-1) at several confining stresses;
+//  (3) the envelope itself, sigma'_1 = sigma'_3 + sigma_ci (m_b sigma'_3/sigma_ci + s)^a, at
+//      several confining stresses;
 //  (4) a return from an inadmissible trial must satisfy f = 0 to round-off;
-//  (5) THE ORDERING. The manual writes the criterion with sigma'_1 <= sigma'_2 <= sigma'_3, its
-//      sigma'_1 being the most COMPRESSIVE; this solver sorts the other way. A model that got
-//      that backwards would run, converge, and be wrong in the direction that matters -- so the
-//      envelope is checked against the manual's own numbers rather than against itself.
+//  (5) THE ORDERING. The criterion is written with sigma'_1 the most COMPRESSIVE principal stress
+//      and sigma'_3 the least, in a compression-positive convention; this solver sorts the other
+//      way. A model that got that backwards would run, converge, and be wrong in the direction
+//      that matters -- so the envelope is checked against the published form rather than
+//      against itself.
 //
 // AND THE IDENTITY. With m_b -> 0 and s = 1 the bracket becomes constant and the criterion
 // degenerates to s3 - s1 + |sigma_ci| = 0, which is Tresca: a friction-free material of cohesion
@@ -28,10 +30,10 @@
 //
 // verify: KV-CST-014
 //   oracle:   closed_form
-//   source:   PLAXIS 2D Material Models Manual (2025.1) §4, the generalised Hoek-Brown criterion of Hoek, Carranza-Torres & Corkum (2002): yield Eq 4-1 and 4-8, the rock-mass constants m_b (Eq 4-2), s (Eq 4-3) and a (Eq 4-4), the rock-mass compressive strength Eq 4-5 and tensile strength Eq 4-6, the non-associated flow of Eq 4-10/4-12 and the mobilised dilatancy of Eq 4-13/4-14. The Tresca degeneration is checked against this tree's own verified Mohr-Coulomb return (mohr_coulomb.cpp, P1.2b)
-//   locator:  f = s3 - s1 + |sigma_ci| (m_b (-s1/|sigma_ci|) + s)^a with s1 >= s2 >= s3 tension-positive (the manual's sigma'_3 and sigma'_1 respectively); m_b = m_i exp((GSI-100)/(28-14D)); s = exp((GSI-100)/(9-3D)); a = 1/2 + (exp(-GSI/15) - exp(-20/3))/6; sigma_c = -|sigma_ci| s^a; sigma_t = s |sigma_ci| / m_b
-//   quantity: the yield function at the closed-form uni-axial and isotropic-tensile states [kPa]; the failure sigma_1 at four confining stresses against Eq 4-1 [kPa]; the yield function after a return from an inadmissible trial [kPa]; and the returned principal stresses of the Tresca degeneration against this tree's Mohr-Coulomb return [kPa]; and the tensile limit the criterion admits with and without the optional cut-off of sec 4.3.7 [kPa]
-//   expected: zero at the two closed-form states, the Eq 4-1 envelope at the four confining stresses, zero after every return, and the Mohr-Coulomb answer in the degeneration
+//   source:   Hoek, E., Carranza-Torres, C. & Corkum, B. (2002). Hoek-Brown failure criterion -- 2002 edition. Proc. NARMS-TAC Conference, Toronto, 267-273 -- the generalised criterion, the rock-mass constants m_b, s and a, and the rock-mass compressive and tensile strengths; KATAI 2D input contract (docs/k2d-format.md, sigci / mi / gsi / hbD / psi / sigpsi / tension_cutoff / tensile_strength) for the non-associated flow, the mobilised dilatancy and the optional tension cut-off. The Tresca degeneration is checked against this tree's own verified Mohr-Coulomb return (mohr_coulomb.cpp, P1.2b)
+//   locator:  f = s3 - s1 + |sigma_ci| (m_b (-s1/|sigma_ci|) + s)^a with s1 >= s2 >= s3 tension-positive (the criterion's sigma'_3 and sigma'_1 respectively); m_b = m_i exp((GSI-100)/(28-14D)); s = exp((GSI-100)/(9-3D)); a = 1/2 + (exp(-GSI/15) - exp(-20/3))/6; sigma_c = -|sigma_ci| s^a; sigma_t = s |sigma_ci| / m_b; mobilised dilatancy psi_mob = max(0, psi (sigma_psi + s1)/sigma_psi) in compression, raised linearly from psi at s1 = 0 to 90 degrees at s1 = sigma_t in tension; the optional tension cut-off replaces sigma_t by min(sigma_t, the entered tensile strength)
+//   quantity: the yield function at the closed-form uni-axial and isotropic-tensile states [kPa]; the failure sigma_1 at four confining stresses against the envelope [kPa]; the yield function after a return from an inadmissible trial [kPa]; and the returned principal stresses of the Tresca degeneration against this tree's Mohr-Coulomb return [kPa]; and the tensile limit the criterion admits with and without the optional tension cut-off [kPa]
+//   expected: zero at the two closed-form states, the published envelope at the four confining stresses, zero after every return, and the Mohr-Coulomb answer in the degeneration
 //   band:     1e-9 relative on the constants, the two strengths and the envelope -- they are the same arithmetic evaluated two ways, so anything larger would be a transcription error rather than a discretisation, and all of them came out at 0.000e+00. 1e-6 kPa absolute on the yield function after a return (nine trials, all on the surface and still ordered) and on the apex. For the Tresca degeneration the band is on the LIMIT rather than on a number: at m_b = 1e-6 the two returns differ by 1.803e-04 kPa and at m_b = 1e-10 by 1.803e-08, a factor of 1e4 for a factor of 1e4 -- the difference is the criterion linearising towards Tresca, not the corrector, and a floor there would have meant the opposite. The edge return is what made that possible: clamping the intermediate stress instead left 2.5e+01 kPa on a material of cohesion 50. The tension cut-off is checked on the ADMISSIBILITY of an isotropic tensile state at 0.99 and 1.01 times the cap rather than on the constant, because a cap stored and never read would pass the constant; the uncapped rock admits both, which is what says the cut-off is doing the binding
 #include <katai/materials/hoek_brown.hpp>
 #include <katai/materials/mohr_coulomb.hpp>
@@ -64,10 +66,10 @@ hb::Params rock() {
 }
 
 void test_constants_and_closed_forms() {
-    std::printf("-- (1) the rock-mass constants and the two strengths the manual gives in closed form --\n");
+    std::printf("-- (1) the rock-mass constants and the two strengths in closed form --\n");
     const hb::Params P = rock();
     const hb::Constants C = hb::constants_of(P);
-    // Eq 4-2/4-3/4-4, evaluated here independently of the header's own arithmetic.
+    // m_b, s and a, evaluated here independently of the header's own arithmetic.
     const double mb_ref = 10.0 * std::exp((50.0 - 100.0) / (28.0 - 14.0 * 0.5));
     const double s_ref = std::exp((50.0 - 100.0) / (9.0 - 3.0 * 0.5));
     const double a_ref = 0.5 + (std::exp(-50.0 / 15.0) - std::exp(-20.0 / 3.0)) / 6.0;
@@ -81,8 +83,8 @@ void test_constants_and_closed_forms() {
     const double sigt_ref = s_ref * 50000.0 / mb_ref;
     std::printf("   rock-mass sigma_c = %.4f kPa (ref %.4f),  sigma_t = %.6f kPa (ref %.6f)\n",
                 C.sigc, sigc_ref, C.sigt, sigt_ref);
-    check(std::fabs(C.sigc / sigc_ref - 1.0) < 1e-9, "sigma_c = -|sigma_ci| s^a  (Eq 4-5)");
-    check(std::fabs(C.sigt / sigt_ref - 1.0) < 1e-9, "sigma_t = s |sigma_ci| / m_b  (Eq 4-6)");
+    check(std::fabs(C.sigc / sigc_ref - 1.0) < 1e-9, "sigma_c = -|sigma_ci| s^a");
+    check(std::fabs(C.sigt / sigt_ref - 1.0) < 1e-9, "sigma_t = s |sigma_ci| / m_b");
 
     // The two states the closed forms name must lie exactly ON the surface.
     const double f_uni = hb::yield(0.0, C.sigc, P, C);
@@ -94,13 +96,13 @@ void test_constants_and_closed_forms() {
 }
 
 void test_envelope() {
-    std::printf("\n-- (2) the envelope itself, against Eq 4-1 at four confining stresses --\n");
+    std::printf("\n-- (2) the envelope itself, at four confining stresses --\n");
     const hb::Params P = rock();
     const hb::Constants C = hb::constants_of(P);
-    std::printf("   sigma3 [kPa]   sigma1 (Eq 4-1)      f there\n");
+    std::printf("   sigma3 [kPa]   sigma1 (envelope)    f there\n");
     int n = 0;
     for (double s3conf : {-500.0, -2000.0, -8000.0, -20000.0}) {
-        // The manual's Eq 4-1 with ITS ordering: sigma'_1 (most compressive) from sigma'_3 (least).
+        // The envelope with ITS ordering: sigma'_1 (most compressive) from sigma'_3 (least).
         // In this file's ordering the confining stress is s1 and the failure stress is s3.
         const double s1 = s3conf;
         const double bracket = C.mb * (-s1 / std::fabs(P.sigci)) + C.s;
@@ -205,7 +207,7 @@ void test_tresca_identity() {
 }
 
 void test_mobilised_dilatancy() {
-    std::printf("\n-- (5) the mobilised dilatancy follows Eq 4-13/4-14 --\n");
+    std::printf("\n-- (5) the mobilised dilatancy follows its linear decay law --\n");
     hb::Params P = rock();
     P.psi = 0.2; P.sig_psi = 4000.0;
     const hb::Constants C = hb::constants_of(P);
@@ -217,16 +219,16 @@ void test_mobilised_dilatancy() {
           "and it decreases linearly between the two");
     check(hb::psi_mobilised(-2.0 * P.sig_psi, P, C) == 0.0, "beyond it, it stays zero");
     check(hb::psi_mobilised(0.5 * C.sigt, P, C) > P.psi,
-          "in the tensile range it is raised, so plastic expansion stays possible (Eq 4-14)");
+          "in the tensile range it is raised, so plastic expansion stays possible");
 }
 
 }  // namespace
 
-// (6) The optional tension cut-off of sec 4.3.7: it caps the criterion's OWN sigma_t and can only
+// (6) The optional tension cut-off: it caps the criterion's OWN sigma_t and can only
 // lower it. Checked on the thing the cap is for -- the isotropic tensile state the criterion admits
 // -- rather than on the constant, because a cap that were stored and not read would pass the latter.
 void test_tension_cutoff() {
-    std::printf("\n-- (6) the optional tension cut-off caps sigma_t, downwards only (sec 4.3.7) --\n");
+    std::printf("\n-- (6) the optional tension cut-off caps sigma_t, downwards only --\n");
     const hb::Params P0 = rock();
     const double sigt0 = hb::constants_of(P0).sigt;
     std::printf("   the criterion's own sigma_t = %.4f kPa\n", sigt0);
@@ -268,7 +270,7 @@ int main() {
     test_mobilised_dilatancy();
     test_tension_cutoff();
     if (g_failures == 0) {
-        std::printf("\nOK: the criterion is the manual's, and its degeneration is this tree's own Tresca\n");
+        std::printf("\nOK: the published criterion; it degenerates to this tree's Tresca\n");
         return 0;
     }
     std::fprintf(stderr, "\n%d check(s) failed\n", g_failures);

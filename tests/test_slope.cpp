@@ -1,8 +1,8 @@
 // Slope stability by phi-c reduction (P1.7) -- the first sellable vertical.
 //
-// Rocscience / Slide verification #1 (after Griffiths & Lane): a homogeneous 1:2
-// slope on a foundation layer, gamma = 20.2, c = 3 kPa, phi = 19.6 deg, psi = 0.
-// Reference factor of safety: Bishop 0.988, Spencer/GLE 0.987, Phase2 T6 0.997.
+// Slope benchmark: the simple homogeneous slope of the Giam & Donald (1989) referee problems
+// (Monash University report 8/1989), a 1:2 slope on a foundation layer, c = 3 kPa, phi = 19.6 deg,
+// psi = 0; gamma = 20.2 here against the problem's 20.0. Referee factor of safety 1.00.
 // This foundation geometry has all corners obtuse/right; sharp (< 60 deg) corners
 // are now handled too (concentric-shell subsegment splitting in the mesher, see
 // test_delaunay::test_acute_corner_domain). We mesh with the unstructured quality
@@ -81,9 +81,9 @@ void test_slope() {
 
     const double fos =
         katai::core::factor_of_safety(mesh, dofs, gravity, base, solve, opt);
-    const double reference = 0.99;  // LEM 0.987-0.988, Phase2 T6 0.997
+    const double reference = 1.00;  // the referee factor of safety
     const double rel_err = std::fabs(fos - reference) / reference;
-    std::printf("  phi-c reduction: FoS = %.3f  (ref ~0.99, T6 0.997)  hata = %.1f%%\n",
+    std::printf("  phi-c reduction: FoS = %.3f  (ref 1.00)  err = %.1f%%\n",
                 fos, 100.0 * rel_err);
     check(rel_err < 0.05, "slope factor of safety within 5% of the benchmark");
 }

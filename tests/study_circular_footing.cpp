@@ -1,15 +1,16 @@
-// CAPSTONE: PLAXIS 2D Tutorial Lesson 1 "Settlement of a circular footing on sand", Case A
-// (rigid footing), reproduced from scratch and compared to the documented PLAXIS result.
+// CAPSTONE: settlement of a rigid circular footing on sand, built from scratch through the
+// engine API.
 //
 // Axisymmetric, Mohr-Coulomb (drained) sand: gamma=17/20, E'=13 MPa, nu=0.3, c'=1 kPa, phi'=30,
 // psi=0. 4 m sand over rigid base, model radius 5 m, footing radius 1 m. Water table at y=2.
 // K0 procedure (K0=1-sin30=0.5) for the initial stress; Phase 1 = a prescribed uniform vertical
-// settlement of 0.05 m over the footing (rigid footing). PLAXIS result: total footing reaction
-// Force-Y x 2*pi ~ 588 kN.
+// settlement of 0.05 m over the footing (rigid footing). Output: total footing reaction
+// Force-Y x 2*pi.
 //
 // Exercises: axisymmetry + Mohr-Coulomb plasticity + K0 initial stress (with water table) +
-// prescribed displacement. Reports ACCURACY (vs 588 kN) and PERFORMANCE (DOFs, iterations, time).
-// Build/run: cmake --build build/msvc-rwdi --target study_footing_plaxis && bin/study_footing_plaxis
+// prescribed displacement. Reports the total footing force and PERFORMANCE (DOFs, iterations,
+// time).
+// Build/run: cmake --build build/msvc-rwdi --target study_circular_footing && bin/study_circular_footing
 #include <katai/analysis/nonlinear_solver.hpp>
 #include <katai/fem/assembly/dof_map.hpp>
 #include <katai/fem/elements/axisymmetric.hpp>
@@ -63,10 +64,9 @@ int main() {
     constexpr double gamma_d = 17.0, gamma_sat = 20.0, gamma_w = 10.0;
     constexpr double E = 13.0e3, nu = 0.3, c = 1.0, gw = 0.0; (void)gw;
     const double pi = std::acos(-1.0);
-    const double phi = 30.0 * pi / 180.0, psi = 0.0;     // PLAXIS: psi=0 (non-associated)
+    const double phi = 30.0 * pi / 180.0, psi = 0.0;     // psi=0 (non-associated)
     const double K0 = 1.0 - std::sin(phi);                // 0.5
     constexpr double settle = 0.05;                       // prescribed footing settlement [m]
-    const double plaxis_total = 588.0;                    // documented total reaction [kN]
 
     // Axisymmetric mesh: x = radius. r=1 (footing), y=2 (water), y=4 (top) land on node lines.
     const RectangularDomain domain{0.0, 0.0, R_model, H, 0};
@@ -128,11 +128,10 @@ int main() {
         if (mesh.x[n] <= R_foot + 1e-9) Ry += (Ffin(2 * n + 1) - F0_full(2 * n + 1));
     const double total = std::fabs(Ry) * 2.0 * pi;
 
-    std::printf("\n=== PLAXIS Tutorial Lesson 1: circular footing on sand (Case A) ===\n");
+    std::printf("\n=== Rigid circular footing on sand (axisymmetric, 0.05 m settlement) ===\n");
     std::printf("  mesh: %d elements, %d nodes, %d DOFs (axisym tri6); footing nodes=%d\n",
                 mesh.element_count, mesh.node_count, dofs.equation_count(), n_foot);
-    std::printf("  ACCURACY: KATAI total footing force = %.1f kN   PLAXIS = %.1f kN   (%.1f%%)\n",
-                total, plaxis_total, 100.0 * (total - plaxis_total) / plaxis_total);
+    std::printf("  RESULT: KATAI total footing force = %.1f kN\n", total);
     std::printf("  PERFORMANCE: converged=%d  load_factor=%.3f  total iters=%d  solve time=%.2f s\n",
                 (int)r.converged, r.load_factor, r.total_iterations, secs);
     return 0;

@@ -1,7 +1,7 @@
 // Staged construction -- fill (element activation) + multi-phase chaining (P2.2).
 // A confined (oedometer) column is built in two lifts; each phase carries the previous
 // phase's committed stress as its prestress (initial_state) and resets displacement
-// (incremental per phase) -- exactly PLAXIS staged construction.
+// (incremental per phase) -- exactly staged construction.
 //
 //   Phase 1: activate lift 1 [0, H/2], zero initial stress, self-weight.
 //            -> sigma'_v = -gamma(H/2 - y),  top(y=H/2) settle = -gamma(H/2)^2/(2M')

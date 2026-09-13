@@ -104,7 +104,7 @@ NB_MODULE(_core, m) {
         .value("Harmonic", api::SeismicWave::Harmonic)
         .value("Ricker", api::SeismicWave::Ricker)
         .value("Record", api::SeismicWave::Record);
-    // How a Consolidation phase ends (PLAXIS Ref sec. 7.5). DegreeOfConsolidation is a PRESSURE
+    // How a Consolidation phase ends (`cstop`). DegreeOfConsolidation is a PRESSURE
     // ratio -- max excess pore pressure now over the maximum the stage generated -- not the
     // settlement ratio the name suggests; the two are ~21% apart in time (KV-CON-003).
     nb::enum_<api::ConsolStop>(m, "ConsolStop", nb::is_arithmetic())
@@ -151,7 +151,7 @@ NB_MODULE(_core, m) {
         .def_rw("y_ref", &api::Material::y_ref)
         .def_rw("tension_cutoff", &api::Material::tension_cutoff)
         .def_rw("dilatancy_cutoff", &api::Material::dilatancy_cutoff,
-                "stop dilatancy at the critical void ratio e_max (PLAXIS MMM Eq. 5.16b)")
+                "stop dilatancy at the critical void ratio e_max (psi_m = 0 once e >= e_max)")
         .def_rw("e_max", &api::Material::e_max, "critical (maximum) void ratio")
         .def_rw("tensile_strength", &api::Material::tensile_strength)
         .def_rw("E50ref", &api::Material::E50ref)
@@ -183,9 +183,10 @@ NB_MODULE(_core, m) {
         .def_rw("ky", &api::Material::ky, "permeability y [m/day]")
         .def_rw("und_mode", &api::Material::und_mode,
                 "undrained stiffness definition: 0 = nu_u entered, 1 = Skempton's B "
-                "(PLAXIS MMM section 2.4); read for Undrained (A)/(B) only")
+                "(alpha_Biot = 1); read for Undrained (A)/(B) only")
         .def_rw("nu_u", &api::Material::nu_u,
-                "equivalent undrained Poisson ratio (und_mode = 0; PLAXIS default 0.495)")
+                "equivalent undrained Poisson ratio (und_mode = 0; default 0.495, nearly "
+                "incompressible)")
         .def_rw("skempton_B", &api::Material::skempton_B,
                 "Skempton's B (und_mode = 1): the share of a mean stress change carried "
                 "by the pore water")
@@ -276,11 +277,11 @@ NB_MODULE(_core, m) {
         .def_rw("iface_material", &api::StructElement::iface_material)
         .def_rw("conn", &api::StructElement::conn,
                 "embedded beam only: connection point of the pile top -- 0 hinged (its "
-                "translations are the soil's there; PLAXIS's default), 1 free (coupled through "
-                "the skin springs only). PLAXIS Ref sec 5.6.3")
+                "translations are the soil's there; the default), 1 free (coupled through "
+                "the skin springs only)")
         .def_rw("flow_barrier", &api::StructElement::flow_barrier,
                 "cross permeability in flow: 0 fully permeable, 1 impermeable, "
-                "2 semi-permeable (PLAXIS Ref Table 5-2)")
+                "2 semi-permeable (passes q = dh / R, R = hydraulic_resistance)")
         .def_rw("hydraulic_resistance", &api::StructElement::hydraulic_resistance,
                 "d/k of a semi-permeable barrier [day]")
         .def_rw("coarseness", &api::StructElement::coarseness);
@@ -449,13 +450,13 @@ NB_MODULE(_core, m) {
         .def_rw("wx", &api::Phase::wx, "phase phreatic polyline, x [m]")
         .def_rw("wy", &api::Phase::wy, "phase phreatic polyline, y [m]")
         .def_rw("sum_mstage", &api::Phase::sum_mstage,
-                "fraction of this phase's staged change to apply (PLAXIS Sum-Mstage); "
+                "fraction of this phase's staged change to apply (`mstage` in the file); "
                 "1 = the whole stage")
         .def_rw("ignore_undrained", &api::Phase::ignore_undrained,
                 "treat Undrained (A)/(B) materials as drained in this phase")
         .def_rw("reset_small_strain", &api::Phase::reset_small_strain,
                 "clear the HS-small strain history at the start of this phase, so the soil "
-                "meets it at G0 (PLAXIS 'Reset small strain'); stress, hardening and the "
+                "meets it at G0; stress, hardening and the "
                 "preconsolidation pressure are carried over untouched")
         // Numerical controls; 0 = let the program choose (the material-class default).
         .def_rw("tolerance", &api::Phase::tolerance,
@@ -647,7 +648,8 @@ NB_MODULE(_core, m) {
                 "1 while the response is elastic, towards 0 as a mechanism forms. The force "
                 "criterion is normalised by it, so the check tightens as the soil plastifies")
         .def_ro("force_error", &katai::core::NewtonResult::Convergence::force_error,
-                "Eq. 9-1: the out-of-balance force over ||f_int|| + CSP*||f_const||")
+                "the CSP-normalised global error: the out-of-balance force over "
+                "||f_int|| + CSP*||f_const||")
         .def_ro("global_error", &katai::core::NewtonResult::Convergence::global_error,
                 "the ratio the DEFAULT gate uses: the out-of-balance force over a FIXED scale, "
                 "max(||f_ext||, ||f_const||, 1). Reported next to force_error because they are "
@@ -675,14 +677,14 @@ NB_MODULE(_core, m) {
                 &katai::core::NewtonResult::Convergence::worst_nl_elastic_error)
         .def_ro("iface_points", &katai::core::NewtonResult::Convergence::iface_points,
                 "slipping interface points, including an embedded beam's skin coupling springs "
-                "-- the source counts them together and so does this")
+                "-- counted together on purpose")
         .def_ro("iface_inaccurate", &katai::core::NewtonResult::Convergence::iface_inaccurate)
         .def_ro("worst_iface_error", &katai::core::NewtonResult::Convergence::worst_iface_error)
         .def_ro("feet", &katai::core::NewtonResult::Convergence::feet,
                 "embedded-beam feet in the model; 0 = the foot criterion does not apply")
         .def_ro("foot_force_error", &katai::core::NewtonResult::Convergence::foot_force_error,
                 "out-of-balance at the pile toes, one ratio over all of them; tolerated at FIVE "
-                "times `tolerated`, which is the source's factor")
+                "times `tolerated`, a looser bar kept on purpose")
         .def_ro("saturated_points", &katai::core::NewtonResult::Convergence::saturated_points,
                 "most stress points, in any one committed increment, whose constitutive "
                 "integration ran out of substeps and therefore did NOT meet its "
@@ -777,7 +779,7 @@ NB_MODULE(_core, m) {
         // hydrostatic pressure the phase was set up in, which is a different quantity.
         .def_prop_ro("excess_pore", [](const api::SolveResult& r) { return r.excess_pore; })
         // What the phase was asked to end on, and what it reached. `consol_degree_reached` is the
-        // PRESSURE ratio 1 - |p|max(end) / consol_pore_reference (PLAXIS Ref sec. 7.5), so it is
+        // PRESSURE ratio 1 - |p|max(end) / consol_pore_reference, so it is
         // NOT the settlement ratio; on the verified column the two differ by 21% in time.
         .def_prop_ro("consol_stop", [](const api::SolveResult& r) {
             // The result carries the ENGINE's enum and the project carries the SCHEMA's; the two

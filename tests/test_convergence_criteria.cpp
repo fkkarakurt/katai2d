@@ -1,4 +1,4 @@
-// The convergence criteria family (Scientific Manual §9.1): what this tree measures at the
+// The convergence criteria family (NewtonResult::Convergence): what this tree measures at the
 // accepted iterate, and what it would cost to be bound by it.
 //
 // Until this landed the solver checked ONE thing -- a global force residual against a fixed
@@ -108,10 +108,10 @@ Run solve(m::Project pr, double tol, bool enforce_local) {
 // ---------------------------------------------------------------------------------------
 // verify: KV-NUM-013
 //   oracle:   independent_path
-//   source:   PLAXIS 2D Scientific Manual 2025.1 sec 9.1 -- the deformation convergence criteria as a FAMILY: Eq. 9-1 the CSP-normalised global force error, Eq. 9-3/9-4 the moment residual, Eq. 9-5 the local error at a plastic soil stress point and Eq. 9-7 at a non-linear elastic one, with the equilibrium/constitutive stress pair of Fig. 9-1 and Eq. 9-6; and PLAXIS 2D Reference Manual 2025.1 sec 7.13.8, Eq. 7-21/7-22 for the same global check and for CSP itself. THE TWO MANUALS PRINT CSP AS RECIPROCALS OF EACH OTHER: Scientific Eq. 9-2 gives elastic energy over total, Reference Eq. 7-22 gives total over elastic. Only the Reference orientation matches the behaviour BOTH manuals state in words -- "when the solution is fully elastic the Stiffness is equal to unity, whereas at failure the Stiffness approaches zero" -- and the uses built on it there (arc-length engages below CSP 0.5, collapse is reported below 0.015). The inverted form is >= 1 and GROWS without bound as a mechanism forms, which would make Eq. 9-1 loosen towards failure instead of tightening. Implemented from Eq. 7-22, deliberately, and this case is what holds it there
-//   locator:  three fixtures on one strip-footing geometry: a LINEAR ELASTIC control that must report nothing at all, the same geometry in Mohr-Coulomb walked from a nearly elastic load to a full mechanism, and the checked-in tests/corpus/kv-cst-002-hs-oedometer.k2d solved three ways -- at the shipped tolerance, at the shipped tolerance with the local criteria binding, and at a tolerance four decades tighter with only the global one
+//   source:   KATAI 2D input contract (docs/k2d-format.md, tol) for the tolerated error every criterion is measured against; the deformation convergence criteria as a FAMILY are stated in full in the locator (and in kernel/analysis/include/katai/analysis/nonlinear_solver.hpp, NewtonResult::Convergence, and internal_forces.hpp, LocalErrorProbe). THE SAME STIFFNESS PARAMETER CAN BE WRITTEN AS EITHER OF TWO RECIPROCALS: elastic work over total, or total over elastic. Only total over elastic has the behaviour the parameter exists to show -- exactly unity while the solution is fully elastic, approaching zero at failure -- and supports the uses built on it (a mechanism is suspected below CSP 0.5, collapse below 0.015). The inverted form is >= 1 and GROWS without bound as a mechanism forms, which would make the stiffness-weighted force error loosen towards failure instead of tightening. Implemented as total over elastic, deliberately, and this case is what holds it there
+//   locator:  (C1) CSP = work of the increment against the returned stress increment / work of the same strain increment against D^e, total over elastic; (C2) global force error ||r|| / (||f_int|| + CSP ||f_const||); (C3) moment error, the largest |residual| on a rotational equation over the sum of absolute nodal moment contributions; (C4) local error at a plastic soil stress point, |sigma_eq,j - sigma_c,j| over max(tau_max, c, 1 kPa), and (C5) the same at an elastic point whose stiffness depends on stress, with sigma_c,j the stress the material law returns and sigma_eq,j = sigma_c,j-1 + D^e delta-eps_j; (C6) interface local error, the traction difference over the point's own shear capacity; (C7) foot force error, sum |F_foot,eq - F_foot,c| over max(sum |F_foot,c|, 1% of sum |F_foot,max|, 1 kN), tolerated at 5x the tolerated error. Three fixtures on one strip-footing geometry: a LINEAR ELASTIC control that must report nothing at all, the same geometry in Mohr-Coulomb walked from a nearly elastic load to a full mechanism, and the checked-in tests/corpus/kv-cst-002-hs-oedometer.k2d solved three ways -- at the shipped tolerance, at the shipped tolerance with the local criteria binding, and at a tolerance four decades tighter with only the global one
 //   quantity: CSP, the global force error, the local error at each soil stress point and the counts of inaccurate points, and the settlement each stopping rule stops at [-; -; m]
-//   expected: the elastic control reports CSP equal to 1 with no plastic and no non-linear elastic points and every criterion met; CSP falls monotonically as the footing load rises and passes below the 0.015 the source reports collapse at; a case exists that meets the global criterion by three or more orders of magnitude while failing a local one; and binding the local criteria at the shipped tolerance lands on the settlement that four decades of extra global tolerance produce, for fewer iterations than that tolerance costs
+//   expected: the elastic control reports CSP equal to 1 with no plastic and no non-linear elastic points and every criterion met; CSP falls monotonically as the footing load rises and passes below the 0.015 collapse threshold; a case exists that meets the global criterion by three or more orders of magnitude while failing a local one; and binding the local criteria at the shipped tolerance lands on the settlement that four decades of extra global tolerance produce, for fewer iterations than that tolerance costs
 //   band:     CSP within 1e-12 of 1 on the elastic control (the two energy sums reach the same number by different arithmetic) and strictly below 1 wherever a plastic point exists; the local/global separation asserted at 1000x, measured 63000x; the settlements agreed to 0.05%, measured 0.0048%, against a global-only run at the same tolerance that is asserted to differ by more than 0.05% and measures 0.179%
 // The separation is the point. On the footing at q = 300 kPa the global force error falls from
 // 1.3e-2 to 3.7e-7 between the first iterate and the last -- five orders of magnitude -- while
@@ -141,19 +141,19 @@ void test_convergence_family() {
           "elastic control: no local error of either kind");
     check(le.c.all_ok(), "elastic control: every criterion satisfied");
 
-    // (2) CSP must FALL as the body plastifies, and keep falling to the collapse value the
-    // source names. This is the guard on the manual conflict: implemented from the Scientific
-    // Manual's printed Eq. 9-2 instead, every one of these would be >= 1 and the sequence would
-    // RISE -- so this check does not merely confirm a number, it convicts the other reading.
+    // (2) CSP must FALL as the body plastifies, and keep falling to the collapse threshold. This
+    // is the guard on the orientation of the ratio: implemented the other way up (elastic work
+    // over total) instead, every one of these would be >= 1 and the sequence would RISE -- so
+    // this check does not merely confirm a number, it convicts the other reading.
     const Run f100 = solve(footing(100.0, m::SoilModel::MohrCoulomb), 0.0, false);
     const Run f300 = solve(footing(300.0, m::SoilModel::MohrCoulomb), 0.0, false);
     const Run f900 = solve(footing(900.0, m::SoilModel::MohrCoulomb), 0.0, false);
     std::printf("     CSP: q=100 %.5f  q=300 %.5f  q=900 %.5f (lf %.3f)\n",
                 f100.c.csp, f300.c.csp, f900.c.csp, f900.load_factor);
     check(f100.c.csp < 1.0 && f300.c.csp < f100.c.csp && f900.c.csp < f300.c.csp,
-          "CSP falls monotonically as the footing load rises (never rises: Eq. 7-22, not 9-2)");
+          "CSP falls monotonically as the footing load rises (never rises: total over elastic)");
     check(f900.c.csp < 0.015,
-          "CSP below 0.015 at a load the model cannot carry (the source's collapse value)");
+          "CSP below 0.015 at a load the model cannot carry (the collapse threshold)");
     check(f900.load_factor < 1.0, "and that load is indeed not carried");
 
     // (3) The separation. The global criterion is met by orders of magnitude while a local one
@@ -180,8 +180,8 @@ void test_local_criteria_cost() {
         check(false, "load kv-cst-002-hs-oedometer.k2d: " + err);
         return;
     }
-    // 1e-2 is what this tree ships for the Hardening Soil family, from the same source the
-    // criteria come from. 1e-6 is four decades tighter and is what the record uses when it wants
+    // 1e-2 is what this tree ships for the Hardening Soil family, a tolerated error of 1%.
+    // 1e-6 is four decades tighter and is what the record uses when it wants
     // the answer rather than a run.
     const Run loose = solve(pr, 1e-2, false);
     const Run bound = solve(pr, 1e-2, true);
@@ -213,14 +213,14 @@ void test_local_criteria_cost() {
           "the correction is paid for in iterations (it is not free)");
 }
 
-// The STRUCTURAL half of the family (Eq. 9-8, Eq. 9-9), on the two corpus cases that have the
-// elements to exercise it. Both already publish a number in the verification matrix, so what the
-// new criteria say about them can be read against a known answer.
+// The STRUCTURAL half of the family (interface and foot errors), on the two corpus cases that
+// have the elements to exercise it. Both already publish a number in the verification matrix, so
+// what the new criteria say about them can be read against a known answer.
 void test_structural_criteria() {
     m::Project block, pile;
     std::string err;
     const std::string dir = std::string(KATAI_CORPUS_DIR) + "/";
-    if (!m::load_project(dir + "kv-str-002-plaxis-sliding-block.k2d", block, &err, nullptr) ||
+    if (!m::load_project(dir + "kv-str-002-sliding-block.k2d", block, &err, nullptr) ||
         !m::load_project(dir + "kv-str-004-axial-pile-capacity.k2d", pile, &err, nullptr)) {
         check(false, "load the interface and pile corpus files: " + err);
         return;
@@ -228,7 +228,7 @@ void test_structural_criteria() {
 
     // The sliding block is the interface case: an elastic block pushed until the joint under it
     // slips. Nothing in the soil yields, so the ONLY local criterion with anything to say is the
-    // interface one -- which makes it the clean test that Eq. 9-8 is wired at all.
+    // interface one -- which makes it the clean test that the interface error is wired at all.
     const Run b = solve(block, 0.0, false);
     check(b.ok, "sliding block solves");
     std::printf("     sliding block: %d/%d interface points inaccurate, worst %.2e (force %.3e)\n",
@@ -243,9 +243,10 @@ void test_structural_criteria() {
           "binding the local criteria settles the interface points");
     check(b2.iterations > b.iterations, "...and that costs iterations");
 
-    // The pile is the foot case. Eq. 9-9 is a ratio over every foot in the model rather than a
-    // count, and it is tolerated at five times the tolerated error -- the source's factor, which
-    // this checks is actually applied rather than quietly rounded to the same bar as the rest.
+    // The pile is the foot case. The foot force error is a ratio over every foot in the model
+    // rather than a count, and it is tolerated at five times the tolerated error -- a looser bar
+    // kept on purpose, which this checks is actually applied rather than quietly rounded to the
+    // same bar as the rest.
     const Run p = solve(pile, 0.0, false);
     check(p.ok, "axial pile solves");
     std::printf("     axial pile: foot error %.2e of %.2e tolerated; skin+interface %d/%d\n",
@@ -253,9 +254,9 @@ void test_structural_criteria() {
                 p.c.iface_inaccurate, p.c.iface_points);
     check(p.c.feet == 1, "the pile's foot is seen");
     check(p.c.iface_points > 0,
-          "the skin coupling springs are counted with the interface points, as the source does");
+          "the skin coupling springs are counted with the interface points, by design");
     check(p.c.foot_ok(), "the foot force is in balance on a run that reached full load");
-    // Two-sided: the allowance must be the source's five times, not one.
+    // Two-sided: the allowance must be five times, not one.
     katai::core::NewtonResult::Convergence probe = p.c;
     probe.foot_force_error = 3.0 * probe.tolerated;
     check(probe.foot_ok(), "a foot error at 3x the tolerated error is allowed (the 5x factor)");
@@ -263,7 +264,8 @@ void test_structural_criteria() {
     check(!probe.foot_ok(), "...and one at 7x is not");
 }
 
-// Eq. 9-7 -- the criterion for a NON-yielding point whose elastic stiffness depends on stress.
+// The non-linear elastic local error -- the criterion for a NON-yielding point whose elastic
+// stiffness depends on stress.
 // The record used to say it "has never been the binding count", and blamed case selection: the
 // Hardening Soil oedometer is plastic everywhere the moment it loads, and Mohr-Coulomb has no
 // stress-dependent modulus at all. Measured on the case that has nothing but such points -- an
@@ -277,9 +279,10 @@ void test_structural_criteria() {
 // would make the count non-zero. `hs_frozen_Eur` evaluates the unloading modulus at the
 // COMMITTED state and holds it for the whole increment (that is what makes the tangent
 // consistent and the line search safe). A point that does not yield therefore has a CONSTANT
-// elastic operator through the iteration -- and Eq. 9-6 builds the equilibrium stress as
+// elastic operator through the iteration -- and the equilibrium stress is built as
 // sigma_c,j-1 + D^e delta-eps, which is then exactly what the constitutive routine returns. The
-// two stresses of Fig. 9-1 coincide identically. Eq. 9-7 measures the difference between them,
+// equilibrium and constitutive stresses coincide identically. The criterion measures the
+// difference between them,
 // so in this tree it measures zero BY CONSTRUCTION, and a code that updated the modulus within
 // the iteration is where it would have something to say.
 //
@@ -307,24 +310,25 @@ void test_nonlinear_elastic_criterion() {
         worst_seen = std::max(worst_seen, r.c.worst_nl_elastic_error);
     }
     check(counted,
-          "an unloading HSsmall point IS a non-linear elastic point, and Eq. 9-7 counts it");
+          "an unloading HSsmall point IS a non-linear elastic point, and its criterion counts it");
     check(ok_everywhere, "and none of them is inaccurate");
     // Round-off, four decades below the tightest tolerance swept: this is the identity, not a
     // threshold. If the unloading modulus ever starts iterating, this is what fails first.
-    std::printf("     worst Eq. 9-7 error over 1e-2 .. 1e-6: %.2e\n", worst_seen);
+    std::printf("     worst non-linear elastic error over 1e-2 .. 1e-6: %.2e\n", worst_seen);
     check(worst_seen < 1e-10,
-          "Eq. 9-7 is identically zero while the elastic modulus is frozen per increment -- the "
-          "two stresses of Fig. 9-1 are built from the same constant operator");
+          "the non-linear elastic error is identically zero while the elastic modulus is frozen "
+          "per increment -- the equilibrium and constitutive stresses are built from the same "
+          "constant operator");
 }
 
-// Eq. 9-3's REFERENCE, and the floor it needed. Every other criterion in this family divides by
-// max(something the point carries, a floor): Eq. 9-5 by max(tau_max, c, 1 kPa), Eq. 9-9 by
-// max(|F_c|, 1% of |F_max|, 1 kN). The moment criterion had no floor, and nothing noticed while
-// it was measured-but-not-consulted. On the day it started gating, the first case in the suite
-// to meet it was a plate standing along the whole of a line that is pushed DOWN: every node of
-// the plate takes the same settlement, so it translates without curving, and its reference was
-// 1.11e-12 kNm/m. One round-off over another came to 2.06e-1 and refused the phase at load
-// factor zero.
+// The moment criterion's REFERENCE, and the floor it needed. Every other criterion in this family
+// divides by max(something the point carries, a floor): the plastic local error by
+// max(tau_max, c, 1 kPa), the foot force error by max(|F_c|, 1% of |F_max|, 1 kN). The moment
+// criterion had no floor, and nothing noticed while it was measured-but-not-consulted. On the day
+// it started gating, the first case in the suite to meet it was a plate standing along the whole
+// of a line that is pushed DOWN: every node of the plate takes the same settlement, so it
+// translates without curving, and its reference was 1.11e-12 kNm/m. One round-off over another
+// came to 2.06e-1 and refused the phase at load factor zero.
 //
 // Both ends are asserted here, because a floor that is never approached from either side is a
 // number nobody can check.

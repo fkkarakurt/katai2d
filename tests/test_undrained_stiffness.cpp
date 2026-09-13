@@ -1,24 +1,24 @@
 // The pore fluid's stiffness, per material.
 //
 // Undrained (A) and (B) work by adding a bulk stiffness for the water to the soil skeleton:
-// Kw/n. It is not a property of water -- PLAXIS says so plainly ("The bulk stiffness of water
-// Kw, calculated in this way, is a numerical value related to the soil stiffness") -- it is a
-// number derived from the material's own effective stiffness and from one choice the engineer
-// makes: how compressible the undrained soil is allowed to be. PLAXIS offers that choice two
-// ways, the equivalent undrained Poisson ratio entered directly or Skempton's B, and it is a
-// per-material choice because it describes a material.
+// Kw/n. It is not a property of water -- it is a numerical value related to the soil
+// stiffness, derived from the material's own effective stiffness and from one choice the engineer
+// makes: how compressible the undrained soil is allowed to be. KATAI offers that choice two
+// ways (`und_mode`), the equivalent undrained Poisson ratio entered directly or Skempton's B, and
+// it is a per-material choice because it describes a material.
 //
-// KATAI used the constant 0.495 for every undrained material in every project, which is PLAXIS's
-// DEFAULT presented as if it were the rule, and -- for the Hardening Soil family -- derived K'
-// from the E and nu boxes that model never reads. This case pins both halves of the repair.
+// KATAI used the constant 0.495 for every undrained material in every project -- a nearly
+// incompressible undrained Poisson's ratio, a convenient value presented as if it were the rule --
+// and, for the Hardening Soil family, derived K' from the E and nu boxes that model never reads.
+// This case pins both halves of the repair.
 //
 // verify: KV-CST-006
 //   oracle:   closed_form
-//   source:   PLAXIS 2D 2025.1 Material Models Manual section 2.4 (Undrained effective stress analysis), read from the manual: Eq. 2-50 Kw/n = 3(nu_u - nu')/((1 - 2 nu_u)(1 + nu')) K' = ((0.495 - nu')/(1 + nu')) 300 K' >= 30 K' for alpha_Biot = 1; Eq. 2-54 Ku = 2G(1 + nu_u)/(3(1 - 2 nu_u)); Eq. 2-55 nu_u = (3 nu' + alpha B (1 - 2 nu'))/(3 - alpha B (1 - 2 nu')); Eq. 2-57 B = alpha/(alpha + n(K'/Kw + alpha - 1)), which at alpha = 1 is B = (Kw/n)/(K' + Kw/n). With the 1D confined closed form u = -q H / M_u, M_u = M' + Kw/n (docs/references/effective-stress-formulation.md)
-//   locator:  a weightless laterally confined two-layer column loaded undrained (A) through a full-width surcharge, the lower layer given nu_u = 0.497 directly and the upper one Skempton's B = 0.90 -- two materials that could not have differed at all before, since every undrained material was solved at nu_u = 0.495
+//   source:   Skempton, A.W. (1954). The pore-pressure coefficients A and B. Geotechnique 4(4), 143-147, for B; Biot, M.A. (1941). General theory of three-dimensional consolidation. J. Appl. Phys. 12, 155-164, for the Biot coefficient alpha; the undrained relations of isotropic linear elasticity as recorded in docs/references/effective-stress-formulation.md; KATAI 2D input contract (docs/k2d-format.md, und_mode / nu_u / skempton_B)
+//   locator:  (R1) Kw/n = 3(nu_u - nu')/((1 - 2 nu_u)(1 + nu')) K', which at nu_u = 0.495 is ((0.495 - nu')/(1 + nu')) 300 K' >= 30 K' for nu' <= 0.35 (alpha_Biot = 1); (R2) Ku = K' + Kw/n = 2G(1 + nu_u)/(3(1 - 2 nu_u)); (R3) nu_u = (3 nu' + alpha B (1 - 2 nu'))/(3 - alpha B (1 - 2 nu')); (R4) B = alpha/(alpha + n(K'/Kw + alpha - 1)), which at alpha = 1 is B = (Kw/n)/(K' + Kw/n); with the 1D confined closed form u = -q H / M_u, M_u = M' + Kw/n -- measured on a weightless laterally confined two-layer column loaded undrained (A) through a full-width surcharge, the lower layer given nu_u = 0.497 directly and the upper one Skempton's B = 0.90 -- two materials that could not have differed at all before, since every undrained material was solved at nu_u = 0.495
 //   quantity: settlement of the column top and of the layer interface, and the effective vertical stress carried by each layer [m; kPa]
-//   expected: u(interface) = -q H1 / M_u1 and u(top) = -q (H1/M_u1 + H2/M_u2), each M_u,i built from that layer's OWN Kw/n; sigma'_yy = -M' q / M_u per layer; the manual's three equations agree with each other (the Kw/n the engine derives through nu_u equals the one Eq. 2-57 gives from B alone); and the interface settlement is unchanged when only the UPPER layer's B is changed, since in a column the layer below cannot know what was done above it
-//   band:     2% on both settlements and 3% on the effective stresses, as asserted below (measured +0.00% on all four); 1e-14 relative on the manual's equation ring; 1e-12 relative on the interface under a changed upper layer (measured 2.1e-14, against a 40% change at the surface -- not bit-identity, because the two runs solve different global systems)
+//   expected: u(interface) = -q H1 / M_u1 and u(top) = -q (H1/M_u1 + H2/M_u2), each M_u,i built from that layer's OWN Kw/n; sigma'_yy = -M' q / M_u per layer; the relations R1-R4 agree with each other (the Kw/n the engine derives through nu_u equals the one R4 gives from B alone); and the interface settlement is unchanged when only the UPPER layer's B is changed, since in a column the layer below cannot know what was done above it
+//   band:     2% on both settlements and 3% on the effective stresses, as asserted below (measured +0.00% on all four); 1e-14 relative on the R1-R4 equation ring; 1e-12 relative on the interface under a changed upper layer (measured 2.1e-14, against a 40% change at the surface -- not bit-identity, because the two runs solve different global systems)
 //
 // The second half -- which K' an advanced model's pore fluid is sized by -- is checked at the
 // registry rather than through a BVP, because the quantity IS a construction: what the catalogue
@@ -55,14 +55,16 @@ constexpr double kB2 = 0.90;                 // upper layer: Skempton's B entere
 
 double k_eff(double E, double nu) { return E / (3.0 * (1.0 - 2.0 * nu)); }
 double m_eff(double E, double nu) { return E * (1.0 - nu) / ((1.0 + nu) * (1.0 - 2.0 * nu)); }
-// MMM Eq. 2-50, written out here rather than called from the header: the comparison is meant to
-// be law against implementation, not implementation against itself.
+// R1, Kw/n = 3(nu_u - nu')/((1 - 2 nu_u)(1 + nu')) K', written out here rather than called from
+// the header: the comparison is meant to be law against implementation, not implementation
+// against itself.
 double kwn_from_nu_u(double nu_u, double E, double nu) {
     return 3.0 * (nu_u - nu) / ((1.0 - 2.0 * nu_u) * (1.0 + nu)) * k_eff(E, nu);
 }
-// MMM Eq. 2-57 at alpha_Biot = 1, solved for Kw/n: B = (Kw/n)/(K' + Kw/n)  =>  Kw/n = B K'/(1 - B).
-// This route never touches nu_u, so agreeing with the engine (which goes B -> nu_u -> Kw/n) is a
-// statement about the manual's own equations as much as about the code.
+// R4 (Skempton's B) at alpha_Biot = 1, solved for Kw/n: B = (Kw/n)/(K' + Kw/n)  =>
+// Kw/n = B K'/(1 - B). This route never touches nu_u, so agreeing with the engine (which goes
+// B -> nu_u -> Kw/n) is a statement about the consistency of the relations as much as about
+// the code.
 double kwn_from_skempton(double B, double E, double nu) {
     return B * k_eff(E, nu) / (1.0 - B);
 }
@@ -138,40 +140,40 @@ double stress_between(const katai::app::SolveResult& R, double ylo, double yhi) 
     return count ? sum / count : 0.0;
 }
 
-// ---------------------------------------------------------------- the manual's equation ring --
+// ------------------------------------------------------------ the undrained equation ring --
 void test_equation_ring() {
-    std::printf("== the three equations of MMM section 2.4 agree with each other ==\n");
+    std::printf("== the undrained relations R1-R4 agree with each other ==\n");
     const double nus[] = {0.0, 0.15, 0.2, 0.3, 0.35};
     const double Bs[] = {0.5, 0.8, 0.9, 0.95, 0.98, 0.999};
     double worst_ring = 0.0, worst_ku = 0.0, min_ratio = 1e300;
     for (double nu : nus) {
         for (double B : Bs) {
-            // B -> nu_u (Eq. 2-55) -> Kw/n (Eq. 2-50) -> B (Eq. 2-57): the ring must close.
+            // B -> nu_u (R3) -> Kw/n (R1) -> B (R4): the ring must close.
             const double nu_u = katai::core::undrained_poisson_from_skempton(B, nu);
             const double kwn = kwn_from_nu_u(nu_u, kE, nu);
             const double B_back = katai::core::skempton_from_kw_over_n(kwn, k_eff(kE, nu));
             worst_ring = std::fmax(worst_ring, std::fabs(B_back - B) / B);
-            // And Eq. 2-54: K' + Kw/n IS the undrained bulk modulus 2G(1 + nu_u)/(3(1 - 2 nu_u)).
+            // And R2: K' + Kw/n IS the undrained bulk modulus 2G(1 + nu_u)/(3(1 - 2 nu_u)).
             const double G = kE / (2.0 * (1.0 + nu));
             const double Ku = 2.0 * G * (1.0 + nu_u) / (3.0 * (1.0 - 2.0 * nu_u));
             worst_ku = std::fmax(worst_ku,
                                  std::fabs(k_eff(kE, nu) + kwn - Ku) / Ku);
         }
-        // The manual's printed numeric claim at its own default: Kw/n = ((0.495 - nu')/(1 + nu'))
-        // 300 K', "larger than 30 K', at least for nu' <= 0.35".
+        // R1's numeric form at nu_u = 0.495: Kw/n = ((0.495 - nu')/(1 + nu')) 300 K', which is
+        // larger than 30 K' for every nu' <= 0.35.
         const double kwn_default = kwn_from_nu_u(0.495, kE, nu);
         const double printed = (0.495 - nu) / (1.0 + nu) * 300.0 * k_eff(kE, nu);
         check(std::fabs(kwn_default - printed) < 1e-9 * printed,
-              "Eq. 2-50's two printed forms agree at nu' = " + std::to_string(nu));
+              "R1's general and nu_u = 0.495 forms agree at nu' = " + std::to_string(nu));
         min_ratio = std::fmin(min_ratio, kwn_default / k_eff(kE, nu));
     }
     std::printf("  ring B -> nu_u -> Kw/n -> B closes to %.2e relative\n", worst_ring);
-    std::printf("  K' + Kw/n = Ku (Eq. 2-54) to %.2e relative\n", worst_ku);
-    std::printf("  smallest Kw/n over nu' in [0, 0.35] at nu_u = 0.495: %.1f K' (manual: >= 30 K')\n",
+    std::printf("  K' + Kw/n = Ku (R2) to %.2e relative\n", worst_ku);
+    std::printf("  smallest Kw/n over nu' in [0, 0.35] at nu_u = 0.495: %.1f K' (>= 30 K')\n",
                 min_ratio);
-    check(worst_ring < 1e-14, "Eq. 2-55, 2-50 and 2-57 are mutually consistent");
-    check(worst_ku < 1e-14, "Eq. 2-50 reproduces the undrained bulk modulus of Eq. 2-54");
-    check(min_ratio >= 30.0, "Kw/n >= 30 K' for nu' <= 0.35, as the manual states");
+    check(worst_ring < 1e-14, "R3, R1 and R4 are mutually consistent");
+    check(worst_ku < 1e-14, "R1 reproduces the undrained bulk modulus of R2");
+    check(min_ratio >= 30.0, "Kw/n >= 30 K' for nu' <= 0.35, as the closed form requires");
 }
 
 // ------------------------------------------------------- which K' an advanced model is sized by --
@@ -236,8 +238,8 @@ int main() {
     const auto& R = res.back();
 
     // The closed forms, each layer with its own pore fluid. The upper layer's Kw/n is computed
-    // here from B alone (Eq. 2-57), so this compares the engine's nu_u route against the
-    // manual's other equation rather than against itself.
+    // here from B alone (R4), so this compares the engine's nu_u route against the
+    // other relation rather than against itself.
     const double Mp = m_eff(kE, kNu);
     const double kwn1 = kwn_from_nu_u(kNuU1, kE, kNu);
     const double kwn2 = kwn_from_skempton(kB2, kE, kNu);

@@ -23,17 +23,17 @@ katai_add_test(test_mesh katai::mesh katai::fem)  # structured tri6 mesh (P0.4+P
 katai_add_test(test_predicates katai::mesh)        # robust geometric predicates (P1.4a)
 katai_add_test(test_delaunay katai::mesh)          # incremental Delaunay (P1.4b)
 katai_add_test(test_mohr_coulomb katai::materials)      # MC constitutive kernels (P1.2a)
-katai_add_test(test_flux_boundary katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-FLW-002: the prescribed boundary flux (PLAXIS Sci. Man. Eqs. 3-31/3-34) against Darcy's straight head profile, with the discharge closing through the base
-katai_add_test(test_dilatancy_cutoff katai::materials)  # KV-CST-004: the dilatancy cut-off (MMM Eq. 5.16b) -- dilation stops at the critical void ratio, the flow is isochoric afterwards, and the switch is inert until it acts
+katai_add_test(test_flux_boundary katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-FLW-002: the prescribed boundary flux (positive into the soil, flow problem only) against Darcy's straight head profile, with the discharge closing through the base
+katai_add_test(test_dilatancy_cutoff katai::materials)  # KV-CST-004: the dilatancy cut-off -- dilation stops at the critical void ratio, the flow is isochoric afterwards, and the switch is inert until it acts
 katai_add_test(test_hardening_soil katai::materials)    # HS stiffness laws + triaxial hyperbola (P2.3a)
 katai_add_test(test_hs_shear katai::materials)          # HS shear return mapping, triaxial (P2.3d-1)
 katai_add_test(test_hs_cap katai::materials)            # HS cap return mapping, isotropic (P2.3d-2)
 katai_add_test(test_hs_fe katai::materials)             # HS integrate_point FE binding (P2.3d-3a)
 katai_add_test(test_hs_two_surface katai::materials)    # HS shear+cap two-surface return (P2.3d-2b)
 katai_add_test(test_hs_integrate katai::materials)      # HS robust substepping + Koiter integrator (P2.3d-2b)
-katai_add_test(test_hs_berlin katai::materials)         # HS Berlin Sand III triaxial validation (PLAXIS Fig 15.4)
-katai_add_test(test_hs_undrained_triaxial katai::materials)  # HS Berlin Sand III UNDRAINED triaxial (PLAXIS Fig 15.5)
-katai_add_test(test_hs_undrained_clay katai::materials)  # HS undrained NC clay (psi=0), effective MC envelope (PLAXIS Undrained-A)
+katai_add_test(test_hs_berlin katai::materials)         # HS Berlin Sand III drained triaxial validation (contraction then dilation, MC plateau)
+katai_add_test(test_hs_undrained_triaxial katai::materials)  # HS Berlin Sand III UNDRAINED triaxial
+katai_add_test(test_hs_undrained_clay katai::materials)  # HS undrained NC clay (psi=0), effective MC envelope, Undrained (A) effective-stress analysis
 katai_add_test(test_hs_calibration katai::materials)    # HS cap calibration K0nc+Eoed (von Mises, P2.3d-2b)
 katai_add_test(test_plate katai::fem)             # Plate (Mindlin/Timoshenko beam) cantilever validation (P2.4)
 katai_add_test(test_plate5 katai::fem)            # 5-node quartic plate (tri15 edge) validation (P2.4)
@@ -63,7 +63,7 @@ katai_add_test(test_k0_layered katai::analysis katai::mesh)  # general layered +
 katai_add_test(test_point_location katai::fem)    # Point location + inverse isoparametric map (embedded beam, Phase A.4)
 katai_add_test(test_embedded_beam katai::analysis)     # Embedded beam skin interaction -- axial pile closed form (Phase A.4)
 katai_add_test(test_distributed_load katai::fem katai::mesh)  # Distributed (line) load -- consistent varying-traction assembly
-katai_add_test(test_struct_forces katai::analysis katai::mesh)  # Structural internal-force output: plate M/Q/N diagram + anchor/geogrid (PLAXIS Output)
+katai_add_test(test_struct_forces katai::analysis katai::mesh)  # Structural internal-force output: plate M/Q/N diagram + anchor/geogrid
 katai_add_test(test_assembly katai::fem)   # pipeline: assembly -> solve -> analytic (P0.6)
 katai_add_test(test_stress katai::analysis)      # stress recovery (P0.7+P0.8a)
 katai_add_test(test_boussinesq katai::analysis)  # Boussinesq strip load (P0.8b)
@@ -89,7 +89,7 @@ katai_add_test(test_hs_footing katai::analysis katai::mesh)  # HS strip footing 
 katai_add_test(test_hs_undrained_bvp katai::analysis katai::mesh)  # HS + Undrained(A) BVP (clay footing, wrapper+HS)
 katai_add_test(test_hs_axisym katai::analysis katai::mesh)   # HS axisymmetric (oedometer K0 + circular footing BVP)
 katai_add_test(test_plate_soil katai::analysis)        # Plate-in-soil coupling (DofMap rotation + solver, P2.4)
-katai_add_test(test_plate_plastic katai::analysis)     # Plate M-N hinge (Mp/Np diamond, MMM section 18.3; section 10)
+katai_add_test(test_plate_plastic katai::analysis)     # Plate M-N hinge (Mp/Np diamond interaction, perfectly plastic)
 katai_add_test(test_anchor katai::analysis)            # Anchor (fixed-end + node-to-node axial spring, P2.4)
 katai_add_test(test_anchor_plastic katai::analysis)    # Anchor elastoplastic F_max + permanent U_p (P2.4)
 katai_add_test(test_geogrid katai::analysis)           # Geogrid tension-only axial membrane + N_p (P2.4)
@@ -105,9 +105,9 @@ katai_add_test(test_solve katai::jobs katai::mesh katai::analysis katai::model) 
 katai_add_test(test_gui_solve katai::jobs katai::mesh katai::analysis katai::model)  # GUI solve K0 + water + effective stress, end to end
 katai_add_test(test_anchor_mesh_repro katai::jobs katai::mesh katai::analysis katai::model)  # regression: an anchor does not corrupt the mesh (nearest node)
 katai_add_test(test_constitutive katai::jobs katai::mesh katai::analysis katai::model)  # the GUI constitutive model is genuinely in effect, LE/MC/HS
-katai_add_test(test_hoek_brown katai::materials)   # Hoek-Brown (rock): the manual closed forms, the envelope, and the Tresca degeneration against the verified MC return (KV-CST-014)
+katai_add_test(test_hoek_brown katai::materials)   # Hoek-Brown (rock): the closed forms of Hoek, Carranza-Torres & Corkum (2002), the envelope, and the Tresca degeneration against the verified MC return (KV-CST-014)
 katai_add_test(test_hoek_brown_tunnel katai::jobs katai::mesh katai::analysis katai::model)  # a tunnel unloaded into Hoek-Brown rock, against the closed form (KV-CST-016): the case that found the missing axisymmetric branch, the elastic tangent and the retry that never reached it
-katai_add_test(test_hoek_brown_gui katai::jobs katai::mesh katai::analysis katai::model)  # Hoek-Brown from a .k2d: a confined specimen fails ON the Eq 4-1 envelope, at two confinements (KV-CST-015)
+katai_add_test(test_hoek_brown_gui katai::jobs katai::mesh katai::analysis katai::model)  # Hoek-Brown from a .k2d: a confined specimen fails ON the generalised Hoek-Brown envelope, at two confinements (KV-CST-015)
 katai_add_test(test_axisym_gui katai::jobs katai::mesh katai::analysis katai::model)  # Axisymmetric GUI path: K0 + r-weighted gravity/traction + radial hoop
 katai_add_test(test_axisym_water katai::jobs katai::mesh katai::analysis katai::model katai::fem katai::geometry)  # Water table in axisymmetric mode: the K0 equilibrium identity and the HOOP pore term (KV-CST-013)
 katai_add_test(test_gui_matrix katai::jobs katai::mesh katai::analysis katai::model)  # Systematic: structures x load x water x model x tri6/tri15 invariants
@@ -115,7 +115,7 @@ katai_add_test(test_safety_gui katai::jobs katai::mesh katai::analysis katai::mo
 katai_add_test(test_k0_slope katai::jobs katai::mesh katai::analysis katai::model)    # K0 nil-step equilibrium on a sloping surface (horizontal = exact u0; a real redistribution on the slope)
 katai_add_test(test_seepage_gui katai::jobs katai::mesh katai::analysis katai::model) # Groundwater flow GUI path: exact Darcy + Charny seepage face + Terzaghi coupling
 katai_add_test(test_consolidation_gui katai::jobs katai::mesh katai::analysis katai::model) # Consolidation GUI path (PhaseType::Consolidation): 1D Terzaghi U-Tv + final settlement
-katai_add_test(test_consolidation_stop katai::jobs katai::mesh katai::analysis katai::model katai::linsolve) # Consolidation stop criteria (PLAXIS Ref 7.5): restart identity + the PRESSURE-ratio degree of consolidation against Terzaghi
+katai_add_test(test_consolidation_stop katai::jobs katai::mesh katai::analysis katai::model katai::linsolve) # Consolidation stop criteria (phases[i].cstop, docs/k2d-format.md): restart identity + the PRESSURE-ratio degree of consolidation against Terzaghi
 katai_add_test(test_consolidation_structures katai::jobs katai::mesh katai::analysis katai::model) # Plates/anchors/geogrids INSIDE a consolidation phase: the drained limit is the oracle (KV-STR-006)
 katai_add_test(test_consolidation_interface katai::jobs katai::mesh katai::analysis katai::model)  # Interfaces in a consolidation phase: cross permeability ties/separates the pore field, elastic joint reported (KV-STR-007)
 katai_add_test(test_fully_coupled_structures katai::jobs katai::mesh katai::analysis katai::model)  # Structures in a FULLY-COUPLED phase: the saturated limit IS the consolidation phase (KV-STR-008)
@@ -126,16 +126,16 @@ katai_add_test(test_robustness katai::jobs katai::mesh katai::analysis katai::mo
 katai_add_test(test_struct_gui katai::jobs katai::mesh katai::analysis katai::model)  # Structural M/Q/N diagrams from the GUI path (wiring: stations along the line, free-end M0, strut N)
 katai_add_test(test_interface_gui katai::jobs katai::mesh katai::analysis katai::model)  # Standalone interface GUI path: embed in mesh + split + soil-soil Coulomb -> present != absent (tri6+tri15)
 katai_add_test(test_mesh_refine katai::jobs katai::mesh katai::model) # Local mesh density (coarseness/sizing field): region + line refinement, quality, bit-for-bit legacy
-katai_add_test(test_staged_gui katai::jobs katai::mesh katai::analysis katai::model)  # Multi-phase staged construction (SumMstage): fill settlement + excavation heave + phase-chain load (closed form)
+katai_add_test(test_staged_gui katai::jobs katai::mesh katai::analysis katai::model)  # Multi-phase staged construction (each phase ramps its configuration imbalance): fill settlement + excavation heave + phase-chain load (closed form)
 katai_add_test(test_staged_struct_carry katai::jobs katai::mesh katai::analysis katai::model)  # Static chain structural state carry: NIL phase no-op IDENTITY (round-off; caught a 32% M shift on 2026-07-19 -> fixed)
-katai_add_test(test_site_response_benchmark katai::jobs katai::mesh katai::analysis katai::model)  # BENCHMARK Wave-1: multi-layer site response vs a SHAKE-class layered viscoelastic transfer matrix (independent oracle, Track 7)
+katai_add_test(test_site_response_benchmark katai::jobs katai::mesh katai::analysis katai::model)  # BENCHMARK Wave-1: multi-layer site response vs a layered viscoelastic transfer-matrix solution (independent oracle, Track 7)
 katai_add_test(test_compliant_base katai::jobs katai::mesh katai::analysis katai::model)  # Compliant (absorbing) base vs a layered solution with a radiation BC: uniform |T|~1, rigid-vs-compliant tooth, honest guards
 katai_add_test(test_real_record katai::jobs katai::mesh katai::analysis katai::model)  # Real record: accelerogram input (bit-for-bit wiring) + El Centro 1940 NS (published PGA + spectral shape) + a product run
-katai_add_test(test_plaxis_validation katai::mesh katai::analysis katai::geometry)  # Official PLAXIS Validation Manual cases: Giroud footing, Gibson E(z), Cox circular bearing, Davis-Booker c(z) (analytic | PLAXIS | KATAI)
-katai_add_test(test_soft_soil katai::mesh katai::analysis katai::geometry)  # Soft Soil: stage 1 material point (ln law lambda*/kappa*, memory, K0NC pin, MC failure) + stage 2 FE wiring (integrate_point identity, frame independence, axisymmetry, oedometer BVP) (MMM section 10)
+katai_add_test(test_foundation_benchmarks katai::mesh katai::analysis katai::geometry)  # KV-FND-001..004: footing benchmarks against analytical solutions -- Giroud (1972) rigid footing, Gibson (1967) E(z), Cox (1962) circular bearing, Davis & Booker (1973) c(z)
+katai_add_test(test_soft_soil katai::mesh katai::analysis katai::geometry)  # Soft Soil: stage 1 material point (ln law lambda*/kappa*, memory, K0NC pin, MC failure) + stage 2 FE wiring (integrate_point identity, frame independence, axisymmetry, oedometer BVP)
 katai_add_test(test_soft_soil_gui katai::jobs katai::mesh katai::analysis katai::model)  # Soft Soil stage 3 GUI path: K0 + ss_initial_pp seeding, NC lambda* integral, OCR/POP memory, honest undrained refusal, dynamic p'/kappa* stiffness
-katai_add_test(test_soft_soil_creep katai::mesh katai::analysis katai::geometry)  # Soft Soil Creep: stage 1 material point (mu*.ln(1+t/tau), OCR^-beta, closed-form relaxation, 1-day NC line, MC) + stage 2 FE (time into integrate_point, time-stepped relaxation BVP identity) (MMM section 11)
-katai_add_test(test_input_audit katai::jobs katai::mesh katai::analysis katai::model)  # Input audit pins: OCR -> K0 (PLAXIS formula), HS+Undrained(B) refusal, plate Mp/Np refusal
+katai_add_test(test_soft_soil_creep katai::mesh katai::analysis katai::geometry)  # Soft Soil Creep: stage 1 material point (mu*.ln(1+t/tau), OCR^-beta, closed-form relaxation, 1-day NC line, MC) + stage 2 FE (time into integrate_point, time-stepped relaxation BVP identity) (Vermeer & Neher 1999)
+katai_add_test(test_input_audit katai::jobs katai::mesh katai::analysis katai::model)  # Input audit pins: OCR -> K0 = K0nc*OCR - nu/(1-nu)*(OCR-1), HS+Undrained(B) refusal, plate Mp/Np refusal
 if(TARGET test_real_record)
   target_compile_definitions(test_real_record PRIVATE KATAI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 endif()
@@ -143,7 +143,7 @@ katai_add_test(test_design_gui katai::jobs katai::mesh katai::analysis katai::mo
 katai_add_test(test_project_io katai::model katai::io)                # Project file JSON round trip (every field exact + honest failure modes)
 katai_add_test(test_results_io katai::mesh katai::analysis katai::model katai::io)  # Binary result file: bitwise round trip + model-hash staleness + refusal of a corrupt file
 katai_add_test(test_k2d_validator katai::model katai::io)             # .k2d input contract: every rule probed at its exact field path + reader forward-version notes
-katai_add_test(test_stratigraphy katai::model)                        # KV-GEO-001: borehole logs -> soil regions + water surface (PLAXIS Ref. 4.2 / 4.3.1.1 / 7.10.1.1). A wrong stratigraphy is invisible downstream -- the mesher meshes it, every phase converges on it, and no residual sees it
+katai_add_test(test_stratigraphy katai::model)                        # KV-GEO-001: borehole logs -> soil regions + water surface (strata/boreholes, docs/k2d-format.md). A wrong stratigraphy is invisible downstream -- the mesher meshes it, every phase converges on it, and no residual sees it
 # One ctest entry per corpus case. Together they were 1370 s and, once test_phase_numerics had
 # been split, the whole suite's wall clock; they are independent by construction, so this is the
 # same trade the phase-numerics split made. The ids are the corpus ids, so a red line in the ctest
@@ -173,16 +173,16 @@ if(TARGET test_tolerance_independence)
   target_compile_definitions(test_tolerance_independence PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
-katai_add_test(test_convergence_criteria katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-NUM-013: the convergence criteria FAMILY (Sci. Man. sec 9.1) -- CSP, the CSP-normalised force error and the local error at every soil stress point; the elastic control that must report nothing, and what it costs to be bound by criteria this tree measured but did not obey
+katai_add_test(test_convergence_criteria katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-NUM-013: the convergence criteria FAMILY -- CSP, the CSP-normalised force error and the local error at every soil stress point; the elastic control that must report nothing, and what it costs to be bound by criteria this tree measured but did not obey
 if(TARGET test_convergence_criteria)
   target_compile_definitions(test_convergence_criteria PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
-katai_add_test(test_flow_barrier katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-FLW-004: a wall as a flow barrier (PLAXIS Ref Table 5-2 / Sci. Man. sec. 3.4) -- an impermeable screen passes exactly no water and holds the whole head difference, a semi-permeable one passes dh / (L/(k b) + R/b)
-katai_add_test(test_wells_drains katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-FLW-003: wells and drains (PLAXIS Ref sec. 5.9) against the Dupuit 1D closed forms -- the drawdown of a full-depth well, the discharge a drain removes, and a well limited by h_min becoming a drain at that level
-katai_add_test(test_undrained_c katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-007: Undrained (C), the total-stress analysis (MMM sec. 2.7) -- the same soil described two ways must agree, and the difference is the compressibility nu_u < 0.5 leaves behind
-katai_add_test(test_undrained_stiffness katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-006: the pore fluid's stiffness per material (MMM Eqs. 2-50/2-54/2-55/2-57) -- two undrained layers with different Kw/n, and the Hardening Soil family sized by its own unload/reload pair
-katai_add_test(test_staged_options katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-EXC-002 + KV-CST-005: the staged-construction target (Sum-Mstage) as an exact linear identity, and "ignore undrained behaviour" as the drained calculation it claims to be
+katai_add_test(test_flow_barrier katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-FLW-004: a wall as a flow barrier -- an impermeable screen passes exactly no water and holds the whole head difference, a semi-permeable one passes dh / (L/(k b) + R/b)
+katai_add_test(test_wells_drains katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-FLW-003: wells and drains against the Dupuit 1D closed forms -- the drawdown of a full-depth well, the discharge a drain removes, and a well limited by h_min becoming a drain at that level
+katai_add_test(test_undrained_c katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-007: Undrained (C), the total-stress analysis -- the same soil described two ways must agree, and the difference is the compressibility nu_u < 0.5 leaves behind
+katai_add_test(test_undrained_stiffness katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-006: the pore fluid's stiffness per material (Kw/n, nu_u or Skempton's B) -- two undrained layers with different Kw/n, and the Hardening Soil family sized by its own unload/reload pair
+katai_add_test(test_staged_options katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-EXC-002 + KV-CST-005: the staged-construction fraction (mstage) as an exact linear identity, and "ignore undrained behaviour" as the drained calculation it claims to be
 # FOUR independent verification cases in one file, so four ctest entries: KV-NUM-008 (the
 # per-phase numerical controls of .k2d v7 must REACH the solver -- file == seam, and both !=
 # default, so a reviewer receives the numerics a published run was computed with), KV-NUM-009
@@ -271,12 +271,12 @@ add_executable(study_giroud_convergence EXCLUDE_FROM_ALL study_giroud_convergenc
 target_link_libraries(study_giroud_convergence PRIVATE katai::jobs katai::mesh katai::analysis katai::model katai::io katai::linsolve)
 add_executable(study_slope_convergence EXCLUDE_FROM_ALL study_slope_convergence.cpp)  # mesh convergence of the slope SRM -> docs/validation/slope-srm-convergence.md
 target_link_libraries(study_slope_convergence PRIVATE katai::analysis katai::linsolve)
-add_executable(study_design_ec7 EXCLUDE_FROM_ALL study_design_ec7.cpp)  # EC7 DA3 material factoring (ODF=FoS/gamma_M identity + Griffiths & Lane benchmark + PLAXIS algorithm identity)
+add_executable(study_design_ec7 EXCLUDE_FROM_ALL study_design_ec7.cpp)  # EC7 DA3 material factoring (ODF=FoS/gamma_M identity + Griffiths & Lane benchmark)
 target_link_libraries(study_design_ec7 PRIVATE katai::analysis katai::mesh katai::linsolve)
-add_executable(study_wall_benchmark EXCLUDE_FROM_ALL study_wall_benchmark.cpp)  # PLAXIS sheet-pile clay benchmark
+add_executable(study_wall_benchmark EXCLUDE_FROM_ALL study_wall_benchmark.cpp)  # cantilever sheet pile in undrained clay: domain-size audit of the wall moment
 target_link_libraries(study_wall_benchmark PRIVATE katai::analysis katai::linsolve)
-add_executable(study_footing_plaxis EXCLUDE_FROM_ALL study_footing_plaxis.cpp)  # PLAXIS Tutorial L1 circular footing
-target_link_libraries(study_footing_plaxis PRIVATE katai::analysis katai::linsolve)
+add_executable(study_circular_footing EXCLUDE_FROM_ALL study_circular_footing.cpp)  # rigid circular footing on sand (axisymmetric MC + K0 + water table), force and performance
+target_link_libraries(study_circular_footing PRIVATE katai::analysis katai::linsolve)
 add_executable(study_hs_calibration EXCLUDE_FROM_ALL study_hs_calibration.cpp)  # HS alpha, beta calibration
 target_link_libraries(study_hs_calibration PRIVATE katai::materials katai::linsolve)
 # LBB / inf-sup diagnostic (audit P2b): does equal-order u-p Biot checkerboard under 2D undrained?
@@ -406,7 +406,7 @@ set(_katai_slow_tests
   test_no_silent_drop_tension_cutoff_ignored 469  test_slope_fos_convergence 535
   test_tolerance_independence 409 test_phase_numerics_008 401
   test_hs_axisym 317              test_input_corpus_kv-cst-012 306
-  test_plaxis_validation 294      test_convergence_criteria 230
+  test_foundation_benchmarks 294  test_convergence_criteria 230
   test_gui_matrix 173             test_dynamic_gui 128    test_bearing_phi 125
   test_input_corpus_kv-str-004 90 test_input_corpus_kv-fnd-013 72)
 while(_katai_slow_tests)

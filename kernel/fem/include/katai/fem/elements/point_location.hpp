@@ -2,7 +2,7 @@
 // Point location + inverse isoparametric mapping (the embedded beam / pile row
 // foundation, Phase A.4). Given a physical point (x,y), finds the element containing it
 // and its local (ξ,η) coordinates → the soil shape functions N_s can be evaluated there
-// (mesh-NONCONFORMING coupling; PLAXIS Sci.Man §7.5 "virtual node"). The inverse mapping
+// (mesh-NONCONFORMING coupling: a "virtual node" inside a soil element). The inverse mapping
 // is a Newton solve of x(ξ,η)=Σ N_i(ξ,η) X_i; for curved tri6/tri15 the Jacobian is
 // J=Xᵀ·(dN/dξ,dN/dη). Element-generic (element_traits).
 //

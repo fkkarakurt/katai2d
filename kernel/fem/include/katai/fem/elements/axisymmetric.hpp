@@ -1,5 +1,5 @@
 #pragma once
-// Axisymmetric (r-z) element kernels — P1.6. One of PLAXIS's two analysis modes (the
+// Axisymmetric (r-z) element kernels — P1.6. One of the program's two analysis modes (the
 // other is plane strain). Geometry and shape functions are the SAME as the base element
 // (tri6/tri15); the only differences are (i) the strain's 4th component, the hoop
 // εθ = u_r / r, (ii) the 4x4 constitutive matrix (the θ direction is a full strain, not

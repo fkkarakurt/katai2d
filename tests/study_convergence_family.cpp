@@ -3,18 +3,17 @@
 //
 // The question it was written for is N-2's acceptance, stated before the code existed: is there
 // a case in this tree that SATISFIES the global force criterion and FAILS a local one? The
-// prediction on record was the Hardening Soil oedometer at its 1e-2 default -- the tolerance
-// this project inherited from the same source the criteria come from. A prediction that cannot
-// fail is not worth making, so the run prints every member of the family for every case and
-// leaves the reading to the numbers.
+// prediction on record was the Hardening Soil oedometer at its 1e-2 default tolerance. A
+// prediction that cannot fail is not worth making, so the run prints every member of the family
+// for every case and leaves the reading to the numbers.
 //
 // usage: study_convergence_family [case]
 //   oedo     KV-CST-002, the Hardening Soil oedometer, over a sweep of tolerances
 //   footing  a Mohr-Coulomb strip footing walked towards its limit load (CSP must fall)
-//   struct   the corpus interface and embedded-beam cases (Eq. 9-8 and Eq. 9-9)
+//   struct   the corpus interface and embedded-beam cases (interface and foot criteria)
 //   staged   a staged excavation, where the two GLOBAL ratios pull apart (KATAI_CONV_CSPGATE)
-//   el7      HSsmall UNLOADING: the only place Eq. 9-7's count can be non-zero
-//   moment   an UNDRIVEN plate next to a driven one: what Eq. 9-3's reference does
+//   el7      HSsmall UNLOADING: the only place the non-yielding elastic count can be non-zero
+//   moment   an UNDRIVEN plate next to a driven one: what the moment criterion's reference does
 //   elastic  a linear-elastic block: every local count must be zero and CSP exactly 1
 //   all      all of the above (default)
 #include <katai/analysis/results.hpp>
@@ -79,7 +78,7 @@ m::Project mc_footing(double q, m::SoilModel model) {
 
 void print_header() {
     std::printf("%-26s %7s %10s %10s %10s %5s %5s %12s %7s  %s\n", "case", "CSP",
-                "Eq9-1 err", "GATE err", "tolerated", "lf", "iters", "max|u| [m]", "time",
+                "force err", "GATE err", "tolerated", "lf", "iters", "max|u| [m]", "time",
                 "local criteria (inaccurate / points, worst error)");
     std::printf("%s\n", std::string(170, '-').c_str());
 }
@@ -185,13 +184,13 @@ int main(int argc, char** argv) {
     }
 
     // The two corpus cases that exercise the STRUCTURAL members of the family: an interface
-    // (Eq. 9-8) and an embedded beam with a foot (Eq. 9-9). Both are cases the record already
+    // and an embedded beam with a foot. Both are cases the record already
     // publishes numbers for, so what the new criteria say about them can be read against a
     // known answer rather than against nothing.
     if (which == "struct" || which == "all") {
         struct Case { const char* file; const char* label; };
         const Case cases[] = {
-            {"kv-str-002-plaxis-sliding-block.k2d", "sliding block (interface)"},
+            {"kv-str-002-sliding-block.k2d", "sliding block (interface)"},
             {"kv-str-004-axial-pile-capacity.k2d", "axial pile (foot + skin)"},
         };
         for (const Case& cs : cases) {
@@ -206,13 +205,14 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Eq. 9-3/9-4 -- the MOMENT criterion, and specifically the case that made it bind: a plate
+    // The MOMENT criterion, and specifically the case that made it bind: a plate
     // standing along the whole of a line that is pushed down. Every node of the plate takes the
     // same settlement, so it translates without curving and carries no moment. Its own
     // reference then collapses towards zero, and a round-off residual over a round-off reference
     // is not a measurement -- it is a ratio with nothing under it.
     if (which == "moment" || which == "all") {
-        std::printf("\n-- Eq. 9-3: a plate that translates without bending, and what its reference does --\n");
+        std::printf("\n-- moment criterion: a plate that translates without bending, and what its "
+                    "reference does --\n");
         m::Project pr;
         std::string err;
         const std::string path = std::string(KATAI_CORPUS_DIR) + "/kv-fnd-008-strip-load.k2d";
@@ -250,7 +250,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Eq. 9-7 -- the criterion for a point whose ELASTIC stiffness moves with stress while
+    // The criterion for a point whose ELASTIC stiffness moves with stress while
     // nothing about it is yielding. It has never been the binding count on anything measured so
     // far, and the reason is case selection rather than the criterion: on the Hardening Soil
     // oedometer every point is plastic the moment loading starts, and the Mohr-Coulomb cases have
@@ -258,7 +258,8 @@ int main(int argc, char** argv) {
     // zero. UNLOADING is where it is not: an unloading point leaves every yield surface and
     // re-enters on Eur, which is a function of the stress it is in the middle of changing.
     if (which == "el7" || which == "all") {
-        std::printf("\n-- Eq. 9-7: unloading, where a NON-yielding point still has a stress-dependent stiffness --\n");
+        std::printf("\n-- non-yielding points: unloading, where a NON-yielding point still has a "
+                    "stress-dependent stiffness --\n");
         struct Case { const char* file; const char* label; };
         const Case cases[] = {
             {"kv-cst-008-hssmall-unloading.k2d", "HSsmall unloading"},
@@ -316,13 +317,13 @@ int main(int argc, char** argv) {
     }
 
     // STAGED CONSTRUCTION, and it is here for the GATE question rather than for the criteria.
-    // The default gate divides the out-of-balance force by max(||f_ext||, ||f_const||, 1); Eq. 9-1
-    // divides it by ||f_int|| + CSP*||f_const||. In a staged phase those denominators are not
-    // close: ||f_const|| is the whole standing K0 load and ||f_ext|| is only the release the
-    // phase itself applies, so the two columns printed above are measuring the same residual
-    // against scales that differ by however much the excavation is smaller than the ground it
-    // stands in. Run this group with and without KATAI_CONV_CSPGATE to read what SWAPPING the
-    // gate does to the answer and to the iteration count.
+    // The default gate divides the out-of-balance force by max(||f_ext||, ||f_const||, 1); the
+    // stiffness-weighted force error divides it by ||f_int|| + CSP*||f_const||. In a staged phase
+    // those denominators are not close: ||f_const|| is the whole standing K0 load and ||f_ext|| is
+    // only the release the phase itself applies, so the two columns printed above are measuring
+    // the same residual against scales that differ by however much the excavation is smaller than
+    // the ground it stands in. Run this group with and without KATAI_CONV_CSPGATE to read what
+    // SWAPPING the gate does to the answer and to the iteration count.
     if (which == "staged" || which == "all") {
         std::printf("\n-- staged construction: the two global ratios side by side --\n");
         m::Project pr;

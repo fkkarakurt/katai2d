@@ -1,6 +1,6 @@
 // Generalised (layered + water-aware) K0 initial stress: compute_k0_initial_stress_layered builds
 // sigma'_v at each Gauss point from the VERTICAL integral of the effective unit weight above it,
-// and sigma'_h = K0 sigma'_v. This is the foundation for a PLAXIS-style K0 procedure on a real GUI
+// and sigma'_h = K0 sigma'_v. This is the foundation for a general K0 procedure on a real GUI
 // model (multiple soil layers, a water table, per-material K0).
 //
 //   (A) Uniform single layer, flat surface: sigma'_v = -gamma'(H - y) reproduced exactly (the

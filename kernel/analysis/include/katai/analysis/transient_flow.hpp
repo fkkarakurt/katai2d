@@ -1,11 +1,11 @@
 #pragma once
 // Transient (time-dependent) saturated groundwater flow -- storage + Darcy continuity.
-// PLAXIS 2D 2025.1 Scientific Manual sec 3.1.1-3.3 (Eq 3-10, 3-31..3-37). HEAD form h:
+// HEAD form h:
 //   S_s dh/dt = div(k grad h) + q,   S_s = n.gamma_w/K_w (specific storage, [1/length]).
 // Semi-discrete (Galerkin, the same tri6/tri15 N):  S.(dh/dt) + H.h = q,
 //   H = int G' diag(kx,ky) G dOmega  (= the seepage conductivity; SPD),
 //   S = int N' S_s N dOmega           (storage/capacitance; consistent-mass-like, SPD).
-// Backward Euler (alpha=1, the PLAXIS default, unconditionally stable):
+// Backward Euler (alpha=1, fully implicit, unconditionally stable):
 //   (S + dt.H).h^{n+1} = S.h^n + dt.q^{n+1}.
 // Fixed dt -> A = (S+dt.H) is factorized ONCE (factor-once-solve-many; A SPD -> PARDISO mtype=2).
 // Time-varying Dirichlet head (rapid drawdown) via `head_bc(node,t)`; the boundary SET is fixed

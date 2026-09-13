@@ -1,10 +1,10 @@
 #pragma once
-// SOFT SOIL CREEP (SSC) — STAGE 1: the material-point core (PLAXIS MMM §11 verbatim; locked
+// SOFT SOIL CREEP (SSC) — STAGE 1: the material-point core (Vermeer & Neher 1999; locked
 // formulation docs/references/soft-soil-creep-formulation.md). Time-dependent
 // viscoplasticity: creep = time-dependent plastic strain, potential g = p_eq (the MCC
 // ellipse, IDENTICAL to the SS f̄ measure), volumetric rate ε̇_v^c = (μ*/τ)(p_eq/p_p)^β,
 // β = (λ*−κ*)/μ*, p_p ages exponentially; failure is a SEPARATE Mohr-Coulomb check AFTER
-// the creep update (the manual §11.7 order).
+// the creep update (creep first, then the failure check, at every stress point).
 //
 // SINGLE-SOURCE reuse: the elastic law/M(K0NC)/q̃/kPmin come from softsoil; the MC return is
 // done by giving softsoil::ss_step pp=∞ (cap off) — same elastic moduli, same edge-cascaded
@@ -17,8 +17,8 @@
 // R → bracketed secant+bisection guaranteed); on the dry side of the ellipse
 // ∂p_eq/∂p′ < 0 → dilative creep (the model's own truth; the |·| floor is numerical
 // protection); the deviatoric creep direction is not pinned by the Stage-1 closed forms
-// (the FE stage does it with MMM §17.4). Sign convention compression-POSITIVE. FE/GUI =
-// the next stage.
+// (the FE stage does it, with constant-rate-of-strain and undrained creep cases). Sign
+// convention compression-POSITIVE. FE/GUI = the next stage.
 
 #include <katai/materials/soft_soil.hpp>
 
@@ -33,7 +33,7 @@ struct Params {
     double phi = 0.0;         // [rad]
     double psi = 0.0;         // [rad]
     double K0nc = 0.5;        // → M (Brinkgreve 1994; same as SS)
-    double tau_day = 1.0;     // reference time τ [days] — the 24-hour definition of the NC line (Eq 11-14)
+    double tau_day = 1.0;     // reference time τ [days] — the 24-hour definition of the NC line
 
     softsoil::Params ss() const {   // shared-machinery view (elastic law, M, MC, q̃)
         softsoil::Params S;
@@ -52,7 +52,7 @@ struct StepResult {
 };
 
 // p_eq = p′ + q̃²/(M²(p′+c·cotφ)) — the measure identical to the SS cap function f̄
-// (Eq 11-20; by the single-source reading the formula matches ss_initial_pp/f_cap).
+// (by the single-source reading the formula matches ss_initial_pp/f_cap).
 inline double p_eq(const softsoil::Params& S, const Eigen::Vector3d& sig) {
     const double sphi = std::sin(S.phi), cphi = std::cos(S.phi);
     const double ccot = S.phi > 1e-12 ? S.c * cphi / sphi : 0.0;
@@ -108,7 +108,7 @@ inline StepResult ssc_substep(const Params& P, const softsoil::Params& S,
                 const double mw = 0.5 * (w(1) + w(2)); w(1) = mw; w(2) = mw;
             }
             // n = a·w + b·1, tr(n) = 3b (w sums to 0). m = n/tr(n): tr(m) = 1 → the
-            // volumetric component is EXACTLY the 1D rate (the Eq 11-30 normalization).
+            // volumetric component is EXACTLY the 1D rate (the creep-direction normalization).
             // Around the nose, |3b| is protected by the floor.
             const double pb = std::max(sig_tr.mean() + ccot, 1e-9);
             const double qt = sig_tr(idx[0]) + (delta - 1.0) * sig_tr(idx[1]) - delta * sig_tr(idx[2]);
@@ -181,7 +181,7 @@ inline StepResult ssc_substep(const Params& P, const softsoil::Params& S,
         }
     }
 
-    // --- Mohr-Coulomb check (manual order: AFTER creep) — single source: softsoil::ss_step
+    // --- Mohr-Coulomb check (order: AFTER creep) — single source: softsoil::ss_step
     // with pp=∞ (cap off, deps=0 → the elastic predictor is the identity, only the MC
     // edge-cascaded return).
     {

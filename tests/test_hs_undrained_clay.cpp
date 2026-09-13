@@ -1,4 +1,4 @@
-// Hardening Soil -- UNDRAINED clay (psi = 0), the common PLAXIS Undrained-(A) case where the
+// Hardening Soil -- UNDRAINED clay (psi = 0), the common Undrained (A) case where the
 // von Mises cap is EXACT (psi=0 -> no shear dilation -> the Lode-dependent cap refinement that
 // matters only for dilatant undrained is irrelevant here). This validates HS undrained against
 // the unambiguous reference: the EFFECTIVE Mohr-Coulomb failure envelope.
@@ -8,9 +8,10 @@
 // mean stress p' DECREASES, and the effective stress path curves LEFT until it terminates on the
 // critical-state / MC failure line in q-p' space:
 //     q_f = M p'_f + (6 c cos phi)/(3 - sin phi),   M = 6 sin phi / (3 - sin phi)   (triaxial comp).
-// This is exactly the classic undrained NC-clay effective-stress path that PLAXIS Undrained-(A)
-// produces. (Undrained = kinematic eps_v=0 at the material point; the excess pore pressure is
-// u = sigma3_cell - sigma3'. See hardening-soil-formulation.md / effective-stress-formulation.md.)
+// This is exactly the classic undrained NC-clay effective-stress path that an Undrained (A)
+// effective-stress analysis must produce. (Undrained = kinematic eps_v=0 at the material point;
+// the excess pore pressure is u = sigma3_cell - sigma3'. See hardening-soil-formulation.md /
+// effective-stress-formulation.md.)
 #include <katai/materials/hardening_soil_plastic.hpp>
 
 #include <cmath>
@@ -80,7 +81,7 @@ int main() {
     test_undrained_clay();
     if (g_failures == 0) {
         std::printf("OK: HS undrained NC clay (psi=0) matches the effective MC failure envelope "
-                    "(PLAXIS Undrained-A)\n");
+                    "(Undrained A)\n");
         return 0;
     }
     std::fprintf(stderr, "%d check(s) failed\n", g_failures);

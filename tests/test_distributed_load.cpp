@@ -1,5 +1,5 @@
 // Distributed (line) load -- consistent nodal forces for a linearly-varying surface traction
-// (PLAXIS distributed load q1 -> q2 along a segment). Validates assemble_surface_traction_varying:
+// (a distributed load q1 -> q2 along a segment). Validates assemble_surface_traction_varying:
 //   (A) a CONSTANT varying traction reproduces the uniform assemble_surface_traction exactly;
 //   (B) the consistent nodal forces sum to the resultant (integral of the traction);
 //   (C) a linear ramp q(x) = -p x/W gives the right resultant (-pW/2) AND the right line of

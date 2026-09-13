@@ -7,8 +7,8 @@
 // Non-associated flow: mobilized dilatancy ψ_m, m_g = (1, R, R), R = ε3^p/ε1^p. ψ_m is Rowe's
 // where Rowe is non-negative; below the phase-transformation line HS takes zero and HSsmall
 // takes Li & Dafalias instead — one rule, `detail::hs_dilatancy` (see its comment).
-//   Rowe (PLAXIS Eq 6-14): ε_v^p/ε_q^p = −sinψ_m (DILATION, comp-pos ⇒ ε_v^p<0) ⇒
-//   R = −(1+sinψ_m)/(2−sinψ_m) ; hardening (Eq 6-10) γ^p=−(2ε1^p−ε_v^p) ⇒ dγ^p=h·dλ,
+//   Rowe flow rule: ε_v^p/ε_q^p = −sinψ_m (DILATION, comp-pos ⇒ ε_v^p<0) ⇒
+//   R = −(1+sinψ_m)/(2−sinψ_m) ; hardening γ^p=−(2ε1^p−ε_v^p) ⇒ dγ^p=h·dλ,
 //   h = 1−2R = (4+sinψ_m)/(2−sinψ_m). At ψ_m=0, R=−½, h=2 (volumetrically neutral, the
 //   hyperbola is preserved).
 // Consistent (asymmetric) tangent D^ep = D_e − (D_e m_g)(n_f^T D_e)/(n_f^T D_e m_g + h).
@@ -55,58 +55,54 @@ inline Eigen::Matrix3d hs_elastic(double E, double nu) {
 // silently wrong answer on whichever stress path reaches the fourth. One definition, four
 // bindings.
 //
-// HS (Ref. Man. Eq 6-14, Rowe):  sinψ_m = (sinφ_m − sinφ_cv)/(1 − sinφ_m·sinφ_cv), cut off to
-// [0, sinψ]. Where Rowe returns a NEGATIVE value the Hardening Soil model takes ψ_m = 0.
+// HS (Rowe 1962; Schanz & Vermeer 1996):  sinψ_m = (sinφ_m − sinφ_cv)/(1 − sinφ_m·sinφ_cv),
+// cut off to [0, sinψ]. Where Rowe returns a NEGATIVE value the Hardening Soil model takes ψ_m = 0.
 //
-// HSsmall (Mat. Models Man. sec 7.9.1, after Li & Dafalias (2000)): that zero cut-off "may
-// sometimes yield too little plastic volumetric strains", so wherever Rowe is negative the
-// small-strain model puts a small CONTRACTION there instead of nothing:
-//   sinψ_m = (1/10)·(−M_c·exp[(1/15)·ln((M_c/M_d)·(q/q_a))] + M_d)          (Eq 7-19)
-//   M_c    = 6·sinφ_cv/(3 − sinφ_cv)                                        (Eq 7-20)
-//   M_d    = 6·sinφ_m /(3 − sinφ_m )                                        (Eq 7-21)
-//   q/q_a  = max([(1−sinφ_cv)/sinφ_cv]·[sinφ_m/(1−sinφ_m)], 1e−4)           (Eq 7-22)
-//   sinφ_m ≥ sinφ/(2 − sinφ)                                                (Eq 7-23)
-// Eq 7-22's q/q_a is its own definition, NOT the model's deviatoric hyperbola ratio q/q_a of
-// Eq 6-3; the two are unrelated quantities that share a name.
+// HSsmall (after Li & Dafalias (2000)): that zero cut-off can give too little plastic
+// volumetric strain, so wherever Rowe is negative the small-strain model puts a small
+// CONTRACTION there instead of nothing:
+//   sinψ_m = (1/10)·(−M_c·exp[(1/15)·ln((M_c/M_d)·(q/q_a))] + M_d)          (i)
+//   M_c    = 6·sinφ_cv/(3 − sinφ_cv)                                        (ii)
+//   M_d    = 6·sinφ_m /(3 − sinφ_m )                                        (iii)
+//   q/q_a  = max([(1−sinφ_cv)/sinφ_cv]·[sinφ_m/(1−sinφ_m)], 1e−4)           (iv)
+//   sinφ_m ≥ sinφ/(2 − sinφ)                                                (v)
+// The q/q_a of (iv) is its own definition, NOT the model's deviatoric hyperbola ratio q/q_a
+// (q_a = q_f/R_f); the two are unrelated quantities that share a name.
 //
 // The two branches MEET EXACTLY, and that is the property worth knowing: at φ_m = φ_cv we get
-// M_d = M_c and q/q_a = 1, so the logarithm vanishes and Eq 7-19 returns exactly 0 — which is
+// M_d = M_c and q/q_a = 1, so the logarithm vanishes and (i) returns exactly 0 — which is
 // also precisely where Rowe changes sign. The composite rule is continuous by CONSTRUCTION,
-// not to a tolerance. Eq 7-23 then bounds how contractant it can get, since sinψ_m falls
+// not to a tolerance. The floor (v) then bounds how contractant it can get, since sinψ_m falls
 // monotonically as φ_m drops: the floor is the most negative ψ_m the model can produce.
 // (test_hssmall pins both.)
 //
-// MEASURED AGAINST THE MANUAL'S OWN FIGURE 7-10 — and they disagree. Digitising that plot
-// (φ=35°, ψ=5°) confirms every structural feature of Eq 7-19: the upper branch is pure Rowe to
-// ±0.01°, the curve vanishes at φ_cv = 30.80°, the plateau starts at the Eq 7-23 floor of
-// 23.71°, and the 1/15 exponent reproduces the plot's curvature to better than 1%. Only the
-// AMPLITUDE differs, by a constant factor: the figure is 1.29× the printed equation
-// everywhere (plateau −2.167° drawn against −1.679° computed), i.e. the plot behaves as if the
-// leading 1/10 were 1/7.74. We implement the EQUATION, because an equation printed in the
-// specification outranks a constant reverse-engineered from a raster plot, and because 1.29 is
-// not a number the manual states anywhere. The gap is declared in hssmall-formulation.md; both
-// readings are small contractions and the difference between them is far smaller than the
-// difference between either and the ψ_m = 0 this replaces.
+// WORKED VALUES (φ=35°, ψ=5°): the upper branch is pure Rowe, the curve vanishes at
+// φ_cv = 30.80°, and the plateau starts at the floor (v), φ_m = 23.71°, where (i) gives
+// ψ_m = −1.679°. We implement the rule exactly as written above, with the leading 1/10. A
+// plotted version of this rule whose amplitude is 1.29× larger (plateau −2.167°, as if the
+// leading 1/10 were 1/7.74) is declared as a gap in hssmall-formulation.md; both readings are
+// small contractions and the difference between them is far smaller than the difference
+// between either and the ψ_m = 0 this replaces.
 struct HsDilatancy {
     double sin_cs = 0.0;        // sinφ_cv (Rowe, from the input φ and ψ)
     double sin_psi = 0.0;       // sinψ — the upper cut-off
     double c_cot = 0.0;         // c·cotφ — the cohesion shift of the mobilized-φ definition
-    double Mc = 0.0;            // Eq 7-20 (HSsmall branch only)
-    double sphi_m_floor = 0.0;  // Eq 7-23 (HSsmall branch only)
+    double Mc = 0.0;            // M_c, (ii) (HSsmall branch only)
+    double sphi_m_floor = 0.0;  // floor (v) (HSsmall branch only)
     bool li_dafalias = false;   // HSsmall (G0_ref>0) with a usable φ_cv
 
     double operator()(double sphi_m) const {
         const double rowe = (sphi_m - sin_cs) / (1.0 - sphi_m * sin_cs);
         if (rowe >= 0.0) return std::min(rowe, sin_psi);
         if (!li_dafalias) return 0.0;                                   // HS: the zero cut-off
-        const double s = std::max(sphi_m, sphi_m_floor);                // Eq 7-23
-        const double Md = 6.0 * s / (3.0 - s);                          // Eq 7-21
+        const double s = std::max(sphi_m, sphi_m_floor);                // floor (v)
+        const double Md = 6.0 * s / (3.0 - s);                          // M_d, (iii)
         const double qqa =
-            std::max((1.0 - sin_cs) / sin_cs * (s / (1.0 - s)), 1e-4);  // Eq 7-22
-        return 0.1 * (-Mc * std::exp(std::log((Mc / Md) * qqa) / 15.0) + Md);  // Eq 7-19
+            std::max((1.0 - sin_cs) / sin_cs * (s / (1.0 - s)), 1e-4);  // q/q_a, (iv)
+        return 0.1 * (-Mc * std::exp(std::log((Mc / Md) * qqa) / 15.0) + Md);  // sinψ_m, (i)
     }
 
-    // sinφ_m from the mobilized stress state (Eq 7-18 / Eq 6-13, σ1 = q + σ3, comp-positive).
+    // sinφ_m = q/(σ1 + σ3 + 2c·cotφ) from the mobilized stress state (σ1 = q + σ3, comp-positive).
     double from_q(double q, double s3v) const {
         const double s1 = q + s3v;
         const double denom = s1 + s3v + 2.0 * c_cot;
@@ -121,13 +117,13 @@ inline HsDilatancy hs_dilatancy(const HardeningSoilParams& p) {
     d.sin_cs = (sphi - sps) / (1.0 - sphi * sps);  // critical state
     d.sin_psi = sps > 0.0 ? sps : 0.0;
     d.c_cot = (sphi > 1e-12) ? p.cohesion * cphi / sphi : 0.0;
-    // φ_cv = 0 (a φ = 0 Tresca soil) would divide by zero in Eq 7-22 — but it also makes Rowe
+    // φ_cv = 0 (a φ = 0 Tresca soil) would divide by zero in (iv) — but it also makes Rowe
     // non-negative everywhere, so the branch is unreachable there; the guard says so rather
     // than relying on it.
     d.li_dafalias = p.G0_ref > 0.0 && !p.dilatancy_cut && d.sin_cs > 1e-12 && sphi < 1.0;
     if (d.li_dafalias) {
-        d.Mc = 6.0 * d.sin_cs / (3.0 - d.sin_cs);  // Eq 7-20
-        d.sphi_m_floor = sphi / (2.0 - sphi);      // Eq 7-23
+        d.Mc = 6.0 * d.sin_cs / (3.0 - d.sin_cs);  // M_c, (ii)
+        d.sphi_m_floor = sphi / (2.0 - sphi);      // floor (v)
     }
     return d;
 }
@@ -136,7 +132,7 @@ inline HsDilatancy hs_dilatancy(const HardeningSoilParams& p) {
 
 // One shear-hardening step: committed (σ_n, γ_n) + strain increment dε → updated state +
 // consistent tangent. Eur/Ei/qa are frozen at the start-of-step σ3 = σ_n[2] (explicit
-// stress-dependent stiffness, like PLAXIS). q is capped at qf at failure (perfectly
+// stress-dependent stiffness). q is capped at qf at failure (perfectly
 // plastic MC).
 inline HsShearStep hs_shear_step(const HardeningSoilParams& p,
                                  const Eigen::Vector3d& sigma_n, double gamma_p_n,
@@ -181,7 +177,7 @@ inline HsShearStep hs_shear_step(const HardeningSoilParams& p,
         const double spm = sin_psi_m(q, s3);
         const double R = -(1.0 + spm) / (2.0 - spm);
         mg = Eigen::Vector3d(1.0, R, R);
-        h = (4.0 + spm) / (2.0 - spm);  // 1−2R (Eq 6-10: γ^p=−(2ε1^p−ε_v^p)); 2 at ψ_m=0
+        h = (4.0 + spm) / (2.0 - spm);  // 1−2R (γ^p=−(2ε1^p−ε_v^p)); 2 at ψ_m=0
         const Eigen::Vector3d Demg = De * mg;
         sig = sig_tr - dlam * Demg;
         q = sig(0) - sig(2);
@@ -204,7 +200,7 @@ inline HsShearStep hs_shear_step(const HardeningSoilParams& p,
     const double spm = sin_psi_m(q, s3);
     const double R = -(1.0 + spm) / (2.0 - spm);
     mg = Eigen::Vector3d(1.0, R, R);
-    h = (4.0 + spm) / (2.0 - spm);  // 1−2R (Eq 6-10); 2 at ψ_m=0
+    h = (4.0 + spm) / (2.0 - spm);  // 1−2R (γ^p hardening); 2 at ψ_m=0
     Eigen::Vector3d nf(fbar_prime(q), 0.0, -fbar_prime(q));  // ∂f/∂σ = f̄'(q)(1,0,−1)
 
     const Eigen::Vector3d Demg = De * mg;
@@ -253,7 +249,7 @@ inline HsPrincipalReturn hs_shear_correct(const HardeningSoilParams& p,
     for (int it = 0; it < 50; ++it) {
         const double spm = sin_psi_m(q, sigma3_stiff);
         const double R = -(1.0 + spm) / (2.0 - spm);
-        const double h = (4.0 + spm) / (2.0 - spm);  // 1−2R (Eq 6-10); 2 at ψ_m=0
+        const double h = (4.0 + spm) / (2.0 - spm);  // 1−2R (γ^p hardening); 2 at ψ_m=0
         const Eigen::Vector3d mg(1.0, R, R);
         const Eigen::Vector3d Demg = De * mg;
         sig = sig_tr - dlam * Demg;
@@ -267,17 +263,18 @@ inline HsPrincipalReturn hs_shear_correct(const HardeningSoilParams& p,
     if (q > qf) { sig(0) -= (q - qf); q = qf; }  // MC failure plateau
     const double spm_f = sin_psi_m(q, sigma3_stiff);
     out.stress = sig;
-    out.gamma_p = gamma_p_n + (4.0 + spm_f) / (2.0 - spm_f) * dlam;  // γ^p += h_s·dλ (Eq 6-10)
+    out.gamma_p = gamma_p_n + (4.0 + spm_f) / (2.0 - spm_f) * dlam;  // γ^p += h_s·dλ
     return out;
 }
 
 // --- Cap (volumetric) yield surface -----------------------------------------------
 // f_c = q̃²/α² + p² − p_p²,  p = (σ1+σ2+σ3)/3,  q̃ = σ1+(δ−1)σ2−δσ3, δ=(3+sinφ)/(3−sinφ)
 // (q̃=q at triaxial σ2=σ3). ASSOCIATED flow g_c=f_c ⇒ dε^p=λ ∂f_c/∂σ, dε_v^pc=λ·2p.
-// POWER-LAW hardening (Eq 15.13): p_c↔ε_v^pc, modulus H_cap=(p_ref/β)(p_c/p_ref)^m. In
-// isotropic compression (q̃=0) the tangent is K_iso = K_e·H_cap/(K_e+H_cap) (springs in
-// series). The consistent tangent (associated) is ~symmetric.
-// Schanz (1999) / Rocscience-PLAXIS HS; hardening-soil-formulation.md §4.
+// POWER-LAW hardening ε_v^pc = (β/(1−m))(p_c/p_ref)^(1−m), modulus
+// H_cap=(p_ref/β)(p_c/p_ref)^m. In isotropic compression (q̃=0) the tangent is
+// K_iso = K_e·H_cap/(K_e+H_cap) (springs in series). The consistent tangent (associated) is
+// ~symmetric.
+// Schanz, Vermeer & Bonnier (1999); hardening-soil-formulation.md §4.
 struct HsCapStep {
     Eigen::Vector3d stress;
     double pp;                // updated preconsolidation pressure
@@ -327,7 +324,7 @@ inline HsCapStep hs_cap_step(const HardeningSoilParams& p,
     };
     auto resid = [&](double l, Eigen::Vector3d& s, double& ppv) {
         s = solve_sig(l);
-        ppv = p.cap_pc_from_ev(ev_n + 2.0 * mean(s) * l);  // power-law hardening (Eq 15.13)
+        ppv = p.cap_pc_from_ev(ev_n + 2.0 * mean(s) * l);  // power-law cap hardening
         return fcap(s, ppv);
     };
     for (int it = 0; it < 60; ++it) {
@@ -348,7 +345,7 @@ inline HsCapStep hs_cap_step(const HardeningSoilParams& p,
     //   D_alg = Ξ − (Ξ n_c)(Ξ w)ᵀ/denom.
     const Eigen::Vector3d nc = Hc * sig;
     const double pmean = mean(sig);
-    const double Hcap = p.cap_hardening_modulus(pp);  // stress-dependent (Eq 15.13)
+    const double Hcap = p.cap_hardening_modulus(pp);  // stress-dependent (power law)
     Eigen::Matrix3d Ce;  // elastic compliance (Eur, ν)
     Ce << 1.0, -nu, -nu, -nu, 1.0, -nu, -nu, -nu, 1.0;
     Ce /= Eur;
@@ -377,7 +374,7 @@ struct HsState {
 };
 
 // sigma3_stiff: the minor principal that freezes the elastic Eur (committed σ3). The FE
-// wrapping passes the committed σ3 (like PLAXIS); negative sentinel ⇒ sigma_n(2) is used
+// wrapping passes the committed σ3; negative sentinel ⇒ sigma_n(2) is used
 // (old call).
 inline HsState hs_return_principal(const HardeningSoilParams& p,
                                    const Eigen::Vector3d& sigma_n, double gamma_p_n,
@@ -427,7 +424,7 @@ inline HsState hs_return_principal(const HardeningSoilParams& p,
         Eigen::Vector3d sig = sig_tr;
         for (int it = 0; it < 50; ++it) {
             const double spm = spm_of(q);
-            const double h = (4.0 + spm) / (2.0 - spm);  // 1−2R (Eq 6-10); 2 at ψ_m=0
+            const double h = (4.0 + spm) / (2.0 - spm);  // 1−2R (γ^p hardening); 2 at ψ_m=0
             const Eigen::Vector3d Demg = De * shear_dir(q);
             sig = sig_tr - dl * Demg;
             q = sig(0) - sig(2);
@@ -439,7 +436,7 @@ inline HsState hs_return_principal(const HardeningSoilParams& p,
         if (q > qf) {
             // Failure plateau: perfectly plastic MC (q=qf), the flow (1,R,R) stays dilatant
             // (ψ_m=ψ@failure). σ=σ_tr−λ De m_g, q=qf ⇒ λ in closed form (R constant).
-            // Dilation continues along the plateau (Fig 15.4); a raw σ1 clamp would kill it.
+            // Dilation continues along the plateau; a raw σ1 clamp would kill it.
             const double spmf = spm_of(qf);
             const double Rf_ = -(1.0 + spmf) / (2.0 - spmf);
             const Eigen::Vector3d Demg = De * Eigen::Vector3d(1.0, Rf_, Rf_);
@@ -458,7 +455,7 @@ inline HsState hs_return_principal(const HardeningSoilParams& p,
         double lam = 0.0; Eigen::Vector3d sig = sig_tr; double pp = pp_n;
         auto solve = [&](double l, Eigen::Vector3d& s, double& ppv) {
             s = (Eigen::Matrix3d::Identity() + l * DeHc).inverse() * sig_tr;
-            ppv = p.cap_pc_from_ev(ev_n + 2.0 * mean(s) * l);  // power law (Eq 15.13)
+            ppv = p.cap_pc_from_ev(ev_n + 2.0 * mean(s) * l);  // power-law cap hardening
             return fcap(s, ppv);
         };
         for (int it = 0; it < 60; ++it) {
@@ -492,8 +489,8 @@ inline HsState hs_return_principal(const HardeningSoilParams& p,
             }
             const double q = s(0) - s(2);
             const double spm = spm_of(q);
-            gpv = gamma_p_n + (4.0 + spm) / (2.0 - spm) * ls;  // 1−2R (Eq 6-10); 2 at ψ_m=0
-            ppv = p.cap_pc_from_ev(ev_n + 2.0 * mean(s) * lc);  // power law (Eq 15.13)
+            gpv = gamma_p_n + (4.0 + spm) / (2.0 - spm) * ls;  // 1−2R (γ^p hardening); 2 at ψ_m=0
+            ppv = p.cap_pc_from_ev(ev_n + 2.0 * mean(s) * lc);  // power-law cap hardening
             Eigen::Vector2d r;
             r(0) = fbar(q) - gpv;
             r(1) = fcap(s, ppv);
@@ -536,15 +533,15 @@ inline HsState hs_return_principal(const HardeningSoilParams& p,
 }
 
 // --- ROBUST multi-surface integrator: explicit substepping + Koiter (Sloan/Potts&Gens) ---
-// The path leading geotechnical codes (the PLAXIS/GEO5/Midas class) and the literature take
-// for complex soil models: the outer strain increment is split into small substeps; at each
+// The path the literature takes for complex soil models: the outer strain increment is split
+// into small substeps; at each
 // substep the active surfaces (shear/cap) are determined, the plastic multipliers are
 // solved from the 2×2 system with Koiter multi-surface flow (negative multiplier → that
 // surface is dropped), stress+hardening are updated, and a drift correction pulls back to
 // the surface. Unlike an implicit nested Newton it does NOT DIVERGE (explicit, small step)
 // — robust including high stiffness (E=100+MPa). Strain-driven (the shared path of
 // integrate_point + single-element triaxial/oedometer + calibration).
-// Source: Sloan, Abbo & Sheng (2001); Potts & Zdravković; Rocscience/PLAXIS HS (Eq 15.1-15.13).
+// Source: Sloan, Abbo & Sheng (2001); Potts & Zdravković; Schanz, Vermeer & Bonnier (1999).
 struct HsIntegrated {
     Eigen::Vector3d stress;
     double gamma_p;
@@ -666,7 +663,7 @@ inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
                                  double stol = 0.0,
                                  HsSubstepPlan* plan_out = nullptr,
                                  const HsSubstepPlan* plan_in = nullptr) {
-    const double pr = p.p_ref, plim = 0.1 * pr;  // p_limit (the Eq 15.3 safeguard)
+    const double pr = p.p_ref, plim = 0.1 * pr;  // p_limit: σ3 floor in the stiffness laws
     const double nu = p.nu_ur;
     const detail::HsDilatancy dil = detail::hs_dilatancy(p);
     const double alpha = p.cap_alpha;
@@ -704,7 +701,7 @@ inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
     };
     const Stiff k_n = stiff_at(sigma_n);   // the committed state, for the elastic default
     // The cap deviatoric measure: symmetric von Mises q (q^2=3J2). This is EQUIVALENT to
-    // the reduced form of PLAXIS's asymmetric q-tilde measure (MMM Eq 6-26) on the OEDOMETER
+    // the reduced form of the asymmetric q-tilde measure (s1+(delta-1)s2-delta s3) on the OEDOMETER
     // (axisymmetric, s2=s3) path: the s2,s3 components of the q-tilde flow average out under
     // axisymmetry -> exactly von Mises flow. (Applying q-tilde raw to a de2=de3=0 probe
     // produces the s2!=s3 absurdity; see hardening-soil-formulation.md section 4f.)
@@ -770,12 +767,12 @@ inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
         // (DILATION, comp-pos => ev^p<0). R=-(1+sin psi_m)/(2-sin psi_m) gives it (-1/2 at
         // psi_m=0 = volumetrically neutral).
         const double spm = spm_of(q, k), R = -(1.0 + spm) / (2.0 - spm);
-        // Hardening modulus h_s = 1-2R = (4+sin psi_m)/(2-sin psi_m) (Eq 6-10); 2 at psi_m=0.
+        // Hardening modulus h_s = 1-2R = (4+sin psi_m)/(2-sin psi_m); 2 at psi_m=0.
         const double h_s = (4.0 + spm) / (2.0 - spm);
         const Eigen::Vector3d n_s(1.0, R, R);  // flow direction (dilatant)
         // Failure plateau: at q>=qf the shear becomes PERFECTLY-PLASTIC MC (yield f=q-qf,
         // grad (1,0,-1), hardening 0); the flow (1,R,R) stays dilatant -> dilation continues
-        // along the plateau (Fig 15.4).
+        // along the plateau.
         const bool at_fail = q >= qf - 1e-9 * (1.0 + qf);
         const Eigen::Vector3d m_s = at_fail ? Eigen::Vector3d(1.0, 0.0, -1.0)
                                             : (fbar_p(q, k) * Eigen::Vector3d(1.0, 0.0, -1.0));
@@ -965,12 +962,11 @@ inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
             // agree, the estimate is zero, and the step is taken whole -- a gate would only hide
             // the case where it is not.
             const Eigen::Vector3d s_end = sigma_n + 0.5 * (f1.dsig + f2.dsig);
-            // The denominator needs a FLOOR, and the reference code says which one. A purely
-            // relative measure against ||sigma|| is degenerate where a run starts from (near)
-            // zero stress -- a weightless column, a surface layer, the first increment of any
-            // seating phase. PLAXIS meets the same problem in its local error checks and floors
-            // the denominator at p_ref/200 (Scientific Manual Eq. 9-7, the check written for
-            // stress-dependent elastic stiffness); this is the same floor, for the same reason.
+            // The denominator needs a FLOOR. A purely relative measure against ||sigma|| is
+            // degenerate where a run starts from (near) zero stress -- a weightless column, a
+            // surface layer, the first increment of any seating phase. The floor is p_ref/200:
+            // tied to the reference pressure of the stress-dependent stiffness law, so it scales
+            // with the material's own stress level rather than with the units.
             const double dn = std::max(s_end.norm(), pr / 200.0);
             const double e_step = 0.5 * (f2.dsig - f1.dsig).norm() / dn;
             if (!(e_step > 0.0)) break;             // exact on this step: nothing to subdivide
@@ -1018,7 +1014,7 @@ inline HsIntegrated hs_integrate(const HardeningSoilParams& p,
 
 // Cap preconsolidation initialization (FE initial state): pp = p_eq · OCR,
 // p_eq = √(3J2/α² + p²) (the isotropic-equivalent pressure at which the cap passes through
-// σ0, the PLAXIS MMM state param p_eq, §6.6). NC (OCR=1) ⇒ the initial state sits on the
+// σ0, the state parameter p_eq). NC (OCR=1) ⇒ the initial state sits on the
 // cap (f_c=0); this keeps the cap well-defined in FE (pp_n=0 would make the cap yield
 // always). sig_comp_pos = compression-positive principal stress (σ_HS = −σ_solver).
 inline double hs_initial_pp(const HardeningSoilParams& p,
@@ -1084,8 +1080,8 @@ inline void hs_oedometer_probe(const HardeningSoilParams& p, double& Eoed_pref,
     }
 }
 
-// Cap hardening modulus K_p = K1·K2/(K1−K2) — CLOSED FORM from Eoed_ref (Itasca
-// Plastic-Hardening = the PLAXIS-HS equivalent). K1=Eur_ref/(3(1−2ν)) unloading bulk;
+// Cap hardening modulus K_p = K1·K2/(K1−K2) — CLOSED FORM from Eoed_ref (elastic and
+// plastic bulk springs in series, 1/K2 = 1/K1 + 1/K_p). K1=Eur_ref/(3(1−2ν)) unloading bulk;
 // K2=Eoed_ref(1+2K0nc)/3. This ties the cap hardening directly to Eoed (no numerical
 // calibration of β needed) ⇒ the K0-Eoed coupling is resolved: β=p_ref/(k·K_p), only α
 // (and a small k correction) is calibrated.
@@ -1095,10 +1091,10 @@ inline double hs_cap_Kp(const HardeningSoilParams& p, double K0_NC) {
     return (K1 > K2) ? K1 * K2 / (K1 - K2) : K1;  // K1>K2 (Eur≫Eoed) typical
 }
 
-// Cap parameters (α, β) from the PLAXIS-standard inputs. β = p_ref/(k·K_p) (K_p closed
-// form, sets Eoed in CLOSED FORM → the coupling is resolved); α by outer bisection for
-// K0_NC; k by inner bisection as an Eoed_ref fine correction (k≈1). The Itasca PH / PLAXIS
-// HS method. If K0_NC is unreachable, the nearest α.
+// Cap parameters (α, β) from the standard HS inputs (Eoed_ref, K0_NC). β = p_ref/(k·K_p) (K_p
+// closed form, sets Eoed in CLOSED FORM → the coupling is resolved); α by outer bisection for
+// K0_NC; k by inner bisection as an Eoed_ref fine correction (k≈1). Both are fitted by
+// simulated oedometer tests. If K0_NC is unreachable, the nearest α.
 inline void hs_calibrate_cap(HardeningSoilParams& p, double K0_NC) {
     const double Kp = hs_cap_Kp(p, K0_NC);
     // Inner: at a given α find k (β=p_ref/(k·K_p)) for Eoed_ref; return K0.

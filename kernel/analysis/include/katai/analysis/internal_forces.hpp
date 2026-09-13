@@ -141,9 +141,9 @@ struct PrevPoint {
 // LOCAL convergence measurement, gathered while the internal force is assembled because that
 // is the only place where both stresses of a point exist at the same instant.
 //
-// The concept (Scientific Manual §9.1.2, Fig. 9-1): a stress point carries TWO stresses per
-// iteration. The CONSTITUTIVE stress is what the material law returns for the strain the point
-// was given, sigma_c,j = sigma_0 + D^e (Delta-eps_j - Delta-eps_p,j). The EQUILIBRIUM stress is
+// The concept: a stress point carries TWO stresses per iteration. The CONSTITUTIVE stress is
+// what the material law returns for the strain the point was given,
+// sigma_c,j = sigma_0 + D^e (Delta-eps_j - Delta-eps_p,j). The EQUILIBRIUM stress is
 // what the finite-element linearisation says the point carries, sigma_eq,j = sigma_c,j-1 +
 // D^e delta-eps_j, built from the previous iterate with this iteration's displacement
 // correction. They coincide only at convergence. A run that satisfies global equilibrium while
@@ -171,39 +171,43 @@ struct LocalErrorProbe {
 
     // --- measured, over the ACTIVE soil stress points -----------------------------------
     int plastic = 0;                 // points with a yield or cap surface active
-    int plastic_inaccurate = 0;      // ... of those, over the tolerated local error (Eq. 9-5)
+    int plastic_inaccurate = 0;      // ... of those, over the tolerated local error
     int elastic_total = 0;           // points with no surface active
     int nl_elastic = 0;              // ... of those, with a STRESS-DEPENDENT elastic stiffness
-    int nl_elastic_inaccurate = 0;   // ... of those, over the tolerated local error (Eq. 9-7)
+    int nl_elastic_inaccurate = 0;   // ... of those, over the tolerated local error
     double worst_plastic = 0.0;      // the largest local error of each kind, so that a count
     double worst_nl_elastic = 0.0;   //   of zero can still say how much room it had
     // Points whose CONSTITUTIVE INTEGRATION hit its substep guard on this iterate, i.e. walked
     // the material law without meeting the error tolerance it was given. Not a local convergence
-    // criterion and not derivable from one: the two stresses of Fig. 9-1 can agree perfectly
-    // while both of them are wrong, because they are both computed from the same cut-short walk.
+    // criterion and not derivable from one: the equilibrium and constitutive stresses can agree
+    // perfectly while both of them are wrong, because they are both computed from the same
+    // cut-short walk.
     int integration_saturated = 0;
 
-    // CSP (Reference Manual Eq. 7-22) numerator and denominator, integrated over the active
-    // volume: the work actually done against the stress increment, over the work the same
+    // The current stiffness parameter (CSP) numerator and denominator, integrated over the
+    // active volume: the work actually done against the stress increment, over the work the same
     // strain would have done had the response stayed elastic.
     double energy_total = 0.0;       // integral of Delta-eps . Delta-sigma
     double energy_elastic = 0.0;     // integral of Delta-eps . D^e Delta-eps
 
-    // Moment criterion (Eq. 9-3, 9-4). m_ref is summed HERE, element by element, because it is
-    // a sum of ABSOLUTE moment contributions: taken after assembly, the opposing contributions
-    // of two adjacent plate elements cancel and the reference collapses towards zero exactly
-    // where the structure is in equilibrium -- which is where the criterion has to work.
+    // Moment criterion: the largest out-of-balance moment on a rotational equation, over m_ref.
+    // m_ref is summed HERE, element by element, because it is a sum of ABSOLUTE moment
+    // contributions: taken after assembly, the opposing contributions of two adjacent plate
+    // elements cancel and the reference collapses towards zero exactly where the structure is in
+    // equilibrium -- which is where the criterion has to work.
     double m_ref = 0.0;
     std::vector<int> moment_eq;      // equations carrying a rotational degree of freedom
 
-    // Interfaces (Eq. 9-8). The source counts the embedded beam's SKIN coupling springs in the
-    // same tally as the soil-structure interfaces ("no distinction between standard interfaces
-    // and special interfaces"), so they are counted here together and the record says so.
+    // Interfaces: the local error at a plastic interface point (see measure_traction_point). The
+    // embedded beam's SKIN coupling springs are counted in the same tally as the soil-structure
+    // interfaces -- no distinction is drawn between a standard interface and the special one a
+    // pile skin is -- so they are counted here together and the record says so.
     int iface_plastic = 0, iface_plastic_inaccurate = 0;
     double worst_iface = 0.0;
 
-    // Embedded-beam foot force (Eq. 9-9). Three sums rather than a count, because the criterion
-    // is one ratio over all the feet in the model, not a per-point test.
+    // Embedded-beam foot force error: the difference between equilibrium and constitutive foot
+    // forces, relative to the foot forces themselves. Three sums rather than a count, because the
+    // criterion is one ratio over all the feet in the model, not a per-point test.
     int feet = 0;
     double foot_num = 0.0;        // sum |F_foot,eq - F_foot,c|
     double foot_den_c = 0.0;      // sum |F_foot,c|
@@ -224,11 +228,12 @@ struct LocalErrorProbe {
     }
 };
 
-// One interface / coupling-spring stress point, measured the way Fig. 9-1 measures a soil one:
-// the EQUILIBRIUM traction is the previous iterate's constitutive traction carried forward
-// elastically through this iteration's slip increment, and the CONSTITUTIVE traction is what the
-// Coulomb return actually gave. Eq. 9-8 normalises their difference by the point's own shear
-// capacity, with the same 1 kPa floor as the soil so that a point carrying nothing cannot report
+// One interface / coupling-spring stress point, measured the way a soil stress point is measured
+// (LocalErrorProbe): the EQUILIBRIUM traction is the previous iterate's constitutive traction
+// carried forward elastically through this iteration's slip increment, and the CONSTITUTIVE
+// traction is what the Coulomb return actually gave. The local interface error normalises their
+// difference by the point's own shear capacity, max(tau_max, c), with the same 1 kPa floor as
+// the soil so that a point carrying nothing cannot report
 // an enormous relative error on a difference that is numerically nothing.
 //
 // `prev` is read and then overwritten with this iterate's pair, which is what carries the
@@ -456,8 +461,8 @@ public:
                 const int gi = e * n_gp + g;
                 typename Kin::Tangent dt;
                 const TangentMode tm = !build_tangent ? TangentMode::kNone : tmode;
-                // Depth-varying stiffness / cohesion are evaluated HERE, at the stress point (PLAXIS
-                // does the same): the whole point of a gradient is that it varies WITHIN an element,
+                // Depth-varying stiffness / cohesion are evaluated HERE, at the stress point: the
+                // whole point of a gradient is that it varies WITHIN an element,
                 // so an element-average would quietly flatten it on a coarse mesh. uniform() keeps the
                 // per-element material by reference -> the constant-E path stays bit-for-bit.
                 const MaterialModel* mp = &mat;
@@ -479,13 +484,14 @@ public:
                 if (probe) {
                     LocalErrorPartial& acc = probe_buf_[e];
                     const double w_loc = gauss[g].weight * grad.weight;
-                    // --- CSP (Eq. 7-22): the work this increment actually did, over the work
-                    // the same strain would have done had the response stayed elastic. Unity
-                    // while elastic, falling towards zero as the body plastifies.
+                    // --- CSP, the current stiffness parameter: the work this increment actually
+                    // did, over the work the same strain would have done had the response stayed
+                    // elastic. Unity while elastic, falling towards zero as the body plastifies.
                     const typename Kin::Strain dsig = sigma - Kin::stress(committed[gi]);
                     acc.energy_total += w_loc * dstrain.dot(dsig);
                     acc.energy_elastic += w_loc * dstrain.dot(rep.elastic * dstrain);
-                    // --- the two stresses of Fig. 9-1.
+                    // --- the two stresses of the point: constitutive (s_c) and equilibrium
+                    // (s_eq = sigma_c,j-1 + D^e delta-eps_j).
                     const size_t base = static_cast<size_t>(gi) * Kin::kStrain;
                     typename Kin::Strain deps_prev;
                     for (int k = 0; k < Kin::kStrain; ++k)
@@ -494,15 +500,16 @@ public:
                     const Eigen::Vector4d s_c = Kin::full_stress(trial[gi]);
                     const Eigen::Vector4d s_eq =
                         Kin::full_stress((*probe->prev_sigma_c)[gi]) +
-                        Kin::elastic_step(rep.elastic, ddeps);              // Eq. 9-6
+                        Kin::elastic_step(rep.elastic, ddeps);
                     if (rep.integration_saturated) ++acc.integration_saturated;
                     const double diff = (s_eq - s_c).norm();
                     const double tmax = tau_max_of(s_c(0), s_c(1), s_c(2), s_c(3));
                     const double coh = cohesion_of(matg);
                     if (rep.plastic) {
-                        // Eq. 9-5. The 1 kPa floor is the manual's: it stops a point that
-                        // carries almost no stress at all from reporting an enormous relative
-                        // error on a difference that is numerically nothing.
+                        // The local error at a plastic stress point: |sigma_eq - sigma_c| over
+                        // max(tau_max, c, 1 kPa). The 1 kPa floor stops a point that carries
+                        // almost no stress at all from reporting an enormous relative error on a
+                        // difference that is numerically nothing.
                         const double err = diff / std::max(std::max(tmax, coh), 1.0);
                         ++acc.plastic;
                         if (err > probe->tolerated) ++acc.plastic_inaccurate;
@@ -510,10 +517,10 @@ public:
                     } else {
                         ++acc.elastic_total;
                         if (rep.stress_dependent) {
-                            // Eq. 9-7. Same difference, a different floor: a point whose
-                            // ELASTIC stiffness moves with stress can be inaccurate while
-                            // carrying no plasticity at all, and p_ref/200 is the scale the
-                            // manual measures that against.
+                            // The local error at a stress-dependent elastic point. Same
+                            // difference, a different floor: a point whose ELASTIC stiffness
+                            // moves with stress can be inaccurate while carrying no plasticity
+                            // at all, and p_ref/200 is the scale that is measured against.
                             const double err = diff / std::max(std::max(tmax, coh),
                                                                p_ref_of(matg) / 200.0);
                             ++acc.nl_elastic;
@@ -860,13 +867,14 @@ public:
         }
 
         // --- Embedded beam (pile row): beam (Timoshenko) stiffness + skin coupling (beam ↔
-        // soil via N_s, mesh-nonconforming). Sci.Man §7.5. The beam lives on extra DOFs; the
+        // soil via N_s, mesh-nonconforming). The beam lives on extra DOFs; the
         // skin splits each point with [N_b,−N_s]. Since E (the soil element) is known in this
         // assembler, N_s = E::shape_functions.
         // Shared helper: axial return mapping + scatter at one coupling point (eq,cx,cy lists).
         // out_f / out_du hand back the axial force the law returned and the relative axial
-        // displacement it was returned for -- the pair the local criteria need (Eq. 9-8 for the
-        // skin springs, Eq. 9-9 for the foot). Both default to null, so the measurement costs
+        // displacement it was returned for -- the pair the local criteria need (the local
+        // interface error for the skin springs, the foot force error for the foot). Both default
+        // to null, so the measurement costs
         // nothing where it is not asked for.
         auto axial_couple = [&](const int* eqp, const int* gdp, const double* cxp,
                                 const double* cyp, int nc,
@@ -951,8 +959,9 @@ public:
                              sp.wJ, (*st.eskin_c)[skin_off + pi], (*st.eskin_t)[skin_off + pi],
                              want ? &f_sp : nullptr, want ? &du_sp : nullptr,
                              want ? &capped : nullptr);
-                // The source counts an embedded beam's skin springs with the interface plastic
-                // points rather than separately, so they land in the same tally (Eq. 9-8's note).
+                // An embedded beam's skin springs are counted with the interface plastic points
+                // rather than separately, so they land in the same tally (the local interface
+                // error).
                 if (want)
                     measure_traction_point(*probe, (*probe->prev_skin)[skin_off + pi], f_sp, du_sp,
                                            sp.k_a, capped, sp.t_max, 0.0);
@@ -980,11 +989,11 @@ public:
                 axial_couple(eq.data(), gdx.data(), cx.data(), cy.data(), nc, eb.foot.tang, eb.foot.D_foot, 0.0,
                              eb.foot.f_max, 1.0, (*st.efoot_c)[bi], (*st.efoot_t)[bi],
                              want_f ? &f_ft : nullptr, want_f ? &du_ft : nullptr);
-                // Eq. 9-9. The foot is not counted as a point: its criterion is ONE ratio over
-                // every foot in the model, so what is gathered here are the three sums that ratio
-                // is formed from. The equilibrium force is the previous iterate's carried forward
-                // elastically -- the same construction as Fig. 9-1, which the source says applies
-                // "in the same fashion" to the pile tip.
+                // The foot force error. The foot is not counted as a point: its criterion is ONE
+                // ratio over every foot in the model, so what is gathered here are the three sums
+                // that ratio is formed from. The equilibrium force is the previous iterate's
+                // carried forward elastically -- the same equilibrium-versus-constitutive
+                // construction as a soil stress point, applied in the same way to the pile tip.
                 if (want_f) {
                     PrevPoint& pv = (*probe->prev_foot)[bi];
                     if (!probe->first_iterate) {

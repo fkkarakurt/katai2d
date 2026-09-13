@@ -275,7 +275,7 @@ check('"mstage":0.5' in katai.project_to_json(built)
 
 # ------------------------------- the pore fluid's stiffness, from the easy surface --
 # KV-CST-006 verifies what these DO; this is how an engineer with a measured Skempton B
-# says so instead of accepting PLAXIS's 0.495 for a soil that was never asked about.
+# says so instead of accepting a generic nu_u = 0.495 for a soil that was never asked about.
 prj = katai.Project("undrained stiffness", mesh_size=2.0, auto_refine=False)
 soft = prj.materials.mohr_coulomb("Soft clay", E=5000.0, nu=0.3, c=20.0, phi=25.0,
                                   gamma=17.0, drainage="undrained_a",
@@ -393,8 +393,8 @@ fos_dsl = job_dsl.results()[-1].fos
 fos_file = job_file.results()[-1].fos
 check(fos_dsl == fos_file,
       f"DSL run == file run, bit for bit (FoS = {fos_dsl:.3f})")
-check(abs(fos_dsl - 0.99) < 0.08 * 0.99,
-      "FoS within the declared band of the published benchmark")
+check(abs(fos_dsl - 1.00) < 0.08 * 1.00,
+      "FoS within the declared band of the referee value")
 
 if failures:
     sys.exit(f"{failures} check(s) failed")

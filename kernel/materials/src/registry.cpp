@@ -29,7 +29,7 @@ bool is_su_entered(const MaterialParams& p) {
 
 // Fields every model shares. The undrained flag wires the pore fluid's bulk
 // stiffness Kw/n into the global tangent (effective stress path); nu_u = 0.495
-// is the PLAXIS default (exactly 0.5 is singular).
+// by default, a nearly incompressible undrained Poisson's ratio (exactly 0.5 is singular).
 MaterialModel common_fields(const MaterialParams& p) {
     MaterialModel mm;
     mm.youngs_modulus = p.E;
@@ -37,21 +37,21 @@ MaterialModel common_fields(const MaterialParams& p) {
     mm.cohesion = p.c;
     mm.friction_angle = p.phi_rad;
     mm.dilatancy_angle = p.psi_rad;
-    // Rankine tension cut-off (MMM Eq 3-11; default ON in the schema,
+    // Rankine tension cut-off (sigma_i <= sigma_t; default ON in the schema,
     // sigma_t = 0). Applied in the Mohr-Coulomb return mapping; the HS/SS
     // integrators do not read it yet, and the editor says so honestly.
     mm.tension_cutoff = p.tension_cutoff;
     mm.tensile_strength = std::max(0.0, p.tensile_strength);
-    // Dilatancy cut-off (MMM Eq. 5.16b): read by the Mohr-Coulomb and Hardening Soil return
-    // mappings, which are the models that HAVE a dilatancy angle to switch off.
+    // Dilatancy cut-off (psi_m = 0 once e >= e_max): read by the Mohr-Coulomb and Hardening
+    // Soil return mappings, which are the models that HAVE a dilatancy angle to switch off.
     mm.dilatancy_cutoff = p.dilatancy_cutoff;
     mm.e_init = p.e_init;
     mm.e_max = p.e_max;
     if (is_undrained(p)) {
         mm.undrained = true;
         // The equivalent undrained Poisson ratio: entered directly, or derived from Skempton's
-        // B (MMM Eq. 2-55). It used to be the constant 0.495 for every material in every model,
-        // which is PLAXIS's DEFAULT rather than its rule -- a soil with a measured B of 0.90 was
+        // B (Skempton 1954). It used to be the constant 0.495 for every material in every model,
+        // which is a DEFAULT rather than a rule -- a soil with a measured B of 0.90 was
         // silently solved at B = 0.978, and the two differ by more than the excess pore pressure
         // a designer would call negligible.
         mm.undrained_poisson = p.skempton_mode
@@ -59,9 +59,9 @@ MaterialModel common_fields(const MaterialParams& p) {
                                    : p.nu_u;
     }
     // Undrained (C): total stress throughout. E and nu are already the undrained pair -- the
-    // user entered them in those boxes, as PLAXIS asks -- so nothing about the elasticity
-    // changes here; what the flag carries is that the result is total stress and there are no
-    // pore pressures to separate out.
+    // user entered them in those boxes, as the input contract asks -- so nothing about the
+    // elasticity changes here; what the flag carries is that the result is total stress and
+    // there are no pore pressures to separate out.
     mm.total_stress = p.drainage == DrainageClass::UndrainedC;
     return mm;
 }
@@ -100,14 +100,13 @@ MaterialModel build_mc(const MaterialParams& p) {
 // --- Hardening Soil (+ HSsmall) ----------------------------------------------
 
 std::string validate_hs(const MaterialParams& p) {
-    // Undrained (C) is offered by PLAXIS for the Linear Elastic and Mohr-Coulomb models (and
-    // for NGI-ADP / UDCAM-S, which this build does not have) -- MMM section 2.7.1. A total
+    // Undrained (C) is offered for the Linear Elastic and Mohr-Coulomb models only. A total
     // stress analysis with a hardening model would run: the model would happily take undrained
     // parameters as effective ones and harden along the wrong stress path.
     if (p.drainage == DrainageClass::UndrainedC)
         return "Hardening Soil with Undrained (C) is not a supported combination: a total "
                "stress analysis needs undrained stiffness and strength, and the hardening laws "
-               "are written for effective stress (PLAXIS offers Undrained (C) for the Linear "
+               "are written for effective stress (Undrained (C) is available for the Linear "
                "Elastic and Mohr-Coulomb models). Use Undrained (A) with this model -- Undrained "
                "(B) is not supported for it yet either -- or Mohr-Coulomb with Eu, nu_u and su "
                "for a total stress analysis.";
@@ -157,8 +156,8 @@ MaterialModel build_hs(const MaterialParams& p) {
 MaterialModel build_hss(const MaterialParams& p) {
     MaterialModel mm = build_hs_core(p);
     mm.hs.gamma07 = p.gamma07;
-    // Small-strain overlay (MMM ch. 7), capped at the ratio the model permits (sec. 7.5:
-    // G0/Gur <= 20). The driver says so when the cap bites (K2D-M004) -- a G0 quietly reduced
+    // Small-strain overlay (Benz 2007), capped at the ratio the model permits
+    // (G0/Gur <= 20). The driver says so when the cap bites (K2D-M004) -- a G0 quietly reduced
     // is a different soil from the one the file asked for.
     mm.hs.G0_ref = std::min(p.G0_ref, mm.hs.G0_ref_cap());
     hs_calibrate_cap(mm.hs, k0nc_of(p));
@@ -171,8 +170,8 @@ std::string validate_ss(const MaterialParams& p) {
     if (p.drainage == DrainageClass::UndrainedC)
         return "Soft Soil (Creep) with Undrained (C) is not a supported combination: a total "
                "stress analysis needs an undrained stiffness, and this model's stiffness is the "
-               "stress-dependent ln law (K = p'/kappa*) written for EFFECTIVE stress (PLAXIS "
-               "offers Undrained (C) for the Linear Elastic and Mohr-Coulomb models). Use "
+               "stress-dependent ln law (K = p'/kappa*) written for EFFECTIVE stress (Undrained "
+               "(C) is available for the Linear Elastic and Mohr-Coulomb models). Use "
                "Drained, or Mohr-Coulomb with Eu, nu_u and su.";
     // Honest refusal: the pore-fluid stiffness plumbing derives Kw/n from a
     // constant E, and Soft Soil has no E input (stiffness is the ln law
@@ -204,9 +203,9 @@ MaterialModel build_ss(const MaterialParams& p) {
 }
 
 MaterialModel build_ssc(const MaterialParams& p) {
-    // Soft Soil Creep (MMM section 11): SS parameters plus mu*; time enters
-    // integration through integrate_point's dt_day tail, tau = 1 day (PLAXIS
-    // constant). Same step/tolerance family and Safety gate as SS.
+    // Soft Soil Creep (Vermeer & Neher 1999): SS parameters plus mu*; time enters
+    // integration through integrate_point's dt_day tail, tau = 1 day (a fixed
+    // reference time). Same step/tolerance family and Safety gate as SS.
     MaterialModel mm = common_fields(p);
     mm.type = MaterialType::SoftSoilCreep;
     auto& s = mm.ssc;
@@ -222,10 +221,11 @@ MaterialModel build_ssc(const MaterialParams& p) {
 }
 
 MaterialModel build_hb(const MaterialParams& p) {
-    // Hoek-Brown (MMM §4). Hooke's law for the elastic part -- so E and nu are read like the
-    // linear-elastic model's -- and the strength is the five rock inputs. Nothing here is fitted:
-    // m_b, s and a come out of GSI and the disturbance factor by the manual's own equations, in
-    // the core (hoek_brown.hpp constants_of), so this seam only ferries.
+    // Hoek-Brown (Hoek, Carranza-Torres & Corkum 2002). Hooke's law for the elastic part -- so E
+    // and nu are read like the linear-elastic model's -- and the strength is the five rock inputs.
+    // Nothing here is fitted: m_b, s and a come out of GSI and the disturbance factor by the
+    // criterion's own equations, in the core (hoek_brown.hpp constants_of), so this seam only
+    // ferries.
     MaterialModel mm = common_fields(p);
     mm.type = MaterialType::HoekBrown;
     auto& h = mm.hb;
@@ -236,7 +236,7 @@ MaterialModel build_hb(const MaterialParams& p) {
     h.D = p.hb_D;
     h.psi = p.psi_rad;
     h.sig_psi = p.sig_psi;
-    // The optional cut-off of MMM sec 4.3.7, taken from the SAME two schema fields every other
+    // The optional tension cut-off, taken from the SAME two schema fields every other
     // model's Rankine cap uses. It caps the criterion's own sigma_t and can only lower it -- so a
     // rock material left with the schema's default (cut-off on, tensile strength 0) is capped at
     // zero tension, which is the conservative reading of that default and the same thing it means
@@ -249,7 +249,7 @@ MaterialModel build_hb(const MaterialParams& p) {
 std::string validate_hb(const MaterialParams& p) {
     // THE UNDRAINED SHEAR STRENGTH HAS NOWHERE TO GO. Undrained (B) and (C) both work by
     // substituting a Tresca envelope for the drained one -- c = su with phi = psi = 0 -- and
-    // this model reads neither c nor phi: its strength is the Eq 4-1 curve alone. The
+    // this model reads neither c nor phi: its strength is the Hoek-Brown curve alone. The
     // substitution would therefore be accepted and then ignored, and the run would quietly use
     // the FULL drained rock envelope while the user believed they had entered su. That is the
     // silent-wrong class, so it is refused here instead. Undrained (A) is a different matter and
@@ -267,9 +267,9 @@ std::string validate_hb(const MaterialParams& p) {
         return "Hoek-Brown needs the intact rock's uni-axial compressive strength |sigma_ci| > 0";
     if (!(p.mi > 0.0)) return "Hoek-Brown needs the intact rock parameter m_i > 0";
     if (p.gsi < 0.0 || p.gsi > 100.0)
-        return "the Geological Strength Index is a 0..100 scale (MMM Fig 4-6)";
+        return "the Geological Strength Index is a 0..100 scale";
     if (p.hb_D < 0.0 || p.hb_D > 1.0)
-        return "the disturbance factor is a 0..1 scale (MMM Fig 4-7: 0 undisturbed, 1 heavily blasted)";
+        return "the disturbance factor is a 0..1 scale (0 undisturbed, 1 heavily blasted)";
     if (p.sig_psi < 0.0)
         return "the confining stress at which dilatancy dies out cannot be negative";
     return {};

@@ -1,7 +1,8 @@
 // Multi-phase staged construction through the GUI compute path (solve_phases / PhaseIO).
-// Every phase ramps the configuration imbalance d = f(active) - f_int(committed) -- the PLAXIS
-// SumMstage -- so fill placement, excavation unloading and newly activated loads all follow from
-// one rule. Closed forms (1D laterally-confined column, E_oed = E(1-nu)/((1+nu)(1-2nu))):
+// Every phase ramps the configuration imbalance d = f(active) - f_int(committed) -- the staged
+// fraction `mstage` -- so fill placement, excavation unloading and newly activated loads all
+// follow from one rule.
+// Closed forms (1D laterally-confined column, E_oed = E(1-nu)/((1+nu)(1-2nu))):
 //   FILL:      settlement at the old surface  u = gamma_f h_f H / E_oed, fill top adds h_f^2/(2E_oed);
 //   EXCAVATE:  heave at the new surface       u = +gamma h_exc H / E_oed (elastic unloading);
 //   NEW LOAD:  next-phase increment           u = q H_total / E_oed.
@@ -141,7 +142,7 @@ int main() {
     test_fill_then_load();
     test_excavation();
     if (g_failures == 0) {
-        std::printf("\nOK: phases = SumMstage chaining (fill settlement, excavation heave, load increments)\n");
+        std::printf("\nOK: phases = mstage chaining (fill settlement, excavation heave, load increments)\n");
         return 0;
     }
     std::fprintf(stderr, "\n%d check(s) failed\n", g_failures);

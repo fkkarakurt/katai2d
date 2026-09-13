@@ -1,4 +1,4 @@
-// GUI constitutive models: the solve must honour the chosen soil model (PLAXIS: the selected model
+// GUI constitutive models: the solve must honour the chosen soil model (the selected model
 // governs), not always linear elastic. Verifies, end-to-end through build_problem:
 //   (A) under the K0 procedure the undisturbed geostatic state is admissible for LE / MC / HS, so
 //       self-weight gives ~zero displacement (no spurious yielding from the K0 seed);
@@ -67,7 +67,7 @@ int main() {
     // (C) Hardening Soil is WIRED and its geostatic K0 state works (part A above). General loaded HS
     // BVPs (free-surface, shear-dominated, low confinement) are not yet robust -- a known next item
     // (HS core is validated single-element + oedometer; general-BVP robustness, e.g. arc-length / low-
-    // confinement handling, is ongoing -- PLAXIS HS also needs care here). Not exercised under load
+    // confinement handling, is ongoing -- HS needs care here in general). Not exercised under load
     // here (the divergent solve is slow), to keep the suite fast.
 
     std::printf(fails ? "\n%d FAIL\n" : "\nOK: GUI honours the constitutive model (LE / MC / HS)\n", fails);

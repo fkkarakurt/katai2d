@@ -1,14 +1,14 @@
 // K0 procedure on NON-LEVEL ground through the GUI compute path (build_problem).
 //
-// PLAXIS Reference Manual: the K0 procedure is only correct when the ground surface, the layer
-// boundaries and the water table are ALL horizontal; otherwise the column-overburden field leaves
-// genuine unbalanced forces (principal directions must rotate, shear must develop near a slope
-// face). PLAXIS resolves this with a "plastic nil-step" whose equilibrium is comparable to gravity
-// loading. build_problem now builds that nil-step into the K0 phase: the imbalance
-// d = f_body - f_int(seed) is ramped together with the external loads, so the converged state is
-// the TRUE equilibrium. On level ground d is round-off and is dropped (u = 0 exactly, the
-// undisturbed-case identity) -- including LAYERED and WATER-TABLE columns, which the
-// strata-break-exact overburden integral keeps exact.
+// The K0 procedure is only correct when the ground surface, the layer boundaries and the water
+// table are ALL horizontal; otherwise the column-overburden field leaves genuine unbalanced
+// forces (principal directions must rotate, shear must develop near a slope face). The remedy is
+// a "plastic nil-step": a step with no load change that equilibrates that field, and whose
+// equilibrium is therefore comparable to gravity loading. build_problem now builds that nil-step
+// into the K0 phase: the imbalance d = f_body - f_int(seed) is ramped together with the external
+// loads, so the converged state is the TRUE equilibrium. On level ground d is round-off and is
+// dropped (u = 0 exactly, the undisturbed-case identity) -- including LAYERED and WATER-TABLE
+// columns, which the strata-break-exact overburden integral keeps exact.
 //
 // History note: before the unified-B K0 (commit 3b99321) the GUI ramped full gravity from the K0
 // seed, so a slope showed this redistribution as colored |u| bands ("slip-circle rings"); the
@@ -122,7 +122,7 @@ void test_level_exact_zero() {
 }
 
 void test_slope_nil_step() {
-    std::printf("-- slope: K0 resolves the genuine imbalance (PLAXIS plastic nil-step) --\n");
+    std::printf("-- slope: K0 resolves the genuine imbalance (plastic nil-step) --\n");
     const auto pr = slope(20.0, 25.0);   // stable slope (well above FoS 1)
     const auto M = katai::app::mesh_from_project(pr, 2.5, 6);
     check(M.ok, "slope meshed");
@@ -139,7 +139,7 @@ void test_slope_nil_step() {
     std::printf("   slope K0: max|sigma_xy| = %.2f kPa\n", max_sxy);
     check(max_sxy > 5.0, "shear stress developed near the slope face (> 5 kPa)");
 
-    // PLAXIS: the nil-step equilibrium is comparable to gravity loading. Anchor: sigma'_v at a
+    // The nil-step equilibrium is comparable to gravity loading. Anchor: sigma'_v at a
     // deep point under the level crest (x=60, y=22, overburden -gamma*(35-22) = -262.6) matches
     // between the two procedures and the overburden estimate.
     const auto G = katai::app::solve_gravity_le(pr, M.mesh, InitialPhase::GravityLoading);
@@ -157,7 +157,7 @@ void test_slope_nil_step() {
         const double sk = sv_at(R, 60.0, 22.0), sg = sv_at(G, 60.0, 22.0);
         std::printf("   crest sigma'_v: K0+nil=%.1f  gravity=%.1f  overburden=%.1f kPa\n", sk, sg, sv_ref);
         check(std::fabs(sk - sv_ref) < 0.10 * std::fabs(sv_ref), "K0+nil sigma'_v ~ overburden (10%)");
-        check(std::fabs(sk - sg) < 0.10 * std::fabs(sv_ref), "K0+nil ~ gravity loading (PLAXIS claim)");
+        check(std::fabs(sk - sg) < 0.10 * std::fabs(sv_ref), "K0+nil ~ gravity loading (10%)");
     }
 }
 

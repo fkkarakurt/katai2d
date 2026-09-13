@@ -347,8 +347,8 @@ void test_seismic_structural_forces() {
 }
 
 // A Dynamic phase reports the TOTAL design action: its own linear increment superposed on the parent
-// phase's static state (PLAXIS reports the total too -- Ref 9.4.5 -- and continues the parent's state,
-// Sci 6.4). Two exact statements pin the machinery:
+// phase's static state, and the dynamic phase continues from the parent's state. Two exact
+// statements pin the machinery:
 //
 //   (1) ZERO-AMPLITUDE IDENTITY. Shake with a_g = 0 and the dynamic increment vanishes, so the
 //       reported total MUST equal the parent phase's static forces -- EXACTLY, station for station.
@@ -451,7 +451,7 @@ void test_total_action_superposition() {
     // Discriminate by AMPLITUDE, at a fixed joint. Two traps make that the only clean axis:
     //  - hard enough shaking separates the joint somewhere (tau_max = 0 -> the ratio is unbounded and
     //    reports the cap), and a capped peak cannot rank anything;
-    //  - ranking by Rinter does NOT work, and that is physics rather than a defect: PLAXIS's virtual-
+    //  - ranking by Rinter does NOT work, and that is physics rather than a defect: the virtual-
     //    thickness formulation reduces interface STIFFNESS as Rinter^2 (G_i = Rinter^2 G -> k_s = G_i/t_i)
     //    but strength only as Rinter^1, so a weaker joint is also a SOFTER joint, its dynamic
     //    tau = k_s du_s falls faster than its capacity, and utilisation ~ Rinter -- a weaker joint can

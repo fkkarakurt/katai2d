@@ -1,13 +1,14 @@
 #pragma once
-// Embedded beam (pile row) — the skin (shaft) interaction (PLAXIS 2D Sci.Man §7.5, Phase
-// A.4). The beam crosses the soil mesh in an ARBITRARY orientation; the skin interaction
-// ties the beam nodes to the soil AT the beam's location (interpolated with N_s, a
-// mesh-nonconforming "virtual node"). At one Newton-Cotes point:
+// Embedded beam (pile row) — the skin (shaft) interaction (Phase A.4). The beam crosses the
+// soil mesh in an ARBITRARY orientation; the skin interaction ties the beam nodes to the soil
+// AT the beam's location (interpolated with N_s, a mesh-nonconforming "virtual node"). At one
+// Newton-Cotes point:
 //   Δu_rel = u_b − u_s = N_b·v_b − N_s·v_s ,  t_skin = T_skin·Δu_rel ,
-//   K_skin = ∫ N_rel^T T_skin N_rel dS (4 blocks; Eq 7-57/58).  T_skin = k_a t̂t̂ᵀ + k_n n̂n̂ᵀ
-// (beam axis). Newton-Cotes nodal integration (Table 7-6; same as our interface → node
-// pairs decouple). This header produces the skin INTEGRATION POINTS (via point_location);
-// assembly is at the caller (test/solver). Math: docs/references/embedded-beam-formulation.md.
+//   K_skin = ∫ N_rel^T T_skin N_rel dS (4 blocks: beam-beam, beam-soil, soil-beam, soil-soil).
+// T_skin = k_a t̂t̂ᵀ + k_n n̂n̂ᵀ (beam axis). Newton-Cotes nodal integration (same as our
+// interface → node pairs decouple). This header produces the skin INTEGRATION POINTS (via
+// point_location); assembly is at the caller (test/solver).
+// Math: docs/references/embedded-beam-formulation.md.
 
 #include <array>
 #include <cmath>
@@ -76,7 +77,7 @@ inline std::vector<SkinPoint> build_skin_points(const mesh::Mesh& mesh,
 // INDEPENDENT extra DOFs (translations ux,uy + rotation φ), 3-node beam elements (the
 // plate core), skin points (pre-located). Foot (tip) interaction: a single point at the
 // beam tip (toe, beam node 0) — axial spring D_foot + capacity F_max. The same N_s
-// coupling as the soil (Sci.Man §7.5 Eq 7-60…64).
+// coupling as the skin: F = D_foot·t̂·(u_b − N_s·v_s) at the tip, capped at F_max.
 struct FootPoint {
     int beam_node = -1;             // beam tip node (toe)
     int soil_elem = -1; double xi_s = 0.0, eta_s = 0.0;
@@ -86,17 +87,16 @@ struct FootPoint {
     bool ok = false;
 };
 
-// How the beam's CONNECTION POINT is attached (PLAXIS 2D Ref. Man. sec 5.6.3). PLAXIS also
-// offers Rigid (to a plate, rotation coupled too); that is out of scope here and declared in
+// How the beam's CONNECTION POINT is attached (input contract: docs/k2d-format.md, `conn`).
+// A Rigid connection (to a plate, rotation coupled too) is out of scope here and declared in
 // docs/references/embedded-beam-formulation.md sec 8.
 enum class Connection {
-    // "The displacement at the connection point of the beam is directly coupled with the
-    // displacement of the element in which the connection point is located ... they undergo
-    // exactly the same displacement, but not necessarily in the same rotation." PLAXIS's
-    // DEFAULT when no structure shares the point.
+    // The connection point's displacement is coupled directly to that of the soil element
+    // containing it: both undergo exactly the same displacement, but not necessarily the same
+    // rotation. The input DEFAULT (`conn` = 0).
     Hinged = 0,
-    // "Not directly coupled with the soil element in which the beam top is located, but the
-    // interaction through the interface elements is still present."
+    // No direct coupling to the soil element at the beam top; the beam still interacts with
+    // the soil through the skin (interface) springs.
     Free = 1,
 };
 
@@ -139,7 +139,7 @@ inline int trans_eq(const EmbeddedBeam& b, int k, int comp, const DofMap& dofs) 
 // `conn_beam_node`/`conn_mesh_node`: a HINGED connection point (>= 0 both) ties that beam node's
 // translations to that mesh node — the node the mesher carries at the connection point — so they
 // get NO extra DOFs of their own. The rotation stays the beam's own: hinged couples displacement,
-// "but not necessarily the same rotation" (Ref. Man. sec 5.6.3). Pass −1/−1 for a Free connection,
+// but not necessarily rotation. Pass −1/−1 for a Free connection,
 // which allocates exactly as before and is bit-identical to the pre-connection engine.
 inline EmbeddedBeam build_embedded_beam(const mesh::Mesh& mesh, DofMap& dofs,
                                         const std::vector<double>& px, const std::vector<double>& py,
@@ -174,31 +174,30 @@ inline EmbeddedBeam build_embedded_beam(const mesh::Mesh& mesh, DofMap& dofs,
     return b;
 }
 
-// PLAXIS default interface stiffness for an embedded beam row (Sluis 2012; PLAXIS 2D
-// Reference Manual sec 6.6.4). TWO equations, and the second one is the reason this
-// function takes the spacing twice over:
+// Default interface stiffness for an embedded beam row (Sluis 2012). TWO equations, and the
+// second one is the reason this function takes the spacing twice over:
 //
-//   Eq 6-66  the dimensionless FACTORS, from the spacing-to-diameter ratio:
+//   (1)  the dimensionless FACTORS, from the spacing-to-diameter ratio:
 //              ISF_RS = ISF_RN = 2.5 (L_spacing/D)^-0.75 ,  ISF_KF = 25 (L_spacing/D)^-0.75
 //            where D is the real diameter (width for a square pile).
-//   Eq 6-65  the STIFFNESSES themselves, tied to the surrounding soil's shear modulus:
+//   (2)  the STIFFNESSES themselves, tied to the surrounding soil's shear modulus:
 //              R_S = ISF_RS G/L_spacing ,  R_N = ISF_RN G/L_spacing ,
 //              K_F = ISF_KF G R_eq/L_spacing .
 //
-// The division by L_spacing in Eq 6-65 is what smears one pile of a row over a metre of
+// The division by L_spacing in (2) is what smears one pile of a row over a metre of
 // wall, exactly as the driver divides EA, EI, the pile weight and both capacities. It is
 // also what makes the units come out: a plane-strain skin traction is a force per metre of
 // beam per metre of wall, so T_skin = t/u is kN/m^3, and ISF*G alone would be kN/m^2.
 //
-// R_eq is NOT half the diameter. Eq 6-67 defines the equivalent diameter from the section
+// R_eq is NOT half the diameter. It is half the equivalent diameter, defined from the section
 // itself, D_eq = sqrt(12 EI/EA), which for a solid circular pile is 0.866 D rather than D
 // -- the ratio EI/EA is the same whether the per-pile or the per-metre-of-wall values are
 // passed, so the caller may use either.
 //
-// Validity, stated by the manual and not by us: these defaults were derived for BORED piles
-// loaded statically in the AXIAL direction, in Hardening Soil with small-strain stiffness,
-// with the phreatic level at the ground surface. Away from those conditions they are a
-// starting point, not a prediction.
+// Validity, a limit of the correlation and not a choice of ours: these defaults were derived
+// for BORED piles loaded statically in the AXIAL direction, in Hardening Soil with small-strain
+// stiffness, with the phreatic level at the ground surface. Away from those conditions they are
+// a starting point, not a prediction.
 inline void default_interface_stiffness(double spacing, double diameter, double G,
                                         double EA, double EI,
                                         double& k_axial, double& k_lateral,

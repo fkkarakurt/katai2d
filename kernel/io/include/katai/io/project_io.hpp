@@ -63,10 +63,10 @@ namespace katai::model {
 //
 // v9 (2026-08): the PER-MATERIAL UNDRAINED STIFFNESS (`materials[].und_mode`, `nu_u`,
 // `skempton_B`). An older build reads none of them and solves every undrained material at
-// nu_u = 0.495 -- the value PLAXIS uses when the user says nothing, applied to a user who said
-// something. A clay entered with a measured Skempton B of 0.90 would be run at 0.978, generating
-// more excess pore pressure and less effective stress than the file describes, silently and in
-// whichever direction the case happens to be sensitive to.
+// nu_u = 0.495 -- a nearly incompressible default meant for a user who says nothing, applied to a
+// user who said something. A clay entered with a measured Skempton B of 0.90 would be run at
+// 0.978, generating more excess pore pressure and less effective stress than the file describes,
+// silently and in whichever direction the case happens to be sensitive to.
 //
 // v10 (2026-08): UNDRAINED (C), the total-stress drainage type (`materials[].drainage` = 4).
 // An older build meets a drainage value it does not know, and what the reader does with any
@@ -86,23 +86,22 @@ namespace katai::model {
 // too low and the inflow too high. Unsafe in both, and invisible in the result.
 // v13 (2026-08): the embedded beam's CONNECTION POINT (`structs[].conn`, 0 hinged / 1 free), and
 // with it a corrected default. Until now the beam's top was always FREE -- coupled to the soil
-// only through the skin springs -- which is not what PLAXIS does: with no structure sharing the
-// point it connects the beam node HINGED to the soil node there. The consequence was not subtle
-// and not visible: a point load at a pile head is carried by the nearest SOIL node, so with a
-// free top the pile barely engaged (measured: a 10 m concrete pile row changed max|u| by 0.7%),
+// only through the skin springs -- which is not the intended contract: with no structure sharing
+// the point, the beam node is connected HINGED to the soil node there. The consequence was not
+// subtle and not visible: a point load at a pile head is carried by the nearest SOIL node, so with
+// a free top the pile barely engaged (measured: a 10 m concrete pile row changed max|u| by 0.7%),
 // and a pile row could not be loaded at its head at all. An older build reads no `conn` and
 // solves the free version of every file, which is a different structure with the same drawing.
 //
-// v14 (2026-08): RESET SMALL STRAIN (`phases[].resetsmall`), PLAXIS's phase option of the same
-// name (Material Models Manual sec. 7.6). The flag says the Hardening Soil small history is to
-// be cleared at the start of the phase, so the soil meets it at G0. An older build reads no
-// such key and runs the phase with whatever history the earlier phases accumulated -- which is
-// the degraded stiffness, not the reset one. The direction is systematic: the run comes out
-// SOFTER than the file asks for, with more settlement and more wall deflection, and nothing in
-// the output says a stiffness reset was requested and dropped. The file's own reason for the
-// reset -- typically a surcharge placed and removed to leave a preconsolidation pressure, whose
-// strain history ageing would long since have erased -- is invisible to that older build, so
-// the phase it runs is a different problem with the same drawing.
+// v14 (2026-08): RESET SMALL STRAIN (`phases[].resetsmall`). The flag says the Hardening Soil
+// small history is to be cleared at the start of the phase, so the soil meets it at G0. An older
+// build reads no such key and runs the phase with whatever history the earlier phases accumulated
+// -- which is the degraded stiffness, not the reset one. The direction is systematic: the run
+// comes out SOFTER than the file asks for, with more settlement and more wall deflection, and
+// nothing in the output says a stiffness reset was requested and dropped. The file's own reason
+// for the reset -- typically a surcharge placed and removed to leave a preconsolidation pressure,
+// whose strain history ageing would long since have erased -- is invisible to that older build,
+// so the phase it runs is a different problem with the same drawing.
 // v18 (2026-08): THE HOEK-BROWN ROCK MODEL (`materials[i].model` = 6, and its five parameters
 // `sigci`, `mi`, `gsi`, `hbD`, `sigpsi`). Rock had to be entered as a Mohr-Coulomb fit before
 // this: a straight line through a curve, which can be made to match over a narrow band of

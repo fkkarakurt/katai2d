@@ -68,7 +68,7 @@ inline std::string dynamic_step_warning(const model::Phase& ph) {
     return katai::core::dynamic_step_warning(in);
 }
 
-// Depth-varying profiles (PLAXIS E'_inc / c'_inc) are built by the engine now (Stage B6,
+// Depth-varying profiles (E'_inc / c'_inc) are built by the engine now (Stage B6,
 // katai/materials/profile_builder.hpp), gated by the catalogue's profile_E / profile_c
 // flags instead of an inline model-type test here -- which inputs a model reads is
 // catalogue knowledge, stated once. The driver wrapper lives after the constitutive
@@ -119,7 +119,7 @@ inline std::string consolidation_step_warning(const model::Project& pr, const ka
     return katai::core::consolidation_step_warning(mats, mesh, ph.duration, ph.time_steps);
 }
 
-// Initial-stress phase (PLAXIS): K0 procedure (geostatic equilibrium, ~zero self-weight
+// Initial-stress phase: K0 procedure (geostatic equilibrium, ~zero self-weight
 // displacement) or gravity loading (self-weight produces settlement from a stress-free start).
 // Consolidation is a chained, time-dependent (Biot) phase: the configuration's load increment is
 // applied at t=0 and the resulting excess pore pressure dissipates over the phase's time interval.
@@ -139,11 +139,12 @@ inline InitialPhase initial_phase_from(model::InitialProcedure p) {
 // selects the active objects (null = everything active = classic single-phase). For a CHAINED
 // phase (after the initial one) `init_states` carries the previous phase's committed Gauss
 // stresses and the solve ramps the configuration imbalance d = f(active) - f_int(committed,
-// active) -- the PLAXIS SumMstage: excavation unloading, fill weight, structure installation
-// all emerge from that single rule. `out_states` returns this phase's committed stresses.
+// active) -- staged construction: excavation unloading, fill weight, structure
+// installation all emerge from that single rule. `out_states` returns this phase's committed
+// stresses.
 // The numerical controls the driver normally derives from the material class: the tolerated
 // force residual and the number of load increments (see driver.cpp -- Hardening Soil runs at a
-// PLAXIS-realistic 1%, Mohr-Coulomb at 1e-6, a linear problem at 1e-10). Deriving them is a
+// tolerated error of 1%, Mohr-Coulomb at 1e-6, a linear problem at 1e-10). Deriving them is a
 // convenience, not a contract, and it has a cost a reviewer is entitled to ask about: is a
 // published number a physics result, or an artefact of the tolerance it happened to be computed
 // at? That question can only be answered by re-running the same problem at other tolerances,
@@ -169,12 +170,12 @@ struct NumericalControls {
     // number owed to its stopping rule but not what it owed to its material integration.
     // 0 = keep the phase's value, then the material class's own default.
     double substep_tolerance = 0.0;
-    // Require the LOCAL convergence criteria as well as the global force residual (Scientific
-    // Manual §9.1.2; NewtonOptions::enforce_local_criteria). TRI-STATE, unlike the three above,
-    // because the engine's default here is ON: 0 = leave the engine's default alone, +1 = force
-    // on, -1 = force OFF. The negative case is the one that matters -- without it a study could
-    // no longer ask what a published number owes to its stopping rule, which is the whole
-    // purpose these seams exist for.
+    // Require the LOCAL convergence criteria (the share of inaccurate stress points held below
+    // its allowance) as well as the global force residual (NewtonOptions::enforce_local_criteria).
+    // TRI-STATE, unlike the three above, because the engine's default here is ON: 0 = leave the
+    // engine's default alone, +1 = force on, -1 = force OFF. The negative case is the one that
+    // matters -- without it a study could no longer ask what a published number owes to its
+    // stopping rule, which is the whole purpose these seams exist for.
     int enforce_local_criteria = 0;
 };
 
@@ -187,8 +188,8 @@ struct PhaseIO {
     // The PARENT phase's converged result. A Dynamic phase needs it: its own solve is the LINEAR
     // dynamic INCREMENT about the static state (soil unloads/reloads elastically at small strain), so
     // the action a section is actually designed for is static + dynamic. Reporting the increment alone
-    // leaves the superposition -- and every strength check -- to the user. PLAXIS instead continues the
-    // parent phase's state and reports the TOTAL (Sci sec 6.4; Ref sec 7.9.2.3, 9.4.5).
+    // leaves the superposition -- and every strength check -- to the user. So the phase continues
+    // the parent phase's state and reports the TOTAL.
     // Null (or a parent that is itself Dynamic) = no static state to add; the phase then reports the
     // dynamic action alone and says so.
     const SolveResult* prev = nullptr;
@@ -240,10 +241,10 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                              const Eigen::VectorXd* flow_head = nullptr,
                              const PhaseIO& io = {});
 
-// Multi-phase staged construction (PLAXIS Phases): runs the INITIAL phase (project.initial
+// Multi-phase staged construction: runs the INITIAL phase (project.initial
 // activation, `init_phase` = K0 / gravity) and then every project phase in order, carrying the
-// committed Gauss stresses forward (SumMstage chaining). Phase displacements are INCREMENTAL
-// (each phase starts from zero displacement, PLAXIS-style); the caller may accumulate them.
+// committed Gauss stresses forward (staged chaining). Phase displacements are INCREMENTAL
+// (each phase starts from zero displacement); the caller may accumulate them.
 // Stops at the first failed phase (its honest message is in the last result).
 // `on_phase`, when set, is called BEFORE each phase solve with (current 0-based index, total phase
 // count, phase display name). It lets a GUI report "Phase k of n: <name>" live from a worker thread

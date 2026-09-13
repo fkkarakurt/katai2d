@@ -1,5 +1,5 @@
 // Axisymmetric analysis through the GUI compute path (build_problem with project.axisymmetric=true).
-// PLAXIS's 2nd analysis mode -- circular footings, piles, shafts, cylinders. The core axisym element
+// The second analysis mode -- circular footings, piles, shafts, cylinders. The core axisym element
 // is validated directly (test_axisym_*, Lame %1e-5, cylinder collapse %0.3); here we validate the
 // INTEGRATED GUI path: r-weighted gravity / internal force / traction + Kinematics::Axisymmetric.
 //

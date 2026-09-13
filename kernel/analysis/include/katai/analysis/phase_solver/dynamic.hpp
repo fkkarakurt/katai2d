@@ -1,5 +1,5 @@
 #pragma once
-// Dynamic (seismic) phase strategy (Stage B9). PLAXIS "Dynamic":
+// Dynamic (seismic) phase strategy (Stage B9). The "Dynamic" phase:
 // M u'' + C u' + K u = -M r a_g(t), Newmark-beta (gamma=1/2, beta=1/4) +
 // Rayleigh damping (dynamics.hpp; docs/references/dynamic-seismic-formulation.md).
 // v1: linear-elastic skeleton, HORIZONTAL base acceleration (site response /
@@ -382,12 +382,12 @@ inline bool solve_dynamic_phase(
     }
     const katai::math::CsrMatrix Cb = bCb.build();
 
-    // --- COMPLIANT (absorbing) BASE (Joyner & Chen 1975; Sci 6.3.2 Eqn 6-12; formulation
+    // --- COMPLIANT (absorbing) BASE (Joyner & Chen 1975; formulation
     // locked in dynamic-seismic-formulation.md sec 11). Lysmer dashpots (rho Vs of the
     // deepest layer -- the halfspace CONTINUES it) along the bottom extreme plane, and the
     // input applied THERE through the same dashpot matrix: F(t) = C_base (2 v_up r_base),
     // with v_up = 0.5 * integral(a_g) -- the phase's a_g is the bedrock (within) motion and
-    // the upward wave is HALF of it (Tut 17.8.5). Reusing C_base for the drive makes the
+    // the upward wave is taken as HALF of it. Reusing C_base for the drive makes the
     // traction integration IDENTICAL to the absorption term by construction.
     katai::math::SparseMatrixBuilder bCbase(neq);
     Eigen::VectorXd rbase;
@@ -509,8 +509,8 @@ inline bool solve_dynamic_phase(
     auto force = [&, has_ff, has_cbase](int step) {
         Eigen::VectorXd f;
         if (has_cbase) {
-            const double v_up = 0.5 * vg[std::min(step, nst)];    // Tut 17.8.5: half of within
-            f = Cbase * ((2.0 * v_up) * rbase);                   // Sci Eqn 6-12: factor 2
+            const double v_up = 0.5 * vg[std::min(step, nst)];    // upward wave: half of within
+            f = Cbase * ((2.0 * v_up) * rbase);                   // Joyner-Chen doubling: factor 2
         } else
             f = -ag(step * dt) * Mr;
         if (has_ff) {
@@ -581,7 +581,7 @@ inline bool solve_dynamic_phase(
     // SIGNED extremes, not max|.|: the design action is static + dynamic, and the static offset
     // breaks the symmetry -- max_t |N_s + N_d(t)| = max(|N_s + max_t N_d|, |N_s + min_t N_d|),
     // which needs BOTH signed extremes of the dynamic part. (max|N_d| alone is only the answer
-    // when N_s = 0.) PLAXIS tracks the same signed historical min/max pair (Ref sec 9.4.5).
+    // when N_s = 0.)
     // --- Track 1a: carry the PARENT phase's structural state into the NONLINEAR increment
     // (validated + built ONCE, shared with the chained static tail -- carry_init/carry_full).
     // Without it the Coulomb cap / anchor capacity / geogrid slack act on the dynamic
@@ -1032,7 +1032,7 @@ inline bool solve_dynamic_phase(
     }
     // The dynamic system is LINEAR, so the structural elements are linearised about the taut /
     // non-slipping state (their incremental stiffness under a static preload). Name the
-    // simplifications that actually apply to THIS model instead of leaving them in the manual:
+    // simplifications that actually apply to THIS model instead of leaving them to a manual:
     // a SLACK geogrid is the sharp case -- the static path drops it entirely while the linear
     // branch keeps EA (test_ssi_dynamics (e) measures that gap).
     if (!R.struct_forces.empty() || !R.interface_forces.empty())

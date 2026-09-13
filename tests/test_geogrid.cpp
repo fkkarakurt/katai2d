@@ -1,6 +1,6 @@
 // Geogrid (P2.4): the 3-node tension-only axial membrane (elements/geogrid.hpp) wired into the
 // solver. N = EA*eps, tension only (compression -> slack, N=0, reversible), optional N_p cap
-// (plastic). Translational DOFs shared with the soil; no bending / rotation (PLAXIS MMM sec 18.2).
+// (plastic). Translational DOFs shared with the soil; no bending / rotation (a membrane).
 //
 // (A) Isolated axial bar (closed form): a single geogrid element fixed at one end, axial end
 //     load F -> the quadratic bar reproduces the exact linear field, u_B = F Lg/EA, u_mid = F Lg/2EA.

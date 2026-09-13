@@ -2,7 +2,7 @@
 //
 // History: found 2026-07-19 as a MEASURED defect. solve_phases chained only the committed Gauss
 // stresses; solve_nonlinear took no initial structural state, so every chained phase restarted its
-// structures at u = 0 with zero plastic memory and the SumMstage imbalance RE-RAMPED the parent's
+// structures at u = 0 with zero plastic memory and the staged-construction imbalance RE-RAMPED the parent's
 // structural tractions: in this very model the unchanged nil phase drifted the wall moment by 32%
 // (and the K0 -> Surcharge hand-off was ~5x off the K0 phase's own converged wall state). Fixed by
 // carrying the parent's displacement datum + committed plastic state into solve_nonlinear and

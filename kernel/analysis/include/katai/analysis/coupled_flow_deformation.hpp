@@ -1,12 +1,14 @@
 #pragma once
-// Fully-coupled flow-deformation (PLAXIS 2D's most general analysis; Ref sec 7.4.4, Sci.Man sec 3
-// Eq 3-8 + sec 4). The UNSATURATED generalisation of Biot coupled consolidation
+// Fully-coupled flow-deformation (the most general analysis type: deformation and saturated/
+// unsaturated groundwater flow solved together). The UNSATURATED generalisation of Biot coupled
+// consolidation
 // (consolidation.hpp) -- W3. Linear-elastic skeleton, monolithic saddle point +
 // time-varying hydraulic BCs + van Genuchten/Mualem unsaturated retention.
 //
 // Three generalisations (in the saturated limit ALL vanish -> reduces to consolidation
 // BIT-FOR-BIT):
-//   1. SATURATION COUPLING: continuity S_eff.m'de/dt (Eq 3-8) -> the L block scales by chi=S_eff.
+//   1. SATURATION COUPLING: continuity S_eff.m'de/dt (the volumetric-strain rate term of the
+//      unsaturated mass balance) -> the L block scales by chi=S_eff.
 //   2. BISHOP EFFECTIVE STRESS: sigma = sigma' + chi.p.m (chi=S_eff); saturated chi=1 => classic
 //      Terzaghi. On an LE skeleton chi affects only the coupling L (the sigma'=D.eps skeleton
 //      response is independent of p).
@@ -76,7 +78,7 @@ CoupledFlowResult solve_coupled_flow_deformation(
 
 // --- ELASTOPLASTIC (MC/HS) FULLY-COUPLED FLOW-DEFORMATION (W3 follow-up) ------------------------
 // The UNION of W3 (LE coupled, above) and elastoplastic consolidation (consolidation_plastic) =
-// PLAXIS 2D's MOST GENERAL analysis: unsaturated (van Genuchten/Mualem + Bishop chi=S_eff) Biot
+// the MOST GENERAL analysis: unsaturated (van Genuchten/Mualem + Bishop chi=S_eff) Biot
 // consolidation on an MC/HS plastic skeleton. The skeleton sigma' comes from the return mapping
 // (integrate_point) and the tangent K_T is state-dependent; the flow coefficients (S_eff, k_rel,
 // storage) depend on pore. Every time step iterates a MONOLITHIC Newton-Picard:

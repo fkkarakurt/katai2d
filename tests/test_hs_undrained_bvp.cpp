@@ -2,7 +2,7 @@
 // clay. The material-point undrained effective-stress path is validated in test_hs_undrained_clay
 // (it terminates on the effective MC envelope, exact for psi=0); this test proves the GLOBAL
 // undrained wrapper (pore-fluid bulk Kw/n added to the solver tangent + total stress) works with
-// the Hardening Soil constitutive model, i.e. PLAXIS Undrained-(A) with HS.
+// the Hardening Soil constitutive model, i.e. Undrained (A) with HS.
 //
 // The defining undrained property is near-INCOMPRESSIBILITY: with nu_u = 0.495 the volumetric
 // strain stays ~0 and the load is carried by excess pore pressure (u = -(Kw/n) eps_v), while the

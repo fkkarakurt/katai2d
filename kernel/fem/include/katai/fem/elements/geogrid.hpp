@@ -4,7 +4,7 @@
 // N = EA·ε. Sits on a mesh edge (tri6 edge = 3 nodes), 2 DOFs per node (u_x, u_y) —
 // SHARED with the soil.
 //
-// Constitutive law (PLAXIS 2D Material Models Manual §18.2, Eq 18-2):
+// Constitutive law (elastic, tension-only, with an optional tensile capacity):
 //   - TENSION-ONLY: tension only; slackens in compression (N=0, REVERSIBLE slack —
 //     nonlinear-elastic).
 //   - N_p (optional): max tensile force; yields at N=N_p (PERMANENT plastic elongation ε_p).

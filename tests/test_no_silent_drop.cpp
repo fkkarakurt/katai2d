@@ -343,7 +343,7 @@ void case_wall_above_soil() {
 
 // 11. A parameter the selected model does not read. The Rankine tension cut-off is applied by the
 //     Mohr-Coulomb return only; the hardening and soft-soil integrators ignore it, and the schema
-//     (like PLAXIS) switches it ON by default -- so the soil takes tension it was told not to,
+//     switches it ON by default -- so the soil takes tension it was told not to,
 //     with nothing said. The mesh is coarsened and the load reduced on purpose: this fixture is
 //     about what the run declares, and a full Hardening Soil solve on the benchmark's own mesh
 //     would cost minutes to assert one string.
