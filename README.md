@@ -181,7 +181,7 @@ checked-in file.
 
 | Namespace | What it makes |
 |---|---|
-| `prj.materials` | `linear_elastic` · `mohr_coulomb` · `hardening_soil` · `hs_small` · `soft_soil` · `soft_soil_creep` |
+| `prj.materials` | `linear_elastic` · `mohr_coulomb` · `hardening_soil` · `hs_small` · `soft_soil` · `soft_soil_creep` · `hoek_brown` |
 | `prj.geometry` | `polygon(points, material=…, fix=[…])` · `rectangle(x0, y0, x1, y1, …)` |
 | `prj.water` | `table(y)` · `phreatic_line(points)` |
 | `prj.loads` | `line_load(a, b, qx=, qy=)` · `point_load(at, qx=, qy=)` |

@@ -108,8 +108,9 @@ std::string validate_hs(const MaterialParams& p) {
         return "Hardening Soil with Undrained (C) is not a supported combination: a total "
                "stress analysis needs undrained stiffness and strength, and the hardening laws "
                "are written for effective stress (PLAXIS offers Undrained (C) for the Linear "
-               "Elastic and Mohr-Coulomb models). Use Undrained (A) or (B) with this model, or "
-               "Mohr-Coulomb with Eu, nu_u and su for a total stress analysis.";
+               "Elastic and Mohr-Coulomb models). Use Undrained (A) with this model -- Undrained "
+               "(B) is not supported for it yet either -- or Mohr-Coulomb with Eu, nu_u and su "
+               "for a total stress analysis.";
     if (p.drainage == DrainageClass::UndrainedB)
         return "Hardening Soil with Undrained (B) is not supported yet (the su/Tresca "
                "override is only implemented for Mohr-Coulomb; HS would silently follow "

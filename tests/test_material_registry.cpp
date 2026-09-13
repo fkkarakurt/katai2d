@@ -225,6 +225,14 @@ void test_refusals() {
     check(find_model("HSsmall")->validate(p) == hs_msg, "HSsmall shares the refusal");
     p.drainage = DrainageClass::UndrainedA;
     check(find_model("HardeningSoil")->validate(p).empty(), "HS + Undrained (A) accepted");
+    // The (C) refusal's advice must name only what this model accepts. It used to say "Use
+    // Undrained (A) or (B) with this model", and (B) is refused by the check just above.
+    p.drainage = DrainageClass::UndrainedC;
+    const std::string hs_c = find_model("HardeningSoil")->validate(p);
+    check(!hs_c.empty() && hs_c.find("Use Undrained (A) with this model") != std::string::npos &&
+              hs_c.find("(A) or (B)") == std::string::npos,
+          "HS + Undrained (C): refused, and its advice names only Undrained (A)");
+    p.drainage = DrainageClass::UndrainedA;
 
     // SS/SSC refuse both undrained classes with the audited message.
     const std::string ss_msg =

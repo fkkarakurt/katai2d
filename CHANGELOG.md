@@ -95,6 +95,15 @@ wall or interface that fell back to bonded, `K2D-G009`) — naming the line. Not
 behaviour; `KV-STR-007`'s test now pins the new one in both phases, including that the
 fully-coupled phase reads the seam at all, which no test had checked.
 
+### Two small statements that were not true
+
+- The refusal of **Hardening Soil (and HS small) with Undrained (C)** advised "Use Undrained (A) or
+  (B) with this model" — and Undrained (B) is refused for that model too, by the check right after
+  it. It now advises Undrained (A), says (B) is not supported for it either, and a check in
+  `test_material_registry` keeps the advice to what the model accepts.
+- The README's table of the Python surface listed six material constructors and left out the
+  seventh, `prj.materials.hoek_brown`, which shipped in 0.9.0.
+
 ### A correction to 0.9.0: the Hoek-Brown Safety refusal gave the wrong reason
 
 The 0.9.0 entry *Rock, from the file to the answer* says a Safety phase on a Hoek-Brown material is
