@@ -2007,6 +2007,34 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // structural self-weight below and stays structure-free (safety_analysis takes no
         // structures).
         if (phase == InitialPhase::Safety) {
+            // STRUCTURE-FREE IS A DIFFERENT MODEL, so an active structural element is refused
+            // rather than dropped. Measured on the Griffiths & Lane slope (MKL and Eigen): an
+            // active geogrid, anchor, plate carrying 150 kN/m/m, or embedded beam returned the
+            // factor of safety of the same mesh with the element DEACTIVATED, bit for bit --
+            // its stiffness and its weight both gone, in a chained Safety phase as in the
+            // initial procedure. The plate and the pile add rotation / beam DOFs that nothing
+            // stiffens, so the Eigen backend refuses every trial and reports an unstable slope
+            // while MKL answers silently; an interface splits the mesh along its line, and with
+            // no interface element in the solve the two sides are unconnected (a joint as strong
+            // as the soil made both backends report an unstable slope that stands at FoS 1.02
+            // without it). Deactivating the elements is the remedy, and it runs: the structure-
+            // free result is then the one that was asked for.
+            for (size_t si = 0; si < pr.structs.size(); ++si) {
+                if (!struct_on(si)) continue;
+                const auto& s = pr.structs[si];
+                refuse(R, "K2D-G016", line_subject(s.name, s.x1, s.y1, s.x2, s.y2),
+                       "Structural element \"" + s.name + "\" is active in a Safety analysis, and a "
+                       "Safety analysis (phi-c reduction) in this build solves the ground alone: a "
+                       "plate, anchor, geogrid or embedded beam contributes neither its stiffness nor "
+                       "its weight to the factor of safety, and an interface leaves the soil on its "
+                       "two sides unconnected. The factor of safety would belong to a different model, "
+                       "in either direction -- dropping a weight that loads the slope raises it, "
+                       "dropping a member that holds the slope lowers it. Deactivate the structural "
+                       "elements in this phase to obtain the factor of safety of the ground without "
+                       "them; an interface cannot be deactivated per phase in this build, so a model "
+                       "that contains one cannot run a Safety analysis yet.");
+                return R;
+            }
             // A factor of safety from strength reduction with a NON-ASSOCIATED flow rule
             // (psi < phi, and psi = 0 is the usual engineering choice) is mesh-dependent, and
             // the dependence is one-sided: failure localises into a shear band whose width is

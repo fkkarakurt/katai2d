@@ -112,6 +112,11 @@ m::Project valid_project() {
     m::Phase fos;
     fos.name = "FoS";
     fos.type = m::PhaseType::Safety;
+    // A Safety analysis solves the ground alone, so the contract refuses one with a structural
+    // element active (K2D-G016's schema half); the baseline's factor of safety is therefore that
+    // of the ground without the wall, the tie and the joint. The validator does not know that the
+    // ENGINE cannot switch an interface off per phase -- this baseline is only ever validated.
+    fos.struct_active = {0, 0, 0};
     p.phases.push_back(fos);
     return p;
 }
@@ -182,6 +187,13 @@ int main() {
           "initial_procedure", E, "unknown initial procedure");
     probe(base, [](m::Project& p) { p.initial_procedure = m::InitialProcedure::Safety; },
           "initial_procedure", W, "initial Safety with staged phases present");
+    // A Safety run is handed no structural elements: their stiffness and weight are dropped and an
+    // interface leaves its two sides unconnected, so an ACTIVE element is refused, in the initial
+    // procedure and in a Safety phase alike (the baseline's own Safety phase deactivates them).
+    probe(base, [](m::Project& p) { p.initial_procedure = m::InitialProcedure::Safety; },
+          "initial.struct", E, "initial Safety with structural elements active");
+    probe(base, [](m::Project& p) { p.phases[3].struct_active = {0, 1, 0}; }, "phases[3].struct",
+          E, "a Safety phase with a structural element active");
 
     // -- soil materials --------------------------------------------------------
     probe(base, [](m::Project& p) { p.materials[0].gamma_sat = -1.0; }, "materials[0].gamma_sat",

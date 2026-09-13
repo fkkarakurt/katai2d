@@ -4,6 +4,50 @@ All notable changes to KATAI 2D. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 MAJOR.MINOR.PATCH.
 
+## [Unreleased]
+
+### A Safety run answered for a model without its structures
+
+A Safety analysis — the initial Safety procedure or a Safety phase — finds its factor of safety by
+re-solving the ground under reduced strength, and that search was never handed the structural
+elements. Nothing said so. Measured on the Griffiths & Lane slope, with each element active and
+then deactivated on the same mesh:
+
+| element in the Safety run | factor of safety, active | factor of safety, deactivated |
+|---|---|---|
+| four geogrid layers, EA = 1e5 kN/m | 1.0185791015625 | 1.0185791015625 |
+| two anchors across the slip surface, EA = 1e6 kN | 1.0103271484374998 | 1.0103271484374998 |
+| a slab on the crest, w = 150 kN/m/m | 1.0319091796875 | 1.0319091796875 |
+| an embedded beam through the slope | 1.0103271484374998 | 1.0103271484374998 |
+
+Bit for bit, displacement field included, on both linear-solver backends and in a chained Safety
+phase as in the initial procedure. The slab's weight was verified to be applied in full in a
+static phase (the vertical reactions rise by exactly w × length), so what disappeared was the
+element, weight and stiffness together. The error runs in whichever direction the element acted:
+dropping a weight that loads a slope raises the factor, dropping a member that holds it lowers it.
+Two elements also behaved differently by backend — the plate and the embedded beam add degrees of
+freedom that nothing stiffened, so the Eigen build refused every trial and reported an unstable
+slope while the MKL build answered silently — and an interface, which splits the mesh along its
+line, left the soil on its two sides unconnected: a joint as strong as the soil turned a slope that
+stands at FoS 1.02 into "did not reach equilibrium even at the lowest strength factor" on both.
+
+**A structural element active in a Safety run is now refused** (`K2D-G016`), by the input contract
+at `initial.struct` / `phases[i].struct` and again by the engine, with no factor of safety
+reported. The remedy is to deactivate the elements in the Safety phase, which runs and gives the
+factor of safety of the ground without them. An interface cannot be deactivated per phase in this
+build, so a model that contains one cannot run a Safety analysis yet; the test that pins the
+refusal also pins that sentence, so it fails the day it stops being true.
+
+The Python `prj.phases.safety()` docstring said "phi-c reduction of the current state". It is not:
+the search starts every trial from an unstressed state, so the stresses the earlier phases left are
+not its starting point. The docstring now says what the phase solves.
+
+### Upgrading from 0.9.0
+
+- A project whose Safety phase (or initial Safety procedure) has a structural element active is
+  refused. Before this build it ran and reported the factor of safety of the same model without
+  that element; deactivate the element in the Safety phase to get that number knowingly.
+
 ## [0.9.0] - 2026-08-31
 
 Two things this program could not be given, and one thing it could not say.

@@ -699,6 +699,51 @@ inline ValidationReport validate_project(const model::Project& p) {
         }
     }
 
+    // A SAFETY RUN SOLVES THE GROUND ALONE. The strength-reduction search re-solves the soil under
+    // gravity for every trial factor and is handed no structural elements, so an active plate,
+    // anchor, geogrid or embedded beam contributes neither stiffness nor weight, and an interface
+    // -- which splits the mesh along its line -- leaves the soil on its two sides unconnected.
+    // Measured on the Griffiths & Lane slope: a geogrid, an anchor, a plate carrying 150 kN/m/m
+    // and a pile each returned the factor of safety of the same mesh WITHOUT them, bit for bit.
+    // The engine refuses the same condition (K2D-G016); saying it here refuses the project before
+    // a mesh is built.
+    {
+        const auto first_active = [&p](const model::Phase& ph, size_t& count) -> const char* {
+            const char* name = nullptr;
+            count = 0;
+            for (size_t i = 0; i < p.structs.size(); ++i)
+                if (ph.active_struct(i)) {
+                    if (!name) name = p.structs[i].name.c_str();
+                    ++count;
+                }
+            return name;
+        };
+        const auto refuse_safety = [&](const model::Phase& ph, const std::string& where) {
+            size_t count = 0;
+            const char* name = first_active(ph, count);
+            if (!name) return;
+            r.add(Severity::Error, where,
+                  "structural element \"" + std::string(name) + "\"" +
+                      (count > 1 ? " and " + std::to_string(count - 1) + " other(s) are"
+                                 : std::string(" is")) +
+                      " active in a Safety analysis, and a Safety analysis (phi-c reduction) in "
+                      "this build solves the ground alone: a plate, anchor, geogrid or embedded "
+                      "beam contributes neither its stiffness nor its weight to the factor of "
+                      "safety, and an interface leaves the soil on its two sides unconnected. "
+                      "The factor of safety would belong to a different model, in either "
+                      "direction -- dropping a weight that loads the slope raises it, dropping a "
+                      "member that holds the slope lowers it. Deactivate the structural elements "
+                      "in this phase to obtain the factor of safety of the ground without them; "
+                      "an interface cannot be deactivated per phase in this build, so a model "
+                      "that contains one cannot run a Safety analysis yet");
+        };
+        if (p.initial_procedure == model::InitialProcedure::Safety)
+            refuse_safety(p.initial, "initial.struct");
+        for (size_t i = 0; i < p.phases.size(); ++i)
+            if (p.phases[i].type == model::PhaseType::Safety)
+                refuse_safety(p.phases[i], at("phases", i, "struct"));
+    }
+
     // -- Water -----------------------------------------------------------------
     if (p.has_water && p.wx.size() != p.wy.size())
         r.add(Severity::Error, "wy",

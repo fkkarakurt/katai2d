@@ -657,7 +657,13 @@ class _Phases:
         return b
 
     def safety(self, name="Safety", **kw):
-        """phi-c reduction of the current state -> factor of safety."""
+        """phi-c reduction -> the factor of safety of this phase's ground.
+
+        The search re-solves the phase's active regions and loads under reduced
+        strength from an unstressed state; the stresses the earlier phases left
+        are not its starting point. It is handed no structural elements, so any
+        that are active must be deactivated in this phase (``deactivate=[...]``)
+        or the run is refused (K2D-G016)."""
         return self._add(name, _core.PhaseType.Safety, **kw)
 
     def transient_flow(self, name, *, duration, steps, **kw):
