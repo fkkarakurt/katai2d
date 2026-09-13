@@ -257,19 +257,33 @@ static bool any_flow_bc_declared(const model::Project& pr) {
 // read by the time-dependent flow solvers (its nodes drain: excess pore pressure zero, PLAXIS Ref
 // sec. 5.9.2); a well prescribes a discharge, which those solvers do not take, so an active well
 // in such a phase is reported rather than silently ignored.
-// Said wherever a pore-pressure field is COMPUTED with walls in the model: an impermeable screen
-// is not something this build can express (PLAXIS Sci. Man. sec. 3.4 gives interfaces their own
-// flow setting), so the water crosses the wall. It is a warning and not a refusal because the
-// deformation answer is still the model's; it is the flow half that is more permeable than drawn.
-static void warn_no_flow_barrier(const model::Project& pr, SolveResult& R) {
-    for (const auto& st : pr.structs)
-        if (st.kind == model::StructKind::Plate || st.kind == model::StructKind::Interface) {
+// Said where a consolidation / fully-coupled phase meets a flow barrier it cannot read. A split
+// seam -- a wall with interfaces, or an interface on mesh edges -- IS read: fully permeable ties
+// its two sides to one pore equation, impermeable keeps two, semi-permeable is refused by the
+// phase. Measured with a surcharge on one side of the line (KV-STR-007's block and test):
+// impermeable interface 12.62 kPa across the seam in consolidation and 1.91 kPa fully coupled,
+// a wall with interfaces 12.57 / 1.71 kPa, their permeable twins 0. What is NOT read is a
+// barrier on a line the mesh was not split along -- a plate without interfaces, or a wall or
+// interface that fell back to bonded (K2D-G009): an impermeable plate there gives the permeable
+// plate's pore field bit for bit, in both phases. Until 2026-09 this warning fired for every plate or interface
+// in such a phase, whatever its barrier setting and whether or not its seam was read. A warning
+// and not a refusal, because the deformation answer is still the model's; it is the flow half
+// that is more permeable than drawn.
+static void warn_no_flow_barrier(const model::Project& pr, const std::vector<char>& unread,
+                                 SolveResult& R) {
+    for (size_t si = 0; si < pr.structs.size() && si < unread.size(); ++si)
+        if (unread[si]) {
+            const auto& st = pr.structs[si];
             warn(R, "K2D-A010", st.name,
-                 "This phase computes a pore-pressure field with walls or interfaces in the "
-                 "model, and a consolidation / fully-coupled phase does not read their cross "
-                 "permeability in this build: water crosses the line as if the soil were "
-                 "continuous, so a cut-off wall holds back less head here than it would in the "
-                 "ground. The steady groundwater-flow calculation does read it.");
+                 "\"" + st.name + "\" is declared a flow barrier, but the mesh is not split along "
+                 "its line -- a plate without interfaces, or a wall or interface that could not be "
+                 "split (K2D-G009) -- so this consolidation / fully-coupled phase has no seam to "
+                 "hold the water at: it crosses the line as if the soil were continuous, and a "
+                 "cut-off holds back less head than it would in the ground. A wall with "
+                 "interfaces, or an interface along mesh edges, is split and its cross "
+                 "permeability is read. The steady groundwater-flow calculation splits the mesh "
+                 "along any barrier line on mesh edges, a plate without interfaces included, and "
+                 "reads it there.");
             return;
         }
 }
@@ -792,6 +806,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         int flow_barrier = 0;   // 0 permeable / 1 impermeable / 2 semi-permeable (model vocabulary)
     };
     std::vector<IfaceSpec> soil_ifaces;
+    std::vector<char> iface_split(pr.structs.size(), 0);   // interfaces whose line the mesh was split along
     std::vector<char> bc_released;   // nodes the domain boundary must NOT fix (filled by the seam pass)
     {
         std::vector<char> is_bnode(mesh.node_count, 0);
@@ -884,6 +899,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             sp.ip.c_i = Rinter * sm.c;
             sp.ip.phi_i = std::atan(Rinter * std::tan(sm.phi * kPi / 180.0));
             sp.ip.sigma_t = sm.tension_cutoff ? Rinter * std::max(0.0, sm.tensile_strength) : 0.0;
+            iface_split[si] = 1;
             soil_ifaces.push_back(std::move(sp));
         }
         // Who holds the support on a seam that touches the domain boundary. The two sides of a seam
@@ -2147,6 +2163,18 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             if (si.flow_barrier == 0)
                 for (const auto& sg : si.seam) tie(sg.dup, sg.orig);
         }
+        // The barriers the coupled phases CANNOT read: declared impermeable or semi-permeable, but
+        // standing on a line the mesh was not split along (a plate without interfaces, or a wall
+        // or interface that fell back to bonded, K2D-G009). With no seam there is no second pore
+        // equation for the declaration to act on.
+        std::vector<char> barrier_unread(pr.structs.size(), 0);
+        for (size_t si = 0; si < pr.structs.size(); ++si) {
+            const auto& st = pr.structs[si];
+            const bool line_kind =
+                st.kind == model::StructKind::Plate || st.kind == model::StructKind::Interface;
+            barrier_unread[si] = line_kind && struct_on(si) && st.flow_barrier != 0 &&
+                                 !plate_is_wall[si] && !iface_split[si];
+        }
         if (phase == InitialPhase::Consolidation) {
             // --- Time-dependent (Biot) consolidation phase (PLAXIS "Consolidation") --------------
             // The strategy lives in the engine (Stage B9: katai/analysis/phase_solver/
@@ -2169,7 +2197,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             cin.have_flow_bcs = any_flow_bc_declared(pr);
             bool well_in_phase = false;
             cin.drain_nodes = phase_drain_nodes(pr, mesh, io, well_in_phase);
-            warn_no_flow_barrier(pr, R);
+            warn_no_flow_barrier(pr, barrier_unread, R);
             if (well_in_phase)
                 warn(R, "K2D-A009", "wells",
                      "A well is active in this consolidation phase, but a consolidation analysis "
@@ -2241,7 +2269,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             fin.have_flow_bcs = any_flow_bc_declared(pr);
             bool well_in_fc = false;
             fin.drain_nodes = phase_drain_nodes(pr, mesh, io, well_in_fc);
-            warn_no_flow_barrier(pr, R);
+            warn_no_flow_barrier(pr, barrier_unread, R);
             if (well_in_fc)
                 warn(R, "K2D-A009", "wells",
                      "A well is active in this fully-coupled phase. This build's coupled solver "

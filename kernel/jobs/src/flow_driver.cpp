@@ -497,10 +497,10 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
                   "Flow solved: discharge Q = %.4g m3/day/m, %d iterations, mass balance %.2g.",
                   R.discharge, R.iterations, R.balance_err);
     R.message = buf;
-    // Walls and interfaces are not flow barriers in this build (PLAXIS Scientific Manual sec. 3.4
-    // gives interfaces their own flow setting: impermeable screen, semi-permeable, or drain).
-    // The flow net here runs straight THROUGH a cut-off wall, which is a real difference between
-    // the drawing and the calculation -- so the run says it rather than leaving it to be noticed.
+    // A wall or interface left FULLY PERMEABLE -- the default cross permeability -- is not a flow
+    // barrier (the impermeable and semi-permeable settings are split above). The flow net then
+    // runs straight THROUGH what looks like a cut-off wall in the drawing, so the run says it
+    // rather than leaving it to be noticed.
     {
         bool permeable_line = false;
         for (const auto& st : pr.structs)

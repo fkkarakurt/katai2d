@@ -29,7 +29,7 @@
 //   source:   PLAXIS 2D Reference Manual Table 5-2 / Scientific Manual sec. 3.4 for the three cross-permeability cases and what each means (the model's own field comment quotes them, and its default is fully permeable); and the drained limit of Biot consolidation, as in KV-STR-006 -- once the excess pore pressure is gone the coupled problem IS the drained problem, which this program solves by an independent path (solve_nonlinear, with a real Coulomb return on the joint)
 //   locator:  a permeable joint is ONE pressure: p_left - p_right = 0 identically, because the two nodes share the pore equation. An impermeable joint is two, and a surcharge on one side cannot cross it. Coulomb capacity at a station: tau_max = c_i - sigma_n tan(phi_i), with c_i = R_inter c and tan(phi_i) = R_inter tan(phi)
 //   quantity: the maximum |p_left - p_right| across the seam EARLY in the dissipation (Tv = 0.05) for a permeable and an impermeable joint [kPa]; the settlement and the joint's peak shear at the end of a consolidation phase run to Tv = 4, against the same model as a drained Plastic phase [m, kPa]; the Coulomb demand/capacity the elastic joint reaches; and whether a joint past its capacity is reported
-//   expected: permeable -> 0 (one equation, so the difference is a number minus itself); impermeable -> of the order of the surcharge (measured 12.83 kPa of 50 kPa). With a joint below its capacity the coupled phase must reach the drained answer in BOTH the settlement and the joint's shear; with one above it (1.19x here) it must not, and the run must say so; semi-permeable must be refused with what it actually is
+//   expected: permeable -> 0 (one equation, so the difference is a number minus itself); impermeable -> of the order of the surcharge (measured 12.62 kPa of 50 kPa; 12.83 when the case was first recorded, and the assertion is the order, above 10% of the surcharge). With a joint below its capacity the coupled phase must reach the drained answer in BOTH the settlement and the joint's shear; with one above it (1.19x here) it must not, and the run must say so; semi-permeable must be refused with what it actually is
 //   band:     1e-12 kPa on the permeable seam, measured 0.000e+00 exactly. 5e-4 relative on the drained-limit pair, measured -0.0042% on the settlement and 0.0000% on the joint's shear (53.2745 kPa against 53.2745). Both are asserted on a LINEAR-ELASTIC soil on purpose: with Mohr-Coulomb the same pair comes out at +0.15% and the cause is not the joint but the soil's stress path -- the coupled phase loads it undrained and the Plastic phase drained, and a yield surface remembers the difference. That figure is measured and printed beside the assertion rather than used to widen it, because a band wide enough to hold it would also be wide enough to hide a joint that was not in the system at all
 #include <katai/jobs/driver.hpp>
 #include <katai/jobs/mesh_builder.hpp>
@@ -112,6 +112,8 @@ struct Answer {
     bool ok = false;
     double settle = 0.0, tau = 0.0, util = 0.0, seam_gap = 0.0;
     bool warned_slip = false, any_slip = false;
+    bool warned_barrier = false;   // K2D-A010: a declared barrier the phase cannot read
+    std::vector<double> excess_pore;
     std::string msg;
 };
 
@@ -149,8 +151,11 @@ Answer run(const m::Project& pr) {
         a.any_slip = R.interface_forces.front().any_slip;
     }
     a.seam_gap = seam_pore_gap(R);
-    for (const auto& d : R.diagnostics)
+    a.excess_pore = R.excess_pore;
+    for (const auto& d : R.diagnostics) {
         if (d.code == std::string("K2D-A016")) a.warned_slip = true;
+        if (d.code == std::string("K2D-A010")) a.warned_barrier = true;
+    }
     return a;
 }
 
@@ -176,6 +181,93 @@ void test_cross_permeability_is_read() {
           "impermeable: two pressures, and the surcharge on one side cannot cross");
     check(imp.seam_gap > 1e6 * std::fmax(perm.seam_gap, 1e-300),
           "so the flag is READ, rather than the split deciding on its own");
+    // K2D-A010 exists for a barrier the phase CANNOT read. It used to fire here too -- for every
+    // plate or interface in a coupled phase -- on the very seam this test shows being read.
+    check(!perm.warned_barrier && !imp.warned_barrier,
+          "and K2D-A010 stays silent on both: a split seam's cross permeability is read");
+
+    // The same line as a WALL WITH INTERFACES: the plate's own flow_barrier rides on the wall's
+    // seam, which is a different list in the driver from a bare interface's.
+    const auto wall = [](m::Project pr) {
+        m::PlateMaterial pm; pm.EA = 1.0e6; pm.EI = 1.0e4;
+        pr.plates.push_back(pm);
+        pr.structs[0].kind = m::StructKind::Plate;
+        pr.structs[0].name = "Wall";
+        pr.structs[0].material = 0;
+        pr.structs[0].iface_pos = pr.structs[0].iface_neg = true;
+        return pr;
+    };
+    const Answer wimp = run(wall(block(1, 1.0, false, 0.05)));
+    check(wimp.ok, "a wall with interfaces, impermeable, in a consolidation phase runs");
+    if (wimp.ok) {
+        std::printf("   wall with interfaces, impermeable: %.4f kPa\n", wimp.seam_gap);
+        check(wimp.seam_gap > 1e6 * std::fmax(perm.seam_gap, 1e-300) && !wimp.warned_barrier,
+              "a wall's seam is read the same way, and raises no K2D-A010");
+    }
+
+    // The FULLY-COUPLED phase is handed the same seam ties, and nothing else checked that it reads
+    // them. Asked at Tv = 0.5, where a head difference is still there to see.
+    const auto coupled = [](m::Project pr) {
+        pr.phases[0].name = "Fully coupled";
+        pr.phases[0].type = m::PhaseType::FullyCoupled;
+        return pr;
+    };
+    const Answer fperm = run(coupled(block(0, 1.0, false, 0.5)));
+    const Answer fimp  = run(coupled(block(1, 1.0, false, 0.5)));
+    const Answer fwall = run(coupled(wall(block(1, 1.0, false, 0.5))));
+    check(fperm.ok && fimp.ok && fwall.ok,
+          "in a fully-coupled phase the permeable joint, the impermeable joint and the wall run");
+    if (!fperm.ok || !fimp.ok || !fwall.ok) {
+        std::printf("   (%s | %s | %s)\n", fperm.msg.c_str(), fimp.msg.c_str(), fwall.msg.c_str());
+        return;
+    }
+    std::printf("   fully coupled, Tv = 0.5:  permeable %.3e kPa,  impermeable %.4f kPa,  "
+                "wall with interfaces %.4f kPa\n", fperm.seam_gap, fimp.seam_gap, fwall.seam_gap);
+    check(fperm.seam_gap < 1e-12, "fully coupled, permeable: one pressure at the joint");
+    check(fimp.seam_gap > 1e6 * std::fmax(fperm.seam_gap, 1e-300) &&
+              fwall.seam_gap > 1e6 * std::fmax(fperm.seam_gap, 1e-300),
+          "fully coupled, impermeable joint and wall: two -- the flag is read in this phase too");
+    check(!fperm.warned_barrier && !fimp.warned_barrier && !fwall.warned_barrier,
+          "and K2D-A010 stays silent there too");
+}
+
+void test_unsplit_barrier_is_said() {
+    std::printf("\n-- (1b) a barrier on a line the mesh was NOT split along is not read, and says so --\n");
+    // The same block, the same line, drawn as a PLATE WITHOUT INTERFACES. Nothing splits the mesh,
+    // so there is no second pore equation for "impermeable" to act on.
+    const auto plate_line = [](int barrier) {
+        m::Project pr = block(barrier, 1.0, false, 0.05);
+        m::PlateMaterial pm; pm.EA = 1.0e6; pm.EI = 1.0e4;
+        pr.plates.push_back(pm);
+        pr.structs[0].kind = m::StructKind::Plate;
+        pr.structs[0].name = "Wall";
+        pr.structs[0].material = 0;
+        return pr;
+    };
+    const Answer perm = run(plate_line(0));
+    const Answer imp  = run(plate_line(1));
+    check(perm.ok && imp.ok, "both plate models ran");
+    if (!perm.ok || !imp.ok) return;
+    check(!imp.excess_pore.empty() && imp.excess_pore == perm.excess_pore,
+          "an impermeable plate without interfaces gives the permeable plate's pore field bit for bit");
+    check(imp.warned_barrier, "and the run says the declaration was not read (K2D-A010)");
+    check(!perm.warned_barrier,
+          "while the fully permeable plate, which behaves exactly as declared, raises nothing");
+
+    // The same pair in a fully-coupled phase, at Tv = 0.5 like the joints above.
+    const auto coupled_plate = [&plate_line](int barrier) {
+        m::Project pr = plate_line(barrier);
+        pr.phases[0].type = m::PhaseType::FullyCoupled;
+        pr.phases[0].duration = 0.5 * kH * kH / cv();
+        return pr;
+    };
+    const Answer fperm = run(coupled_plate(0));
+    const Answer fimp  = run(coupled_plate(1));
+    check(fperm.ok && fimp.ok, "both plate models ran in a fully-coupled phase");
+    if (!fperm.ok || !fimp.ok) return;
+    check(!fimp.excess_pore.empty() && fimp.excess_pore == fperm.excess_pore && fimp.warned_barrier &&
+              !fperm.warned_barrier,
+          "fully coupled: the same -- not read, bit for bit, and said only where it was declared");
 }
 
 void test_drained_limit_with_a_joint() {
@@ -249,6 +341,7 @@ void test_semi_permeable_is_refused() {
 int main() {
     std::printf("Interfaces inside a consolidation phase\n\n");
     test_cross_permeability_is_read();
+    test_unsplit_barrier_is_said();
     test_drained_limit_with_a_joint();
     test_a_joint_that_would_slip_says_so();
     test_semi_permeable_is_refused();

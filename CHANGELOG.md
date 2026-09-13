@@ -73,6 +73,28 @@ Their numbers were right: such a plate carries no moment. The reason was not —
 nodes takes the same settlement, so it translates without curving. Corrected, and the published
 record carries a dated correction note rather than a silent edit.
 
+### A flow-barrier warning fired on the seams it said were not read
+
+`K2D-A010` warned, in every consolidation and fully-coupled phase whose model contained a plate or
+an interface, that those phases do not read cross permeability and water crosses the line as if the
+soil were continuous. Since `KV-STR-007` that is not true of a split seam, and the warning fired
+anyway — on the permeable default too, where water crossing is exactly what was declared. Measured
+with a surcharge on one side of the line, the largest pore-pressure difference across it:
+
+| the line | consolidation (Tv = 0.05) | fully coupled (Tv = 0.5) |
+|---|---|---|
+| interface, impermeable | 12.62 kPa | 1.91 kPa |
+| wall with interfaces, impermeable | 12.57 kPa | 1.71 kPa |
+| the same, fully permeable | 0 | 0 |
+| plate without interfaces, impermeable | pore field bit-identical to the permeable plate's | the same |
+
+So a split seam is read in both phases, and the one barrier that is not is a declared barrier on a
+line the mesh was not split along. The warning now says exactly that and fires only there — an
+active plate or interface with `flow_barrier` ≠ 0 and no seam (a plate without interfaces, or a
+wall or interface that fell back to bonded, `K2D-G009`) — naming the line. Nothing pinned the old
+behaviour; `KV-STR-007`'s test now pins the new one in both phases, including that the
+fully-coupled phase reads the seam at all, which no test had checked.
+
 ### A correction to 0.9.0: the Hoek-Brown Safety refusal gave the wrong reason
 
 The 0.9.0 entry *Rock, from the file to the answer* says a Safety phase on a Hoek-Brown material is
