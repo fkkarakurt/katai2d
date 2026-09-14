@@ -33,6 +33,15 @@ static void factor_strength(MaterialModel& m, double srf) {
     if (m.ssoil.psi > m.ssoil.phi) m.ssoil.psi = m.ssoil.phi;
 }
 
+// An interface's strength is a soil strength -- c_i = R_inter c and tan(phi_i) = R_inter tan(phi) --
+// so the reduction is the soil's, term for term, tension cut-off included. The joint has no
+// dilatancy to clamp (its Coulomb return is non-dilatant), and its stiffnesses are not strengths.
+static void factor_interface_strength(iface::InterfaceProps& p, double srf) {
+    p.c_i /= srf;
+    p.phi_i = std::atan(std::tan(p.phi_i) / srf);
+    p.sigma_t /= srf;
+}
+
 double factor_of_safety(const mesh::Mesh& mesh, const DofMap& dofs,
                         const Eigen::VectorXd& gravity_load,
                         const MaterialModel& base, const LinearSolve& linear_solve,
@@ -72,11 +81,21 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                              const StrengthReductionOptions& options,
                              const std::vector<GaussState>& initial_state,
                              const std::vector<char>& active_element,
-                             const std::vector<MaterialProfile>& profile) {
+                             const std::vector<MaterialProfile>& profile,
+                             const Structures& structures) {
     // Factor every material's strength by srf and re-solve under gravity from the unstressed state;
     // failure to converge is the standard collapse signal. (This is robust for Mohr-Coulomb. Hardening
     // Soil from a stress-free state over-shoots the cap and is unreliable here -- HS Safety is gated
     // upstream until a path-stable scheme is in place; see build_problem.)
+    //
+    // The structures enter every trial as they are, except for what a trial changes about them: the
+    // interface strengths (reduced below, per trial) and, when the search starts unstressed, the
+    // interfaces' seeded normal stress (cleared here, once). See the header for why each.
+    Structures base = structures;
+    if (initial_state.empty()) {
+        for (auto& ie : base.interfaces) ie.sigma_n0.fill(0.0);
+        for (auto& ie : base.interfaces5) ie.sigma_n0.fill(0.0);
+    }
     auto try_srf = [&](double srf, NewtonResult& out) -> bool {
         std::vector<MaterialModel> m = materials;
         for (auto& mm : m) factor_strength(mm, srf);
@@ -86,9 +105,12 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
         // strength: phi-c reduction never touches it, so it rides through unchanged.)
         std::vector<MaterialProfile> p = profile;
         for (auto& pp : p) pp.c_inc /= srf;
+        Structures s = base;
+        for (auto& ie : s.interfaces) factor_interface_strength(ie.props, srf);
+        for (auto& ie : s.interfaces5) factor_interface_strength(ie.props, srf);
         try {
             out = solve_nonlinear(mesh, dofs, m, gravity_load, linear_solve, options.newton,
-                                  initial_state, active_element, {}, {}, {}, p);
+                                  initial_state, active_element, s, {}, {}, p);
             return out.converged;
         } catch (...) {
             return false;  // singular tangent at incipient collapse = the failure signal

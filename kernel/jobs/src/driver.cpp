@@ -1997,41 +1997,85 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             nonsym ? katai::linsolve::MatrixType::RealNonsymmetric
                    : katai::linsolve::MatrixType::RealSymmetricPositiveDefinite);
 
+        // Structural SELF-WEIGHT (plate w [kN/m/m]; embedded pile gamma*A/L_s) -- the 2026-07 audit
+        // fix: the weight fed only the dynamic mass before, so statics silently carried weightless
+        // walls/piles. Consistent nodal line load over every ACTIVE chain of THIS phase, added to
+        // BOTH f and f_loads: a gravity-start phase ramps it with the body force (ramp = f); a
+        // K0/baseline initial phase ramps it as an unbalanced new load (ramp = f_loads -- the
+        // wished-in-place wall settles under its own weight, the equivalent of a plastic nil-step);
+        // a chained phase sees it inside ramp = f - B, so a plate already equilibrated by the parent
+        // adds NOTHING (nil identity preserved) and a newly activated plate arrives incrementally
+        // (the staged change). Permanent load -> assembled AFTER the gamma_Q variable-load scaling.
+        // The Safety search reads f too: its structures are solved with the soil, so they bear on
+        // the factor of safety with their weight as well as their stiffness. Dynamic reads neither
+        // f nor f_loads (static equilibrium comes from the parent baseline). w = 0 (default)
+        // contributes nothing -> bit-identical.
+        {
+            Eigen::VectorXd f_sw = Eigen::VectorXd::Zero(dofs.equation_count());
+            katai::core::assemble_structural_weight(mesh, dofs, structures, kGravity, f_sw);
+            f += f_sw;
+            f_loads += f_sw;
+        }
         // SAFETY analysis (phi-c reduction / SRM): the strategy lives in the engine (Stage B9:
         // katai/analysis/phase_solver/safety.hpp). The seam passes the registry-derived model
-        // family flags and the composition root's solver callback; the refusals and the honest
-        // lower-bound reporting are engine-owned. On success the phase falls through to the
-        // common result tail, exactly as before. Note the Safety branch consumes f BEFORE the
-        // structural self-weight below and stays structure-free (safety_analysis takes no
-        // structures).
+        // family flags, the phase's active structures and the composition root's solver callback;
+        // the refusals and the honest lower-bound reporting are engine-owned. On success the phase
+        // falls through to the common result tail, exactly as before.
         if (phase == InitialPhase::Safety) {
-            // STRUCTURE-FREE IS A DIFFERENT MODEL, so an active structural element is refused
-            // rather than dropped. Measured on the Griffiths & Lane slope (MKL and Eigen): an
-            // active geogrid, anchor, plate carrying 150 kN/m/m, or embedded beam returned the
-            // factor of safety of the same mesh with the element DEACTIVATED, bit for bit --
-            // its stiffness and its weight both gone, in a chained Safety phase as in the
-            // initial procedure. The plate and the pile add rotation / beam DOFs that nothing
-            // stiffens, so the Eigen backend refuses every trial and reports an unstable slope
-            // while MKL answers silently; an interface splits the mesh along its line, and with
-            // no interface element in the solve the two sides are unconnected (a joint as strong
-            // as the soil made both backends report an unstable slope that stands at FoS 1.02
-            // without it). Deactivating the elements is the remedy, and it runs: the structure-
-            // free result is then the one that was asked for.
+            // THE STRUCTURES TAKE PART IN THE SEARCH (since 2026-09). Until then the search
+            // was handed none of them, and an active geogrid, anchor, plate carrying 150 kN/m/m or
+            // embedded beam returned the factor of safety of the same mesh with the element
+            // DEACTIVATED, bit for bit, while an interface left the soil on its two sides
+            // unconnected; every one of them was refused. What the reduction does to each is
+            // stated with safety_analysis: an interface's strength is reduced with the soil's, a
+            // structure's own capacity is not.
+            //
+            // One element still cannot enter, and it is refused rather than approximated: a
+            // PRESTRESSED anchor. The search re-solves the ground from the unstressed state, and a
+            // lock-off force is a force applied to a ground that has already moved -- on the
+            // unstressed mesh it would pull the wall into soil that carries no stress yet, with
+            // nothing in the search to say when the anchor was locked. Starting the search from the
+            // parent phase is what gives that force a meaning, and this build does not do that yet.
+            // silent-drop-scope: none -- this loop only looks for a prestressed anchor to refuse; it
+            // builds nothing, and every element it passes over was built by its own loop above.
             for (size_t si = 0; si < pr.structs.size(); ++si) {
-                if (!struct_on(si)) continue;
                 const auto& s = pr.structs[si];
+                if (s.kind != model::StructKind::Anchor || !struct_on(si)) continue;
+                if (s.material < 0 || s.material >= (int)pr.anchors.size()) continue;
+                const auto& am = pr.anchors[s.material];
+                if (!(am.prestress > 0.0)) continue;
                 refuse(R, "K2D-G016", line_subject(s.name, s.x1, s.y1, s.x2, s.y2),
-                       "Structural element \"" + s.name + "\" is active in a Safety analysis, and a "
-                       "Safety analysis (phi-c reduction) in this build solves the ground alone: a "
-                       "plate, anchor, geogrid or embedded beam contributes neither its stiffness nor "
-                       "its weight to the factor of safety, and an interface leaves the soil on its "
-                       "two sides unconnected. The factor of safety would belong to a different model, "
-                       "in either direction -- dropping a weight that loads the slope raises it, "
-                       "dropping a member that holds the slope lowers it. Deactivate the structural "
-                       "elements in this phase to obtain the factor of safety of the ground without "
-                       "them; an interface cannot be deactivated per phase in this build, so a model "
-                       "that contains one cannot run a Safety analysis yet.");
+                       "Anchor \"" + s.name + "\" is prestressed (lock-off force " +
+                           dnum(am.prestress) +
+                           " kN) and active in a Safety analysis. The strength-reduction search in "
+                           "this build re-solves the ground from the unstressed state, and a "
+                           "lock-off force belongs to a ground that has already moved: applied to "
+                           "the unstressed mesh it would pull on soil that carries no stress yet, "
+                           "and the factor of safety would depend on that. Plates, geogrids, "
+                           "embedded beams, interfaces and anchors without prestress do take part "
+                           "in the search. Deactivate this anchor in the Safety phase to obtain the "
+                           "factor of safety without it.");
                 return R;
+            }
+            // What starting from the unstressed state means once structures are in it, said
+            // whenever one is: a structure is present from the first increment of every trial, so
+            // it also carries whatever the ground's settlement under its own weight does to it --
+            // which, in the phases the user built, may have happened before it was installed.
+            {
+                size_t n_active = 0;
+                for (size_t si = 0; si < pr.structs.size(); ++si) {
+                    if (struct_on(si)) ++n_active;
+                }
+                if (n_active > 0)
+                    note(R, "K2D-A018", "Safety",
+                         "The factor of safety includes the " + std::to_string(n_active) +
+                             " active structural element(s). The strength-reduction search "
+                             "re-solves this phase from the unstressed state with them present "
+                             "from the start, so each also carries what the ground's settlement "
+                             "under its own weight does to it -- including settlement that, in "
+                             "the phases built before it, may have happened before the element was "
+                             "installed. No structural force is reported for this phase, because "
+                             "the state the search stops at is not the state those phases built.");
             }
             // A factor of safety from strength reduction with a NON-ASSOCIATED flow rule
             // (psi < phi, and psi = 0 is the usual engineering choice) is mesh-dependent, and
@@ -2081,27 +2125,15 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                          ", looser than the strength-reduction search's own 1e-3. The factor of "
                          "safety it reports will be too HIGH, not merely less precise: measured "
                          "on the Griffiths and Lane benchmark, +2.0% at 1e-2 and +45.6% at 1e-1.");
-            if (!katai::core::solve_safety_phase(mesh, dofs, models, profiles, f, solver, sfin, R))
+            if (!katai::core::solve_safety_phase(mesh, dofs, models, profiles, f, solver,
+                                                 structures, sfin, R))
                 return R;
+            // A Safety phase leaves the ground as it found it -- solve_phases does not commit its
+            // stresses forward -- and it leaves the structures as it found them too. Without this
+            // the phase after it met a parent with no structural state and re-developed every
+            // structural force from zero, although nothing had changed.
+            if (io.prev && io.prev->ok) R.struct_state = io.prev->struct_state;
         } else {
-        // Structural SELF-WEIGHT (plate w [kN/m/m]; embedded pile gamma*A/L_s) -- the 2026-07 audit
-        // fix: the weight fed only the dynamic mass before, so statics silently carried weightless
-        // walls/piles. Consistent nodal line load over every ACTIVE chain of THIS phase, added to
-        // BOTH f and f_loads: a gravity-start phase ramps it with the body force (ramp = f); a
-        // K0/baseline initial phase ramps it as an unbalanced new load (ramp = f_loads -- the
-        // wished-in-place wall settles under its own weight, the equivalent of a plastic nil-step);
-        // a chained phase sees it inside ramp = f - B, so a plate already equilibrated by the parent
-        // adds NOTHING (nil identity preserved) and a newly activated plate arrives incrementally
-        // (the staged change). Permanent load -> assembled AFTER the gamma_Q variable-load scaling; the
-        // Safety branch consumed f above and stays structure-free (consistent: safety_analysis takes
-        // no structures). Dynamic reads neither f nor f_loads (static equilibrium comes from the
-        // parent baseline). w = 0 (default) contributes nothing -> bit-identical.
-        {
-            Eigen::VectorXd f_sw = Eigen::VectorXd::Zero(dofs.equation_count());
-            katai::core::assemble_structural_weight(mesh, dofs, structures, kGravity, f_sw);
-            f += f_sw;
-            f_loads += f_sw;
-        }
         // K0 procedure: the geostatic state (seeded soil stress + interface sigma_n0) IS the
         // equilibrium; its internal force is held as constant_force B and ONLY external loads ramp, so
         // residual(0) = B - f_int(0) = 0 on any mesh and self-weight is NOT double-counted during the
@@ -2479,7 +2511,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         R.message += " Structural state continued from the parent phase (forces are totals).";
     else if (static_carry_missing)
         R.message += " NOTE: the parent phase supplies no structural state (different structure set, "
-                     "or a Safety/consolidation/restored parent), so structural forces re-develop "
+                     "or a consolidation/restored parent), so structural forces re-develop "
                      "from zero this phase.";
     if (!R.consol_time.empty()) {
         const double s_inf = R.consol_settlement.back();

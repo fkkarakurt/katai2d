@@ -39,7 +39,7 @@ enum class DiagnosticSeverity {
 
 struct Diagnostic {
     DiagnosticSeverity severity = DiagnosticSeverity::Warning;
-    std::string code;      // e.g. "K2D-W101" -- stable, greppable, never reworded
+    std::string code;      // e.g. "K2D-A005" -- stable, greppable, never reworded
     std::string subject;   // the object's name as the user wrote it (may be empty)
     std::string message;   // engineer-readable: what was found, and what was done instead
 };

@@ -169,6 +169,11 @@ endif()
 katai_add_test(test_phase_water katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-003: staged dewatering (.k2d v4 per-phase water) against the effective-stress closed form -- the second capability the anchored-excavation benchmark needed
 katai_add_test(test_anchor_prestress katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-001: the anchor lock-off force (.k2d v3) against an equivalent external-force model -- the first structural case in the matrix, and the input every anchored excavation needs
 katai_add_test(test_driven_structures katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-009: a plate on a settling support and anchors on driven edges, read from the force report against closed forms -- the anchor report used to drop a driven node's motion
+katai_add_test(test_safety_structures katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-STR-010: a Safety run with its structures, on the sliding block -- the interface reduced with the soil, a plate's weight and an anchor's capacity carried unreduced, each against a closed form
+if(TARGET test_safety_structures)
+  target_compile_definitions(test_safety_structures PRIVATE
+    KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
 katai_add_test(test_tolerance_independence katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-NUM-007: the same benchmark at six tolerated residuals -- is the published number a physics result or an artefact of the stopping rule? (and, above the default, an unsafe-sided one)
 if(TARGET test_tolerance_independence)
   target_compile_definitions(test_tolerance_independence PRIVATE

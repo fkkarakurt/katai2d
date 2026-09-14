@@ -51,10 +51,15 @@ struct SafetyPhase {
 // the mechanism displacement and the recovered nodal stresses in R. Returns
 // false on an honest refusal or an unstable-at-minimum outcome, with
 // R.message set; on success the caller's common result tail completes R.
+//
+// `structures` are the phase's active structural elements and `f` must already carry their
+// self-weight: both enter every trial of the search (safety_analysis states what the reduction
+// does and does not touch). No structural force diagram is produced for this phase -- the state
+// the search stops at is a re-solve from the unstressed ground, not the state the phases built.
 inline bool solve_safety_phase(
     const katai::mesh::Mesh& mesh, const DofMap& dofs,
     const std::vector<MaterialModel>& models, const std::vector<MaterialProfile>& profiles,
-    const Eigen::VectorXd& f, const LinearSolve& solver,
+    const Eigen::VectorXd& f, const LinearSolve& solver, const Structures& structures,
     const SafetyPhase& in, SolveResult& R) {
     if (!in.nonlinear_soil && !in.has_hardening) {
         R.message = "Safety analysis (phi-c reduction) needs a Mohr-Coulomb or Hardening Soil "
@@ -121,7 +126,8 @@ inline bool solve_safety_phase(
     sopt.newton = NewtonOptions{in.load_steps > 0 ? in.load_steps : 8,
                                 in.max_iterations > 0 ? in.max_iterations : 120,
                                 in.tolerance > 0.0 ? in.tolerance : 1e-3};
-    const auto sr = safety_analysis(mesh, dofs, f, models, solver, sopt, {}, in.active, profiles);
+    const auto sr =
+        safety_analysis(mesh, dofs, f, models, solver, sopt, {}, in.active, profiles, structures);
     R.fos = sr.fos;
     if (!sr.ok) {
         R.message = "Safety analysis: the slope did not reach equilibrium even at the lowest "

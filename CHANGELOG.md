@@ -31,12 +31,10 @@ slope while the MKL build answered silently — and an interface, which splits t
 line, left the soil on its two sides unconnected: a joint as strong as the soil turned a slope that
 stands at FoS 1.02 into "did not reach equilibrium even at the lowest strength factor" on both.
 
-**A structural element active in a Safety run is now refused** (`K2D-G016`), by the input contract
+**A structural element active in a Safety run was refused** (`K2D-G016`), by the input contract
 at `initial.struct` / `phases[i].struct` and again by the engine, with no factor of safety
-reported. The remedy is to deactivate the elements in the Safety phase, which runs and gives the
-factor of safety of the ground without them. An interface cannot be deactivated per phase in this
-build, so a model that contains one cannot run a Safety analysis yet; the test that pins the
-refusal also pins that sentence, so it fails the day it stops being true.
+reported. That refusal did not last the release: the search was then given the structures, and
+`K2D-G016` now refuses only a prestressed anchor — see *A Safety run solves its structures* below.
 
 The Python `prj.phases.safety()` docstring said "phi-c reduction of the current state". It is not:
 the search starts every trial from an unstressed state, so the stresses the earlier phases left are
@@ -214,11 +212,81 @@ The Non-porous refusal in these phases gave "a single fluid stiffness" as half o
 half is gone; the refusal stays, because every element still receives a pore-pressure unknown, and
 the message now says only that.
 
+### A Safety run solves its structures
+
+The strength-reduction search — the initial Safety procedure or a Safety phase — now solves the
+phase's active structural elements together with the soil in every trial, and their self-weight
+with them. What the reduction does to each follows from what a strength is. An **interface's**
+strength is a soil strength (c_i = R_inter c′, tan φ_i = R_inter tan φ′), so it is reduced exactly
+as the soil's: c_i / SRF, tan φ_i / SRF, and its tension cut-off / SRF. A **plate's** M_p and N_p,
+an **anchor's** and a **geogrid's** capacity, and an **embedded beam's** skin and base resistance
+are the structure's own declared capacities, and stay at their input values. The search starts
+from the unstressed state, so an interface starts unstressed with it: the normal stress it is
+seeded with in a K0 phase is not carried in.
+
+`KV-STR-010` checks all three rules against closed forms, on the `KV-STR-002` block (4 m × 1 m,
+W = 100 kN/m, joint c_w = 2.5 kN/m², φ_w = 26.6°) with the imposed slip replaced by a horizontal
+load H on its left face:
+
+| run | closed form | expected | measured |
+|---|---|---|---|
+| interface, H = 40 kN/m | (B c_w + W tan φ_w) / H | 1.501907 | 1.501636 |
+| interface, H = 30 kN/m | same | 2.002542 | 2.002466 |
+| interface, c_w = 0 | W tan φ_w / H | 1.251907 | 1.252173 |
+| plate on the top, w = 10 kN/m/m | (B c_w + (W + w B) tan φ_w) / H | 2.002669 | 2.002466 |
+| anchor pulling back, F = 10 kN, H = 40 | (B c_w + W tan φ_w) / (H − F) | 2.002542 | 2.002466 |
+| the same anchor at 2 m spacing | (B c_w + W tan φ_w) / (H − F/2) | 1.716465 | 1.716187 |
+
+Every one is inside a single interval of the search's own bisection, (3.0 − 0.4) / 2¹² = 6.35·10⁻⁴,
+which is the band, and the same numbers come out of both linear-solver backends. The answers the
+band rejects are far outside it: without the plate's weight 1.5019, with the anchor's capacity
+reduced as well 1.7519, without the anchor 1.5019. The plate's weight and the same distributed load
+give the same factor bit for bit, and so do the yielded anchor and a constant point force equal to
+its capacity; an elastic anchor, which has no capacity, holds the block through the whole search and
+the factor is reported as a lower bound. The band also sees geometry: an anchor drawn at mid-height
+attached to the nearest node, 3 cm above its line, pulled 0.9° downward and read +0.123% against the
+horizontal closed form, and −0.003% against the closed form written on the direction it actually
+pulled along.
+
+On the Griffiths & Lane slope, each element against the same mesh with it deactivated
+(`test_safety_gui`; direction witnesses, not verification):
+
+| element in the Safety run | factor of safety |
+|---|---|
+| none (all deactivated) | 1.04080 |
+| a geogrid across the slip surface, EA = 1e5 kN/m | 1.20012 |
+| an anchor across the slip surface, EA = 1e6 kN | 1.15315 |
+| an embedded beam through the slope face | 1.18679 |
+| a crest slab, weightless / at w = 150 kN/m/m | 1.04016 / 1.01667 |
+
+An interface as strong as the soil, which before left the two sides of its line unconnected, now
+gives 1.036. A model with no active structural element is unchanged bit for bit: `KV-SLP-001`
+still reports 1.0103271484374998 and `KV-SLP-002` 1.3835693359375, with the same largest mechanism
+displacement.
+
+**One element is still refused: a prestressed anchor** (`K2D-G016`, narrowed to this). Its lock-off
+force belongs to a ground that has already moved, and the search starts from the unstressed one — on
+the unstressed mesh the force would pull on soil that carries no stress yet. Deactivating the
+anchor in the Safety phase runs.
+
+**A Safety run with structures says what starting from the unstressed state means for them**
+(`K2D-A018`, a note): each element is present from the first increment of every trial, so it also
+carries what the ground's settlement under its own weight does to it, including settlement that, in
+the phases built before it, may have happened before it was installed. For the same reason no
+structural force is reported for a Safety phase.
+
+**The phase after a Safety phase now continues from the structural state.** A Safety phase has
+never committed its stresses forward, but it did not pass the structures on either, so the phase
+after it found a parent with no structural state and re-developed every structural force from zero
+although nothing had changed. Measured on the slope: an anchor carrying 45.072858952 kN after
+gravity carries 45.072858952 kN in a nil phase after a Safety phase.
+
 ### Upgrading from 0.9.0
 
-- A project whose Safety phase (or initial Safety procedure) has a structural element active is
-  refused. Before this build it ran and reported the factor of safety of the same model without
-  that element; deactivate the element in the Safety phase to get that number knowingly.
+- A Safety phase (or initial Safety procedure) now solves its active structural elements, so its
+  factor of safety changes wherever one is active: 0.9.0 reported the factor of the same model
+  without them. A prestressed anchor active in a Safety run is refused (`K2D-G016`); deactivate it
+  in the Safety phase. A Safety run with structures raises the note `K2D-A018`.
 - Scripts that matched on `K2D-A003` will no longer see it. An anchor whose end stands on a
   non-zero prescribed displacement now reports its force; before, it reported 0.
 - Two corpus files are renamed, `tests/corpus/kv-str-002-sliding-block.k2d` and

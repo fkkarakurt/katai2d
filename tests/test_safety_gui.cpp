@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace m = katai::model;
 
@@ -24,6 +25,7 @@ void check(bool ok, const char* what) {
     if (!ok) ++g_failures;
     std::fflush(stdout);
 }
+void check(bool ok, const std::string& what) { check(ok, what.c_str()); }
 
 m::Project slope() {
     m::Project pr;
@@ -128,16 +130,9 @@ m::StructElement line(m::StructKind kind, const char* name, double x1, double y1
     return s;
 }
 
-void test_safety_structures_refused() {
-    // A Safety run solves the ground alone: the strength-reduction search is handed no structural
-    // elements. Measured on this slope before the refusal existed, an active geogrid, anchor, plate
-    // carrying 150 kN/m/m and embedded beam each returned the factor of safety of the same mesh
-    // with the element deactivated, bit for bit -- stiffness and weight both gone -- and an
-    // interface left the two sides of its line unconnected, so a joint as strong as the soil was
-    // reported as an unstable slope. Each kind is therefore REFUSED (K2D-G016) with no number,
-    // and the remedy the message names -- deactivate the elements -- is checked to RUN.
+m::Project slope_with_structures(double slab_w) {
     m::Project pr = slope();
-    m::PlateMaterial slab; slab.name = "Slab"; slab.EA = 1.0e7; slab.EI = 1.0e5; slab.w = 150.0;
+    m::PlateMaterial slab; slab.name = "Slab"; slab.EA = 1.0e7; slab.EI = 1.0e5; slab.w = slab_w;
     pr.plates.push_back(slab);
     m::GeogridMaterial grid; grid.name = "Grid"; grid.EA = 1.0e5;
     pr.geogrids.push_back(grid);
@@ -149,7 +144,20 @@ void test_safety_structures_refused() {
     pr.structs.push_back(line(m::StructKind::Plate, "Slab", 52, 35, 68, 35));
     pr.structs.push_back(line(m::StructKind::Geogrid, "Grid", 42.5, 31, 68, 31));
     pr.structs.push_back(line(m::StructKind::Anchor, "Tie", 38.5, 29, 66, 22));
-    pr.structs.push_back(line(m::StructKind::EmbeddedBeam, "Pile", 56, 35, 56, 22));
+    pr.structs.push_back(line(m::StructKind::EmbeddedBeam, "Pile", 44, 32, 44, 21));
+    return pr;
+}
+
+void test_safety_structures_take_part() {
+    // The structures take part in the strength-reduction search. Until 2026-09 the search was
+    // handed none of them: measured on this slope, an active geogrid, anchor, plate carrying
+    // 150 kN/m/m and embedded beam each returned the factor of safety of the same mesh with the
+    // element deactivated, bit for bit, and every one was refused (K2D-G016). Now each kind runs,
+    // and each is seen to move the factor the way it acts. These are DIRECTION witnesses only --
+    // how much is verified against closed forms in test_safety_structures (KV-STR-010). Each is
+    // read against the same mesh with the element deactivated: a slope drawn without the element
+    // is meshed differently, and the difference between two meshes is not the element's.
+    m::Project pr = slope_with_structures(0.0);
     const auto M = katai::app::mesh_from_project(pr, 5.0, 6);
     check(M.ok, "slope with a slab, a geogrid, an anchor and a pile meshed");
     if (!M.ok) return;
@@ -157,54 +165,89 @@ void test_safety_structures_refused() {
     m::Phase cfg = pr.initial;
     katai::app::PhaseIO io;
     io.config = &cfg;
-    for (size_t k = 0; k < pr.structs.size(); ++k) {
-        cfg.struct_active.assign(pr.structs.size(), 0);
-        cfg.struct_active[k] = 1;
-        const auto R = katai::app::solve_gravity_le(pr, M.mesh, katai::app::InitialPhase::Safety,
-                                                    nullptr, io);
-        const std::string what = "an active " + pr.structs[k].name +
-                                 " in a Safety run is REFUSED (K2D-G016), with no factor of safety";
-        check(!R.ok && R.fos < 0.0 && raised(R, "K2D-G016"), what.c_str());
+    const auto run = [&](const m::Project& p, std::vector<char> active) {
+        cfg.struct_active = std::move(active);
+        return katai::app::solve_gravity_le(p, M.mesh, katai::app::InitialPhase::Safety, nullptr,
+                                            io);
+    };
+    const auto none = run(pr, {0, 0, 0, 0});
+    check(none.ok && !raised(none, "K2D-A018"),
+          "with every element deactivated it runs, and says nothing about structures");
+    if (!none.ok) return;
+    std::printf("  structures deactivated: FoS = %.5f\n", none.fos);
+
+    // A member across the slip surface holds the slope: the factor rises.
+    struct Holder { size_t index; const char* what; };
+    for (const Holder& h : {Holder{1, "a geogrid across the slip surface"},
+                            Holder{2, "an anchor across the slip surface"},
+                            Holder{3, "a pile through the slope face"}}) {
+        std::vector<char> on(4, 0);
+        on[h.index] = 1;
+        const auto R = run(pr, on);
+        std::printf("  %-34s FoS = %.5f\n", h.what, R.fos);
+        check(R.ok && !raised(R, "K2D-G016") && raised(R, "K2D-A018"),
+              std::string(h.what) + " takes part, and the run says so (K2D-A018)");
+        check(R.ok && R.fos > none.fos + 0.02, std::string(h.what) + " raises the factor");
+    }
+    // A weight on the crest loads the slope: the factor falls. The plate's STIFFNESS is present in
+    // both runs, so what is compared is its weight alone.
+    const auto limp = run(pr, {1, 0, 0, 0});
+    const auto heavy = run(slope_with_structures(150.0), {1, 0, 0, 0});
+    std::printf("  a crest slab: FoS = %.5f weightless, %.5f at 150 kN/m/m\n", limp.fos, heavy.fos);
+    check(limp.ok && heavy.ok && heavy.fos < limp.fos - 0.005,
+          "a heavy crest slab lowers the factor -- its weight is in the search");
+
+    // One element still cannot enter: a PRESTRESSED anchor. Its lock-off force belongs to a ground
+    // that has already moved, and the search starts from the unstressed one. Refused by the engine
+    // and by the contract, and the remedy the message names runs.
+    {
+        m::Project pre = pr;
+        pre.anchors[0].prestress = 100.0;
+        const auto R = run(pre, {0, 0, 1, 0});
+        check(!R.ok && R.fos < 0.0 && raised(R, "K2D-G016"),
+              "a prestressed anchor in a Safety run is REFUSED (K2D-G016), with no factor");
+        pre.initial.struct_active = {0, 0, 1, 0};
+        pre.initial_procedure = m::InitialProcedure::Safety;
+        bool schema = false;
+        for (const auto& is : katai::io::validate_project(pre).issues)
+            schema |= is.severity == katai::io::Severity::Error && is.path == "initial.struct";
+        check(schema, "and the .k2d contract refuses it at initial.struct");
+        check(run(pre, {0, 0, 0, 0}).ok, "and deactivated in the Safety run, it runs");
     }
 
-    // The remedy runs, and answers the question it states: the ground without the elements.
-    cfg.struct_active.assign(pr.structs.size(), 0);
-    const auto R = katai::app::solve_gravity_le(pr, M.mesh, katai::app::InitialPhase::Safety,
-                                                nullptr, io);
-    check(R.ok && !raised(R, "K2D-G016"), "with every structural element deactivated it runs");
-    if (R.ok) {
-        const double err = std::fabs(R.fos - 1.00) / 1.00 * 100.0;
-        std::printf("  structures deactivated: FoS = %.3f (ref 1.00)  err = %.1f%%\n", R.fos, err);
-        check(err < 8.0, "and returns the unreinforced slope's factor within 8% of the benchmark");
-    }
-
-    // The same refusal in a CHAINED Safety phase, where the elements were active in the phase
-    // before it -- and the same remedy there.
+    // A CHAINED Safety phase with the elements still active runs too -- and hands the structural
+    // state on unchanged. A Safety phase commits no stress forward; before it passed the structures
+    // on as well, the phase after it met a parent with no structural state and re-developed every
+    // structural force from zero although nothing had changed.
     {
         m::Project ch = pr;
-        ch.initial.struct_active = {1, 0, 0, 0};
+        ch.initial.struct_active = {0, 0, 1, 0};
         m::Phase sf; sf.name = "FoS"; sf.type = m::PhaseType::Safety;
-        sf.struct_active = {1, 0, 0, 0};
-        ch.phases = {sf};
-        auto res = katai::app::solve_phases(ch, M.mesh, katai::app::InitialPhase::GravityLoading);
-        check(res.size() == 2 && res[0].ok && !res[1].ok && raised(res[1], "K2D-G016"),
-              "a chained Safety phase with the slab still active is REFUSED (K2D-G016)");
-        ch.phases[0].struct_active = {0, 0, 0, 0};
-        res = katai::app::solve_phases(ch, M.mesh, katai::app::InitialPhase::GravityLoading);
-        check(res.size() == 2 && res[1].ok && res[1].fos > 0.0,
-              "and runs once the slab is deactivated in the Safety phase");
-        // And the contract says so before a mesh exists.
-        ch.phases[0].struct_active = {1, 0, 0, 0};
-        bool schema = false;
-        for (const auto& is : katai::io::validate_project(ch).issues)
-            schema |= is.severity == katai::io::Severity::Error && is.path == "phases[0].struct";
-        check(schema, "and the .k2d contract refuses it at phases[0].struct");
+        sf.struct_active = {0, 0, 1, 0};
+        m::Phase nil; nil.name = "Nil"; nil.struct_active = {0, 0, 1, 0};
+        ch.phases = {sf, nil};
+        const auto res =
+            katai::app::solve_phases(ch, M.mesh, katai::app::InitialPhase::GravityLoading);
+        check(res.size() == 3 && res[0].ok && res[1].ok && res[1].fos > 0.0 && res[2].ok,
+              "gravity -> Safety with the anchor active -> a nil phase: all three run");
+        if (res.size() == 3 && res[0].ok && res[2].ok && res[0].struct_forces.size() == 1 &&
+            res[2].struct_forces.size() == 1) {
+            const double N0 = res[0].struct_forces[0].max_N, N2 = res[2].struct_forces[0].max_N;
+            std::printf("  anchor force: %.9f after gravity, %.9f in the nil phase after Safety\n",
+                        N0, N2);
+            check(N0 > 1.0 && std::fabs(N2 - N0) <= 1e-9 * N0,
+                  "the nil phase after Safety carries the anchor force the gravity phase left");
+            check(res[2].message.find("supplies no structural state") == std::string::npos,
+                  "and does not report a parent without structural state");
+        } else {
+            check(false, "each static phase reports one anchor force diagram");
+        }
     }
 
-    // An interface is refused the same way, and the remedy is NOT available for it: an interface
-    // splits the mesh, which is fixed across phases, so it cannot be deactivated per phase. The
-    // message says so; this pins the sentence to the behaviour, so that the day an interface can
-    // be switched off per phase this check fails and the message is revisited with it.
+    // An interface takes part as well. Its line splits the mesh, and a split mesh with nothing
+    // across the seam is two unconnected bodies -- which is what the search used to solve. A joint
+    // as strong as the soil now returns a factor of safety near the benchmark's. It still cannot be
+    // deactivated per phase, and that refusal is a different one.
     {
         m::Project pj = slope();
         pj.structs.push_back(line(m::StructKind::Interface, "Joint", 41, 30, 68, 30));
@@ -213,8 +256,9 @@ void test_safety_structures_refused() {
         check(MJ.ok, "slope with an interface meshed");
         if (!MJ.ok) return;
         const auto RJ = katai::app::solve_gravity_le(pj, MJ.mesh, katai::app::InitialPhase::Safety);
-        check(!RJ.ok && RJ.fos < 0.0 && raised(RJ, "K2D-G016"),
-              "an interface in a Safety run is REFUSED (K2D-G016)");
+        std::printf("  a joint as strong as the soil: FoS = %.5f\n", RJ.fos);
+        check(RJ.ok && !RJ.fos_lower_bound && std::fabs(RJ.fos - 1.00) < 0.08,
+              "an interface in a Safety run takes part, and the factor is within 8% of the benchmark");
         m::Phase off = pj.initial;
         off.struct_active = {0};
         katai::app::PhaseIO oio;
@@ -222,7 +266,7 @@ void test_safety_structures_refused() {
         const auto RO = katai::app::solve_gravity_le(pj, MJ.mesh, katai::app::InitialPhase::Safety,
                                                      nullptr, oio);
         check(!RO.ok && !raised(RO, "K2D-G016"),
-              "and it cannot be deactivated per phase, which is what the refusal tells the user");
+              "it cannot be deactivated per phase, which is a different refusal");
     }
 }
 
@@ -234,7 +278,7 @@ int main() {
     test_safety_slope_fos();
     test_safety_confined_no_mechanism();
     test_safety_hs_gated();
-    test_safety_structures_refused();
+    test_safety_structures_take_part();
     if (g_failures == 0) {
         std::printf("\nOK: GUI Safety analysis -> factor of safety + failure mechanism\n");
         return 0;

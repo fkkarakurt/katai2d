@@ -112,10 +112,9 @@ m::Project valid_project() {
     m::Phase fos;
     fos.name = "FoS";
     fos.type = m::PhaseType::Safety;
-    // A Safety analysis solves the ground alone, so the contract refuses one with a structural
-    // element active (K2D-G016's schema half); the baseline's factor of safety is therefore that
-    // of the ground without the wall, the tie and the joint. The validator does not know that the
-    // ENGINE cannot switch an interface off per phase -- this baseline is only ever validated.
+    // The baseline's Safety phase deactivates the wall, the tie and the joint, which the contract
+    // accepts either way. The validator does not know that the ENGINE cannot switch an interface
+    // off per phase -- this baseline is only ever validated.
     fos.struct_active = {0, 0, 0};
     p.phases.push_back(fos);
     return p;
@@ -187,13 +186,27 @@ int main() {
           "initial_procedure", E, "unknown initial procedure");
     probe(base, [](m::Project& p) { p.initial_procedure = m::InitialProcedure::Safety; },
           "initial_procedure", W, "initial Safety with staged phases present");
-    // A Safety run is handed no structural elements: their stiffness and weight are dropped and an
-    // interface leaves its two sides unconnected, so an ACTIVE element is refused, in the initial
-    // procedure and in a Safety phase alike (the baseline's own Safety phase deactivates them).
-    probe(base, [](m::Project& p) { p.initial_procedure = m::InitialProcedure::Safety; },
-          "initial.struct", E, "initial Safety with structural elements active");
-    probe(base, [](m::Project& p) { p.phases[3].struct_active = {0, 1, 0}; }, "phases[3].struct",
-          E, "a Safety phase with a structural element active");
+    // A Safety run solves the structural elements with the soil (K2D-G016 refused every active one
+    // until 2026-09). One is still refused, in the initial procedure and in a Safety phase alike: a
+    // PRESTRESSED anchor, whose lock-off force belongs to a ground that has already moved while the
+    // search starts from the unstressed one. The same anchor slack, and every other element, pass.
+    probe(base,
+          [](m::Project& p) {
+              p.initial_procedure = m::InitialProcedure::Safety;
+              p.anchors[0].prestress = 50.0;
+          },
+          "initial.struct", E, "initial Safety with a prestressed anchor active");
+    probe(base,
+          [](m::Project& p) {
+              p.phases[3].struct_active = {0, 1, 0};
+              p.anchors[0].prestress = 50.0;
+          },
+          "phases[3].struct", E, "a Safety phase with a prestressed anchor active");
+    probe_accepts(base, [](m::Project& p) { p.initial_procedure = m::InitialProcedure::Safety; },
+                  "initial.struct",
+                  "initial Safety with a plate, a slack anchor and an interface active");
+    probe_accepts(base, [](m::Project& p) { p.phases[3].struct_active = {1, 1, 1}; },
+                  "phases[3].struct", "a Safety phase with every structural element active");
 
     // -- soil materials --------------------------------------------------------
     probe(base, [](m::Project& p) { p.materials[0].gamma_sat = -1.0; }, "materials[0].gamma_sat",

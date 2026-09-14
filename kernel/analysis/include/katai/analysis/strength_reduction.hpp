@@ -56,6 +56,19 @@ struct SafetyResult {
 // through to solve_nonlinear as-is. If c'_inc is GIVEN, the φ-c reduction divides c'_ref
 // and the gradient carries c'(y) → strength growing with depth enters the FoS. Empty ⇒ old
 // behaviour exactly.
+//
+// structures: the phase's active structural elements, solved in every trial together with the
+// soil. gravity_load must then already hold their self-weight -- a structure present without its
+// weight is a different model. What the reduction touches is decided by what a strength IS:
+//  - an INTERFACE is a soil strength (c_i = R_inter c, tan φ_i = R_inter tan φ), so it is reduced
+//    exactly as the soil is -- c_i / SRF, tan φ_i / SRF, and its tension cut-off / SRF;
+//  - a plate's M_p / N_p, an anchor's and a geogrid's capacity and an embedded beam's skin and base
+//    resistance are the STRUCTURE's own declared capacities, so they stay at their input values.
+// With an empty initial_state the search starts from the unstressed state, and every interface
+// starts unstressed with it: its wished-in-place normal stress σ_n0 belongs to a geostatic seed
+// this search does not have, and kept alone it would push the two faces apart with nothing in
+// the soil to balance it. A prestressed anchor has the same problem with no such fix -- its
+// lock-off force presupposes a ground that has already moved -- and is refused by the caller.
 SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                              const Eigen::VectorXd& gravity_load,
                              const std::vector<MaterialModel>& materials,
@@ -63,6 +76,7 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                              const StrengthReductionOptions& options = {},
                              const std::vector<GaussState>& initial_state = {},
                              const std::vector<char>& active_element = {},
-                             const std::vector<MaterialProfile>& profile = {});
+                             const std::vector<MaterialProfile>& profile = {},
+                             const Structures& structures = {});
 
 } // namespace katai::core
