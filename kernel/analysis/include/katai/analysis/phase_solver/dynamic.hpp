@@ -612,7 +612,8 @@ inline bool solve_dynamic_phase(
     std::vector<SignedEnv> sgn(diag_specs.size());
     for (size_t i = 0; i < diag_specs.size(); ++i) {
         StructForce d = force_diagram(diag_specs[i], structures, mesh, dofs,
-                                      Eigen::VectorXd::Zero(dofs.total_dofs()), {}, {});
+                                      Eigen::VectorXd::Zero(dofs.total_dofs()), {}, {}, false, {},
+                                      {}, /*disp_is_total=*/false);
         for (auto& st : d.stations) { st.N = st.Q = st.M = 0.0; }   // geometry kept, forces zeroed
         d.envelope = true;
         const size_t ns2 = d.stations.size();
@@ -634,7 +635,7 @@ inline bool solve_dynamic_phase(
     for (size_t i = 0; i < iface_diags.size(); ++i) {
         InterfaceResult ir = force_diagram(iface_diags[i], structures, mesh, dofs,
                                            Eigen::VectorXd::Zero(dofs.total_dofs()),
-                                           {}, {}, iface_elastic);
+                                           {}, {}, iface_elastic, /*disp_is_total=*/false);
         for (auto& st : ir.stations) { st.tau = st.sigma_n = st.slip = st.gap = 0.0; }
         ir.envelope = true;
         const size_t ns2 = ir.stations.size();
@@ -671,8 +672,10 @@ inline bool solve_dynamic_phase(
             // Linear path: uncapped anchors + full-EA geogrids + elastic plates, matching the
             // linear solve (iface_elastic == !dyn_nl is exactly that flag). Nonlinear path: the
             // streamed committed state + the real caps, matching the per-step Newton solve.
+            // uf_s is a TOTAL field only on the carried nonlinear path (datum + dynamic).
             const StructForce cur = force_diagram(diag_specs[i], structures, mesh, dofs, uf_s,
-                                                  anch_c, geo_c, iface_elastic, pl_c, pl5_c);
+                                                  anch_c, geo_c, iface_elastic, pl_c, pl5_c,
+                                                  /*disp_is_total=*/nl_carry);
             SignedEnv& s = sgn[i];
             const size_t n2 = std::min(cur.stations.size(), s.nmin.size());
             for (size_t k = 0; k < n2; ++k) {
@@ -686,7 +689,8 @@ inline bool solve_dynamic_phase(
         }
         for (size_t i = 0; i < iface_diags.size(); ++i) {
             const InterfaceResult cur = force_diagram(iface_diags[i], structures, mesh, dofs,
-                                                      uf_s, if3_c, if5_c, iface_elastic);
+                                                      uf_s, if3_c, if5_c, iface_elastic,
+                                                      /*disp_is_total=*/nl_carry);
             SignedIfEnv& s = sgn_if[i];
             const auto& props = (iface_diags[i].order == 15)
                                     ? structures.interfaces5[iface_diags[i].begin].props
@@ -837,7 +841,8 @@ inline bool solve_dynamic_phase(
     for (size_t i = 0; i < env_forces.size(); ++i) {
         StructForce& e = env_forces[i];
         const StructForce at_peak = force_diagram(diag_specs[i], structures, mesh, dofs,
-                                                  R.disp, {}, {});
+                                                  R.disp, {}, {}, false, {}, {},
+                                                  /*disp_is_total=*/false);
         // Track 1a: with the parent state CARRIED the stations already hold the total action
         // (the solver evaluated the structures at parent datum + dynamic increment) --
         // superposing the parent's statics again would double-count them. `superposed` keeps

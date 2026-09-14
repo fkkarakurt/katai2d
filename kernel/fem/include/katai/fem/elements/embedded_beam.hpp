@@ -116,6 +116,7 @@ struct EmbeddedBeam {
     Connection connection = Connection::Free;
     int conn_beam_node = -1;                   // beam node tied (−1 = none / Free)
     int conn_mesh_node = -1;                   // the mesh node it is tied to
+    int install = -1;   // installation cohort (analysis Structures::install_datum); -1 = zero datum
 };
 
 // The global DOF of beam node `k`'s translation component `comp` (0 = x, 1 = y): the beam's own

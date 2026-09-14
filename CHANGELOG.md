@@ -319,8 +319,40 @@ The same Soft Soil Creep block was also missing from the Safety search's strengt
 refuses both soft soils, so no factor of safety was affected; the block is reduced now, so that
 lifting the refusal cannot bring the omission back.
 
+### Activating one structure reset every other structure's force
+
+A staged phase carries the structural state of the phase before it — each structure's total
+displacement and committed plastic state — so a wall's moment continues from one construction stage
+to the next. That carry was accepted only when the structure set was **identical**. Activating or
+removing any structure — an anchor row after an excavation stage, a strut, a geogrid with each lift —
+dropped it for every structure in the model, and the only statement was a sentence at the end of the
+phase message. Measured on a wall behind a 50 kPa surcharge, in a phase whose only change was an
+anchor of EA = 1 kN placed far from the wall:
+
+| wall | before the phase | the phase, anchor not activated | the phase, anchor activated |
+|---|---|---|---|
+| plate with interfaces | max\|M\| 1.914704 kNm/m | 1.914704, nothing moves | **0.921088 (−52%)** |
+| plate without interfaces | 17.889413 kNm/m | 17.889413, nothing moves | **10.867339 (−39%)** |
+
+That is the ordinary anchored-excavation sequence. **The state is now matched by drawn structure.** A
+structure present in both phases keeps its state; one activated in the phase is installed on the
+ground as the parent phase left it, and reads only the displacement since its installation; one
+removed releases its force as part of the phase's change. A prestressed anchor activated in a later
+phase still applies its lock-off force in that phase. On the wall above, activating the anchor now
+leaves the moment at 1.914704 and 17.889413, with nothing moving.
+
+`KV-STR-012` checks the three rules against superposition on a linear model, where every phase is the
+solve of its own change: activating an anchor in a phase that changes nothing else moves nothing and
+leaves the anchor at zero force; loading after it gives the wall the sum of the two stages' moments
+(1.6e-13) and the anchor the second stage's force alone (8.7e-13); removing it again changes the wall
+by exactly the moment of its released force applied as a point load (1.5e-11); and a prestressed
+anchor activated in the chain equals a slack one with its lock-off force as a point load (8.4e-13).
+The nil-phase identity of the existing carry test is unchanged bit for bit.
+
 ### Upgrading from 0.9.0
 
+- A staged phase that activates or removes a structure now carries the state of every other
+  structure; results of such chains change, the carried structures' forces most.
 - A design phase (EC7 DA1-C2 or DA3) now factors interfaces, the cohesion gradient, Soft Soil and
   Soft Soil Creep. Its results change wherever a model has any of them, in the safe direction.
 - An interface beside an Undrained (B) or (C) Mohr-Coulomb material no longer takes a friction

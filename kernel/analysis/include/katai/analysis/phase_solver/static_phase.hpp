@@ -307,7 +307,8 @@ inline bool solve_static_phase(
             // PHASE INCREMENT (R.disp) -- so the overlay must use the increment too, or the
             // structure would visually detach from its soil. Forces stay evaluated at the total.
             const StructForce dinc = force_diagram(sp, structures, mesh, dofs,
-                                                   nr.displacement, {}, {});
+                                                   nr.displacement, {}, {}, false, {}, {},
+                                                   /*disp_is_total=*/false);
             for (size_t k = 0; k < d.stations.size() && k < dinc.stations.size(); ++k) {
                 d.stations[k].ux = dinc.stations[k].ux;
                 d.stations[k].uy = dinc.stations[k].uy;

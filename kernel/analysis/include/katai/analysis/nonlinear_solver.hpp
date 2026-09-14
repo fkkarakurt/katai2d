@@ -132,6 +132,7 @@ struct PlateElement {
     // (instead of the mesh node) → the wall is detached from the mesh and tied to both sides
     // with interfaces. -1 = share the mesh node.
     std::array<int, 6> trans_dof = {-1, -1, -1, -1, -1, -1};  // [A_x,A_y, B_x,B_y, mid_x,mid_y]
+    int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
 };
 
 // Anchor — one-directional AXIAL spring (normal force only, NO rotation): N = (EA/L)·U, U the
@@ -161,6 +162,7 @@ struct AnchorElement {
     // this program: the lock-off force is applied once, and afterwards the force follows the wall.
     // 0 ⇒ installed slack, i.e. what every KATAI anchor was before this field existed.
     double prestress = 0.0;
+    int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
 };
 
 // Geogrid — 3-node axial membrane (tension-only + optional N_p; see elements/geogrid.hpp).
@@ -169,6 +171,7 @@ struct AnchorElement {
 struct GeogridElement {
     std::array<int, 3> nodes;     // mesh node indices [A, B, middle]
     geogrid::GeogridProps props;
+    int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
 };
 
 // Interface — zero-thickness soil-structure Coulomb interface (see elements/interface.hpp).
@@ -185,6 +188,7 @@ struct InterfaceElement {
     // at Δu_n=0 → no spurious "installation" movement. Default 0 = old behaviour bit-for-bit.
     // (interface-formulation §6.)
     std::array<double, 3> sigma_n0 = {0.0, 0.0, 0.0};
+    int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
 };
 
 // 5-NODE (quartic) plate — sits on a tri15 edge (the structural partner of the 15-node soil
@@ -196,6 +200,7 @@ struct PlateElement5 {
     std::array<int, 5> rot_dof;
     plate::PlateProps props;
     std::array<int, 10> trans_dof = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};  // [n_i_x, n_i_y]×5
+    int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
 };
 
 // 5-NODE interface (tri15 edge, 5-point Newton-Cotes). Same as the 3-node one; σ_n0 per NC point.
@@ -204,6 +209,7 @@ struct InterfaceElement5 {
     std::array<int, 10> struct_dof;   // structure-side extra DOFs [n_i_ux, n_i_uy]×5
     iface::InterfaceProps props;
     std::array<double, 5> sigma_n0 = {0.0, 0.0, 0.0, 0.0, 0.0};
+    int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
 };
 
 // Bundle of structural elements embedded in the soil (plate + anchor + geogrid + interface;
@@ -216,6 +222,15 @@ struct Structures {
     std::vector<PlateElement5> plates5;          // tri15-edge structural elements
     std::vector<InterfaceElement5> interfaces5;
     std::vector<ebeam::EmbeddedBeam> embedded_beams;  // embedded beam (pile row, mesh-nonconforming skin)
+    // INSTALLATION DATUMS. Structural elements are total-displacement formulated, so an element that
+    // is activated in a later phase must not read the displacement the ground had before it existed:
+    // it is installed stress-free on the deformed ground, and reads u - u_install ever after. Every
+    // element activated in the same phase shares the same u_install -- the total displacement at
+    // the start of that phase -- so the datums are kept once per installation phase (a cohort), in
+    // EQUATION space, and each element names its cohort in `install`. install = -1 is the zero
+    // datum and reads u itself, bit for bit: the state of every element in a chain whose structure
+    // set never changed. Filled by the phase chain (structural_carry.hpp); empty = no cohorts.
+    std::vector<Eigen::VectorXd> install_datum;
 };
 
 // PARENT STRUCTURAL STATE (Track 1a; first in nonlinear dynamics, now in the static chain

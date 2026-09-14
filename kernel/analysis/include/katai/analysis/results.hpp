@@ -8,6 +8,7 @@
 // engine's own enum (design_code.hpp); the schema value is mapped once, at the
 // driver seam, by to_core_design_approach.
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -97,6 +98,22 @@ struct InterfaceResult {
     bool slip_checked = false;
 };
 
+// One drawn structure's share of a phase's structural state (StructCarryState below), so that the
+// phase after can find it again when the structure SET has changed. The global numbers of the extra
+// structural DOFs (allocated in the order the driver builds the structures) and the positions in the
+// plastic-state vectors (solver order) both depend on which structures were built before this one,
+// so neither can be carried by index across a set change -- only by the drawn structure they belong
+// to.
+struct StructCarryRecord {
+    int si = -1;                                   // index into the project's structure list
+    // [begin, end) of this structure's elements in each Structures vector.
+    std::array<size_t, 2> plates{}, plates5{}, anchors{}, geogrids{}, interfaces{}, interfaces5{},
+                          embedded{};
+    std::array<size_t, 2> skin{};                  // [begin, end) of its skin points (embedded beam)
+    std::array<int, 2> extra_dof{};                // [begin, end) of the extra DOFs it allocated
+    int install = -1;                              // its installation cohort (-1 = the zero datum)
+};
+
 // Raw converged structural state of a STATIC-family phase, for the phase chain (Track 1a): a
 // NONLINEAR Dynamic child seeds its structural elements from this (displacement datum incl. the
 // extra structural DOFs + the committed plastic state), so its Coulomb / yield / slack caps act on
@@ -109,6 +126,13 @@ struct StructCarryState {
     std::vector<double> anchor_plastic, geogrid_plastic, interface_slip, interface5_slip,
                         embedded_skin_slip, embedded_foot_slip,   // committed plastic state (solver order)
                         plate_plastic, plate5_plastic;            // plate M-N hinge state ([eps_p,kap_p]xGauss)
+    // Per drawn structure (StructCarryRecord), and the datum of every installation cohort still in
+    // use, as FULL global-DOF vectors in this phase's numbering. node_dofs = the mesh's own DOFs
+    // (2 per node), which keep their numbers from phase to phase. Empty records = a state that
+    // cannot be matched by structure, carried only to an identical structure set.
+    std::vector<StructCarryRecord> records;
+    std::vector<Eigen::VectorXd> install_datum;
+    int node_dofs = 0;
 };
 
 // How a CONSOLIDATION phase is asked to end (docs/k2d-format.md, `cstop`). TimeInterval is the

@@ -398,6 +398,16 @@ public:
             if (eq >= 0) return u_free(eq) + du_free(eq);
             return has_presc ? ramp.total * (*ramp.presc)(gdof) : 0.0;
         };
+        // What a structural element reads: the total displacement less the datum of the phase it
+        // was installed in (Structures::install_datum), on a free DOF. install < 0 is the zero
+        // datum and returns u_at itself -- no subtraction is performed at all, so every element of
+        // a chain whose structure set never changed computes exactly what it always did.
+        const auto u_el = [&](int gdof, int install) -> double {
+            if (install < 0) return u_at(gdof);
+            const int eq = dofs.equation(gdof);
+            return eq >= 0 ? u_at(gdof) - structures.install_datum[(size_t)install](eq)
+                           : u_at(gdof);
+        };
 
         Eigen::VectorXd f_int = Eigen::VectorXd::Zero(neq);
 
@@ -617,7 +627,7 @@ public:
                 for (int c = 0; c < 3; ++c) geq[3 * k + c] = dofs.equation(gd[3 * k + c]);
             }
             plate::Dof up = plate::Dof::Zero();
-            for (int a = 0; a < 9; ++a) up(a) = u_at(gd[a]);
+            for (int a = 0; a < 9; ++a) up(a) = u_el(gd[a], pe.install);
             plate::Dof fp;
             plate::ElementMatrix Kbuf;
             const plate::ElementMatrix* Kp = nullptr;
@@ -661,7 +671,7 @@ public:
                 for (int c = 0; c < 3; ++c) geq[3 * k + c] = dofs.equation(gd[3 * k + c]);
             }
             plate::Dof5 up = plate::Dof5::Zero();
-            for (int a = 0; a < 15; ++a) up(a) = u_at(gd[a]);
+            for (int a = 0; a < 15; ++a) up(a) = u_el(gd[a], pe.install);
             plate::Dof5 fp;
             plate::ElementMatrix5 Kbuf;
             const plate::ElementMatrix5* Kp = nullptr;
@@ -714,7 +724,7 @@ public:
             const double g[4] = {-dir(0), -dir(1), dir(0), dir(1)};  // ∂U/∂u
             double U = 0.0;
             for (int i = 0; i < 4; ++i)
-                if (gdx[i] >= 0) U += g[i] * u_at(gdx[i]);
+                if (gdx[i] >= 0) U += g[i] * u_el(gdx[i], an.install);
             const double Up_c = (*st.anchor_c)[ai];
             // The lock-off force rides on the elastic response: N = N0 + k(U - U_p). It is a
             // constant, so it enters the residual and not the tangent -- a prestressed anchor is
@@ -754,7 +764,7 @@ public:
                 geq[2 * k + 1] = dofs.equation(gd[2 * k + 1]);
             }
             geogrid::Dof ug = geogrid::Dof::Zero();
-            for (int a = 0; a < 6; ++a) ug(a) = u_at(gd[a]);
+            for (int a = 0; a < 6; ++a) ug(a) = u_el(gd[a], ge.install);
             for (int q = 0; q < geogrid::kGaussCount; ++q) {
                 const auto kin = geogrid::axial_kin(Xe, gxi[q]);
                 const double eps = (kin.Be * ug)(0);
@@ -797,7 +807,7 @@ public:
                 const double b[4] = {s, -c, -s, c};   // ∂Δu_n/∂dof
                 double du_s = 0.0, du_n = 0.0;
                 for (int i = 0; i < 4; ++i) {
-                    const double ui = u_at(gdx[i]);
+                    const double ui = u_el(gdx[i], ie.install);
                     du_s += a[i] * ui; du_n += b[i] * ui;
                 }
                 const size_t si = ii * iface::kPointCount + q;
@@ -841,7 +851,7 @@ public:
                 const double b[4] = {s, -c, -s, c};
                 double du_s = 0.0, du_n = 0.0;
                 for (int i = 0; i < 4; ++i) {
-                    const double ui = u_at(gdx[i]);
+                    const double ui = u_el(gdx[i], ie.install);
                     du_s += a[i] * ui; du_n += b[i] * ui;
                 }
                 const size_t si = ii * iface::kPointCount5 + q;
@@ -877,7 +887,7 @@ public:
         // to null, so the measurement costs
         // nothing where it is not asked for.
         auto axial_couple = [&](const int* eqp, const int* gdp, const double* cxp,
-                                const double* cyp, int nc,
+                                const double* cyp, int nc, int install,
                                 const Eigen::Vector2d& tang, double k_a, double k_n, double cap,
                                 double wJ, double slip_c, double& slip_t,
                                 double* out_f = nullptr, double* out_du = nullptr,
@@ -885,7 +895,7 @@ public:
             const Eigen::Vector2d nrm(-tang(1), tang(0));
             Eigen::Vector2d dur(0.0, 0.0);
             for (int d = 0; d < nc; ++d)
-                if (gdp[d] >= 0) { const double ud = u_at(gdp[d]); dur(0) += cxp[d] * ud; dur(1) += cyp[d] * ud; }
+                if (gdp[d] >= 0) { const double ud = u_el(gdp[d], install); dur(0) += cxp[d] * ud; dur(1) += cyp[d] * ud; }
             const double dua = dur.dot(tang), dun = dur.dot(nrm);
             double ta = k_a * (dua - slip_c), Da = k_a;
             if (cap > 0.0 && std::fabs(ta) > cap) { ta = std::copysign(cap, ta); slip_t = dua - ta / k_a; Da = 0.0; }
@@ -922,7 +932,7 @@ public:
                 }
                 const plate::ElementMatrix Kp = plate::stiffness(Xe, eb.props);
                 plate::Dof up = plate::Dof::Zero();
-                for (int a = 0; a < 9; ++a) up(a) = u_at(gd[a]);
+                for (int a = 0; a < 9; ++a) up(a) = u_el(gd[a], eb.install);
                 const plate::Dof fp = Kp * up;
                 for (int a = 0; a < 9; ++a) {
                     if (geq[a] < 0) continue;
@@ -955,7 +965,7 @@ public:
                 }
                 double f_sp = 0.0, du_sp = 0.0; bool capped = false;
                 const bool want = probe && probe->prev_skin;
-                axial_couple(eq.data(), gdx.data(), cx.data(), cy.data(), nc, sp.tang, sp.k_a, sp.k_n, sp.t_max,
+                axial_couple(eq.data(), gdx.data(), cx.data(), cy.data(), nc, eb.install, sp.tang, sp.k_a, sp.k_n, sp.t_max,
                              sp.wJ, (*st.eskin_c)[skin_off + pi], (*st.eskin_t)[skin_off + pi],
                              want ? &f_sp : nullptr, want ? &du_sp : nullptr,
                              want ? &capped : nullptr);
@@ -986,7 +996,7 @@ public:
                 }
                 double f_ft = 0.0, du_ft = 0.0;
                 const bool want_f = probe && probe->prev_foot;
-                axial_couple(eq.data(), gdx.data(), cx.data(), cy.data(), nc, eb.foot.tang, eb.foot.D_foot, 0.0,
+                axial_couple(eq.data(), gdx.data(), cx.data(), cy.data(), nc, eb.install, eb.foot.tang, eb.foot.D_foot, 0.0,
                              eb.foot.f_max, 1.0, (*st.efoot_c)[bi], (*st.efoot_t)[bi],
                              want_f ? &f_ft : nullptr, want_f ? &du_ft : nullptr);
                 // The foot force error. The foot is not counted as a point: its criterion is ONE

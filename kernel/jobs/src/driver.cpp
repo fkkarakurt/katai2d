@@ -665,6 +665,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         int order;               // 6 or 15 (element order -> build_embedded_wall vs _wall5)
         int soil_mat;
         int strength_mat = 0;    // the material whose strength the interfaces take (resolved index)
+        size_t si = 0;           // index of the drawn structure in the project
         std::string name;        // drawn element name (for the force-diagram output)
         int flow_barrier = 0;    // 0 permeable / 1 impermeable / 2 semi-permeable (model vocabulary)
     };
@@ -689,6 +690,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // input contract, so it cannot reach a run; the guard is arithmetic self-defence.
             if (len < 1e-9) continue;
             WallSpec w;
+            w.si = si;
             w.name = s.name;
             w.order = order;
             w.flow_barrier = s.flow_barrier;
@@ -815,6 +817,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         double nx, ny;          // unit normal (orientation-aware K0 seed)
         int soil_mat;
         int strength_mat = 0;   // the material whose strength the joint takes (resolved index)
+        size_t si = 0;          // index of the drawn structure in the project
         std::string name;
         int flow_barrier = 0;   // 0 permeable / 1 impermeable / 2 semi-permeable (model vocabulary)
     };
@@ -840,6 +843,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // input contract, so it cannot reach a run; the guard is arithmetic self-defence.
             if (len < 1e-9) continue;
             IfaceSpec sp;
+            sp.si = si;
             sp.name = s.name.empty() ? "Interface" : s.name;
             sp.flow_barrier = s.flow_barrier;
             sp.nx = dy / len; sp.ny = -dx / len;   // unit normal (matches split_mesh_at_segment frame)
@@ -996,10 +1000,35 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // structures.interfaces / interfaces5: a phase that factors ground strength has to factor the
     // joints by the same rule as the soil they came from, after they have been built.
     std::vector<int> iface_strength_mat, iface5_strength_mat;
+    // What each drawn structure built, so the phase after can match its state by structure rather
+    // than by position (StructCarryRecord, structural_carry.hpp). A snapshot of every Structures
+    // vector and of the DOF count before a structure is built, and the record of what it added.
+    struct StructSnap { size_t pl, pl5, an, gg, if3, if5, eb, skin; int extra; };
+    const auto snap = [&]() {
+        size_t skin = 0;
+        for (const auto& eb : structures.embedded_beams) skin += eb.skin.size();
+        return StructSnap{structures.plates.size(), structures.plates5.size(),
+                          structures.anchors.size(), structures.geogrids.size(),
+                          structures.interfaces.size(), structures.interfaces5.size(),
+                          structures.embedded_beams.size(), skin, dofs.total_dofs()};
+    };
+    std::vector<katai::core::StructCarryRecord> struct_records;
+    const auto record = [&](size_t si, const StructSnap& a) {
+        const StructSnap b = snap();
+        katai::core::StructCarryRecord r;
+        r.si = (int)si;
+        r.plates = {a.pl, b.pl}; r.plates5 = {a.pl5, b.pl5}; r.anchors = {a.an, b.an};
+        r.geogrids = {a.gg, b.gg}; r.interfaces = {a.if3, b.if3}; r.interfaces5 = {a.if5, b.if5};
+        r.embedded = {a.eb, b.eb}; r.skin = {a.skin, b.skin}; r.extra_dof = {a.extra, b.extra};
+        const bool built = b.pl > a.pl || b.pl5 > a.pl5 || b.an > a.an || b.gg > a.gg ||
+                           b.if3 > a.if3 || b.if5 > a.if5 || b.eb > a.eb || b.extra > a.extra;
+        if (built) struct_records.push_back(r);
+    };
     for (size_t si = 0; si < pr.structs.size(); ++si) {
         const auto& s = pr.structs[si];
         if (s.kind != model::StructKind::Plate || plate_is_wall[si]) continue;   // walls built below
         if (!struct_on(si)) continue;   // not installed in this phase
+        const StructSnap snap0 = snap();
         const std::vector<int> chain = collect_chain(mesh, s.x1, s.y1, s.x2, s.y2);
         const std::string psub = line_subject(s.name, s.x1, s.y1, s.x2, s.y2);
         // Structural lines are mesh constraints too, so an unusable chain means the plate is not
@@ -1044,6 +1073,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         }
         if (structures.plates.size() > p0)
             diag_specs.push_back({0, s.name, p0, structures.plates.size()});
+        record(si, snap0);
     }
 
     // Geogrids: tension-only axial membranes. Like plates, each line is a conforming node chain;
@@ -1051,6 +1081,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     for (size_t si = 0; si < pr.structs.size(); ++si) {
         const auto& s = pr.structs[si];
         if (s.kind != model::StructKind::Geogrid || !struct_on(si)) continue;
+        const StructSnap snap0 = snap();
         const std::vector<int> chain = collect_chain(mesh, s.x1, s.y1, s.x2, s.y2);
         const std::string gsub = line_subject(s.name, s.x1, s.y1, s.x2, s.y2);
         if (chain.size() < 3 || chain.size() % 2 == 0) {
@@ -1084,6 +1115,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 {chain[2 * e], chain[2 * e + 2], chain[2 * e + 1]}, gp});
         if (structures.geogrids.size() > g0)
             diag_specs.push_back({2, s.name, g0, structures.geogrids.size()});
+        record(si, snap0);
     }
 
     // Anchors: single axial spring (node-to-node when both ends sit in the soil; fixed-end when one
@@ -1111,6 +1143,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     for (size_t si = 0; si < pr.structs.size(); ++si) {
         const auto& s = pr.structs[si];
         if (s.kind != model::StructKind::Anchor || !struct_on(si)) continue;
+        const StructSnap snap0 = snap();
         katai::core::AnchorElement an;
         double Ls = 1.0;
         if (s.material >= 0 && s.material < (int)pr.anchors.size()) {
@@ -1194,11 +1227,13 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         }
         structures.anchors.push_back(an);
         diag_specs.push_back({1, s.name, structures.anchors.size() - 1, structures.anchors.size(), Ls});
+        record(si, snap0);
     }
 
     // Embedded walls: build the plate + two interfaces on the split mesh and seed each interface's
     // initial normal stress sigma_n0 = K0*sigma'_v from the layered field (wished-in-place K0).
     for (const auto& w : walls) {
+        const StructSnap snap0 = snap();
         int toe = -1;
         for (int n = 0; n < mesh.node_count; ++n)
             if (std::fabs(mesh.x[n] - w.toe_x) < 1e-6 && std::fabs(mesh.y[n] - w.toe_y) < 1e-6) { toe = n; break; }
@@ -1254,12 +1289,14 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             if (structures.interfaces.size() > if0)
                 iface_diags.push_back({w.name, 6, if0, structures.interfaces.size()});
         }
+        record(w.si, snap0);
     }
 
     // Standalone interfaces: build the soil-soil Coulomb joint on the split mesh and seed each NC point's
     // initial normal stress sigma_n0 = (K0*nx^2 + ny^2)*sigma'_v (orientation-aware; vertical -> K0*sigma'_v,
     // horizontal -> sigma'_v) so the wished-in-place interface starts in geostatic equilibrium.
     for (auto& sp : soil_ifaces) {
+        const StructSnap snap0 = snap();
         const katai::core::InterfaceRange rng =
             katai::core::build_soil_interface(mesh, sp.seam, dofs, sp.ip, mesh.nodes_per_element, structures);
         iface_strength_mat.resize(structures.interfaces.size(), sp.strength_mat);
@@ -1282,6 +1319,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                     structures.interfaces[i].sigma_n0[q] = fac * eff_sigma_v(mesh.x[nd], mesh.y[nd]);
                 }
         }
+        record(sp.si, snap0);
     }
     const bool has_interfaces = !structures.interfaces.empty() || !structures.interfaces5.empty();
 
@@ -1300,6 +1338,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     for (size_t si = 0; si < pr.structs.size(); ++si) {
         const auto& s = pr.structs[si];
         if (s.kind != model::StructKind::EmbeddedBeam || !struct_on(si)) continue;
+        const StructSnap snap0 = snap();
         const std::string esub = line_subject(s.name, s.x1, s.y1, s.x2, s.y2);
         // A pile without a material or with no section has no stiffness to contribute, so it
         // would be drawn in the model and absent from the analysis.
@@ -1393,6 +1432,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // Force-diagram bookkeeping (kind 3 = embedded beam; produces N/Q/M like a plate).
         diag_specs.push_back({3, s.name, structures.embedded_beams.size() - 1,
                               structures.embedded_beams.size()});
+        record(si, snap0);
     }
     const bool has_embedded = !structures.embedded_beams.empty();
 
@@ -1539,9 +1579,16 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         !structures.interfaces5.empty() || !structures.embedded_beams.empty();
     bool static_carry_used = false;      // set by the static tail when it actually consumed carry
     bool static_carry_missing = false;   // chained + structures, but no carriable parent state
+    // Matched by drawn structure, so that a phase which activates or removes a structure still
+    // carries every other one (build_structural_carry states the three cases). carry_plan.full_datum
+    // is the parent's total displacement in THIS phase's DOF numbering -- the datum every consumer
+    // below evaluates its structures at.
+    katai::core::StructuralCarry carry_plan;
     if (any_struct_carry && io.prev && io.prev->ok) {
         const StructCarryState& ps = io.prev->struct_state;
-        if (katai::core::build_structural_init(ps, structures, dofs, carry_init)) carry_src = &ps;
+        carry_plan = katai::core::build_structural_carry(ps, struct_records, structures, dofs,
+                                                         2 * mesh.node_count, carry_init);
+        if (carry_plan.carried) carry_src = &ps;
     }
 
     // Axisymmetric scope: soil-only. A WATER TABLE is now carried -- the r-weighted phreatic
@@ -2203,8 +2250,24 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 // SUBSUMES the manual sigma_n0 terms below (coulomb_return adds sigma_n0
                 // internally), so those loops must be SKIPPED on this path -- adding both would
                 // double-count the wished-in-place lateral earth pressure.
+                //
+                // An anchor INSTALLED in this phase contributes nothing to that baseline -- its
+                // installation datum is this phase's datum -- except its lock-off force, which is a
+                // constant in its internal force. That force is what this phase applies, so it must
+                // stay out of B, exactly as it did when no structure was carried at all.
+                katai::core::Structures without_new_lockoff;
+                const katai::core::Structures* base_structures = &structures;
+                for (size_t ai = 0; ai < structures.anchors.size(); ++ai)
+                    if (ai < carry_plan.new_anchor.size() && carry_plan.new_anchor[ai] &&
+                        structures.anchors[ai].prestress != 0.0) {
+                        if (base_structures == &structures) {
+                            without_new_lockoff = structures;
+                            base_structures = &without_new_lockoff;
+                        }
+                        without_new_lockoff.anchors[ai].prestress = 0.0;
+                    }
                 B += katai::core::structural_internal_force(
-                    mesh, dofs, models, structures, carry_init,
+                    mesh, dofs, models, *base_structures, carry_init,
                     axi ? katai::core::Kinematics::Axisymmetric
                         : katai::core::Kinematics::PlaneStrain);
             }
@@ -2293,7 +2356,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             cin.structures = &structures;
             cin.diagrams = &diag_specs;
             cin.iface_diagrams = &iface_diags;
-            cin.carry_full = static_carry ? &carry_src->full_disp : nullptr;
+            cin.carry_full = static_carry ? &carry_plan.full_datum : nullptr;
             cin.has_semi_permeable_interface = semi_permeable;
             cin.pore_tie = &pore_tie;
             if (io.config) {
@@ -2360,7 +2423,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             fin.structures = &structures;
             fin.diagrams = &diag_specs;
             fin.iface_diagrams = &iface_diags;
-            fin.carry_full = static_carry ? &carry_src->full_disp : nullptr;
+            fin.carry_full = static_carry ? &carry_plan.full_datum : nullptr;
             fin.pore_tie = &pore_tie;
             if (io.config) { fin.duration_day = io.config->duration; fin.time_steps = io.config->time_steps; }
             fin.yscale = ymax - ymin;
@@ -2482,7 +2545,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             };
             if (katai::core::solve_dynamic_phase(mesh, dofs, models, mats, profiles, structures,
                                                  diag_specs, iface_diags, carry_init,
-                                                 carry_src ? &carry_src->full_disp : nullptr,
+                                                 carry_src ? &carry_plan.full_datum : nullptr,
                                                  io.prev, io.init_states, din, spdf, nonsymf, R))
                 R.mesh = std::move(mesh);
             return R;
@@ -2523,11 +2586,17 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         if (!katai::core::solve_static_phase(mesh, dofs, models, profiles, init, f, f_loads, B,
                                              solver, structures, diag_specs, iface_diags,
                                              carry_init,
-                                             static_carry ? &carry_src->full_disp : nullptr,
+                                             static_carry ? &carry_plan.full_datum : nullptr,
                                              stin, R, io.out_states))
             return R;
         static_carry_used = static_carry;
         static_carry_missing = io.chained && any_struct_carry && !static_carry;
+        // What the next phase needs to find this phase's structures again by structure: the
+        // records (with the installation cohort each ended up in), the cohorts' datums in this
+        // phase's numbering, and the count of mesh DOFs that keep their numbers.
+        R.struct_state.records = struct_records;
+        R.struct_state.install_datum = katai::core::install_datum_full(structures, dofs);
+        R.struct_state.node_dofs = 2 * mesh.node_count;
         }  // end ramp/solve (non-consolidation)
         }  // end normal (non-Safety) solve
     } catch (const std::exception& e) {
@@ -2550,12 +2619,17 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     R.mesh = std::move(mesh);   // the (possibly split) mesh the GUI must render
     R.ok = true;
     R.message = "Solved: max |u| = " + std::to_string(R.max_disp);
-    if (static_carry_used)
+    if (static_carry_used) {
         R.message += " Structural state continued from the parent phase (forces are totals).";
+        if (carry_plan.installed > 0)
+            R.message += " " + std::to_string(carry_plan.installed) +
+                         " structure(s) installed in this phase on the ground as the parent phase "
+                         "left it (their forces start from zero here).";
+    }
     else if (static_carry_missing)
-        R.message += " NOTE: the parent phase supplies no structural state (different structure set, "
-                     "or a consolidation/restored parent), so structural forces re-develop "
-                     "from zero this phase.";
+        R.message += " NOTE: the parent phase supplies no structural state (no structure in common "
+                     "with this phase, or a consolidation/restored parent), so structural forces "
+                     "re-develop from zero this phase.";
     if (!R.consol_time.empty()) {
         const double s_inf = R.consol_settlement.back();
         const double s0 = R.consol_settlement.front();

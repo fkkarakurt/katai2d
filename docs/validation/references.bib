@@ -332,6 +332,11 @@
 }
 
 @misc{theg,
+  title = {the principle of superposition for a linear elastic system (each phase of a chain of linear solves is the solve of that phase's change, and the solves add); the KATAI 2D input contract for staged activation (docs/k2d-format.md, phases[i].struct) and for the anchor lock-off force (anchors[i].prestress: applied when the anchor is activated, the anchor behaving as an elastic spring from that state); the prestress equivalence of KV-STR-001 (a constant internal force N0 along the anchor axis is, in the residual, an external force of N0 along that axis at the attached node)},
+  note  = {cited by KV-STR-012},
+}
+
+@misc{theh,
   title = {the same numerical control applied through two independent routes -- the .k2d file (model::Phase::tolerance / load_steps / max_iterations since io v7, and substep_tolerance since io v15) and the jobs-layer seam (app::NumericalControls, the route KV-NUM-007 measures with) -- must reach the same solver and produce the same run; the controls themselves are the phase-level numerical control parameters of KATAI 2D input contract (docs/k2d-format.md, tol / loadsteps / maxiter / substol), whose per-phase presence in the input is what makes a calculation reproducible by a third party},
   note  = {cited by KV-NUM-008},
 }
@@ -341,7 +346,7 @@
   note  = {cited by KV-NUM-007},
 }
 
-@misc{theh,
+@misc{thei,
   title = {the saturated limit of the fully-coupled (unsaturated Biot + Bishop) formulation is the consolidation (saturated Biot) formulation -- kernel/analysis/coupled_flow_deformation.hpp states the reduction and test_coupled_flow measures it for soil alone; here the same reduction is asked for with a structure in the system. The drained limit is the one KV-STR-006 uses: once the excess pore pressure is gone, the coupled problem IS the drained problem, which solve_nonlinear solves by a different path},
   note  = {cited by KV-STR-008},
 }
