@@ -174,6 +174,11 @@ if(TARGET test_safety_structures)
   target_compile_definitions(test_safety_structures PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
+katai_add_test(test_design_ground_strength katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-STR-011 + KV-FND-015: EC7 DA1-C2/DA3 reach every ground strength -- the joints, the cohesion gradient and the soft soils -- and a joint beside an undrained clay is a Tresca joint
+if(TARGET test_design_ground_strength)
+  target_compile_definitions(test_design_ground_strength PRIVATE
+    KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
 katai_add_test(test_tolerance_independence katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-NUM-007: the same benchmark at six tolerated residuals -- is the published number a physics result or an artefact of the stopping rule? (and, above the default, an unsafe-sided one)
 if(TARGET test_tolerance_independence)
   target_compile_definitions(test_tolerance_independence PRIVATE

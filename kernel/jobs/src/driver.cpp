@@ -558,7 +558,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             return R;
         }
     // Depth-varying E'(y) / c'(y), evaluated per stress point by every deformation phase's own assembly.
-    const std::vector<katai::core::MaterialProfile> profiles = build_profiles(pr);
+    // Not const: a material-factored design approach divides the cohesion gradient as well (below).
+    std::vector<katai::core::MaterialProfile> profiles = build_profiles(pr);
 
     // --- K0 / water infrastructure (used by initial stress, interface seeding and post-processing) -
     const double kPi = std::acos(-1.0);
@@ -663,6 +664,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         double nx, ny;           // unit normal (orientation-aware K0 seed: sigma_n0=(K0 nx^2+ny^2) sigma'_v)
         int order;               // 6 or 15 (element order -> build_embedded_wall vs _wall5)
         int soil_mat;
+        int strength_mat = 0;    // the material whose strength the interfaces take (resolved index)
         std::string name;        // drawn element name (for the force-diagram output)
         int flow_barrier = 0;    // 0 permeable / 1 impermeable / 2 semi-permeable (model vocabulary)
     };
@@ -780,13 +782,22 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                     "friction and cohesion, not the rock mass's.");
                 return R;
             }
-            w.ip.c_i = Rinter * sm.c;
-            w.ip.phi_i = std::atan(Rinter * std::tan(sm.phi * kPi / 180.0));
+            // THE JOINT TAKES THE STRENGTH ITS SOIL IS SOLVED WITH, read from the constitutive model
+            // rather than from the schema boxes. The two differ exactly where the model overrides a
+            // box: Undrained (B) and (C) solve the soil as a Tresca material, c = su with phi = 0,
+            // and the input contract says so ("phi is forced to 0 and the entered value is ignored
+            // for strength"). Read from the box, the joint beside such a clay kept that ignored
+            // angle -- measured on the sliding block: 59.72 kN/m of capacity with the box left at
+            // 26.6 deg, against 9.90 with it at 0 and B su = 10 for the Tresca joint.
+            w.strength_mat = smat >= 0 ? smat : 0;
+            const katai::core::MaterialModel& smodel = models[(size_t)w.strength_mat];
+            w.ip.c_i = Rinter * smodel.cohesion;
+            w.ip.phi_i = std::atan(Rinter * std::tan(smodel.friction_angle));
             // Interface tensile strength = R * sigma_t (reduced like c) -- only while the
             // material's tension cutoff is on; otherwise 0 (the interface default: carries no
             // tension -- the safe side). Previously the material's sigma_t never reached the
             // interface at all (an audit finding).
-            w.ip.sigma_t = sm.tension_cutoff ? Rinter * std::max(0.0, sm.tensile_strength) : 0.0;
+            w.ip.sigma_t = smodel.tension_cutoff ? Rinter * smodel.tensile_strength : 0.0;
             plate_is_wall[si] = 1;
             walls.push_back(std::move(w));
         }
@@ -803,6 +814,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         katai::core::iface::InterfaceProps ip;
         double nx, ny;          // unit normal (orientation-aware K0 seed)
         int soil_mat;
+        int strength_mat = 0;   // the material whose strength the joint takes (resolved index)
         std::string name;
         int flow_barrier = 0;   // 0 permeable / 1 impermeable / 2 semi-permeable (model vocabulary)
     };
@@ -898,9 +910,13 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                     "friction and cohesion, not the rock mass's.");
                 return R;
             }
-            sp.ip.c_i = Rinter * sm.c;
-            sp.ip.phi_i = std::atan(Rinter * std::tan(sm.phi * kPi / 180.0));
-            sp.ip.sigma_t = sm.tension_cutoff ? Rinter * std::max(0.0, sm.tensile_strength) : 0.0;
+            // The strength the soil is SOLVED with, as for the wall above (Undrained (B)/(C) is a
+            // Tresca material, and its joint is a Tresca joint).
+            sp.strength_mat = smat >= 0 ? smat : 0;
+            const katai::core::MaterialModel& smodel = models[(size_t)sp.strength_mat];
+            sp.ip.c_i = Rinter * smodel.cohesion;
+            sp.ip.phi_i = std::atan(Rinter * std::tan(smodel.friction_angle));
+            sp.ip.sigma_t = smodel.tension_cutoff ? Rinter * smodel.tensile_strength : 0.0;
             iface_split[si] = 1;
             soil_ifaces.push_back(std::move(sp));
         }
@@ -976,6 +992,10 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     std::vector<DiagSpec> diag_specs;
     std::vector<IfaceDiag> iface_diags;
     katai::core::Structures structures;
+    // Which material each interface element takes its strength from, parallel to
+    // structures.interfaces / interfaces5: a phase that factors ground strength has to factor the
+    // joints by the same rule as the soil they came from, after they have been built.
+    std::vector<int> iface_strength_mat, iface5_strength_mat;
     for (size_t si = 0; si < pr.structs.size(); ++si) {
         const auto& s = pr.structs[si];
         if (s.kind != model::StructKind::Plate || plate_is_wall[si]) continue;   // walls built below
@@ -1210,6 +1230,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             for (const auto& pe : wb.plates) structures.plates5.push_back(pe);
             const size_t if0 = structures.interfaces5.size();
             for (const auto& ie : wb.interfaces) structures.interfaces5.push_back(ie);
+            iface5_strength_mat.resize(structures.interfaces5.size(), w.strength_mat);
             if (structures.plates5.size() > p0)
                 diag_specs.push_back({5, w.name, p0, structures.plates5.size()});   // tri15 wall N/Q/M
             if (structures.interfaces5.size() > if0)
@@ -1227,6 +1248,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             for (const auto& pe : wb.plates) structures.plates.push_back(pe);
             const size_t if0 = structures.interfaces.size();
             for (const auto& ie : wb.interfaces) structures.interfaces.push_back(ie);
+            iface_strength_mat.resize(structures.interfaces.size(), w.strength_mat);
             if (structures.plates.size() > p0)
                 diag_specs.push_back({0, w.name, p0, structures.plates.size()});
             if (structures.interfaces.size() > if0)
@@ -1240,6 +1262,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     for (auto& sp : soil_ifaces) {
         const katai::core::InterfaceRange rng =
             katai::core::build_soil_interface(mesh, sp.seam, dofs, sp.ip, mesh.nodes_per_element, structures);
+        iface_strength_mat.resize(structures.interfaces.size(), sp.strength_mat);
+        iface5_strength_mat.resize(structures.interfaces5.size(), sp.strength_mat);
         if (rng.end > rng.begin) iface_diags.push_back({sp.name, rng.order, rng.begin, rng.end});
         const double k0 = (sp.soil_mat >= 0 && sp.soil_mat < (int)k0_by_mat.size()) ? k0_by_mat[sp.soil_mat] : 0.5;
         const double fac = k0 * sp.nx * sp.nx + sp.ny * sp.ny;
@@ -1781,6 +1805,25 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 }
             const katai::core::PartialFactors pf = katai::core::design_factors(da);
             for (auto& mm : models) katai::core::factor_material_strength(mm, pf);
+            // The strengths DERIVED from those materials take the same factors: the depth gradient
+            // of cohesion (part of the strength of the material it belongs to) and every interface
+            // (a ratio of the strength of the material it was built from). Each is decided by its
+            // own material -- an undrained one takes gamma_cu -- and none of them carried a design
+            // factor before 2026-09 (design_code.hpp states what was measured).
+            if (iface_strength_mat.size() != structures.interfaces.size() ||
+                iface5_strength_mat.size() != structures.interfaces5.size()) {
+                R.message = "Internal: an interface was built without the material its strength "
+                            "comes from, so the design approach could not be applied to it.";
+                return R;
+            }
+            for (size_t mi = 0; mi < profiles.size() && mi < models.size(); ++mi)
+                katai::core::factor_profile_strength(profiles[mi], models[mi], pf);
+            for (size_t k = 0; k < structures.interfaces.size(); ++k)
+                katai::core::factor_interface_strength(structures.interfaces[k].props,
+                                                       models[(size_t)iface_strength_mat[k]], pf);
+            for (size_t k = 0; k < structures.interfaces5.size(); ++k)
+                katai::core::factor_interface_strength(structures.interfaces5[k].props,
+                                                       models[(size_t)iface5_strength_mat[k]], pf);
             if (pf.gamma_Q_unfav != 1.0) f += (pf.gamma_Q_unfav - 1.0) * f_loads;  // variable loads x gamma_Q
         }
     }

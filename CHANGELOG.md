@@ -281,8 +281,50 @@ after it found a parent with no structural state and re-developed every structur
 although nothing had changed. Measured on the slope: an anchor carrying 45.072858952 kN after
 gravity carries 45.072858952 kN in a nil phase after a Safety phase.
 
+### A design approach left four ground strengths at their characteristic value
+
+EC7 DA1-C2 and DA3 divide the ground's characteristic shear strength by the M2 partial factors
+(EN 1997-1 Table A.4: γ_φ′ = 1.25 on tan φ′, γ_c′ = 1.25, γ_cu = 1.4) and re-solve. Four strengths
+were never divided. Each was silent, each erred on the unsafe side, and the report said the approach
+had been applied:
+
+| strength | measured under EC7 DA3 | on hand-factored input |
+|---|---|---|
+| every interface (sliding block, KV-STR-002 geometry) | 59.720 kN/m — the characteristic capacity, bit for bit | 47.743 kN/m |
+| the cohesion gradient `c_inc` (footing, c_inc = 20 kPa/m) | 125.467 kN/m — only c_ref divided | 117.718 kN/m |
+| Soft Soil (footing) | 61.458 kN/m — the characteristic run, bit for bit | 58.748 kN/m |
+| Soft Soil Creep (footing) | 68.357 kN/m — the characteristic run, bit for bit | 64.781 kN/m |
+
+The interfaces are built from characteristic strength before a phase applies its approach, and
+nothing factored them afterwards; the gradient lives in a separate profile; the two soft soils keep
+their failure line in parameter blocks of their own. **All four are now factored**, each by its own
+material's rule, so a gradient or a joint beside an undrained material takes γ_cu.
+
+**A joint beside an undrained clay also kept a friction angle the clay does not have.** Undrained (B)
+and (C) solve the soil as a Tresca material (c = s_u, φ = 0), and the input contract says the entered
+φ "is ignored for strength". The interface builder read that box anyway: with it left at 26.6° the
+sliding block's joint carried 59.72 kN/m, where B s_u = 10. An interface now takes the strength its
+material is solved with — c_i = R_inter s_u and φ_i = 0 beside an undrained clay.
+
+`KV-STR-011` holds the joint to closed forms on the checked-in sliding block: under DA3 and DA1-C2,
+B c_w / γ_c′ + W tan φ_w / γ_φ′ = 48.061 (measured −0.66%, inside the case's 2%); an Undrained (B) or
+(C) joint, B s_u = 10 (−1.04%) whatever its friction box holds; and the same joint under DA3,
+B s_u / γ_cu, with the characteristic run's bias to 1e-9. `KV-FND-015` runs each strength twice —
+under DA3, and with no design approach on strength factored by hand — and the two agree bit for bit,
+while each differs from its characteristic run. For the soft soils the design approach is applied in
+both phases of that comparison: applied in the loading phase alone, Soft Soil differs by 1.06e-5,
+because the preconsolidation the first phase seeds reads the strength that phase was given.
+
+The same Soft Soil Creep block was also missing from the Safety search's strength reduction. Safety
+refuses both soft soils, so no factor of safety was affected; the block is reduced now, so that
+lifting the refusal cannot bring the omission back.
+
 ### Upgrading from 0.9.0
 
+- A design phase (EC7 DA1-C2 or DA3) now factors interfaces, the cohesion gradient, Soft Soil and
+  Soft Soil Creep. Its results change wherever a model has any of them, in the safe direction.
+- An interface beside an Undrained (B) or (C) Mohr-Coulomb material no longer takes a friction
+  angle from that material's φ box. Results change wherever that box is not 0.
 - A Safety phase (or initial Safety procedure) now solves its active structural elements, so its
   factor of safety changes wherever one is active: 0.9.0 reported the factor of the same model
   without them. A prestressed anchor active in a Safety run is refused (`K2D-G016`); deactivate it

@@ -13,6 +13,7 @@
 
 #include <cmath>
 
+#include <katai/fem/elements/interface.hpp>
 #include <katai/materials/material_model.hpp>
 
 namespace katai::core {
@@ -87,16 +88,22 @@ inline bool factors_material(DesignApproach da) {
     return da == DesignApproach::EC7_DA1_C2 || da == DesignApproach::EC7_DA3;
 }
 
+// Whether a material's strength is an UNDRAINED shear strength -- Undrained (B) and (C): c = c_u,
+// phi = 0. (C) reaches the same Tresca envelope through a total stress analysis, and the strength
+// being factored is still an undrained one, so it takes gamma_cu. Reading only `undrained` here would
+// have factored a total-stress c_u with the effective-cohesion partial factor -- a different design
+// value, quietly. Every strength DERIVED from such a material (its depth gradient, the interface
+// beside it) is an undrained strength too, and is factored by the same test.
+inline bool strength_is_undrained(const MaterialModel& m) {
+    return (m.undrained || m.total_stress) && m.friction_angle == 0.0;
+}
+
 // Apply the M-set to a material's shear strength, MIRRORING strength_reduction.cpp::factor_strength
 // but with distinct gamma_c'/gamma_phi' (and gamma_cu for an undrained Tresca material, phi=0). The
 // Hardening Soil failure-surface sub-struct carries its OWN c/phi, so it is reduced too -- otherwise
 // an HS material keeps full strength. Dilatancy is clamped to the reduced friction (psi <= phi).
 inline void factor_material_strength(MaterialModel& m, const PartialFactors& f) {
-    // Undrained (B) and (C): c = c_u, phi = 0. (C) reaches the same Tresca envelope through a
-    // total stress analysis, and the strength being factored is still an undrained one, so it
-    // takes gamma_cu. Reading only `undrained` here would have factored a total-stress c_u with
-    // the effective-cohesion partial factor -- a different design value, quietly.
-    const bool tresca = (m.undrained || m.total_stress) && m.friction_angle == 0.0;
+    const bool tresca = strength_is_undrained(m);
     m.cohesion /= (tresca ? f.gamma_cu : f.gamma_c);
     m.friction_angle = std::atan(std::tan(m.friction_angle) / f.gamma_phi);
     if (m.dilatancy_angle > m.friction_angle) m.dilatancy_angle = m.friction_angle;
@@ -108,6 +115,43 @@ inline void factor_material_strength(MaterialModel& m, const PartialFactors& f) 
     m.hs.cohesion /= (hs_tresca ? f.gamma_cu : f.gamma_c);
     m.hs.friction = std::atan(std::tan(m.hs.friction) / f.gamma_phi);
     if (m.hs.dilatancy > m.hs.friction) m.hs.dilatancy = m.hs.friction;
+    // Soft Soil and Soft Soil Creep keep their failure line in their OWN blocks, and neither reads
+    // the fields above. Until 2026-09 they were not factored at all: a design phase ran them at
+    // characteristic strength while the report said the design approach had been applied (measured
+    // on a footing pushed into each: the design run was bit for bit the characteristic one, 4.6% and
+    // 5.5% above the same run on hand-factored strength). phi = 0 is not admissible in either
+    // model, so neither is ever a Tresca material here.
+    m.ssoil.c /= f.gamma_c;
+    m.ssoil.phi = std::atan(std::tan(m.ssoil.phi) / f.gamma_phi);
+    if (m.ssoil.psi > m.ssoil.phi) m.ssoil.psi = m.ssoil.phi;
+    m.ssc.c /= f.gamma_c;
+    m.ssc.phi = std::atan(std::tan(m.ssc.phi) / f.gamma_phi);
+    if (m.ssc.psi > m.ssc.phi) m.ssc.psi = m.ssc.phi;
+}
+
+// The depth gradient of cohesion is part of the same strength, c(y) = c_ref + c_inc (y_ref - y), so a
+// design value divides both terms -- dividing c_ref alone leaves the deep ground at characteristic
+// strength (measured before this existed: a footing on c_inc = 20 kPa/m came out 6.6% stronger under
+// EC7 DA3 than on hand-factored input). `soil` is the material the profile belongs to.
+inline void factor_profile_strength(MaterialProfile& p, const MaterialModel& soil,
+                                    const PartialFactors& f) {
+    p.c_inc /= strength_is_undrained(soil) ? f.gamma_cu : f.gamma_c;
+}
+
+// An interface's strength is a ground strength -- R_inter times the strength of the soil it takes it
+// from -- so its design value is that soil's, factored the same way: c_i and the tension cut-off by
+// gamma_c' (gamma_cu beside an undrained material), tan(phi_i) by gamma_phi'. The interfaces are
+// built from the characteristic strength before a phase applies its approach, which is why they are
+// factored separately; left alone they stayed at characteristic strength (measured before this
+// existed: the sliding block's joint carried 59.72 kN/m under EC7 DA3, bit for bit its
+// characteristic capacity, where 47.74 was due). `soil` is the material the joint's strength is read
+// from.
+inline void factor_interface_strength(iface::InterfaceProps& p, const MaterialModel& soil,
+                                      const PartialFactors& f) {
+    const bool tresca = strength_is_undrained(soil);
+    p.c_i /= tresca ? f.gamma_cu : f.gamma_c;
+    p.phi_i = std::atan(std::tan(p.phi_i) / f.gamma_phi);
+    p.sigma_t /= tresca ? f.gamma_cu : f.gamma_c;
 }
 
 } // namespace katai::core

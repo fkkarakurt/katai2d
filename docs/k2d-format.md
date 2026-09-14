@@ -312,7 +312,10 @@ with `name` (default `"Soil"`) as above.
 
 with `name` (default `"Element"`), `material` (index into the kind's material list, default `-1`)
 and `coarseness` (default `1`) as above. An Interface element takes its strength from the adjacent
-soil (or `iface_material`); its `material` field is ignored.
+soil (or `iface_material`), as that material is solved: c_i = R_inter c′ and tan φ_i = R_inter tan φ′,
+or c_i = R_inter s_u with φ_i = 0 beside an Undrained (B) or (C) Mohr-Coulomb material. A phase with a
+material-factored design approach (`design` 2 or 4) factors it as it factors that material. Its
+`material` field is ignored.
 
 #### Load object (`loads[i]`)
 

@@ -31,6 +31,10 @@ static void factor_strength(MaterialModel& m, double srf) {
     m.ssoil.c /= srf;
     m.ssoil.phi = std::atan(std::tan(m.ssoil.phi) / srf);
     if (m.ssoil.psi > m.ssoil.phi) m.ssoil.psi = m.ssoil.phi;
+    // Soft Soil Creep has a block of its own too, and the same reason applies to it.
+    m.ssc.c /= srf;
+    m.ssc.phi = std::atan(std::tan(m.ssc.phi) / srf);
+    if (m.ssc.psi > m.ssc.phi) m.ssc.psi = m.ssc.phi;
 }
 
 // An interface's strength is a soil strength -- c_i = R_inter c and tan(phi_i) = R_inter tan(phi) --
