@@ -27,10 +27,34 @@ void DofMap::fix(int global_dof) {
     fixed_[global_dof] = 1;
 }
 
+void DofMap::tie(int slave, int master) {
+    assert(!finalized_ && "tie() must be called before finalize");
+    assert(slave >= 0 && slave < total_dofs_ && master >= 0 && master < total_dofs_);
+    assert(slave != master);
+    if ((int)master_.size() < total_dofs_) master_.resize(total_dofs_, -1);
+    assert(master_[slave] < 0 && master_[master] < 0 && "ties do not chain");
+    master_[slave] = master;
+}
+
 void DofMap::finalize() {
     equation_count_ = 0;
+    if (master_.empty()) {
+        for (int d = 0; d < total_dofs_; ++d)
+            equation_[d] = fixed_[d] ? -1 : equation_count_++;
+        finalized_ = true;
+        return;
+    }
+    master_.resize(total_dofs_, -1);
+    // A tied pair is one unknown: a support on either twin holds both.
     for (int d = 0; d < total_dofs_; ++d)
-        equation_[d] = fixed_[d] ? -1 : equation_count_++;
+        if (master_[d] >= 0 && (fixed_[d] || fixed_[master_[d]])) fixed_[d] = fixed_[master_[d]] = 1;
+    // Equations for every DOF that is not a slave, in DOF order -- the numbering the unsplit mesh
+    // would have had, since the twins of a split are appended after the original nodes -- then each
+    // slave takes its master's.
+    for (int d = 0; d < total_dofs_; ++d)
+        if (master_[d] < 0) equation_[d] = fixed_[d] ? -1 : equation_count_++;
+    for (int d = 0; d < total_dofs_; ++d)
+        if (master_[d] >= 0) equation_[d] = equation_[master_[d]];
     finalized_ = true;
 }
 

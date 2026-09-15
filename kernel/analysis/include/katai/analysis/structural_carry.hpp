@@ -8,10 +8,9 @@
 // memory, and the staged-construction imbalance re-ramps the parent's structural
 // tractions -- measured: an unchanged nil phase drifted the wall moment by 32%.
 //
-// Every size must match EXACTLY (same mesh, same DofMap layout, same structure
-// set); anything else returns false and the consumer falls back -- honestly,
-// named in its message -- to the old increment-from-zero path rather than seed
-// a half-matching state.
+// build_structural_init carries a state to an IDENTICAL structure set only;
+// build_structural_carry matches it structure by structure, so that a phase which
+// activates or removes a structure still continues every other one.
 
 #include <vector>
 
@@ -74,6 +73,9 @@ struct StructuralCarry {
     int installed = 0;            // drawn structures installed in this phase, on the deformed ground
     Eigen::VectorXd full_datum;   // the datum in THIS phase's global-DOF numbering (total_dofs)
     std::vector<char> new_anchor; // per structures.anchors: installed in this phase
+    // Per child record: 1 = installed in this phase (not found in the parent). Filled whether or not
+    // anything was carried -- with no parent state every structure is installed.
+    std::vector<char> record_installed;
 };
 
 // THE CARRY ACROSS A CHANGED STRUCTURE SET. build_structural_init above accepts the parent's state
@@ -97,6 +99,7 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
                                               Structures& structures, const DofMap& dofs,
                                               int node_dofs, StructuralInit& out) {
     StructuralCarry plan;
+    plan.record_installed.assign(child_records.size(), 1);
     if (ps.full_disp.size() == 0) return plan;
     // A parent state with no records has none to match by: an identical set is still carried as
     // before (build_structural_init checks it), anything else is not.
@@ -124,7 +127,10 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
                 parent_of[c] = &p;
                 break;
             }
-    for (const auto* p : parent_of) (p ? plan.kept : plan.installed) += 1;
+    for (size_t c = 0; c < parent_of.size(); ++c) {
+        (parent_of[c] ? plan.kept : plan.installed) += 1;
+        plan.record_installed[c] = parent_of[c] ? 0 : 1;
+    }
     if (plan.kept == 0) { plan.installed = 0; return plan; }
 
     // This phase's global DOF -> the parent's, for every DOF that exists in both.

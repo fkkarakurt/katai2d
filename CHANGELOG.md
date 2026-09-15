@@ -349,8 +349,42 @@ by exactly the moment of its released force applied as a point load (1.5e-11); a
 anchor activated in the chain equals a slack one with its lock-off force as a point load (8.4e-13).
 The nil-phase identity of the existing carry test is unchanged bit for bit.
 
+### A wall with interfaces, or an interface, can be activated in a later phase
+
+Both split the mesh along their line, and the split — with the element — had to exist in every
+phase: a phase that left one out was refused. The everyday excavation sequence, a K0 initial phase
+and the wall installed in the first construction stage, could not be modelled; the wall had to be in
+the geostatic phase itself.
+
+**The mesh is now split in every phase whether the element is active or not**, so every phase has the
+same nodes. In a phase where the element is inactive nothing is built on the seam and its two sides
+are tied into one unknown each: the ground is continuous and fully permeable there. An element
+activated later is installed on the ground as the phase before left it (the rule of the previous
+section), and its joint takes over the stress the ground carried across the line: the recovered
+committed stress, normal n·σ·n as the joint's σ_n0 and shear t·σ·n as an initial slip, capped by the
+joint's strength.
+
+`KV-STR-013` checks it three ways. A wall or an interface inactive in every phase gives the
+displacement field of the same line drawn as an inactive geogrid, which splits nothing, bit for bit;
+so does a Safety run with the joint deactivated. K0 followed by the wall's activation equals the wall
+present from the K0 phase: after a level K0 phase the recovered stress is K0 σ′_v, the seed the wall
+has always had, and the surcharge phase after it matches to 2.3·10⁻¹⁵ m and 7.4·10⁻¹³ of the moment,
+with a wall of 9.6 kN/m/m settling 1.349268·10⁻³ m under its own weight in the activation phase exactly
+as it does in the K0 phase. Activated after a stage that is not geostatic — gravity loading and a
+surcharge on Mohr-Coulomb ground — the recovered stress is not the discrete traction exactly, and the
+activation moves the ground by 2.15·10⁻⁴ of the stage before it and gives the wall 0.00996 kNm/m;
+without the shear seed the same activation moves 3.6·10⁻³ and bends the wall 0.47 kNm/m. On
+linear-elastic ground the activation opens the joint where that ground carried tension across the
+line, which a joint without tensile strength cannot do.
+
+Two cases are refused: activating a wall or interface in a consolidation, fully-coupled or dynamic
+phase (the stress takeover runs in Plastic phases — activate it in one first), and deactivating a
+joint whose two sides have moved apart while a structure standing on its line is carried on.
+
 ### Upgrading from 0.9.0
 
+- A wall with interfaces, or an interface, may be inactive in a phase; files that kept one active in
+  every phase are unchanged.
 - A staged phase that activates or removes a structure now carries the state of every other
   structure; results of such chains change, the carried structures' forces most.
 - A design phase (EC7 DA1-C2 or DA3) now factors interfaces, the cohesion gradient, Soft Soil and

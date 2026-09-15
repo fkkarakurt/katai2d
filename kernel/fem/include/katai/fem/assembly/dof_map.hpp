@@ -36,6 +36,18 @@ public:
         fix(global_dof(node, component));
     }
 
+    // Make `slave` the SAME unknown as `master` (before finalize): it takes master's equation, so every
+    // contribution assembled into either lands in one equation and the two always move together. A
+    // fixity on either end holds both. Ties do not chain -- a master is never itself a slave -- and a
+    // DOF is tied at most once. Used for the two twins of a mesh split along a wall or an interface
+    // that is inactive in a phase: the split stays (the node numbering is the same in every phase),
+    // and the ground across it is continuous.
+    void tie(int slave, int master);
+    // The DOF `global_dof` is tied to, or -1.
+    int master_of(int global_dof) const {
+        return global_dof < (int)master_.size() ? master_[global_dof] : -1;
+    }
+
     // Serbest DOF'lara 0..equation_count-1 denklem indeksleri atar.
     void finalize();
 
@@ -51,6 +63,7 @@ private:
     int total_dofs_;
     std::vector<char> fixed_;     // total_dofs_: 1 = sabit
     std::vector<int> equation_;   // total_dofs_: denklem indeksi ya da -1
+    std::vector<int> master_;     // DOFs with a tie: the master they share an equation with, else -1
     int equation_count_ = 0;
     bool finalized_ = false;
 };

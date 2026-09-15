@@ -246,8 +246,9 @@ void test_safety_structures_take_part() {
 
     // An interface takes part as well. Its line splits the mesh, and a split mesh with nothing
     // across the seam is two unconnected bodies -- which is what the search used to solve. A joint
-    // as strong as the soil now returns a factor of safety near the benchmark's. It still cannot be
-    // deactivated per phase, and that refusal is a different one.
+    // as strong as the soil now returns a factor of safety near the benchmark's. Deactivated in the
+    // Safety run, its seam is tied and the ground is continuous: the factor is the one of the same
+    // line drawn as an inactive geogrid, which constrains the mesh alike and splits nothing.
     {
         m::Project pj = slope();
         pj.structs.push_back(line(m::StructKind::Interface, "Joint", 41, 30, 68, 30));
@@ -265,8 +266,18 @@ void test_safety_structures_take_part() {
         oio.config = &off;
         const auto RO = katai::app::solve_gravity_le(pj, MJ.mesh, katai::app::InitialPhase::Safety,
                                                      nullptr, oio);
-        check(!RO.ok && !raised(RO, "K2D-G016"),
-              "it cannot be deactivated per phase, which is a different refusal");
+        m::Project pg = slope();
+        m::GeogridMaterial gm; gm.name = "Grid";
+        pg.geogrids.push_back(gm);
+        pg.structs.push_back(line(m::StructKind::Geogrid, "Joint", 41, 30, 68, 30));
+        const auto MG = katai::app::mesh_from_project(pg, 5.0, 6);
+        const auto RG = MG.ok ? katai::app::solve_gravity_le(pg, MG.mesh, katai::app::InitialPhase::Safety,
+                                                             nullptr, oio)
+                              : katai::core::SolveResult{};
+        std::printf("  the joint deactivated: FoS = %.10f; the line as an inactive geogrid: %.10f\n",
+                    RO.fos, RG.fos);
+        check(RO.ok && RG.ok && RO.fos == RG.fos,
+              "deactivated, the joint's seam is tied: the factor is the unsplit line's, bit for bit");
     }
 }
 

@@ -666,6 +666,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         int soil_mat;
         int strength_mat = 0;    // the material whose strength the interfaces take (resolved index)
         size_t si = 0;           // index of the drawn structure in the project
+        bool active = true;      // installed in this phase; inactive = the seam is tied (continuous soil)
         std::string name;        // drawn element name (for the force-diagram output)
         int flow_barrier = 0;    // 0 permeable / 1 impermeable / 2 semi-permeable (model vocabulary)
     };
@@ -677,13 +678,10 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         for (size_t si = 0; si < pr.structs.size(); ++si) {
             const auto& s = pr.structs[si];
             if (s.kind != model::StructKind::Plate || !(s.iface_pos || s.iface_neg)) continue;
-            // An embedded wall splits the mesh -- the geometry cannot change between phases, so
-            // per-phase (de)activation of walls is not supported yet; guard honestly.
-            if (io.config && !io.config->active_struct(si)) {
-                R.message = "Activating/deactivating an embedded wall (plate with interface) per "
-                            "phase is not supported yet -- keep it active in every phase.";
-                return R;
-            }
+            // An embedded wall splits the mesh in EVERY phase, active or not, so that every phase
+            // has the same nodes (the carried datum and the displacement fields are node by node).
+            // In a phase where it is inactive nothing is built on the seam and its two sides are
+            // tied into one unknown each: the ground is continuous there, as if no wall were drawn.
             const double dx = s.x2 - s.x1, dy = s.y2 - s.y1;
             const double len = std::hypot(dx, dy);
             // silent-drop-ok: a zero-length structural line is an ERROR at structs[i].x2 in the
@@ -691,6 +689,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             if (len < 1e-9) continue;
             WallSpec w;
             w.si = si;
+            w.active = !io.config || io.config->active_struct(si);
             w.name = s.name;
             w.order = order;
             w.flow_barrier = s.flow_barrier;
@@ -818,6 +817,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         int soil_mat;
         int strength_mat = 0;   // the material whose strength the joint takes (resolved index)
         size_t si = 0;          // index of the drawn structure in the project
+        bool active = true;     // installed in this phase; inactive = the seam is tied (continuous soil)
         std::string name;
         int flow_barrier = 0;   // 0 permeable / 1 impermeable / 2 semi-permeable (model vocabulary)
     };
@@ -832,11 +832,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         for (size_t si = 0; si < pr.structs.size(); ++si) {
             const auto& s = pr.structs[si];
             if (s.kind != model::StructKind::Interface) continue;
-            if (io.config && !io.config->active_struct(si)) {
-                R.message = "Activating/deactivating an interface per phase is not supported yet -- keep "
-                            "it active in every phase (it splits the mesh, which is fixed across phases).";
-                return R;
-            }
+            // Split in every phase, like a wall; inactive = its two sides tied (see the wall loop).
             const double dx = s.x2 - s.x1, dy = s.y2 - s.y1;
             const double len = std::hypot(dx, dy);
             // silent-drop-ok: a zero-length structural line is an ERROR at structs[i].x2 in the
@@ -844,6 +840,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             if (len < 1e-9) continue;
             IfaceSpec sp;
             sp.si = si;
+            sp.active = !io.config || io.config->active_struct(si);
             sp.name = s.name.empty() ? "Interface" : s.name;
             sp.flow_barrier = s.flow_barrier;
             sp.nx = dy / len; sp.ny = -dx / len;   // unit normal (matches split_mesh_at_segment frame)
@@ -1232,7 +1229,19 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
 
     // Embedded walls: build the plate + two interfaces on the split mesh and seed each interface's
     // initial normal stress sigma_n0 = K0*sigma'_v from the layered field (wished-in-place K0).
+    // The twins an inactive wall or interface ties back together, for the inactive-node pass below.
+    std::vector<std::pair<int, int>> tied_nodes;
+    const auto tie_twins = [&](int twin, int original) {
+        for (int c = 0; c < 2; ++c) dofs.tie(dofs.global_dof(twin, c), dofs.global_dof(original, c));
+        tied_nodes.push_back({twin, original});
+    };
     for (const auto& w : walls) {
+        // silent-drop-ok: an inactive wall is not dropped -- the phase asked for it to be absent, and
+        // its seam is tied so that the ground across the line is continuous, exactly as without it.
+        if (!w.active) {
+            for (const auto& sp : w.seam) tie_twins(sp.left, sp.right);
+            continue;
+        }
         const StructSnap snap0 = snap();
         int toe = -1;
         for (int n = 0; n < mesh.node_count; ++n)
@@ -1296,6 +1305,12 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // initial normal stress sigma_n0 = (K0*nx^2 + ny^2)*sigma'_v (orientation-aware; vertical -> K0*sigma'_v,
     // horizontal -> sigma'_v) so the wished-in-place interface starts in geostatic equilibrium.
     for (auto& sp : soil_ifaces) {
+        // silent-drop-ok: an inactive interface is not dropped -- its seam is tied, so the ground
+        // across it is continuous, which is what an interface the phase does not install means.
+        if (!sp.active) {
+            for (const auto& sg : sp.seam) tie_twins(sg.dup, sg.orig);
+            continue;
+        }
         const StructSnap snap0 = snap();
         const katai::core::InterfaceRange rng =
             katai::core::build_soil_interface(mesh, sp.seam, dofs, sp.ip, mesh.nodes_per_element, structures);
@@ -1521,6 +1536,13 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         const auto carry = [&](int n) { if (n >= 0 && n < mesh.node_count) carried[(size_t)n] = 1; };
         for (const auto& p : structures.plates) for (int n : p.nodes) carry(n);
         for (const auto& p : structures.plates5) for (int n : p.nodes) carry(n);
+        // A twin tied to a node that an active element still holds is not orphaned either: the two
+        // are one unknown. Only when neither side has an active element is the pair fixed.
+        if (!tied_nodes.empty()) {
+            const std::vector<char> na = katai::core::active_nodes(mesh, act);
+            for (const auto& [a, b] : tied_nodes)
+                if (na[(size_t)a] || na[(size_t)b]) { carry(a); carry(b); }
+        }
         katai::core::fix_inactive_nodes(mesh, act, dofs, carried);
     }
     dofs.finalize();
@@ -1589,6 +1611,55 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         carry_plan = katai::core::build_structural_carry(ps, struct_records, structures, dofs,
                                                          2 * mesh.node_count, carry_init);
         if (carry_plan.carried) carry_src = &ps;
+    }
+    // A wall or interface that was active in the parent and is inactive here leaves its two sides
+    // where the joint let them go -- apart, if it slipped or opened -- and ties them for this phase's
+    // increments. The ground is fine with that: it carries its stresses, not a displacement datum. A
+    // structure CARRIED on such a node is not: its datum is the node's total displacement, and a tied
+    // pair is one unknown with one datum while the two twins have two totals. Refused rather than
+    // continued from whichever twin happens to be read.
+    if (carry_plan.carried && !tied_nodes.empty()) {
+        std::vector<char> offset_twin(mesh.node_count, 0);
+        for (const auto& [a, b] : tied_nodes)
+            for (int c = 0; c < 2; ++c) {
+                const double ua = carry_plan.full_datum[2 * a + c], ub = carry_plan.full_datum[2 * b + c];
+                if (std::fabs(ua - ub) > 1e-12 * std::max(1.0, std::max(std::fabs(ua), std::fabs(ub))))
+                    offset_twin[(size_t)a] = offset_twin[(size_t)b] = 1;
+            }
+        const auto on_offset = [&](int n) { return n >= 0 && n < mesh.node_count && offset_twin[(size_t)n]; };
+        for (size_t c = 0; c < struct_records.size(); ++c) {
+            if (c < carry_plan.record_installed.size() && carry_plan.record_installed[c]) continue;
+            const auto& r = struct_records[c];
+            bool hit = false;
+            for (size_t i = r.plates[0]; i < r.plates[1] && !hit; ++i)
+                for (int n : structures.plates[i].nodes) hit = hit || on_offset(n);
+            for (size_t i = r.plates5[0]; i < r.plates5[1] && !hit; ++i)
+                for (int n : structures.plates5[i].nodes) hit = hit || on_offset(n);
+            for (size_t i = r.anchors[0]; i < r.anchors[1] && !hit; ++i)
+                hit = on_offset(structures.anchors[i].node_a) || on_offset(structures.anchors[i].node_b);
+            for (size_t i = r.geogrids[0]; i < r.geogrids[1] && !hit; ++i)
+                for (int n : structures.geogrids[i].nodes) hit = hit || on_offset(n);
+            for (size_t i = r.interfaces[0]; i < r.interfaces[1] && !hit; ++i)
+                for (int n : structures.interfaces[i].soil_nodes) hit = hit || on_offset(n);
+            for (size_t i = r.interfaces5[0]; i < r.interfaces5[1] && !hit; ++i)
+                for (int n : structures.interfaces5[i].soil_nodes) hit = hit || on_offset(n);
+            for (size_t i = r.embedded[0]; i < r.embedded[1] && !hit; ++i) {
+                const auto& eb = structures.embedded_beams[i];
+                hit = on_offset(eb.conn_mesh_node);
+                for (const auto& sp : eb.skin)
+                    for (int k = 0; k < mesh.nodes_per_element && !hit && sp.soil_elem >= 0; ++k)
+                        hit = on_offset(mesh.node_of(sp.soil_elem, k));
+            }
+            if (hit) {
+                const std::string nm = r.si >= 0 && (size_t)r.si < pr.structs.size() ? pr.structs[(size_t)r.si].name : "";
+                R.message = "Structure \"" + nm + "\" is carried into this phase on the line of a wall or "
+                            "interface that is deactivated here, after the joint had let its two sides move "
+                            "apart. The two sides are tied for this phase, and a structure standing on them "
+                            "cannot be continued from both. Deactivate \"" + nm + "\" in this phase as well, "
+                            "or keep the wall or interface active.";
+                return R;
+            }
+        }
     }
 
     // Axisymmetric scope: soil-only. A WATER TABLE is now carried -- the r-weighted phreatic
@@ -2241,11 +2312,120 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // the parent's structural tractions and the wall moment drifted 32% in a phase where
         // nothing changed).
         const bool static_carry = io.chained && carry_src != nullptr;
+        // AN INTERFACE INSTALLED IN THIS PHASE takes the stress the ground has at its line. Until the
+        // phase before, its seam was tied and the ground carried that stress across it; untied now,
+        // each side stops holding the other, and a joint that did not take the stress over at once
+        // would see it applied as a load of the phase. The seed is the committed stress recovered at
+        // each Newton-Cotes node: normal n.sigma.n as the joint's sigma_n0, shear t.sigma.n entered as
+        // an initial slip offset (capped by the joint's Coulomb strength). It generalises the K0
+        // formula the initial phase uses -- after a level K0 phase the recovered stress IS K0 sigma'_v
+        // -- so the usual sequence, a wall activated right after the K0 initial phase, installs it
+        // stress-free. On a seam whose soil sides differ (a split soil-soil joint) the two sides'
+        // stresses are averaged.
+        int seeded_interfaces = 0;
+        if (io.chained) {
+            std::vector<char> new3(structures.interfaces.size(), 0);
+            std::vector<char> new5(structures.interfaces5.size(), 0);
+            for (size_t c = 0; c < struct_records.size(); ++c) {
+                if (c < carry_plan.record_installed.size() && !carry_plan.record_installed[c]) continue;
+                for (size_t i = struct_records[c].interfaces[0]; i < struct_records[c].interfaces[1]; ++i)
+                    new3[i] = 1;
+                for (size_t i = struct_records[c].interfaces5[0]; i < struct_records[c].interfaces5[1]; ++i)
+                    new5[i] = 1;
+            }
+            const bool any_new = std::find(new3.begin(), new3.end(), 1) != new3.end() ||
+                                 std::find(new5.begin(), new5.end(), 1) != new5.end();
+            if (any_new && phase != InitialPhase::GravityLoading) {
+                R.message = std::string("An interface or a wall with interfaces is activated in a ") +
+                            (phase == InitialPhase::Consolidation ? "consolidation"
+                             : phase == InitialPhase::FullyCoupled ? "fully-coupled"
+                                                                   : "dynamic") +
+                            " phase. Activating one takes over the ground's stress at its line, and "
+                            "this build does that in a Plastic (staged construction) phase only: "
+                            "activate it in a Plastic phase first, then run this phase.";
+                return R;
+            }
+            if (any_new) {
+                const auto rec = katai::core::recover_nodal_stresses_from_gauss(mesh, init, act);
+                const int nn = mesh.node_count;
+                if (!static_carry) {
+                    carry_init = katai::core::StructuralInit{};
+                    carry_plan.full_datum = Eigen::VectorXd::Zero(dofs.total_dofs());
+                }
+                if (carry_init.interface_slip.size() !=
+                    structures.interfaces.size() * (size_t)katai::core::iface::kPointCount)
+                    carry_init.interface_slip.assign(
+                        structures.interfaces.size() * (size_t)katai::core::iface::kPointCount, 0.0);
+                if (carry_init.interface5_slip.size() !=
+                    structures.interfaces5.size() * (size_t)katai::core::iface::kPointCount5)
+                    carry_init.interface5_slip.assign(
+                        structures.interfaces5.size() * (size_t)katai::core::iface::kPointCount5, 0.0);
+                // The stress at one joint node: the soil side's, averaged with the other side's when
+                // that side is ground too (its structure-side DOF is a mesh node's).
+                const auto node_stress = [&](int soil_node, int struct_gdof) {
+                    Eigen::Vector3d sig = rec.stress[(size_t)soil_node];
+                    if (struct_gdof >= 0 && struct_gdof < 2 * nn)
+                        sig = 0.5 * (sig + rec.stress[(size_t)(struct_gdof / 2)]);
+                    return sig;
+                };
+                const auto seed = [&](const Eigen::Vector3d& sig, double c, double s,
+                                      const katai::core::iface::InterfaceProps& props,
+                                      double& sigma_n0, double& slip0) {
+                    const double nx = -s, ny = c, tx = c, ty = s;
+                    const double sn = nx * nx * sig(0) + ny * ny * sig(1) + 2.0 * nx * ny * sig(2);
+                    double tau = tx * nx * sig(0) + ty * ny * sig(1) + (tx * ny + ty * nx) * sig(2);
+                    const double tau_max =
+                        std::max(0.0, props.c_i - std::min(sn, props.sigma_t) * std::tan(props.phi_i));
+                    if (std::fabs(tau) > tau_max) tau = std::copysign(tau_max, tau);
+                    sigma_n0 = sn;
+                    slip0 = props.ks > 0.0 ? -tau / props.ks : 0.0;
+                };
+                const auto ncp = katai::core::iface::nc_points();
+                for (size_t i = 0; i < structures.interfaces.size(); ++i) {
+                    if (!new3[i]) continue;
+                    auto& ie = structures.interfaces[i];
+                    katai::core::iface::NodeCoords Xe;
+                    for (int k = 0; k < 3; ++k) {
+                        Xe(k, 0) = mesh.x[ie.soil_nodes[k]];
+                        Xe(k, 1) = mesh.y[ie.soil_nodes[k]];
+                    }
+                    for (int q = 0; q < katai::core::iface::kPointCount; ++q) {
+                        const int nd = ncp[q].node;
+                        const auto fr = katai::core::iface::edge_frame(Xe, ncp[q].xi);
+                        seed(node_stress(ie.soil_nodes[nd], ie.struct_dof[2 * nd]), fr.c, fr.s, ie.props,
+                             ie.sigma_n0[q],
+                             carry_init.interface_slip[i * katai::core::iface::kPointCount + q]);
+                    }
+                    ++seeded_interfaces;
+                }
+                const auto ncp5 = katai::core::iface::nc_points5();
+                for (size_t i = 0; i < structures.interfaces5.size(); ++i) {
+                    if (!new5[i]) continue;
+                    auto& ie = structures.interfaces5[i];
+                    katai::core::iface::NodeCoords5 Xe;
+                    for (int k = 0; k < 5; ++k) {
+                        Xe(k, 0) = mesh.x[ie.soil_nodes[k]];
+                        Xe(k, 1) = mesh.y[ie.soil_nodes[k]];
+                    }
+                    for (int q = 0; q < katai::core::iface::kPointCount5; ++q) {
+                        const int nd = ncp5[q].node;
+                        const auto fr = katai::core::iface::edge_frame5(Xe, ncp5[q].xi);
+                        seed(node_stress(ie.soil_nodes[nd], ie.struct_dof[2 * nd]), fr.c, fr.s, ie.props,
+                             ie.sigma_n0[q],
+                             carry_init.interface5_slip[i * katai::core::iface::kPointCount5 + q]);
+                    }
+                    ++seeded_interfaces;
+                }
+            }
+        }
+        // The structural baseline is assembled whenever the structures start from a state -- the
+        // carried one, or the stress a newly installed joint took over.
+        const bool struct_baseline = static_carry || seeded_interfaces > 0;
         Eigen::VectorXd B = Eigen::VectorXd::Zero(dofs.equation_count());
         if (baseline) {
             if (axi) katai::core::assemble_axisym_internal_force(mesh, dofs, init, B);  // r-weighted baseline
             else katai::core::assemble_internal_force(mesh, dofs, init, B, act);
-            if (static_carry) {
+            if (struct_baseline) {
                 // Full structural baseline at (parent datum + committed plastic state). This
                 // SUBSUMES the manual sigma_n0 terms below (coulomb_return adds sigma_n0
                 // internally), so those loops must be SKIPPED on this path -- adding both would
@@ -2258,7 +2438,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 katai::core::Structures without_new_lockoff;
                 const katai::core::Structures* base_structures = &structures;
                 for (size_t ai = 0; ai < structures.anchors.size(); ++ai)
-                    if (ai < carry_plan.new_anchor.size() && carry_plan.new_anchor[ai] &&
+                    if ((!carry_plan.carried ||
+                         (ai < carry_plan.new_anchor.size() && carry_plan.new_anchor[ai])) &&
                         structures.anchors[ai].prestress != 0.0) {
                         if (base_structures == &structures) {
                             without_new_lockoff = structures;
@@ -2275,7 +2456,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // interface_baseline.hpp). Carry path skips it: sigma_n0 is already inside the
             // structural baseline above (coulomb_return adds it internally) -- adding both
             // would double-count the lateral earth pressure.
-            if (!static_carry)
+            if (!struct_baseline)
                 katai::core::add_interface_sigma_n0_baseline(structures, mesh, dofs, B);
         }
 
@@ -2294,14 +2475,14 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // silent-drop-ok: nothing is skipped here -- a semi-permeable joint is RECORDED
             // and the phase refuses on it a few lines below (the engine owns that message,
             // which is why it is not raised at this seam).
-            if (w.flow_barrier == 2) { semi_permeable = true; continue; }
-            if (w.flow_barrier == 0)
+            if (w.active && w.flow_barrier == 2) { semi_permeable = true; continue; }
+            if (!w.active || w.flow_barrier == 0)   // an inactive seam is fully permeable
                 for (const auto& sp : w.seam) tie(sp.left, sp.right);
         }
         for (const auto& si : soil_ifaces) {
             // silent-drop-ok: as above -- recorded, then refused by the phase strategy.
-            if (si.flow_barrier == 2) { semi_permeable = true; continue; }
-            if (si.flow_barrier == 0)
+            if (si.active && si.flow_barrier == 2) { semi_permeable = true; continue; }
+            if (!si.active || si.flow_barrier == 0)   // an inactive seam is fully permeable
                 for (const auto& sg : si.seam) tie(sg.dup, sg.orig);
         }
         // The barriers the coupled phases CANNOT read: declared impermeable or semi-permeable, but
@@ -2586,7 +2767,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         if (!katai::core::solve_static_phase(mesh, dofs, models, profiles, init, f, f_loads, B,
                                              solver, structures, diag_specs, iface_diags,
                                              carry_init,
-                                             static_carry ? &carry_plan.full_datum : nullptr,
+                                             struct_baseline ? &carry_plan.full_datum : nullptr,
                                              stin, R, io.out_states))
             return R;
         static_carry_used = static_carry;

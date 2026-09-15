@@ -272,6 +272,11 @@
 }
 
 @misc{the,
+  title = {the KATAI 2D input contract for staged activation (docs/k2d-format.md, phases[i].struct) -- an inactive structure is absent from the phase's model; for (b) the geostatic stress field of the K0 procedure (horizontal effective stress K0 sigma'_v, vertical sigma'_v) and the wished-in-place normal stress it gives a wall's interfaces, sigma_n0 = (K0 n_x^2 + n_y^2) sigma'_v; for (c) the Cauchy traction on a line of unit normal n and tangent t, sigma_n = n.sigma.n and tau = t.sigma.n},
+  note  = {cited by KV-STR-013},
+}
+
+@misc{theb,
   title = {the Rankine tension cut-off, stated in full: three additional yield functions f4 = sigma'1 - sigma_t <= 0, f5 = sigma'2 - sigma_t <= 0, f6 = sigma'3 - sigma_t <= 0 with an associated flow rule, sigma_t being the tensile strength, zero unless one is entered; KATAI 2D input contract (docs/k2d-format.md, tension_cutoff / tensile_strength), where the cut-off and the tensile strength are failure parameters shared by the Hardening Soil family and Mohr-Coulomb alike},
   note  = {cited by KV-CST-011},
 }
@@ -281,7 +286,7 @@
   note  = {cited by KV-CST-010},
 }
 
-@misc{theb,
+@misc{thec,
   title = {the analysis driver's former inline SoilModel construction (build_problem.hpp before commit b35bb9a), duplicated verbatim in this test as the oracle},
   note  = {cited by KV-NUM-001},
 }
@@ -296,22 +301,22 @@
   note  = {cited by KV-CST-016},
 }
 
-@misc{thec,
+@misc{thed,
   title = {the embedded beam (pile row) as KATAI 2D defines it, KATAI 2D input contract (docs/k2d-format.md, embedded: Tskin_max / Fmax_base / Lspacing; structs[i].conn for the connection point). The element's purpose fixes the loading path twice over: its material data set carries the bearing capacity (skin resistance and base resistance) and not a stiffness response, and it is meant for axially loaded piles rather than for failure under transverse load -- so the defining quantity of this element is its AXIAL capacity},
   note  = {cited by KV-STR-004},
 }
 
-@misc{thed,
+@misc{thee,
   title = {the geogrid element as KATAI 2D defines it, KATAI 2D input contract (docs/k2d-format.md, geogrids: EA / Np / elastoplastic): a flexible elastic or elastoplastic line element representing a grid or sheet of fabric that sustains tension and no compression, whose axial stiffness EA is the axial force F per unit width divided by the axial strain eps = dl/l, so F = EA eps (stated in full)},
   note  = {cited by KV-STR-005},
 }
 
-@misc{thee,
+@misc{thef,
   title = {the logarithmic compression law of the Soft Soil model, stated in full: e_v = lambda* ln(p'/p'_0) in primary loading and e_v^e = kappa* ln(p'/p'_0) in unloading/reloading, with the tangent bulk modulus K_ur = p'/kappa*; M is not an input but is derived from K0nc so that primary one-dimensional compression reaches that K0nc; KATAI 2D input contract (docs/k2d-format.md, lamstar / kapstar / k0nc_auto). The same equations are verified at the material point and through a hand-built BVP in test_soft_soil},
   note  = {cited by KV-CST-009},
 }
 
-@misc{thef,
+@misc{theg,
   title = {the method of consistent deformations (force method) for a statically indeterminate beam with a support settlement, and the linear axial spring of an anchor, both stated in full in the locator; the plate is a Timoshenko beam whose shear rigidity is kGA' = k EA / (2 (1 + nu)) with the rectangular-section shear coefficient k = 5/6, the same expression KV-STR-003 verifies its deflections with},
   note  = {cited by KV-STR-009},
 }
@@ -331,12 +336,12 @@
   note  = {cited by KV-CST-012},
 }
 
-@misc{theg,
+@misc{theh,
   title = {the principle of superposition for a linear elastic system (each phase of a chain of linear solves is the solve of that phase's change, and the solves add); the KATAI 2D input contract for staged activation (docs/k2d-format.md, phases[i].struct) and for the anchor lock-off force (anchors[i].prestress: applied when the anchor is activated, the anchor behaving as an elastic spring from that state); the prestress equivalence of KV-STR-001 (a constant internal force N0 along the anchor axis is, in the residual, an external force of N0 along that axis at the attached node)},
   note  = {cited by KV-STR-012},
 }
 
-@misc{theh,
+@misc{thei,
   title = {the same numerical control applied through two independent routes -- the .k2d file (model::Phase::tolerance / load_steps / max_iterations since io v7, and substep_tolerance since io v15) and the jobs-layer seam (app::NumericalControls, the route KV-NUM-007 measures with) -- must reach the same solver and produce the same run; the controls themselves are the phase-level numerical control parameters of KATAI 2D input contract (docs/k2d-format.md, tol / loadsteps / maxiter / substol), whose per-phase presence in the input is what makes a calculation reproducible by a third party},
   note  = {cited by KV-NUM-008},
 }
@@ -346,7 +351,7 @@
   note  = {cited by KV-NUM-007},
 }
 
-@misc{thei,
+@misc{thej,
   title = {the saturated limit of the fully-coupled (unsaturated Biot + Bishop) formulation is the consolidation (saturated Biot) formulation -- kernel/analysis/coupled_flow_deformation.hpp states the reduction and test_coupled_flow measures it for soil alone; here the same reduction is asked for with a structure in the system. The drained limit is the one KV-STR-006 uses: once the excess pore pressure is gone, the coupled problem IS the drained problem, which solve_nonlinear solves by a different path},
   note  = {cited by KV-STR-008},
 }
