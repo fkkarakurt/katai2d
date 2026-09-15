@@ -545,8 +545,8 @@ public:
                 // Undrained (A): the constitutive model returns EFFECTIVE stress and its effective
                 // tangent; add the pore fluid's volumetric (bulk) contribution. Total = sigma' +
                 // (Kw/n) eps_v m and tangent += (Kw/n) m m^T = D_u. The excess pore pressure
-                // u = -(Kw/n) eps_v is carried in the Gauss state (eps_vol) for post-processing /
-                // staging. (See effective-stress-formulation.md.)
+                // u = -(Kw/n) eps_v is carried in the Gauss state (eps_vol_und, pw_carried) from
+                // phase to phase. (See effective-stress-formulation.md.)
                 // matg, not mat: kw_over_n is derived from E' (K' = E'/(3(1-2nu'))), so under a depth
                 // gradient the pore-fluid stiffness varies with depth too. Using `mat` here would
                 // freeze it at the reference value while the skeleton stiffened -- a silent mismatch.
@@ -558,13 +558,27 @@ public:
                 // else reads it for a drained material; the suite is what says so.
                 const typename Kin::Strain mvec = Kin::pore_vector();
                 trial[gi].eps_vol = committed[gi].eps_vol + mvec.dot(dstrain);
+                // The excess pore pressure is the point's own state (GaussState::eps_vol_und,
+                // pw_carried): generated here only while the material is undrained and the phase
+                // does not ignore it, and carried -- never dropped, never re-derived from the
+                // volume change of an earlier drained stage -- otherwise.
+                trial[gi].eps_vol_und = committed[gi].eps_vol_und;
+                trial[gi].pw_carried = committed[gi].pw_carried;
                 if (matg.undrained) {
-                    // Undrained (A): the constitutive model returned EFFECTIVE stress; add the
+                    // Undrained (A)/(B): the constitutive model returned EFFECTIVE stress; add the
                     // pore fluid's volumetric contribution. u = -(Kw/n) eps_v.
                     const double kwn = matg.kw_over_n(matg.undrained_poisson);
-                    sigma += kwn * trial[gi].eps_vol * mvec;
-                    if (build_tangent) dt += kwn * mvec * mvec.transpose();
+                    if (!matg.ignore_undrained) {
+                        trial[gi].eps_vol_und = committed[gi].eps_vol_und + mvec.dot(dstrain);
+                        sigma += kwn * trial[gi].eps_vol_und * mvec;
+                        if (build_tangent) dt += kwn * mvec * mvec.transpose();
+                    } else if (trial[gi].eps_vol_und != 0.0) {
+                        // Ignoring undrained behaviour: no water stiffness and nothing new, but
+                        // the pressure generated before this phase stays where it is.
+                        sigma += kwn * trial[gi].eps_vol_und * mvec;
+                    }
                 }
+                if (trial[gi].pw_carried != 0.0) sigma += trial[gi].pw_carried * mvec;
                 const double w = gauss[g].weight * grad.weight;
                 fe.noalias() += w * grad.B.transpose() * sigma;
                 if (build_tangent)

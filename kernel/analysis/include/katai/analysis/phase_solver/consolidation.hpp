@@ -538,6 +538,9 @@ inline bool solve_consolidation_phase(
         committed = init;
         recover_consolidation_stress(mesh, dofs, models, v_total, in.active, committed);
     }
+    // The excess pore pressure this phase ends with becomes the state the next phase starts from
+    // (store_excess_pore_pressure explains why it may not simply be dropped).
+    store_excess_pore_pressure(mesh, p_state, in.active, {}, committed);
     R.disp = v_total.head(mesh.node_count * 2);
     R.stress = recover_nodal_stresses_from_gauss(mesh, committed, in.active);
     R.load_factor = 1.0;

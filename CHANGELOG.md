@@ -381,8 +381,58 @@ Two cases are refused: activating a wall or interface in a consolidation, fully-
 phase (the stress takeover runs in Plastic phases — activate it in one first), and deactivating a
 joint whose two sides have moved apart while a structure standing on its line is carried on.
 
+### An undrained phase read the volume changes of earlier stages as pore pressure
+
+An Undrained (A) or (B) material carries the excess pore pressure its undrained phases generate, and
+the phases after them are supposed to find that pressure where it was left. They did not: the
+pressure was re-derived in every phase as Kw/n times the volume change **since the initial state**,
+whatever had produced it — a drained stage, a phase that ignores undrained behaviour, or a
+consolidation. And a phase that ignores undrained behaviour deleted the pressure generated before it.
+Measured on a laterally confined 1 × 8 m column (E = 5 MPa, ν = 0.3, water at the surface, a 25 kPa
+surcharge; displacements of the column top in the phase):
+
+| chain | 0.9.0 and this tree until now | now |
+|---|---|---|
+| load, ignoring undrained behaviour → an undrained phase that changes nothing | **28.7 mm of heave**, σ′yy at mid-depth −61.8 → −37.6 kPa | 0, unchanged |
+| gravity loading ignoring undrained behaviour → 25 kPa undrained | **41.1 mm of heave** under a downward load, σ′yy −36.8 → −2.1 kPa | 1.030 mm down, −0.866 kPa (q H / M_u, −q M′ / M_u) |
+| undrained load → a phase ignoring undrained behaviour that changes nothing | 28.7 mm down: the pressure was deleted and the column consolidated in a phase with no time | 0 |
+| undrained load → consolidation → an undrained phase that changes nothing, linear-elastic ground | **28.7 mm of heave**: the consolidation undone | 0 |
+| the same on Mohr-Coulomb ground | 0.99 mm of heave | 0 |
+
+Gravity loading with undrained behaviour ignored, followed by undrained loading, is the ordinary way
+to start an undrained analysis; the heave above is what it produced.
+
+**The excess pore pressure is now a state of each stress point**, carried from phase to phase. An
+undrained phase adds to it; a phase that ignores undrained behaviour neither adds to it nor removes
+it, and the water adds no stiffness there; a consolidation or fully coupled phase writes the pressure
+it ends with back to the stress points (in the fully coupled phase, the share the skeleton feels,
+S_eff times the pressure), so the Plastic phase after it starts from that pressure. A Plastic phase
+that inherits a pressure starts from its parent's equilibrium with the pressure included, and ramps
+only its own change. In a chain in which every phase generates pressure the pressure is computed by
+the same expression as before, and every existing undrained and consolidation case passes unchanged.
+
+The same switch had a second effect. Ignoring undrained behaviour cleared the flag that marks a
+material undrained, and a design phase reads that flag to give an Undrained (B) or (C) strength the
+undrained partial factor γ_cu. **In an EC7 DA1-C2 or DA3 phase that ignored undrained behaviour, an
+Undrained (B) soil was factored with γ_c′ instead** (1.25 in place of 1.4). On the checked-in strip
+footing on a Tresca clay under DA3, where the water cannot change the capacity, the collapse load
+factor was 0.52500 with undrained behaviour ignored and 0.47187 without it; both are now 0.471875.
+
+`KV-CST-017` checks nine chains on the confined column against the closed forms: a phase that
+changes nothing moves nothing (0 m, where the defects measured 2.9·10⁻² m and 9.9·10⁻⁴ m); an
+undrained load after a drained stage, after gravity loading, after a consolidation
+and after a fully coupled phase settles q H / M_u (to 3·10⁻¹⁴); a load while ignoring undrained
+behaviour, on top of an undrained one, settles q H / M′ (8·10⁻¹⁶); a consolidation stopped part-way
+leaves its remainder to the next consolidation, which reaches the drained settlement; and the footing
+above gives the same collapse factor either way. `K2D-A008` now says that the pressure generated
+earlier is kept.
+
 ### Upgrading from 0.9.0
 
+- Results change for a model with an Undrained (A) or (B) material wherever an undrained phase
+  follows a phase that ignores undrained behaviour, a consolidation or a fully coupled phase, and in
+  any phase that ignores undrained behaviour after an undrained one. A design phase that ignores
+  undrained behaviour now factors an Undrained (B) strength with γ_cu.
 - A wall with interfaces, or an interface, may be inactive in a phase; files that kept one active in
   every phase are unchanged.
 - A staged phase that activates or removes a structure now carries the state of every other

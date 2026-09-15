@@ -196,6 +196,11 @@ katai_add_test(test_wells_drains katai::jobs katai::mesh katai::analysis katai::
 katai_add_test(test_undrained_c katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-007: Undrained (C), the total-stress analysis -- the same soil described two ways must agree, and the difference is the compressibility nu_u < 0.5 leaves behind
 katai_add_test(test_undrained_stiffness katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-006: the pore fluid's stiffness per material (Kw/n, nu_u or Skempton's B) -- two undrained layers with different Kw/n, and the Hardening Soil family sized by its own unload/reload pair
 katai_add_test(test_staged_options katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-EXC-002 + KV-CST-005: the staged-construction fraction (mstage) as an exact linear identity, and "ignore undrained behaviour" as the drained calculation it claims to be
+katai_add_test(test_excess_pore_chain katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-017: the excess pore pressure as a state of the phase chain -- a drained stage, an ignoring phase, a consolidation or a fully coupled phase hands the next undrained phase the pressure it left, against the confined-column closed forms
+if(TARGET test_excess_pore_chain)
+  target_compile_definitions(test_excess_pore_chain PRIVATE
+    KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
 # FOUR independent verification cases in one file, so four ctest entries: KV-NUM-008 (the
 # per-phase numerical controls of .k2d v7 must REACH the solver -- file == seam, and both !=
 # default, so a reviewer receives the numerics a published run was computed with), KV-NUM-009

@@ -266,6 +266,13 @@ inline bool solve_fully_coupled_phase(
     // existed only as a maximum per step.
     R.excess_pore.assign(mesh.node_count, 0.0);
     for (int n = 0; n < mesh.node_count; ++n) R.excess_pore[n] = series->pore.back()(n);
+    // ...and the state the next phase starts from, the part the skeleton feels (Bishop chi = S_eff,
+    // at the suction the coupling term evaluates it at) -- store_excess_pore_pressure.
+    store_excess_pore_pressure(mesh, R.excess_pore, in.active,
+                               [&](int mat, double p_gp) {
+                                   return effective_saturation(ret[(size_t)mat], p_gp / kGammaWater);
+                               },
+                               committed);
     // The structures, through the one function that reports them for both coupled phases.
     if (in.structures) {
         Eigen::VectorXd disp_total = series->displacement.back();

@@ -603,7 +603,8 @@ class _Phases:
 
         ``apply_fraction=0.5`` applies half of the stage and
         leaves the rest; ``ignore_undrained=True`` solves undrained materials as
-        drained for this phase; ``reset_small_strain=True`` clears the HS-small
+        drained for this phase (no new excess pore pressure; what earlier phases
+        generated is kept); ``reset_small_strain=True`` clears the HS-small
         strain history first, so the soil meets this phase at G0 instead of the
         stiffness the earlier phases degraded it to."""
         return self._add(name, _core.PhaseType.Plastic, **kw)

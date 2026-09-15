@@ -12,6 +12,7 @@
 
 #include <Eigen/Dense>
 
+#include <katai/analysis/excess_pore_force.hpp>
 #include <katai/analysis/internal_forces.hpp>  // SHARED internal-force/tangent assembly (static+dynamic)
 #include <katai/fem/assembly/assembler.hpp>  // expand_to_full
 #include <katai/fem/elements/axisymmetric.hpp>
@@ -625,7 +626,84 @@ Eigen::VectorXd structural_f0_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                          TangentMode::kNone, st, no_ramp, nullptr, nullptr);
 }
 
+// The excess pore pressure's force (excess_pore_force.hpp). Written beside the internal force it
+// has to agree with: the same Gauss rule and weight (gauss weight x Kin weight), the same B, the same
+// pore direction m, and Kw/n from the stress point's profiled material -- the lines the assembler
+// adds to sigma', kept separate because the baseline must not re-integrate the constitutive law.
+template <class E, class Kin>
+void excess_pore_force_impl(const mesh::Mesh& mesh, const DofMap& dofs,
+                            const std::vector<MaterialModel>& materials,
+                            const std::vector<MaterialProfile>& profile,
+                            const std::vector<GaussState>& states,
+                            const std::vector<char>& active_element, Eigen::VectorXd& rhs) {
+    const auto gauss = E::gauss_points();
+    const int n_gp = E::kGaussCount;
+    const typename Kin::Strain mvec = Kin::pore_vector();
+    typename E::NodeCoords coords;
+    std::array<int, E::kDofCount> edofs;
+    for (int e = 0; e < mesh.element_count; ++e) {
+        if (!active_element.empty() && !active_element[e]) continue;
+        const int e_mat = mesh.element_material[e];
+        const MaterialModel& mat = materials[e_mat];
+        const MaterialProfile prof = e_mat < (int)profile.size() ? profile[e_mat] : MaterialProfile{};
+        bool gathered = false;
+        for (int g = 0; g < n_gp; ++g) {
+            const GaussState& s = states[(size_t)e * n_gp + g];
+            if (s.pw_carried == 0.0 && !(mat.undrained && s.eps_vol_und != 0.0)) continue;
+            if (!gathered) { detail::gather_element<E>(mesh, dofs, e, coords, edofs); gathered = true; }
+            double pw = 0.0;
+            if (mat.undrained && s.eps_vol_und != 0.0) {
+                double kwn = mat.kw_over_n(mat.undrained_poisson);
+                if (!prof.uniform()) {
+                    const typename E::ShapeValues sh = E::shape_functions(gauss[g].xi, gauss[g].eta);
+                    double y = 0.0;
+                    for (int i = 0; i < E::kNodeCount; ++i) y += sh(i) * coords(i, 1);
+                    MaterialModel mg = mat;
+                    mg.youngs_modulus = profile_at(mat.youngs_modulus, prof.E_inc, prof.y_ref, y);
+                    kwn = mg.kw_over_n(mg.undrained_poisson);
+                }
+                pw = kwn * s.eps_vol_und;
+            }
+            if (s.pw_carried != 0.0) pw += s.pw_carried;
+            const auto grad = Kin::template gradients<E>(coords, gauss[g].xi, gauss[g].eta);
+            const typename Kin::Strain sig = pw * mvec;
+            const auto fe = ((gauss[g].weight * grad.weight) * grad.B.transpose() * sig).eval();
+            for (int a = 0; a < E::kDofCount; ++a) {
+                const int eq = dofs.equation(edofs[a]);
+                if (eq >= 0) rhs(eq) += fe(a);
+            }
+        }
+    }
+}
+
 } // namespace
+
+void add_excess_pore_force(const mesh::Mesh& mesh, const DofMap& dofs,
+                           const std::vector<MaterialModel>& materials,
+                           const std::vector<MaterialProfile>& profile,
+                           const std::vector<GaussState>& states,
+                           const std::vector<char>& active_element, bool axisymmetric,
+                           Eigen::VectorXd& rhs) {
+    if (states.size() != (size_t)mesh.element_count *
+                             (mesh.nodes_per_element == Tri15Element::kNodeCount
+                                  ? Tri15Element::kGaussCount : Tri6Element::kGaussCount))
+        return;   // no committed state of this mesh: nothing is carried
+    if (mesh.nodes_per_element == Tri15Element::kNodeCount) {
+        if (axisymmetric)
+            excess_pore_force_impl<Tri15Element, detail::AxisymKin>(mesh, dofs, materials, profile,
+                                                                    states, active_element, rhs);
+        else
+            excess_pore_force_impl<Tri15Element, detail::PlaneStrainKin>(mesh, dofs, materials, profile,
+                                                                         states, active_element, rhs);
+        return;
+    }
+    if (axisymmetric)
+        excess_pore_force_impl<Tri6Element, detail::AxisymKin>(mesh, dofs, materials, profile, states,
+                                                               active_element, rhs);
+    else
+        excess_pore_force_impl<Tri6Element, detail::PlaneStrainKin>(mesh, dofs, materials, profile,
+                                                                    states, active_element, rhs);
+}
 
 bool seed_structural_state(const Structures& structures, const StructuralInit& init_struct,
                            std::vector<double>& anchor, std::vector<double>& geogrid,

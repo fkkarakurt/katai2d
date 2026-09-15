@@ -401,7 +401,7 @@ with `name` (default `"Well"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
 | `wx` | num[] | m | `[]` | Phase phreatic polyline, x (used when `water_override`) |
 | `wy` | num[] | m | `[]` | Phase phreatic polyline, y (used when `water_override`) |
 | `mstage` | num | — | `1` | Fraction of this phase's staged change to apply. Staged (non-initial) phases only. Written only when below 1 |
-| `ignoreund` | bool | — | `false` | Solve Undrained (A)/(B) materials as drained in this phase; strength parameters unchanged. Written only when true |
+| `ignoreund` | bool | — | `false` | Solve Undrained (A)/(B) materials as drained in this phase: the water adds no stiffness and no new excess pore pressure is generated, while the excess pore pressure generated in earlier phases is kept as it is; strength parameters unchanged. Written only when true |
 | `resetsmall` | bool | — | `false` | Clear the Hardening Soil small-strain history at the start of this phase, so the soil meets the phase at G0 instead of the stiffness earlier phases degraded it to. Stress, shear hardening `gamma_p` and the preconsolidation pressure are carried over untouched — the option resets the *history*, not the state. Staged (non-initial) phases only; raises `K2D-M005` saying how many stress points it cleared, or that no small-strain material was present to clear. Written only when true |
 | `tol` | num | — | *by material class* | Tolerated relative force residual. Written only when set |
 | `loadsteps` | int | — | *by material class* | Load increments for this phase. Not a cap on automatic steps: KATAI splits the load into a fixed number of increments (with adaptive cut-back), it does not step automatically to a cap. Written only when set |

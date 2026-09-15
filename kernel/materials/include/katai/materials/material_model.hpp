@@ -65,10 +65,8 @@ enum class MaterialType {
 struct GaussState {
     Eigen::Vector3d stress = Eigen::Vector3d::Zero();  // Voigt [sxx, syy, sxy]
     double stress_zz = 0.0;                            // sigma_zz
-    // Accumulated (committed) volumetric strain eps_v = eps_xx+eps_yy(+eps_theta).
-    // For Undrained (A) the excess pore pressure is u = -(Kw/n) eps_vol (tension-
-    // positive). Zero / unused for drained materials. (See effective-stress-
-    // formulation.md.)
+    // Accumulated (committed) volumetric strain eps_v = eps_xx+eps_yy(+eps_theta), in every
+    // phase and for every material: the void ratio the dilatancy cut-off reads comes from it.
     double eps_vol = 0.0;
     // Hardening Soil history: shear hardening parameter gamma_p and cap pre-
     // consolidation pressure pp (compression-positive). Zero / unused for other models.
@@ -77,6 +75,21 @@ struct GaussState {
     // HSsmall: accumulated deviatoric shear strain γ_hist (monotone; drives the
     // small-strain stiffness degradation). Only for HSsmall (G0_ref>0); 0/unused otherwise.
     double gamma_hist = 0.0;
+    // THE EXCESS PORE PRESSURE IS A STATE OF THE PHASE CHAIN, not a function of the volume
+    // change. Its stress (tension positive, the sign it enters the total stress with) at this
+    // point is
+    //     pw_carried + (Kw/n) eps_vol_und
+    // eps_vol_und is the volumetric strain accumulated while the point GENERATED excess pore
+    // pressure -- an Undrained (A)/(B) material in a phase that does not ignore undrained
+    // behaviour -- and pw_carried is a pressure handed over by a phase that computes the pressure
+    // itself (consolidation, fully coupled). It used to be (Kw/n) eps_vol, the volume change since
+    // the initial state whatever produced it, so a drained stage or a consolidation came back in
+    // the next undrained phase as a pore pressure nobody had generated: measured on a confined
+    // column, a phase that changed nothing heaved 28.7 mm. eps_vol_und accumulates by the same
+    // expression eps_vol does, so a chain in which every phase generates is bit-for-bit what it
+    // was. (docs/references/effective-stress-formulation.md)
+    double eps_vol_und = 0.0;
+    double pw_carried = 0.0;
 };
 
 // Isotropic elastic constitutive matrix from an (E, nu) PAIR, rather than from the pair a
@@ -160,9 +173,16 @@ struct MaterialModel {
     // volumetric stiffness Kw/n is added to the GLOBAL tangent (D_u = D' + (Kw/n)mm^T)
     // and the internal force uses TOTAL stress = sigma' + (Kw/n) eps_v m, while the
     // constitutive model still works on effective stress. The solver tracks the excess
-    // pore pressure in GaussState::eps_vol. undrained_poisson = nu_u (0.495 by default, a
+    // pore pressure in GaussState::eps_vol_und. undrained_poisson = nu_u (0.495 by default, a
     // nearly incompressible undrained Poisson's ratio; exactly 0.5 is singular).
     bool undrained = false;
+    // The phase ignores undrained behaviour (`ignoreund`): the water's stiffness is not in the
+    // tangent and no NEW excess pore pressure is generated, but the pressure generated before
+    // stays in the total stress: a phase with no time and no flow has nothing that could dissipate
+    // it. It is a flag of its own because clearing `undrained` for the phase used to
+    // do both jobs at once and a third by accident: the existing pressure vanished, and an
+    // Undrained (B) soil lost the undrained partial factor its cohesion is owed (design_code.hpp).
+    bool ignore_undrained = false;
     double undrained_poisson = 0.495;  // nu_u
     // The EFFECTIVE elastic pair the pore-fluid derivation uses, when it is not (E, nu).
     // Zero = derive from youngs_modulus / poisson_ratio, which is what Linear Elastic and

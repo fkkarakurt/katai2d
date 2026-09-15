@@ -23,6 +23,7 @@
 #include <katai/analysis/staged_construction.hpp> // split_mesh_at_wall, SeamPair
 #include <katai/analysis/boundary_conditions.hpp>  // neutral edge BCs (Stage B3: engine-owned)
 #include <katai/analysis/design_code.hpp>          // EC7/TBDY partial factors (design approaches)
+#include <katai/analysis/excess_pore_force.hpp>    // the inherited excess pore pressure in a baseline
 #include <katai/analysis/hydraulic_boundary.hpp>   // phreatic line + flow-edge services (Stage B4)
 #include <katai/analysis/interface_baseline.hpp>   // wished-in-place sigma_n0 baseline (Stage B9)
 #include <katai/analysis/phase_solver/consolidation.hpp>  // consolidation phase strategy (Stage B9)
@@ -426,16 +427,21 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         }
         models.push_back(entry->build(to_material_params(m)));
         // "Ignore undrained behaviour" (`ignoreund`): this phase treats Undrained (A)/(B) soil as
-        // drained -- no excess pore pressure is generated. Only the volumetric coupling is
-        // switched off; the strength parameters stay exactly as the material declares them, so
-        // an Undrained (B) soil keeps its c_u with phi = 0, which is what the option means.
+        // drained -- no excess pore pressure is generated and the water adds no stiffness. The
+        // strength parameters stay exactly as the material declares them, so an Undrained (B) soil
+        // keeps its c_u with phi = 0, and the excess pore pressure generated in earlier phases
+        // STAYS: the phase has no mechanism that could dissipate it. The flag is the material's
+        // own (MaterialModel::ignore_undrained) rather than `undrained = false`, which deleted that
+        // pressure and let the phase's drained volume change return in the next undrained phase as
+        // a pore pressure nobody had generated.
         // Reported per material, because a phase that quietly stops being undrained
         // is the difference between a short-term and a long-term answer.
         if (io.config && io.config->ignore_undrained && models.back().undrained) {
-            models.back().undrained = false;
+            models.back().ignore_undrained = true;
             note(R, "K2D-A008", m.name,
                  "This phase ignores undrained behaviour, so material \"" + m.name +
-                     "\" is solved DRAINED: no excess pore pressure is generated in it. Its "
+                     "\" is solved DRAINED: no new excess pore pressure is generated in it, and "
+                     "the excess pore pressure generated in earlier phases is kept as it is. Its "
                      "strength parameters are unchanged. This is a long-term (or state-setting) "
                      "answer, not a short-term one.");
         }
@@ -2764,6 +2770,12 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         stin.time_interval_day = (io.chained && io.config) ? io.config->duration : 0.0;
         stin.active = act;
         stin.presc = presc;   // active prescribed displacements (empty = none)
+        // The excess pore pressure the phase inherits belongs in its baseline too
+        // (excess_pore_force.hpp): a chained phase starts in the parent's equilibrium, water
+        // included, and ramps only its own change. Only here -- the coupled phases above keep the
+        // effective-stress baseline their imbalance re-generates the pressure from.
+        if (baseline && io.chained)
+            katai::core::add_excess_pore_force(mesh, dofs, models, profiles, init, act, axi, B);
         if (!katai::core::solve_static_phase(mesh, dofs, models, profiles, init, f, f_loads, B,
                                              solver, structures, diag_specs, iface_diags,
                                              carry_init,

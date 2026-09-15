@@ -8,6 +8,7 @@
 // out-of-plane increment is sigma_zz += nu (sigma_xx + sigma_yy), and the
 // volumetric strain accumulates eps_xx + eps_yy.
 
+#include <functional>
 #include <vector>
 
 #include <Eigen/Core>
@@ -54,7 +55,51 @@ inline void recover_stress_impl(const katai::mesh::Mesh& mesh, const DofMap& dof
     }
 }
 
+// The excess pore pressure a coupled phase ends with, handed to its Gauss states.
+template <class E>
+inline void store_excess_pore_impl(const katai::mesh::Mesh& mesh, const std::vector<double>& pore,
+                                   const std::vector<char>& act,
+                                   const std::function<double(int, double)>& active_share,
+                                   std::vector<GaussState>& out) {
+    constexpr int N = E::kNodeCount;
+    const auto gp = E::gauss_points();
+    const int ng = E::kGaussCount;
+    for (int e = 0; e < mesh.element_count; ++e) {
+        if (!act.empty() && !act[e]) continue;
+        const int mat = mesh.element_material[e];
+        for (int g = 0; g < ng; ++g) {
+            const auto Nsh = E::shape_functions(gp[g].xi, gp[g].eta);
+            double p_gp = 0.0;
+            for (int i = 0; i < N; ++i) p_gp += Nsh(i) * pore[(size_t)mesh.node_of(e, i)];
+            auto& gs = out[(size_t)e * ng + g];
+            gs.pw_carried = active_share ? active_share(mat, p_gp) * p_gp : p_gp;
+            gs.eps_vol_und = 0.0;
+        }
+    }
+}
+
 } // namespace detail
+
+// THE PRESSURE OUTLIVES THE PHASE THAT COMPUTED IT. A consolidation or fully coupled phase solves the
+// excess pore pressure as a nodal field; a Plastic, Safety or Dynamic phase after it carries the
+// pressure as Gauss-point state (GaussState::pw_carried). This interpolates the phase's final field
+// to each Gauss point with the element's own shape functions -- the N^T p the coupling term
+// L = int B^T m N^T dV integrates -- so the next phase's internal force B^T sigma' + int B^T m p_gp
+// is the one this phase ended in equilibrium with, and a phase that changes nothing moves nothing.
+// `active_share` is the part of the pressure the skeleton feels (Bishop chi = S_eff in the fully
+// coupled phase; empty = all of it). The generated share eps_vol_und is cleared: the pressure now
+// holds everything it had produced. Before this existed the field was simply dropped, and the next
+// undrained phase re-derived a pressure from the volume change instead -- for a linear skeleton the
+// consolidation's own settlement, which came back as a heave of the same size.
+inline void store_excess_pore_pressure(const katai::mesh::Mesh& mesh, const std::vector<double>& pore,
+                                       const std::vector<char>& act,
+                                       const std::function<double(int, double)>& active_share,
+                                       std::vector<GaussState>& out) {
+    if (mesh.nodes_per_element == Tri15Element::kNodeCount)
+        detail::store_excess_pore_impl<Tri15Element>(mesh, pore, act, active_share, out);
+    else
+        detail::store_excess_pore_impl<Tri6Element>(mesh, pore, act, active_share, out);
+}
 
 inline void recover_consolidation_stress(const katai::mesh::Mesh& mesh, const DofMap& dofs,
                                          const std::vector<MaterialModel>& models,

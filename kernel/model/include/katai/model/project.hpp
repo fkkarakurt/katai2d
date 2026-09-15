@@ -491,8 +491,9 @@ struct Phase {
     // different planet, so the value is refused rather than quietly obeyed.
     double sum_mstage = 1.0;
     // IGNORE UNDRAINED BEHAVIOUR (docs/k2d-format.md `ignoreund`): for this phase, materials
-    // whose drainage is Undrained (A) or (B) are treated as drained -- no excess pore pressure is
-    // generated. Strength parameters are untouched, so an Undrained (B) material still carries its
+    // whose drainage is Undrained (A) or (B) are treated as drained -- no new excess pore pressure is
+    // generated, and the excess pore pressure generated in earlier phases is kept as it is.
+    // Strength parameters are untouched, so an Undrained (B) material still carries its
     // c_u with phi = 0. The standard use is a phase where the undrained response is not the
     // question being asked (establishing an initial state, or a long-term stage).
     bool ignore_undrained = false;
