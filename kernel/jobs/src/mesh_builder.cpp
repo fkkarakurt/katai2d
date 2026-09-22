@@ -1,6 +1,11 @@
 // The model-to-mesh builder body, compiled ONCE (section 5.2).
 #include <katai/jobs/mesh_builder.hpp>
 
+#include <algorithm>
+#include <cstdint>
+#include <unordered_set>
+
+#include <katai/geometry/planar_graph.hpp>
 #include <katai/mesh/delaunay.hpp>
 
 namespace katai::app {
@@ -13,150 +18,154 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
     if (max_area <= 0.0) { R.message = "Element size must be positive."; return R; }
 
     // 1) Build a CLEAN planar straight-line graph (PSLG). Raw input segments are the soil polygon
-    // edges (the domain OUTLINE) plus the internal structural lines (plates/geogrids). They are then
-    // split at every pairwise crossing and at every point where one segment's endpoint touches
-    // another's interior, so the result has no crossings and no vertex inside a segment -- exactly the
-    // constrained-Delaunay precondition. Without this, a plate ending on/crossing the boundary (or two
-    // lines crossing) violates the precondition and wrecks the mesh depending on placement.
-    //   - `outline` (= split soil-polygon edges) is the domain boundary used for the inside/outside
-    //     test; an internal line must never act as a boundary (or it deletes the mesh on one side).
-    //   - structural sub-segments are clipped to the soil (only kept where their midpoint is inside),
-    //     so a plate poking out of the soil contributes only its in-soil part.
-    //   - `clip` (structural lines only) keeps just the in-soil part of a line poking out of the
-    //     soil; outline edges and LOAD lines are kept whole (a surface distributed load lies on the
-    //     boundary, where the soil-interior midpoint test is ambiguous).
-    struct Raw { double ax, ay, bx, by; bool outline; bool clip; };
+    // edges plus the internal lines the mesh has to follow (plates, geogrids, interfaces, line
+    // loads, prescribed displacements, wells and drains). They are noded ONCE, to one tolerance
+    // scaled to the model (katai/geometry/planar_graph.hpp): near-coincident points merge, a
+    // point within tolerance of a segment splits it, crossings become vertices and a piece that
+    // two sources share becomes one segment. The result has no crossings, no vertex inside a
+    // segment and no feature below the tolerance -- the constrained-Delaunay precondition, and
+    // the condition for the refinement to terminate: a corner left 1e-5 off its neighbour is a
+    // sliver 1e-5 thick that Ruppert refinement would try to resolve and never finish.
+    //
+    // Which pieces are kept is decided by who OWNS each side of it, with the rule the rest of
+    // the tree already applies to a point (material, phase activity): the last polygon that
+    // contains it. A polygon piece separating two different owners is a constraint, and when one
+    // side has no owner it is also the domain OUTLINE (the inside/outside test uses only those,
+    // so they form the boundary of the union of the polygons, each piece once). A piece with the
+    // same owner on both sides -- a boundary drawn over by a later polygon, a shared edge traced
+    // twice -- bounds nothing and is dropped. Overlapping polygons therefore mesh as the later
+    // one over the earlier, a lens drawn inside a layer meshes as a lens, and neither becomes a
+    // hole; the old even-odd count over every polygon edge made both of them holes.
+    //   - structural lines are kept where they run through soil (either side owned), so a plate
+    //     poking out of the soil contributes only its in-soil part;
+    //   - load/displacement/hydraulic lines are kept whole (a surface load lies on the boundary).
+    enum RawKind { kPolyEdge, kStruct, kLine };
+    struct Raw { double ax, ay, bx, by; RawKind kind; };
     std::vector<Raw> raw;
-    for (const auto& P : pr.polygons) {
+    std::vector<int> poly_first(pr.polygons.size(), -1), poly_count(pr.polygons.size(), 0);
+    for (size_t p = 0; p < pr.polygons.size(); ++p) {
+        const auto& P = pr.polygons[p];
         const int n = (int)P.x.size(); if (n < 3) continue;
+        poly_first[p] = (int)raw.size(); poly_count[p] = n;
         for (int k = 0; k < n; ++k)
-            raw.push_back({P.x[k], P.y[k], P.x[(k + 1) % n], P.y[(k + 1) % n], true, false});
+            raw.push_back({P.x[k], P.y[k], P.x[(k + 1) % n], P.y[(k + 1) % n], kPolyEdge});
     }
     for (const auto& s : pr.structs) {
         using SK = model::StructKind;
         // Plates/geogrids AND standalone interfaces become conforming constraints: the interface line
         // must lie on mesh edges so split_mesh_at_segment can duplicate its nodes (a slip surface).
         if (s.kind == SK::Plate || s.kind == SK::Geogrid || s.kind == SK::Interface)
-            raw.push_back({s.x1, s.y1, s.x2, s.y2, false, true});
+            raw.push_back({s.x1, s.y1, s.x2, s.y2, kStruct});
     }
     // Distributed (line) loads become conforming constraints too, so the solver can assemble the
     // surcharge as consistent nodal forces along the resulting edge chain (build_problem).
     for (const auto& L : pr.loads)
         if (L.kind == model::LoadKind::Distributed)
-            raw.push_back({L.x1, L.y1, L.x2, L.y2, false, false});
+            raw.push_back({L.x1, L.y1, L.x2, L.y2, kLine});
     // Prescribed-displacement lines likewise: the imposed components apply to the mesh
-    // nodes ON the line, so the line must lie on mesh edges (same dedup rule as loads
-    // when the line coincides with a boundary edge).
+    // nodes ON the line, so the line must lie on mesh edges.
     for (const auto& D : pr.disps)
-        raw.push_back({D.x1, D.y1, D.x2, D.y2, false, false});
+        raw.push_back({D.x1, D.y1, D.x2, D.y2, kLine});
     // Wells and drains for the same reason: a well prescribes a discharge along its line and a
     // drain a head at its nodes, so the line has to BE a chain of mesh edges. A hydraulic
     // condition the mesh does not follow is one whose water is applied somewhere else.
     for (const auto& H : pr.hydros)
-        raw.push_back({H.x1, H.y1, H.x2, H.y2, false, false});
+        raw.push_back({H.x1, H.y1, H.x2, H.y2, kLine});
     if (raw.size() < 3) { R.message = "Degenerate geometry."; return R; }
 
-    // Pairwise split parameters (segment p->p2 vs q->q2 proper/touching intersection).
-    auto seg_x = [](double px0, double py0, double px1, double py1, double qx0, double qy0,
-                    double qx1, double qy1, double& t, double& u) {
-        const double rx = px1 - px0, ry = py1 - py0, sx = qx1 - qx0, sy = qy1 - qy0;
-        const double rxs = rx * sy - ry * sx;
-        if (std::fabs(rxs) < 1e-12) return false;          // parallel / collinear (overlaps ignored)
-        const double qpx = qx0 - px0, qpy = qy0 - py0;
-        t = (qpx * sy - qpy * sx) / rxs;
-        u = (qpx * ry - qpy * rx) / rxs;
-        return t >= -1e-9 && t <= 1.0 + 1e-9 && u >= -1e-9 && u <= 1.0 + 1e-9;
-    };
-    const int nr = (int)raw.size();
-    std::vector<std::vector<double>> param(nr);
-    for (int i = 0; i < nr; ++i) { param[i].push_back(0.0); param[i].push_back(1.0); }
-    // COLLINEAR OVERLAP split: seg_x only handles proper (transversal) crossings; two segments on the
-    // SAME line (e.g. a surface distributed load lying on a boundary edge, or two collinear plates) are
-    // parallel so seg_x skips them -> the longer segment then contains the other's endpoints in its
-    // interior, which VIOLATES the constrained-Delaunay precondition (no vertex inside a segment) and
-    // corrupts the mesh there (triangles spill outside). Fix: split each collinear segment at the
-    // other's endpoints projected onto it, so every shared point becomes a shared vertex.
-    auto split_collinear = [&](int i, int j) {
-        const double rx = raw[i].bx - raw[i].ax, ry = raw[i].by - raw[i].ay, rr = rx * rx + ry * ry;
-        const double sx = raw[j].bx - raw[j].ax, sy = raw[j].by - raw[j].ay, ss = sx * sx + sy * sy;
-        if (rr < 1e-18 || ss < 1e-18) return;
-        const double rlen = std::sqrt(rr);
-        // j must lie on i's infinite line (perpendicular distance ~ 0) to be collinear.
-        auto off_line = [&](double qx, double qy) {
-            return std::fabs((qx - raw[i].ax) * ry - (qy - raw[i].ay) * rx) / rlen;
-        };
-        if (off_line(raw[j].ax, raw[j].ay) > 1e-7 || off_line(raw[j].bx, raw[j].by) > 1e-7) return;
-        const double ti0 = ((raw[j].ax - raw[i].ax) * rx + (raw[j].ay - raw[i].ay) * ry) / rr;
-        const double ti1 = ((raw[j].bx - raw[i].ax) * rx + (raw[j].by - raw[i].ay) * ry) / rr;
-        const double uj0 = ((raw[i].ax - raw[j].ax) * sx + (raw[i].ay - raw[j].ay) * sy) / ss;
-        const double uj1 = ((raw[i].bx - raw[j].ax) * sx + (raw[i].by - raw[j].ay) * sy) / ss;
-        for (double t : {ti0, ti1}) if (t > 1e-9 && t < 1.0 - 1e-9) param[i].push_back(t);
-        for (double u : {uj0, uj1}) if (u > 1e-9 && u < 1.0 - 1e-9) param[j].push_back(u);
-    };
-    for (int i = 0; i < nr; ++i)
-        for (int j = i + 1; j < nr; ++j) {
-            double t, u;
-            if (seg_x(raw[i].ax, raw[i].ay, raw[i].bx, raw[i].by,
-                      raw[j].ax, raw[j].ay, raw[j].bx, raw[j].by, t, u)) {
-                param[i].push_back(std::clamp(t, 0.0, 1.0));
-                param[j].push_back(std::clamp(u, 0.0, 1.0));
-            } else {
-                split_collinear(i, j);   // parallel: handle the collinear-overlap case
-            }
-        }
+    double minx = raw[0].ax, maxx = minx, miny = raw[0].ay, maxy = miny;
+    for (const Raw& g : raw) {
+        for (double v : {g.ax, g.ay, g.bx, g.by})
+            if (!std::isfinite(v)) { R.message = "The geometry has a coordinate that is not a finite number."; return R; }
+        minx = std::min({minx, g.ax, g.bx}); maxx = std::max({maxx, g.ax, g.bx});
+        miny = std::min({miny, g.ay, g.by}); maxy = std::max({maxy, g.ay, g.by});
+    }
+    std::vector<std::array<geometry::V2, 2>> in_segs;
+    in_segs.reserve(raw.size());
+    for (const Raw& g : raw) in_segs.push_back({geometry::V2{g.ax, g.ay}, geometry::V2{g.bx, g.by}});
+    const geometry::PlanarGraph G =
+        geometry::planar_graph(in_segs, geometry::geometry_tolerance(minx, miny, maxx, maxy));
 
-    // NOTE (measured 2026-08-13, kept so it is not retried): the embedded beam's CONNECTION POINT
-    // is deliberately NOT injected here as an input vertex. Carrying it looked like the exact way
-    // to make a hinged connection a degree-of-freedom identity, but an isolated interior point
-    // cascades through Ruppert refinement: on the test_gui_solve fixture one such point cost
-    // **+146 nodes, more than the +126 of a plate CONFORMED along the whole 8 m shaft**. Paying
-    // more to stay non-conforming than conforming would have cost is not a trade worth making.
-    // The connection is tied to the nearest existing node in the driver instead, which is the
-    // convention this tree already applies to every structural point attachment (a point load,
-    // an anchor end), diagnostic included. See docs/references/embedded-beam-formulation.md 7.1.
-
-    std::vector<double> px, py;
-    std::vector<std::array<int, 2>> segs, outline;
-    const double tol = 1e-6;
-    auto add_pt = [&](double x, double y) -> int {
-        for (size_t i = 0; i < px.size(); ++i)
-            if (std::fabs(px[i] - x) < tol && std::fabs(py[i] - y) < tol) return (int)i;
-        px.push_back(x); py.push_back(y); return (int)px.size() - 1;
+    // Each polygon re-read on the graph and split into simple loops (a pinched layer into its
+    // lobes); a loop knows its orientation, so the side of a piece it owns is exact -- no probe
+    // point is offset from the piece, which a narrow wedge would defeat.
+    struct Loop {
+        std::vector<int> ring; bool ccw;
+        double x0, y0, x1, y1;
+        std::unordered_set<std::uint64_t> walked;   // directed (u -> v) pieces
     };
-    for (int i = 0; i < nr; ++i) {
-        auto& pr2 = param[i];
-        std::sort(pr2.begin(), pr2.end());
-        pr2.erase(std::unique(pr2.begin(), pr2.end(),
-                              [](double a, double b) { return std::fabs(a - b) < 1e-7; }), pr2.end());
-        const Raw& g = raw[i];
-        for (size_t k = 0; k + 1 < pr2.size(); ++k) {
-            const double t0 = pr2[k], t1 = pr2[k + 1];
-            const double x0 = g.ax + t0 * (g.bx - g.ax), y0 = g.ay + t0 * (g.by - g.ay);
-            const double x1 = g.ax + t1 * (g.bx - g.ax), y1 = g.ay + t1 * (g.by - g.ay);
-            if (g.clip) {   // clip internal structural sub-segments to the soil
-                const double mx = 0.5 * (x0 + x1), my = 0.5 * (y0 + y1);
-                bool inside = false;
-                for (const auto& P : pr.polygons) if (point_in_polygon(mx, my, P)) inside = true;
-                if (!inside) continue;
+    const auto dkey = [](int u, int v) { return ((std::uint64_t)(std::uint32_t)u << 32) | (std::uint32_t)v; };
+    std::vector<std::vector<Loop>> loops(pr.polygons.size());
+    for (size_t p = 0; p < pr.polygons.size(); ++p) {
+        if (poly_first[p] < 0) continue;
+        std::vector<int> walk;
+        for (int k = 0; k < poly_count[p]; ++k)
+            for (int v : G.chain_nodes(poly_first[p] + k))
+                if (walk.empty() || walk.back() != v) walk.push_back(v);
+        for (auto& ring : geometry::simple_loops(walk)) {
+            Loop L; L.ring = std::move(ring);
+            L.ccw = geometry::ring_area(G.nodes, L.ring) > 0.0;
+            L.x0 = L.x1 = G.nodes[L.ring[0]].x; L.y0 = L.y1 = G.nodes[L.ring[0]].y;
+            for (size_t k = 0; k < L.ring.size(); ++k) {
+                const auto& q = G.nodes[L.ring[k]];
+                L.x0 = std::min(L.x0, q.x); L.x1 = std::max(L.x1, q.x);
+                L.y0 = std::min(L.y0, q.y); L.y1 = std::max(L.y1, q.y);
+                L.walked.insert(dkey(L.ring[k], L.ring[(k + 1) % L.ring.size()]));
             }
-            const int a = add_pt(x0, y0), b = add_pt(x1, y1);
-            if (a == b) continue;
-            // A LOAD sub-segment that coincides with an existing constraint (e.g. a surface
-            // surcharge collinear with the top outline edge) is redundant -- the outline already
-            // conforms the boundary, so drop the duplicate (it would otherwise perturb the mesh).
-            // Only loads are deduped: adjacent polygons legitimately add their SHARED edge twice
-            // (the inside/outside ray-cast parity relies on it), and structural lines keep their
-            // original handling. Internal (non-coincident) load lines are still added -> conforming.
-            if (!g.outline && !g.clip) {
-                bool dup = false;
-                for (const auto& e : segs)
-                    if ((e[0] == a && e[1] == b) || (e[0] == b && e[1] == a)) { dup = true; break; }
-                if (dup) continue;
-            }
-            segs.push_back({a, b});
-            if (g.outline) outline.push_back({a, b});
+            loops[p].push_back(std::move(L));
         }
     }
+    // Owner (last containing polygon, -1 = none) on the left and right of piece a -> b.
+    const auto owners = [&](int a, int b, int& left, int& right) {
+        left = right = -1;
+        const double mx = 0.5 * (G.nodes[a].x + G.nodes[b].x), my = 0.5 * (G.nodes[a].y + G.nodes[b].y);
+        for (size_t p = 0; p < loops.size(); ++p) {
+            bool cl = false, cr = false;   // even-odd over the polygon's loops
+            for (const Loop& L : loops[p]) {
+                if (L.walked.count(dkey(a, b)))      { cl ^= L.ccw;  cr ^= !L.ccw; }
+                else if (L.walked.count(dkey(b, a))) { cl ^= !L.ccw; cr ^= L.ccw; }
+                else if (mx >= L.x0 && mx <= L.x1 && my >= L.y0 && my <= L.y1 &&
+                         geometry::ring_contains(G.nodes, L.ring, mx, my)) { cl = !cl; cr = !cr; }
+            }
+            if (cl) left = (int)p;
+            if (cr) right = (int)p;
+        }
+    };
+
+    // Emit the kept pieces in input order (segment by segment, along each segment), so a model
+    // with nothing to node hands the mesher exactly the points and segments it always did.
+    std::vector<double> px, py;
+    std::vector<std::array<int, 2>> segs, outline;
+    std::vector<int> pt_of(G.nodes.size(), -1);
+    std::vector<char> decided(G.edges.size(), 0), keep(G.edges.size(), 0), bound(G.edges.size(), 0);
+    const auto add_pt = [&](int v) {
+        if (pt_of[v] < 0) { pt_of[v] = (int)px.size(); px.push_back(G.nodes[v].x); py.push_back(G.nodes[v].y); }
+        return pt_of[v];
+    };
+    for (int i = 0; i < (int)raw.size(); ++i)
+        for (const auto& st : G.chain[i]) {
+            const int e = st.edge;
+            if (!decided[e]) {
+                decided[e] = 1;
+                bool has_poly = false, has_struct = false, has_line = false;
+                for (int s : G.edges[e].src) {
+                    has_poly |= raw[s].kind == kPolyEdge;
+                    has_struct |= raw[s].kind == kStruct;
+                    has_line |= raw[s].kind == kLine;
+                }
+                int ol, orr;
+                owners(G.edges[e].a, G.edges[e].b, ol, orr);
+                keep[e] = (has_poly && ol != orr) || (has_struct && (ol >= 0 || orr >= 0)) || has_line;
+                bound[e] = has_poly && ((ol < 0) != (orr < 0));
+                if (keep[e]) {
+                    const int u = st.forward ? G.edges[e].a : G.edges[e].b;
+                    const int w = st.forward ? G.edges[e].b : G.edges[e].a;
+                    const int pa = add_pt(u), pb = add_pt(w);
+                    segs.push_back({pa, pb});
+                    if (bound[e]) outline.push_back({pa, pb});
+                }
+            }
+        }
     if (px.size() < 3 || outline.size() < 3) { R.message = "Degenerate geometry."; return R; }
 
     // 2) Local mesh density: build the sizing field from the per-object coarseness factors
@@ -258,6 +267,7 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
     R.mesh = std::move(m); R.ok = true;
     R.quality_met = T.quality_met;
     R.min_angle_asked = min_angle_deg;
+    R.corner_elements = T.corner_elements;
     R.message = "Mesh: " + std::to_string(R.mesh.node_count) + " nodes, " +
                 std::to_string(R.mesh.element_count) + " elements.";
     // A mesh that did not reach its own quality bound says so IN THE MESSAGE, because the message
@@ -270,6 +280,13 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
                      "-degree minimum angle, so some elements are worse conditioned than asked " +
                      "for. Coarsen the element size, or simplify the geometry where it has very " +
                      "sharp corners, and mesh again before reading the result as converged.";
+    else if (R.corner_elements > 0)
+        R.message += " " + std::to_string(R.corner_elements) +
+                     (R.corner_elements == 1 ? " element sits" : " elements sit") +
+                     " in a corner of the geometry narrower than the " +
+                     std::to_string((int)min_angle_deg) + "-degree minimum angle, and keeps" +
+                     " that corner's own angle: no mesh can do better there. If no corner is" +
+                     " meant to be that sharp, look for a vertex slightly off a straight line.";
     return R;
 }
 

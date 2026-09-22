@@ -767,4 +767,39 @@ struct Project {
     }
 };
 
+// Editing the polygon list. Every phase -- the initial one included -- holds the activation of
+// its polygons BY INDEX, so an edit that shifts indices has to shift those flags with them:
+// deleting polygon i and leaving the flags where they were hands polygon i's excavation to the
+// polygon after it, silently, in every later phase. These two are the only edits that shift.
+inline void erase_polygon(Project& p, size_t i) {
+    if (i >= p.polygons.size()) return;
+    p.polygons.erase(p.polygons.begin() + (long)i);
+    auto fix = [i](Phase& ph) {
+        if (i < ph.poly_active.size()) ph.poly_active.erase(ph.poly_active.begin() + (long)i);
+    };
+    fix(p.initial);
+    for (auto& ph : p.phases) fix(ph);
+}
+
+// Insert `pieces` before position i. In every phase each piece takes the activation polygon
+// `like` had there (an index into the list BEFORE the insertion; -1 = active), which is what a
+// polygon cut into pieces needs: the pieces are excavated wherever the whole was.
+inline void insert_polygons(Project& p, size_t i, const std::vector<SoilPolygon>& pieces, int like) {
+    if (pieces.empty()) return;
+    i = std::min(i, p.polygons.size());
+    auto fix = [&](Phase& ph) {
+        const bool on = like < 0 || ph.active_poly((size_t)like);
+        auto& v = ph.poly_active;
+        if (on) {   // a short vector already reads as active past its end
+            if (i < v.size()) v.insert(v.begin() + (long)i, pieces.size(), 1);
+        } else {
+            if (v.size() < i) v.resize(i, 1);
+            v.insert(v.begin() + (long)i, pieces.size(), 0);
+        }
+    };
+    fix(p.initial);
+    for (auto& ph : p.phases) fix(ph);
+    p.polygons.insert(p.polygons.begin() + (long)i, pieces.begin(), pieces.end());
+}
+
 } // namespace katai::model

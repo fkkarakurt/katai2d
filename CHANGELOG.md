@@ -6,6 +6,63 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### Regions that overlap, nearly meet or pinch out mesh — and a region closes against its neighbours
+
+Several geometries a section drawing produces all the time either meshed wrong without saying so
+or never finished meshing. Measured on two-region models, 0.5 m² target element area:
+
+| geometry | before | now |
+|---|---|---|
+| two regions overlapping in area (union 88 m²) | 76 m² — the 12 m² overlap meshed as a **hole** | 88 m², the later region owns the overlap |
+| a 6 m² lens drawn inside a 50 m² layer | 44 m², lens **gone**, a hole in its place | 44 + 6 m² |
+| a corner typed 1e-5 m off its neighbour's | **did not finish** (killed after 30 min) | 1 ms, mesh bit-identical to the exact corner |
+| a vertex 1e-4 m above a neighbour's edge | **did not finish** | 1 ms |
+| a layer pinching out at 5.7° or 1.1° | **did not finish** | 1 ms, 45 + 5 and 49 + 1 m² |
+| a single region with a 3° corner | **did not finish** | 1 ms |
+
+Three causes. The inside/outside test counted every polygon edge even-odd, so where two regions
+overlapped the count was even and the ground was "outside". Nearly coincident points more than
+1e-6 m apart were kept apart, so a corner typed a hair off became a sliver 1e-5 m thick and 10 m
+long that the quality refinement tried to resolve. And the refinement kept splitting the triangles
+in the corner of an input angle narrower than its 20° bound, where no insertion can help, until its
+step cap — with every step scanning all triangles, which is what made the cap take hours.
+
+**The geometry is now noded once, to one tolerance** — 1e-5 of the model's diagonal, 1 mm on a
+100 m section (`katai/geometry/planar_graph.hpp`): vertices that close merge, a vertex that close
+to an edge splits it, crossings become vertices, and an edge two regions share is one mesh edge
+instead of two. **Each piece is kept by who owns its two sides**, with the rule the driver already
+used for material and phase activity: the last region containing a point owns it. A piece with
+different owners on its two sides is a constraint, and the domain outline when one side has none;
+a piece with the same owner on both — a boundary drawn over by a later region — is dropped. So
+overlap and lenses are defined, and a gap wider than the tolerance (a 2 mm strip was checked) is
+real and stays empty. **Corners narrower than the bound are left at their own angle**
+(Miller, Pav & Walkington 2003, the rule Shewchuk's Triangle applies), and the mesh message counts
+those elements, because a corner can also be narrow by accident. The refinement now keeps its
+candidates incrementally and makes the same choices it made before. Meshed with the old and the
+new builder side by side, **23 of the 26 corpus files come out bit for bit identical**. The three
+that do not: the two with a shared boundary (`kv-dyn-003`, 80 → 104 elements; `kv-exc-001`,
+267 → 266), because the shared edge is no longer a doubled constraint; and `kv-fnd-010`, same 478
+elements, whose surface load ends inside the top edge — the edge used to be split at a point
+interpolated along it, one unit in the last place off the load's end, and is now split at the
+coordinate the load was given.
+
+**Drawing.** A region drawn against existing ones closes along their boundary: start on a
+neighbour's edge, click the free vertices, end on a neighbour's edge and right-click. Before, a
+region above a layer whose top had several vertices had to be traced through every one of them
+again, and drawn with only its end points its straight closing edge left slivers of gap and
+overlap. **A new Split tool** cuts every region a drawn line crosses into pieces; a closed line
+cuts out the shape it encloses. The pieces keep the material, the coarseness, the per-edge
+conditions of the edges they lie on, and in every phase the activation of the region they came
+from (`katai/model/region_edit.hpp`).
+
+**Deleting a region left the phase activation flags in place.** A phase activates regions by
+index, so deleting region *i* in the Studio shifted every later region down while its flags stayed
+put: the excavation of region *i* passed silently to the region after it, in every phase. All four
+delete paths now go through `katai::model::erase_polygon`, which moves the flags with the regions.
+
+Verification: KV-GEO-002 (areas per region and boundary length of the mesh against the drawn
+union, for all of the geometries above) and KV-GEO-003 (close, split, lens cut, phase flags).
+
 ### A Safety run answered for a model without its structures
 
 A Safety analysis — the initial Safety procedure or a Safety phase — finds its factor of safety by

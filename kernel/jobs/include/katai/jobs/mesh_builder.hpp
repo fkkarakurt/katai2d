@@ -2,13 +2,16 @@
 // Build an FE mesh from a project's soil polygons (layer 2, katai/jobs; historical
 // name build_mesh.hpp). The model-to-mesh half of the driver seam.
 //
-// Pipeline: the polygon edges form a planar straight-line graph (PSLG, shared
-// vertices deduplicated so adjacent regions stay conforming) -> Ruppert quality
-// mesh (constrained Delaunay + refinement) -> triangles whose centroid falls
-// outside every soil polygon are dropped (handles concavity, holes and the
-// convex-hull fill) -> used vertices are compacted (no orphan/singular nodes) ->
+// Pipeline: the polygon edges and the lines the mesh must follow are noded into one
+// planar graph at a tolerance scaled to the model (katai/geometry/planar_graph.hpp:
+// near-coincident points merge, T-junctions and overlaps become shared vertices, a
+// shared edge is one segment) -> each piece is kept when the owners on its two sides
+// differ (owner = the last polygon containing the point, as everywhere else), so
+// overlapping polygons and a lens inside a layer are regions, not holes -> Ruppert
+// quality mesh (constrained Delaunay + refinement) -> triangles outside every soil
+// polygon are dropped -> used vertices are compacted (no orphan/singular nodes) ->
 // the linear triangulation is promoted to a tri6 / tri15 FE mesh, and every
-// element takes the material of the polygon containing its centroid.
+// element takes the material of the last polygon containing its centroid.
 //
 // Pure geometry on katai::model data; no GUI dependency, so it is unit-testable.
 
@@ -44,6 +47,10 @@ struct MeshResult {
     // that had not (see katai::mesh::Triangulation::quality_met for the argument).
     bool quality_met = true;
     double min_angle_asked = 0.0;   // the bound the refinement was given [deg]
+    // Elements below that bound only because they sit in a corner of the geometry narrower than
+    // it (Triangulation::corner_elements) -- a pinched-out layer, a sharp toe. Not a defect of
+    // the mesh, but reported, because a corner can also be narrow by accident.
+    int corner_elements = 0;
 };
 
 // Local mesh-density options (coarseness factors; docs/references/mesh-sizing.md).

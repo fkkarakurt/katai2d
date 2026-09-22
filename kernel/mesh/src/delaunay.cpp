@@ -59,7 +59,20 @@ private:
 
     int add_tri(int a, int b, int c) {
         tris_.push_back(Tri{{a, b, c}, {-1, -1, -1}, true});
-        return static_cast<int>(tris_.size()) - 1;
+        const int t = static_cast<int>(tris_.size()) - 1;
+        note_vertices(t);
+        return t;
+    }
+
+    // vtri_[v]: a triangle incident to v, kept current by add_tri and flip (the only two places
+    // a vertex gains a triangle). A Bowyer-Watson cavity has no vertex in its interior, so every
+    // vertex of a retired triangle is re-noted by one of the triangles that replace it.
+    void note_vertices(int t) {
+        for (int k = 0; k < 3; ++k) {
+            const int v = tris_[t].v[k];
+            if (static_cast<int>(vtri_.size()) <= v) vtri_.resize(v + 1, -1);
+            vtri_[v] = t;
+        }
     }
 
     void add_super_triangle() {
@@ -111,10 +124,11 @@ private:
         return linear_locate(pi);  // robustness fallback
     }
 
+    // The first live triangle. A retired triangle never comes back to life, so the answer only
+    // moves forward and a cursor gives the same triangle a scan from 0 would, without the scan.
     int any_alive() const {
-        for (int t = 0; t < static_cast<int>(tris_.size()); ++t)
-            if (tris_[t].alive) return t;
-        return 0;
+        while (alive_lo_ < static_cast<int>(tris_.size()) && !tris_[alive_lo_].alive) ++alive_lo_;
+        return alive_lo_ < static_cast<int>(tris_.size()) ? alive_lo_ : 0;
     }
 
     int linear_locate(int pi) const {
@@ -209,6 +223,12 @@ private:
 
         // 3. Retire the cavity triangles.
         for (int cur : cavity_) tris_[cur].alive = false;
+        // 4. A subsegment's encroachment depends only on the two triangles beside it, and every
+        //    constrained edge whose neighbourhood changed is an edge of a new triangle.
+        if (track_encroach_)
+            for (int t = first_new; t >= 0 && t < static_cast<int>(tris_.size()); ++t)
+                for (int k = 0; k < 3; ++k)
+                    note_encroachment(tris_[t].v[(k + 1) % 3], tris_[t].v[(k + 2) % 3]);
         return {first_new, -1, -1};
     }
 
@@ -305,6 +325,33 @@ private:
         return {-1, -1};
     }
 
+    // find_edge by rotating around u from vtri_[u] -- O(degree) instead of a scan of every
+    // triangle ever made. It may return the triangle on EITHER side of the edge, so it serves
+    // only callers that look at both sides (segment_encroached); anything that acts on the
+    // returned triangle keeps the scan, whose choice of side the meshes depend on.
+    std::pair<int, int> find_edge_any_side(int u, int w) const {
+        if (u < static_cast<int>(vtri_.size()) && vtri_[u] >= 0 && tris_[vtri_[u]].alive) {
+            const int t0 = vtri_[u];
+            for (int dir = 0; dir < 2; ++dir) {
+                int t = t0;
+                for (int guard = 0; guard < 4096 && t >= 0; ++guard) {
+                    const Tri& tr = tris_[t];
+                    int i = -1;
+                    for (int k = 0; k < 3; ++k) if (tr.v[k] == u) i = k;
+                    if (i < 0) return find_edge(u, w);   // stale map entry: fall back
+                    if (tr.v[(i + 1) % 3] == w) return {t, (i + 2) % 3};
+                    if (tr.v[(i + 2) % 3] == w) return {t, (i + 1) % 3};
+                    t = tr.n[dir == 0 ? (i + 1) % 3 : (i + 2) % 3];
+                    if (t == t0) return {-1, -1};        // all the way round: no such edge
+                }
+                if (t >= 0) return find_edge(u, w);      // guard ran out: fall back
+                // t < 0: hit the hull going this way; try the other way round
+            }
+            return {-1, -1};                             // both ways ended on the hull
+        }
+        return find_edge(u, w);
+    }
+
     // Flip the edge opposite v[k] of triangle t (shared with neighbour n[k]).
     // The diagonal (b,c) of quad (a,b,d,c) is replaced by (a,d); both triangles
     // are rewritten in place and all neighbour links are repaired.
@@ -328,6 +375,8 @@ private:
         if (n_ca >= 0) tris_[n_ca].n[neighbour_slot(n_ca, t)] = nb;
         if (n_bd >= 0) tris_[n_bd].n[neighbour_slot(n_bd, nb)] = t;
         // n_ab keeps pointing at t, n_dc keeps pointing at nb.
+        note_vertices(t);
+        note_vertices(nb);
     }
 
     // Gather the edges of the current triangulation crossed by segment (a,b),
@@ -478,7 +527,7 @@ private:
     }
 
     bool segment_encroached(int a, int b) const {
-        const auto [t, k] = find_edge(a, b);
+        const auto [t, k] = find_edge_any_side(a, b);
         if (t < 0) return false;
         const int apex = tris_[t].v[k];
         if (!is_super(apex) && inside_diametral(x_[apex], y_[apex], a, b))
@@ -492,13 +541,26 @@ private:
         return false;
     }
 
+    // The first encroached subsegment in the iteration order of constrained_ -- the order the
+    // meshes have always been built in. encroached_ holds exactly the encroached ones (kept by
+    // insert_point and split_segment), so the common case -- none -- costs nothing, and the
+    // walk below no longer locates an edge per subsegment by scanning every triangle.
     bool find_encroached_subsegment(int& sa, int& sb) const {
+        if (encroached_.empty()) return false;
         for (const std::uint64_t key : constrained_) {
-            const int a = static_cast<int>(key >> 32);
-            const int b = static_cast<int>(key & 0xffffffffu);
-            if (segment_encroached(a, b)) { sa = a; sb = b; return true; }
+            if (!encroached_.count(key)) continue;
+            sa = static_cast<int>(key >> 32);
+            sb = static_cast<int>(key & 0xffffffffu);
+            return true;
         }
         return false;
+    }
+
+    void note_encroachment(int a, int b) {
+        const std::uint64_t key = edge_key(a, b);
+        if (!constrained_.count(key)) return;
+        if (segment_encroached(a, b)) encroached_.insert(key);
+        else encroached_.erase(key);
     }
 
     bool point_encroaches(double px, double py, int& sa, int& sb) const {
@@ -580,12 +642,44 @@ private:
         const double mx = x_[a] + t * (x_[b] - x_[a]);
         const double my = y_[a] + t * (y_[b] - y_[a]);
         constrained_.erase(edge_key(a, b));  // let the cavity merge across it
+        encroached_.erase(edge_key(a, b));
         x_.push_back(mx);
         y_.push_back(my);
         const int m = static_cast<int>(x_.size()) - 1;
+        // The input segment m lies on: that of whichever end is already a segment point, or
+        // (a, b) itself when both ends are input vertices.
+        std::array<int, 2> origin = segment_of(a);
+        if (origin[0] < 0) origin = segment_of(b);
+        if (origin[0] < 0) origin = {a, b};
+        if (static_cast<int>(seg_of_.size()) <= m) seg_of_.resize(m + 1, {-1, -1});
+        seg_of_[m] = origin;
         insert_point(m, locate(any_alive(), m));
         constrained_.insert(edge_key(a, m));
         constrained_.insert(edge_key(m, b));
+        if (track_encroach_) { note_encroachment(a, m); note_encroachment(m, b); }
+    }
+
+    std::array<int, 2> segment_of(int v) const {
+        return v < static_cast<int>(seg_of_.size()) ? seg_of_[v] : std::array<int, 2>{-1, -1};
+    }
+
+    // Miller, Pav & Walkington (2003), in the form Shewchuk's Triangle applies it: a skinny
+    // triangle whose shortest edge joins two points on two DIFFERENT input segments that meet at
+    // a small input angle, both on the same concentric shell around that apex, is left alone.
+    // Such a triangle sits in the corner of an angle narrower than the quality bound and no
+    // insertion can improve it -- splitting it only makes a smaller copy of it one shell in, and
+    // before this rule a pinched-out layer (a 5.7 degree wedge) refined until the step cap.
+    // Restricted to apexes marked acute (< 60 degrees), so a mesh without such a corner is built
+    // exactly as before.
+    bool in_small_angle_corner(int u, int w) const {
+        const std::array<int, 2> su = segment_of(u), sw = segment_of(w);
+        if (su[0] < 0 || sw[0] < 0) return false;
+        if ((su[0] == sw[0] && su[1] == sw[1]) || (su[0] == sw[1] && su[1] == sw[0])) return false;
+        int apex = -1;
+        for (int p : su) for (int q : sw) if (p == q) apex = p;
+        if (apex < 0 || !acute_.count(apex)) return false;
+        const double d1 = dist2(u, apex), d2 = dist2(w, apex);
+        return d1 < 1.001 * d2 && d1 > 0.999 * d2;
     }
 
     // Point inside the meshing domain, tested against the actual PSLG boundary
@@ -613,9 +707,16 @@ private:
     // Return the first real triangle that is skinny (circumradius / shortest edge
     // exceeds the bound) or larger than the area cap -- constant max_area, or the
     // sizing field evaluated at the centroid when one is set (local refinement).
+    //
+    // During refinement a live triangle never changes its vertices (only insertions happen, which
+    // retire triangles and append new ones), and whether it is bad depends on nothing else, so a
+    // triangle found good stays good. The scan therefore resumes where the last one stopped and
+    // returns what a scan from 0 would -- the whole refinement scans the list about once instead
+    // of once per step.
     int find_bad_triangle(double radius_edge_bound, double max_area) const {
         const double b2 = radius_edge_bound * radius_edge_bound;
-        for (int t = 0; t < static_cast<int>(tris_.size()); ++t) {
+        for (int t = bad_lo_; t < static_cast<int>(tris_.size()); ++t) {
+            bad_lo_ = t;
             if (!tris_[t].alive) continue;
             const int a = tris_[t].v[0], b = tris_[t].v[1], c = tris_[t].v[2];
             if (is_super(a) || is_super(b) || is_super(c)) continue;
@@ -624,17 +725,44 @@ private:
             const double gx = (x_[a] + x_[b] + x_[c]) / 3.0;
             const double gy = (y_[a] + y_[b] + y_[c]) / 3.0;
             if (!in_domain(gx, gy)) continue;
-            const double hmin2 = std::min({dist2(a, b), dist2(b, c), dist2(c, a)});
+            const double dab = dist2(a, b), dbc = dist2(b, c), dca = dist2(c, a);
+            const double hmin2 = std::min({dab, dbc, dca});
             const auto [ux, uy] = circumcenter(a, b, c);
             const double r2 = (ux - x_[a]) * (ux - x_[a]) + (uy - y_[a]) * (uy - y_[a]);
-            if (r2 > b2 * hmin2) return t;
+            if (r2 > b2 * hmin2) {
+                const bool corner = !acute_.empty() &&
+                    (hmin2 == dab ? in_small_angle_corner(a, b)
+                                  : hmin2 == dbc ? in_small_angle_corner(b, c)
+                                                 : in_small_angle_corner(c, a));
+                if (!corner) return t;
+            }
             const double cap = size_field_ ? size_field_(gx, gy) : max_area;
             if (cap > 0.0) {
                 const double area = 0.5 * std::fabs(orient(a, b, c));
                 if (area > cap) return t;
             }
         }
+        bad_lo_ = static_cast<int>(tris_.size());
         return -1;
+    }
+
+    // In-domain triangles that fail the angle bound. After a refinement that met its bound
+    // these are exactly the ones left in narrow input corners.
+    int count_skinny(double min_angle_deg) const {
+        const double pi = 3.14159265358979323846;
+        const double bound = 1.0 / (2.0 * std::sin(min_angle_deg * pi / 180.0));
+        int n = 0;
+        for (const Tri& tr : tris_) {
+            if (!tr.alive) continue;
+            const int a = tr.v[0], b = tr.v[1], c = tr.v[2];
+            if (is_super(a) || is_super(b) || is_super(c)) continue;
+            if (!in_domain((x_[a] + x_[b] + x_[c]) / 3.0, (y_[a] + y_[b] + y_[c]) / 3.0)) continue;
+            const double hmin2 = std::min({dist2(a, b), dist2(b, c), dist2(c, a)});
+            const auto [ux, uy] = circumcenter(a, b, c);
+            const double r2 = (ux - x_[a]) * (ux - x_[a]) + (uy - y_[a]) * (uy - y_[a]);
+            if (r2 > bound * bound * hmin2) ++n;
+        }
+        return n;
     }
 
     // Returns true when every in-domain triangle satisfies the bound, false when the step cap
@@ -648,6 +776,13 @@ private:
         // exterior runaway that an escaped circumcentre would otherwise cause. The
         // cap is a final safety valve.
         const int cap = 200000;
+        bad_lo_ = 0;
+        encroached_.clear();
+        for (const std::uint64_t key : constrained_) {
+            const int a = static_cast<int>(key >> 32), b = static_cast<int>(key & 0xffffffffu);
+            if (segment_encroached(a, b)) encroached_.insert(key);
+        }
+        track_encroach_ = true;
         for (int guard = 0; guard < cap; ++guard) {
             int sa, sb;
             if (find_encroached_subsegment(sa, sb)) {  // conform boundaries first
@@ -655,7 +790,7 @@ private:
                 continue;
             }
             const int bad = find_bad_triangle(bound, max_area);
-            if (bad < 0) { refine_steps_ = guard; return true; }  // quality achieved
+            if (bad < 0) { refine_steps_ = guard; track_encroach_ = false; return true; }  // quality achieved
             const auto [cx, cy] =
                 circumcenter(tris_[bad].v[0], tris_[bad].v[1], tris_[bad].v[2]);
             int ea, eb;
@@ -689,6 +824,7 @@ private:
         // is still a valid triangulation of the domain -- it is simply not the quality mesh that
         // was asked for, and saying so is the whole point of this return.
         refine_steps_ = cap;
+        track_encroach_ = false;
         return false;
     }
 
@@ -711,6 +847,7 @@ public:
         Triangulation t = extract();
         t.quality_met = met;
         t.refinement_steps = refine_steps_;
+        if (met) t.corner_elements = count_skinny(min_angle_deg);   // all of them corner-exempt
         return t;
     }
 
@@ -731,6 +868,12 @@ private:
     std::vector<std::array<int, 2>> outline_;        // domain OUTLINE only (in_domain inside/outside)
     std::unordered_set<int> acute_;                  // input vertices at a < 60 deg corner
     SizeField size_field_;                           // local area cap (empty = constant max_area)
+    std::vector<int> vtri_;                          // vertex -> an incident triangle
+    std::vector<std::array<int, 2>> seg_of_;         // Steiner point -> input segment it lies on
+    std::unordered_set<std::uint64_t> encroached_;   // constrained edges currently encroached
+    bool track_encroach_ = false;                    // keep encroached_ exact (refinement only)
+    mutable int alive_lo_ = 0;                       // any_alive cursor
+    mutable int bad_lo_ = 0;                         // find_bad_triangle cursor
     int refine_steps_ = 0;                           // refinement steps the last refine() took
 };
 

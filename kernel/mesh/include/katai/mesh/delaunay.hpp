@@ -41,8 +41,16 @@ struct Triangulation {
     //
     // Same argument, and the same shape, as the constitutive integrator running out of substeps
     // (K2D-A012): the guard is right, and the silence was the defect.
+    //
+    // One exception is not a failure of the refinement and is counted apart: a triangle in the
+    // corner of an INPUT angle narrower than the bound. No mesh of that geometry can put an
+    // angle wider than the corner's own there, and trying (Miller, Pav & Walkington; see
+    // in_small_angle_corner) only makes smaller copies of the same triangle. quality_met stays
+    // true for them; corner_elements says how many there are, so a corner drawn narrow by
+    // accident (a vertex a hair off a straight line) is still visible.
     bool quality_met = true;
     int refinement_steps = 0;                    // how many the refinement actually took
+    int corner_elements = 0;                     // below the bound only because of a narrow input corner
 };
 
 // Delaunay-triangulate the points (px, py). Inputs must be distinct; the result

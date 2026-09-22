@@ -15,8 +15,10 @@
 //          Consolidation phase, NonPorous in a flow phase). The ENGINE refuses
 //          those at solve time with its own tested messages -- one source of
 //          truth; duplicating the rules here would let the two drift apart.
-//   * OUT: geometry that only the mesher can judge (polygon self-intersection,
-//          region overlap). The mesher's failure is the honest report there.
+//   * OUT: how regions meet. Overlap is defined (the last polygon containing a point
+//          owns it, as for material and phase activity), and near-coincident vertices
+//          and edges are noded by the mesher to one model-scaled tolerance
+//          (katai/geometry/planar_graph.hpp), so neither is an input error.
 //
 // Parameter-bound references: Hardening Soil ranges and the Rf < 1 asymptote of
 // the hyperbola (Schanz, Vermeer & Bonnier 1999), Soft Soil lambda* > kappa*, Soft

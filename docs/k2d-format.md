@@ -294,6 +294,14 @@ way past, because a geometry with two sources of truth is a geometry that can di
 
 with `name` (default `"Soil"`) as above.
 
+**How regions combine.** Regions may share edges, touch at a vertex, meet at a T-junction or
+overlap. Where several contain a point, the **last** one in `polygons` owns it — its material,
+its coarseness and its phase activation — which is the same rule for all three. A region drawn
+inside another (a lens) or over part of it is a region, never a hole. The mesher nodes all edges to
+one tolerance, 1e-5 of the model's diagonal (1 mm on a 100 m section): vertices closer than that
+merge, a vertex that close to an edge splits it, and an edge two regions share is one mesh edge.
+A gap wider than the tolerance is real geometry and stays empty.
+
 #### Structural element object (`structs[i]`)
 
 | Key | Type | Unit | Default | Meaning |

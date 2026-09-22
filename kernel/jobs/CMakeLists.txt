@@ -15,6 +15,7 @@ target_include_directories(katai_jobs PUBLIC include)
 target_link_libraries(katai_jobs PUBLIC
   katai::analysis
   katai::fem
+  katai::geometry
   katai::io
   katai::linsolve
   katai::materials

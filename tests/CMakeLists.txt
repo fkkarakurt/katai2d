@@ -56,6 +56,8 @@ katai_add_test(test_material_registry katai::materials) # constitutive catalogue
 katai_add_test(test_design_code katai::analysis)       # EC7 (EN 1997-1) + TBDY 2018 partial factor tables + material factoring (v0.3 B1)
 katai_add_test(test_geometry2d katai::geometry)     # planar arrangement: geometry lines -> closed regions (clusters)
 katai_add_test(test_model_mesh katai::jobs katai::mesh katai::model)  # project polygon -> FE mesh (katai/jobs/mesh_builder.hpp)
+katai_add_test(test_mesh_multi_region katai::jobs katai::mesh katai::model)  # regions that share, touch or overlap one another mesh as one conforming partition
+katai_add_test(test_region_edit katai::jobs katai::mesh katai::model)  # close a region against existing ones, split regions with a line, keep phase flags aligned
 katai_add_test(test_plate_mesh katai::jobs katai::mesh katai::model)  # regression: a structural line does not delete the mesh (outline separation)
 katai_add_test(test_mesh_domain katai::jobs katai::mesh katai::model)  # mesh triangles must NOT spill outside the domain (load/structure/non-convex)
 katai_add_test(test_mesh_quality_signal katai::jobs katai::mesh katai::model)  # KV-DIA-002: a mesh says whether it reached its own quality bound. Ruppert guarantees the angle, but the loop carries a step cap and the valve used to open in silence -- the K2D-A012 argument, applied to the mesher
