@@ -163,7 +163,20 @@ struct AnchorElement {
     // 0 ⇒ installed slack, i.e. what every KATAI anchor was before this field existed.
     double prestress = 0.0;
     int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
+    // The global DOFs the ends act on when they are NOT the mesh node's own, [a_x,a_y, b_x,b_y];
+    // -1 = the node's DOF. An end drawn on an embedded wall pulls the WALL, whose translations
+    // are its own DOFs joined to the soil only through the interfaces; the mesh node at the same
+    // point is the soil beside the wall, and an anchor bound to it tensions the ground against
+    // itself while the wall never feels it.
+    std::array<int, 4> end_dof = {-1, -1, -1, -1};
 };
+
+// Global DOF of anchor end component i (0 a_x, 1 a_y, 2 b_x, 3 b_y); -1 = a fixed far end.
+inline int anchor_dof(const AnchorElement& an, const DofMap& dofs, int i) {
+    if (an.end_dof[i] >= 0) return an.end_dof[i];
+    const int n = i < 2 ? an.node_a : an.node_b;
+    return n >= 0 ? dofs.global_dof(n, i % 2) : -1;
+}
 
 // Geogrid — 3-node axial membrane (tension-only + optional N_p; see elements/geogrid.hpp).
 // Translational DOFs (u_x,u_y) are SHARED with the mesh nodes; NO bending/rotation. nodes:
@@ -172,7 +185,16 @@ struct GeogridElement {
     std::array<int, 3> nodes;     // mesh node indices [A, B, middle]
     geogrid::GeogridProps props;
     int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
+    // As AnchorElement::end_dof: a node on an embedded wall is attached to the wall's own
+    // translations, not to the soil beside it. [A_x,A_y, B_x,B_y, mid_x,mid_y]; -1 = the mesh node.
+    std::array<int, 6> trans_dof = {-1, -1, -1, -1, -1, -1};
 };
+
+// Global DOF of geogrid node k, component c.
+inline int geogrid_dof(const GeogridElement& ge, const DofMap& dofs, int k, int c) {
+    const int d = ge.trans_dof[2 * k + c];
+    return d >= 0 ? d : dofs.global_dof(ge.nodes[k], c);
+}
 
 // Interface — zero-thickness soil-structure Coulomb interface (see elements/interface.hpp).
 // soil_nodes: mesh nodes (soil side, base DOFs) [A,B,middle]; struct_dof: global indices of
@@ -189,6 +211,11 @@ struct InterfaceElement {
     // (interface-formulation §6.)
     std::array<double, 3> sigma_n0 = {0.0, 0.0, 0.0};
     int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
+    // false = the ground on one side of the joint is not there in this phase (excavated, or not
+    // yet placed): the joint then transmits nothing -- no stiffness and no sigma_n0. Its nodes on
+    // that side are orphaned and fixed, so a joint left in place would hold the wall against
+    // points fixed in space AND keep pressing it with the earth pressure of the removed soil.
+    bool active = true;
 };
 
 // 5-NODE (quartic) plate — sits on a tri15 edge (the structural partner of the 15-node soil
@@ -210,6 +237,7 @@ struct InterfaceElement5 {
     iface::InterfaceProps props;
     std::array<double, 5> sigma_n0 = {0.0, 0.0, 0.0, 0.0, 0.0};
     int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
+    bool active = true;   // see InterfaceElement::active
 };
 
 // Bundle of structural elements embedded in the soil (plate + anchor + geogrid + interface;

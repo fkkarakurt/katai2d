@@ -729,9 +729,8 @@ public:
             if (Lgeom < 1e-30) continue;
             const Eigen::Vector2d dir = dvec / Lgeom;
             const double kk = an.EA / (an.L > 0.0 ? an.L : Lgeom);
-            const int gdx[4] = {dofs.global_dof(an.node_a, 0), dofs.global_dof(an.node_a, 1),
-                                an.node_b >= 0 ? dofs.global_dof(an.node_b, 0) : -1,
-                                an.node_b >= 0 ? dofs.global_dof(an.node_b, 1) : -1};
+            const int gdx[4] = {anchor_dof(an, dofs, 0), anchor_dof(an, dofs, 1),
+                                anchor_dof(an, dofs, 2), anchor_dof(an, dofs, 3)};
             const int idx[4] = {dofs.equation(gdx[0]), dofs.equation(gdx[1]),
                                 gdx[2] >= 0 ? dofs.equation(gdx[2]) : -1,
                                 gdx[3] >= 0 ? dofs.equation(gdx[3]) : -1};
@@ -772,8 +771,8 @@ public:
             for (int k = 0; k < 3; ++k) {
                 Xe(k, 0) = mesh.x[ge.nodes[k]];
                 Xe(k, 1) = mesh.y[ge.nodes[k]];
-                gd[2 * k + 0] = dofs.global_dof(ge.nodes[k], 0);
-                gd[2 * k + 1] = dofs.global_dof(ge.nodes[k], 1);
+                gd[2 * k + 0] = geogrid_dof(ge, dofs, k, 0);
+                gd[2 * k + 1] = geogrid_dof(ge, dofs, k, 1);
                 geq[2 * k + 0] = dofs.equation(gd[2 * k + 0]);
                 geq[2 * k + 1] = dofs.equation(gd[2 * k + 1]);
             }
@@ -805,6 +804,11 @@ public:
         const auto ncpts = iface::nc_points();
         for (size_t ii = 0; ii < structures.interfaces.size(); ++ii) {
             const auto& ie = structures.interfaces[ii];
+            if (!ie.active) {   // the ground on one side is not there: the joint carries nothing
+                for (int q = 0; q < iface::kPointCount; ++q)
+                    (*st.iface_t)[ii * iface::kPointCount + q] = (*st.iface_c)[ii * iface::kPointCount + q];
+                continue;
+            }
             iface::NodeCoords Xe;
             for (int k = 0; k < 3; ++k) { Xe(k, 0) = mesh.x[ie.soil_nodes[k]]; Xe(k, 1) = mesh.y[ie.soil_nodes[k]]; }
             for (int q = 0; q < iface::kPointCount; ++q) {
@@ -850,6 +854,11 @@ public:
         const auto ncpts5 = iface::nc_points5();
         for (size_t ii = 0; ii < structures.interfaces5.size(); ++ii) {
             const auto& ie = structures.interfaces5[ii];
+            if (!ie.active) {
+                for (int q = 0; q < iface::kPointCount5; ++q)
+                    (*st.iface5_t)[ii * iface::kPointCount5 + q] = (*st.iface5_c)[ii * iface::kPointCount5 + q];
+                continue;
+            }
             iface::NodeCoords5 Xe;
             for (int k = 0; k < 5; ++k) { Xe(k, 0) = mesh.x[ie.soil_nodes[k]]; Xe(k, 1) = mesh.y[ie.soil_nodes[k]]; }
             for (int q = 0; q < iface::kPointCount5; ++q) {
@@ -905,14 +914,19 @@ public:
                                 const Eigen::Vector2d& tang, double k_a, double k_n, double cap,
                                 double wJ, double slip_c, double& slip_t,
                                 double* out_f = nullptr, double* out_du = nullptr,
-                                bool* out_capped = nullptr) {
+                                bool* out_capped = nullptr, bool no_tension = false) {
             const Eigen::Vector2d nrm(-tang(1), tang(0));
             Eigen::Vector2d dur(0.0, 0.0);
             for (int d = 0; d < nc; ++d)
                 if (gdp[d] >= 0) { const double ud = u_el(gdp[d], install); dur(0) += cxp[d] * ud; dur(1) += cyp[d] * ud; }
             const double dua = dur.dot(tang), dun = dur.dot(nrm);
             double ta = k_a * (dua - slip_c), Da = k_a;
-            if (cap > 0.0 && std::fabs(ta) > cap) { ta = std::copysign(cap, ta); slip_t = dua - ta / k_a; Da = 0.0; }
+            // A pile BASE bears, it does not hold: pulled away from the soil under it the tip lifts
+            // off and carries nothing (embedded-beam-formulation.md sec 4, Ref. sec 6.6.3.3). The
+            // gap is reversible -- the plastic state is kept -- and tension is positive along
+            // `tang`, which points from the tip up the beam.
+            if (no_tension && ta > 0.0) { ta = 0.0; slip_t = slip_c; Da = 0.0; }
+            else if (cap > 0.0 && std::fabs(ta) > cap) { ta = std::copysign(cap, ta); slip_t = dua - ta / k_a; Da = 0.0; }
             else { slip_t = slip_c; }
             if (out_f) *out_f = ta;
             if (out_du) *out_du = dua;
@@ -1012,7 +1026,8 @@ public:
                 const bool want_f = probe && probe->prev_foot;
                 axial_couple(eq.data(), gdx.data(), cx.data(), cy.data(), nc, eb.install, eb.foot.tang, eb.foot.D_foot, 0.0,
                              eb.foot.f_max, 1.0, (*st.efoot_c)[bi], (*st.efoot_t)[bi],
-                             want_f ? &f_ft : nullptr, want_f ? &du_ft : nullptr);
+                             want_f ? &f_ft : nullptr, want_f ? &du_ft : nullptr, nullptr,
+                             /*no_tension=*/true);
                 // The foot force error. The foot is not counted as a point: its criterion is ONE
                 // ratio over every foot in the model, so what is gathered here are the three sums
                 // that ratio is formed from. The equilibrium force is the previous iterate's
@@ -1021,7 +1036,8 @@ public:
                 if (want_f) {
                     PrevPoint& pv = (*probe->prev_foot)[bi];
                     if (!probe->first_iterate) {
-                        const double f_eq = pv.value + eb.foot.D_foot * (du_ft - pv.du);
+                        // A base that has lifted off carries nothing whichever way it is reached.
+                        const double f_eq = std::min(0.0, pv.value + eb.foot.D_foot * (du_ft - pv.du));
                         probe->foot_num += std::fabs(f_eq - f_ft);
                     }
                     probe->foot_den_c += std::fabs(f_ft);

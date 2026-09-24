@@ -176,6 +176,7 @@ if(TARGET test_safety_structures)
   target_compile_definitions(test_safety_structures PRIVATE
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
+katai_add_test(test_wall_attachment katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-014: an anchor, a load or a free pile drawn on a wall with interfaces acts on the wall; the joints of an excavated side hold nothing; the toe is free; iface_pos / iface_neg and an entered k_s are read -- against the statics of a cantilever and a bonded-plate identity
 katai_add_test(test_structure_set_carry katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-012: activating or removing a structure in a phase carries every other structure's state, and installs the new one on the deformed ground -- against superposition on a linear model
 katai_add_test(test_phase_activation katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-013: walls with interfaces and interfaces activated and deactivated per phase -- inactive is the unsplit model, K0 then the wall equals the wall from K0, and the joint takes over the ground's stress
 katai_add_test(test_design_ground_strength katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-STR-011 + KV-FND-015: EC7 DA1-C2/DA3 reach every ground strength -- the joints, the cohesion gradient and the soft soils -- and a joint beside an undrained clay is a Tresca joint

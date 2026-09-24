@@ -27,6 +27,7 @@ inline void add_interface_sigma_n0_baseline(const Structures& structures, const 
                                             const DofMap& dofs, Eigen::VectorXd& B) {
     const auto ncp = iface::nc_points();
     for (const auto& ie : structures.interfaces) {   // 3-node (tri6) interface sigma_n0
+        if (!ie.active) continue;
         iface::NodeCoords Xe;
         for (int k = 0; k < 3; ++k) { Xe(k, 0) = mesh.x[ie.soil_nodes[k]]; Xe(k, 1) = mesh.y[ie.soil_nodes[k]]; }
         for (int q = 0; q < 3; ++q) {
@@ -43,6 +44,7 @@ inline void add_interface_sigma_n0_baseline(const Structures& structures, const 
     }
     const auto ncp5 = iface::nc_points5();
     for (const auto& ie : structures.interfaces5) {  // 5-node (tri15): same seed, 5-pt NC
+        if (!ie.active) continue;
         iface::NodeCoords5 Xe;
         for (int k = 0; k < 5; ++k) { Xe(k, 0) = mesh.x[ie.soil_nodes[k]]; Xe(k, 1) = mesh.y[ie.soil_nodes[k]]; }
         for (int q = 0; q < 5; ++q) {

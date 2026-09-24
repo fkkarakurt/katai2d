@@ -101,7 +101,11 @@ void test_embedded_wall() {
         model::StructElement s;
         s.kind = model::StructKind::Plate; s.material = 0;
         s.x1 = 10.0; s.y1 = 2.0; s.x2 = 10.0; s.y2 = 10.0;   // vertical wall, toe at y=2
-        s.iface_pos = true;
+        // Both sides. Drawn upward, the wall's positive side is the right (x > 10), and the load
+        // below pushes the LEFT soil against it: a positive-only interface would leave the pushed
+        // side bonded. (This case used to set iface_pos alone and relied on both sides being built
+        // whichever was asked for -- the defect KV-STR-014 (d) closed.)
+        s.iface_pos = true; s.iface_neg = true;
         pr.structs.push_back(s);
         if (with_load) {   // strong horizontal surcharge pushing the left soil AGAINST the wall, so
             // the soil-wall interface (slip / separation) actually engages and differs from bonded.
@@ -133,7 +137,7 @@ void test_embedded_wall() {
     // The interface MUST matter: a bonded plate (no interface) gives a different surcharge response
     // than the same plate WITH an interface (which allows soil-wall slip/separation).
     model::Project prb = make(true);
-    prb.structs.back().iface_pos = false;   // same plate, but bonded (no interface)
+    prb.structs.back().iface_pos = prb.structs.back().iface_neg = false;   // same plate, bonded
     const auto mrb = katai::app::mesh_from_project(prb, 0.5 * 1.0 * 1.0, 6);
     const auto Rb = katai::app::solve_gravity_le(prb, mrb.mesh, katai::app::InitialPhase::K0Procedure);
     check(Rb.ok, "bonded-plate + load solve ok");

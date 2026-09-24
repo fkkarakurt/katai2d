@@ -116,8 +116,8 @@ inline StructForce force_diagram(const DiagSpec& sp, const Structures& structure
         // yield flag; the displayed number, times Ls, is in the same unit as
         // the capacity the user entered.
         st.x = mesh.x[an.node_a]; st.y = mesh.y[an.node_a]; st.N = af.N * sp.anchor_spacing;
-        st.ux = field[dofs.global_dof(an.node_a, 0)];   // for deformed-mesh overlay
-        st.uy = field[dofs.global_dof(an.node_a, 1)];
+        st.ux = field[anchor_dof(an, dofs, 0)];   // for deformed-mesh overlay
+        st.uy = field[anchor_dof(an, dofs, 1)];
         d.stations.push_back(st);
         d.yielded = af.yielded;
     } else if (sp.kind == 3) {     // embedded beam (pile row): N, Q, M along the pile

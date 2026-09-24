@@ -82,6 +82,7 @@ m::Project build_full() {
     m::StructElement s1; s1.kind = m::StructKind::Plate; s1.name = "Wall";
     s1.x1 = 10; s1.y1 = 2; s1.x2 = 10; s1.y2 = 10; s1.material = 0;
     s1.iface_pos = true; s1.iface_neg = true; s1.iface_material = 1; s1.coarseness = 0.5;
+    s1.iface_kn = 1.0e5; s1.iface_ks = 1.25e4;   // entered joint stiffness (v19)
     p.structs.push_back(s1);
     m::StructElement s2; s2.kind = m::StructKind::Anchor; s2.name = "Strut";
     s2.x1 = 10; s2.y1 = 9; s2.x2 = 14; s2.y2 = 13; s2.material = 0;
@@ -170,7 +171,8 @@ void compare(const m::Project& A, const m::Project& B) {
         sts = x.kind == y.kind && x.name == y.name && eq(x.x1, y.x1) && eq(x.y1, y.y1) &&
               eq(x.x2, y.x2) && eq(x.y2, y.y2) && x.material == y.material &&
               x.iface_pos == y.iface_pos && x.iface_neg == y.iface_neg &&
-              x.iface_material == y.iface_material && eq(x.coarseness, y.coarseness);
+              x.iface_material == y.iface_material && eq(x.coarseness, y.coarseness) &&
+              eq(x.iface_kn, y.iface_kn) && eq(x.iface_ks, y.iface_ks);
     }
     check(sts, "structural elements incl. interfaces exact");
 

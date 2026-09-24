@@ -35,15 +35,20 @@ struct WallBuild {
     std::vector<int> dof_x, dof_y;  // wall translational global DOFs (toe: mesh DOF; seam: extra DOF)
     std::vector<int> dof_phi;       // wall rotational extra DOFs
     std::vector<int> node_r;        // right (retained) mesh node (toe: shared)
+    std::vector<int> node_l;        // left (excavated) mesh node, the twin (toe: shared)
 };
 
 // `seam` = split_mesh_at_wall output; `toe_node` = the lowest SHARED mesh node on the wall
 // line (on the y_toe corner row, not split). dofs BEFORE finalize. pp/ip: wall + interface
-// properties.
+// properties. `iface_right` / `iface_left` say which sides carry an interface; a side WITHOUT
+// one is bonded to the wall -- the wall's translations there ARE that side's mesh DOFs, as for
+// a plate in the soil -- so a one-sided wall slips against one soil and moves with the other.
+// At least one side must carry an interface (a wall with none is a plain plate).
 inline WallBuild build_embedded_wall(const mesh::Mesh& mesh, std::vector<SeamPair> seam,
                                      int toe_node, DofMap& dofs,
                                      const plate::PlateProps& pp,
-                                     const iface::InterfaceProps& ip) {
+                                     const iface::InterfaceProps& ip,
+                                     bool iface_right = true, bool iface_left = true) {
     std::sort(seam.begin(), seam.end(),
               [](const SeamPair& a, const SeamPair& b) { return a.y < b.y; });
     WallBuild w;
@@ -56,14 +61,20 @@ inline WallBuild build_embedded_wall(const mesh::Mesh& mesh, std::vector<SeamPai
     dphi.push_back(dofs.add_extra_dof());
     for (const auto& s : seam) {
         nr.push_back(s.right); nl.push_back(s.left);
-        dx.push_back(dofs.add_extra_dof());                   // INDEPENDENT wall translation
-        dy.push_back(dofs.add_extra_dof());
+        if (!iface_right || !iface_left) {                    // bonded side: its mesh DOFs
+            const int bn = iface_right ? s.left : s.right;
+            dx.push_back(dofs.global_dof(bn, 0));
+            dy.push_back(dofs.global_dof(bn, 1));
+        } else {
+            dx.push_back(dofs.add_extra_dof());               // INDEPENDENT wall translation
+            dy.push_back(dofs.add_extra_dof());
+        }
         dphi.push_back(dofs.add_extra_dof());
     }
     const int npos = static_cast<int>(nr.size());
     for (int i = 0; i < npos; ++i) {
         w.y.push_back(mesh.y[nr[i]]); w.dof_x.push_back(dx[i]); w.dof_y.push_back(dy[i]);
-        w.dof_phi.push_back(dphi[i]); w.node_r.push_back(nr[i]);
+        w.dof_phi.push_back(dphi[i]); w.node_r.push_back(nr[i]); w.node_l.push_back(nl[i]);
     }
     // Plate + interface elements: consecutive triples [A=2e(corner), B=2e+2(corner), mid=2e+1].
     for (int e = 0; 2 * e + 2 < npos; ++e) {
@@ -75,9 +86,12 @@ inline WallBuild build_embedded_wall(const mesh::Mesh& mesh, std::vector<SeamPai
         pe.props = pp;
         w.plates.push_back(pe);
         const std::array<int, 6> sdof = {dx[a], dy[a], dx[b], dy[b], dx[m], dy[m]};
-        InterfaceElement ir;  // right (retained) soil ↔ wall — normal outward from the right soil (−x)
-        ir.soil_nodes = {nr[a], nr[b], nr[m]}; ir.struct_dof = sdof; ir.props = ip;
-        w.interfaces.push_back(ir);
+        if (iface_right) {
+            InterfaceElement ir;  // right (retained) soil ↔ wall — normal outward from the right soil (−x)
+            ir.soil_nodes = {nr[a], nr[b], nr[m]}; ir.struct_dof = sdof; ir.props = ip;
+            w.interfaces.push_back(ir);
+        }
+        if (!iface_left) continue;
         // Left (excavated) soil ↔ wall. Node order REVERSED (A↔B) → the edge tangent, hence
         // the normal, flips → the normal points OUTWARD from the left soil (+x) (outward-
         // normal convention symmetric with the right). Thus compression is σ_n<0 on both
@@ -149,13 +163,14 @@ struct WallBuild5 {
     std::vector<PlateElement5> plates;
     std::vector<InterfaceElement5> interfaces;     // right + left (2 per plate)
     std::vector<double> y;
-    std::vector<int> dof_x, dof_y, dof_phi, node_r;
+    std::vector<int> dof_x, dof_y, dof_phi, node_r, node_l;
 };
 
 inline WallBuild5 build_embedded_wall5(const mesh::Mesh& mesh, std::vector<SeamPair> seam,
                                        int toe_node, DofMap& dofs,
                                        const plate::PlateProps& pp,
-                                       const iface::InterfaceProps& ip) {
+                                       const iface::InterfaceProps& ip,
+                                       bool iface_right = true, bool iface_left = true) {
     std::sort(seam.begin(), seam.end(),
               [](const SeamPair& a, const SeamPair& b) { return a.y < b.y; });
     WallBuild5 w;
@@ -166,14 +181,20 @@ inline WallBuild5 build_embedded_wall5(const mesh::Mesh& mesh, std::vector<SeamP
     dphi.push_back(dofs.add_extra_dof());
     for (const auto& s : seam) {
         nr.push_back(s.right); nl.push_back(s.left);
-        dx.push_back(dofs.add_extra_dof());
-        dy.push_back(dofs.add_extra_dof());
+        if (!iface_right || !iface_left) {                  // bonded side (see build_embedded_wall)
+            const int bn = iface_right ? s.left : s.right;
+            dx.push_back(dofs.global_dof(bn, 0));
+            dy.push_back(dofs.global_dof(bn, 1));
+        } else {
+            dx.push_back(dofs.add_extra_dof());
+            dy.push_back(dofs.add_extra_dof());
+        }
         dphi.push_back(dofs.add_extra_dof());
     }
     const int npos = static_cast<int>(nr.size());
     for (int i = 0; i < npos; ++i) {
         w.y.push_back(mesh.y[nr[i]]); w.dof_x.push_back(dx[i]); w.dof_y.push_back(dy[i]);
-        w.dof_phi.push_back(dphi[i]); w.node_r.push_back(nr[i]);
+        w.dof_phi.push_back(dphi[i]); w.node_r.push_back(nr[i]); w.node_l.push_back(nl[i]);
     }
     // plate5/interface5: consecutive groups of 5 [4e, 4e+1, 4e+2, 4e+3, 4e+4] (ends shared).
     for (int e = 0; 4 * e + 4 < npos; ++e) {
@@ -195,7 +216,8 @@ inline WallBuild5 build_embedded_wall5(const mesh::Mesh& mesh, std::vector<SeamP
             ir.struct_dof[2 * k + 1] = dy[p[k]];
         }
         ir.props = ip;
-        w.interfaces.push_back(ir);
+        if (iface_right) w.interfaces.push_back(ir);
+        if (!iface_left) continue;
         InterfaceElement5 il;  // left soil ↔ wall: node order REVERSED → normal outward from the left soil
         for (int k = 0; k < 5; ++k) {
             const int pk = p[4 - k];                       // reversed order

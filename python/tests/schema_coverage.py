@@ -146,6 +146,9 @@ def coverage_project():
     wall.x1, wall.y1, wall.x2, wall.y2 = 5.0, 5.0, 5.0, 1.0
     wall.flow_barrier = 2            # so the writer emits the cross-permeability pair
     wall.hydraulic_resistance = 10.0
+    wall.iface_pos = True            # a wall with an interface, so the stiffness keys are read
+    wall.iface_kn = 1.0e5            # and emitted (written only when set)
+    wall.iface_ks = 1.0e4
     pr.structs = [wall]
 
     strip = core.Load()

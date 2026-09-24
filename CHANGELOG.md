@@ -6,6 +6,83 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A wall with interfaces carries what is drawn on it, and an excavation unloads it
+
+An anchored sheet pile with interfaces on both sides, rebuilt from a published worked example
+(two layers, two excavation stages, two prestressed tiebacks), came out with anchors of 1.7 and
+1.3 kN where 35.0 and 88.0 were expected and the wall's largest moment at its free toe. The same
+model without interfaces matched the example. Four defects in the wall-with-interfaces path,
+each silent:
+
+| | before | now |
+|---|---|---|
+| anchor forces (upper / lower), kN | 1.7 / 1.3 | 36.1 / 98.7 (example 35.0 / 88.0) |
+| largest wall moment, kNm/m | 34.8, **at the free toe** | 46.4 (example 47.0) |
+| moment at the free toe, kNm/m | −34.8 | −0.2 |
+| largest horizontal movement, mm | −10.2 | −19.1 (example −20.2) |
+
+(tri6, 0.5 m elements; the model without interfaces gives 35.0 / 99.1 kN and 45.2 kNm/m.)
+
+* **The toe was clamped.** The driver fixed the rotation of the wall's toe, so the free end of an
+  embedded wall carried a moment. The rotation is free now; the translations stay shared with
+  the soil below the toe.
+* **What was drawn on the wall acted on the soil beside it.** A wall with interfaces moves on
+  DOFs of its own, and an anchor, a point load, a geogrid or a plate found its node by position
+  — the soil node on the wall line. An anchor from the wall therefore tensioned the retained
+  ground against itself and the wall never felt it. Every node of an active wall's line now maps
+  to the wall's own translation (`AnchorElement::end_dof`, `GeogridElement::trans_dof`,
+  a plate's `trans_dof`, the point load's equations).
+* **The joints of an excavated side went on pushing.** When a phase removes the soil on one side,
+  that side's nodes are orphaned and fixed, and the joints there stayed on: they held the wall
+  against points fixed in space and kept pressing it with the earth pressure of the removed
+  ground, so the excavation never unloaded the wall (the lower anchor ended in compression,
+  −2.4 kN). A joint whose ground is gone on either side is now switched off for the phase
+  (`InterfaceElement::active`) — no stiffness, no σn0, zero in the report — and keeps its place in
+  the arrays so the phase chain's state stays aligned. This holds for soil-soil interfaces too.
+* **A one-sided interface was built on both sides.** `iface_pos` / `iface_neg` were only or-ed.
+  They are read now: positive is the right of the direction from the first point to the second
+  (the side the Studio marks with "+"), and a side without an interface is bonded to the wall.
+
+**An anchor ending on a free embedded beam pulls the beam.** A free connection is the grout body
+of a ground anchor, but the anchor's end found the soil node there and the beam took only what
+the ground passed to it (10.6% of the anchor's force against 99.6% now, KV-STR-014 (iv)).
+
+**A pile base carried tension.** The embedded beam's foot spring took force both ways, although
+the formulation it implements says the base "can only sustain compression, not tension"
+(`docs/references/embedded-beam-formulation.md` sec 4): a pulled grout body held the ground by a
+single point at its tip, where a Mohr-Coulomb soil can only fail. Rebuilt with embedded-beam
+grout bodies (hinged), the anchored sheet pile above stopped at 98% of its last excavation
+("mechanism"), while the same wall with geogrid grout bodies solved even with the clay's cohesion
+lowered from 10 to 8 kPa. The base now lifts off in tension (reversibly; its plastic state is
+kept), and the hinged variant solves: wall 46.4 kNm/m, 19.9 mm, anchors 28.8 / 68.7 kN. On a
+linear ground a pile pulled up is now no longer the mirror image of the same pile pushed down:
+the tip force pulled / pushed was exactly 1.0000 and is 0.0081 (KV-STR-014 (v)). And **an exactly
+horizontal pile had its base at its connection point**: the base is the lower end and the
+connection point the upper one, but for a horizontal pile the connection point is the lower-x end
+and the base was simply the first point drawn, so a pile drawn left to right had both at its head
+and none at its far end. The base is now the end that is not the connection point.
+
+**Still open, measured in the same study.** With FREE embedded-beam grout bodies the anchored
+sheet pile does not finish its last excavation (93% at 200 iterations per increment, 96% at
+2000, the out-of-balance still falling; 98% "mechanism" with a 0.2 m body), and on a tri15 mesh
+the model without interfaces stops at 87% (89% at 2000 iterations, still falling) where tri6
+solves. Neither is a collapse load: the equilibrium iteration converges far too slowly near the
+limit state, which is a numerical question of its own.
+
+**Interface stiffness can be entered** (`.k2d` **v19**: `structs[i].iface_kn`, `iface_ks`,
+kN/m³; 0 = derived from the adjacent soil as before, and written only when set). The derived
+value follows the soil and the mesh; a joint whose stiffness is known now gets it. The Python
+`plate()` and `interface()` take `iface_material`, `iface_kn` and `iface_ks`, so a wall's
+interface strength no longer needs the project's private lists.
+
+**KV-STR-014** (`tests/test_wall_attachment.cpp`) checks each against an exact oracle: the part
+of a wall above an excavation on both sides is a cantilever, so its moment is statics at every
+station (1.6e-11 under a head load, 3.0e-12 below an anchor); a one-sided interface on an
+excavated side is the plain bonded plate (1.4e-11); two interfaces with one side gone are the
+other one alone (1.8e-11); an entered k_s is read back as τ/slip exactly. With each fix undone in
+turn the case fails: the clamped toe carries 94% of the peak moment (1.6% now), the anchor and the
+load reach the wall not at all, the excavated-side joints leave the cantilever's moment 99% off.
+
 ### Regions that overlap, nearly meet or pinch out mesh — and a region closes against its neighbours
 
 Several geometries a section drawing produces all the time either meshed wrong without saying so

@@ -1019,6 +1019,21 @@ inline ValidationReport validate_project(const model::Project& p) {
                   who + "interface material index " + std::to_string(s.iface_material) +
                       " does not exist; the project has " + std::to_string(p.materials.size()) +
                       " soil material(s)");
+        // Interface stiffness: a stiffness is positive, and one entered on a line that carries no
+        // interface would be read by nothing -- said, not dropped.
+        const bool has_joint = s.kind == StructKind::Interface ||
+                               (s.kind == StructKind::Plate && (s.iface_pos || s.iface_neg));
+        for (const auto& [key, v] : {std::pair<const char*, double>{"iface_kn", s.iface_kn},
+                                     std::pair<const char*, double>{"iface_ks", s.iface_ks}}) {
+            if (!std::isfinite(v) || v < 0.0)
+                r.add(Severity::Error, at("structs", i, key),
+                      who + "the interface stiffness must be positive, or 0 to derive it from "
+                            "the adjacent soil (got " + num(v) + ")");
+            else if (v > 0.0 && !has_joint)
+                r.add(Severity::Warning, at("structs", i, key),
+                      who + "an interface stiffness is set but this line carries no interface, "
+                            "so nothing reads it");
+        }
         if (!(s.coarseness > 0.0))
             r.add(Severity::Error, at("structs", i, "coarseness"),
                   who + "the mesh coarseness factor must be positive (got " + num(s.coarseness) +

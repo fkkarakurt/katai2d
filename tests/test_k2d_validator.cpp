@@ -392,6 +392,12 @@ int main() {
           "structs[0].iface_material", E, "dangling interface material override");
     probe(base, [](m::Project& p) { p.structs[0].coarseness = -0.5; },
           "structs[0].coarseness", E, "element with negative coarseness");
+    probe(base, [](m::Project& p) { p.structs[2].iface_kn = -1.0; }, "structs[2].iface_kn", E,
+          "negative interface normal stiffness");
+    probe(base, [](m::Project& p) { p.structs[1].iface_ks = 1.0e4; }, "structs[1].iface_ks", W,
+          "interface stiffness on an anchor, which carries no interface");
+    probe_accepts(base, [](m::Project& p) { p.structs[2].iface_kn = 1.0e5; p.structs[2].iface_ks = 1.0e4; },
+                  "structs[2].iface_kn", "an interface takes an entered stiffness silently");
 
     // -- loads -----------------------------------------------------------------
     probe(base, [](m::Project& p) { p.loads[0].kind = (m::LoadKind)7; }, "loads[0].kind", E,

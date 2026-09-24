@@ -144,10 +144,11 @@ void assemble_structural_stiffness(const mesh::Mesh& mesh, const DofMap& dofs,
         if (Lgeom < 1e-30) continue;
         const Eigen::Vector2d dir = dvec / Lgeom;
         const double kk = an.EA / (an.L > 0.0 ? an.L : Lgeom);
-        const std::array<int, 4> eq = {dofs.equation(dofs.global_dof(an.node_a, 0)),
-                                       dofs.equation(dofs.global_dof(an.node_a, 1)),
-                                       an.node_b >= 0 ? dofs.equation(dofs.global_dof(an.node_b, 0)) : -1,
-                                       an.node_b >= 0 ? dofs.equation(dofs.global_dof(an.node_b, 1)) : -1};
+        std::array<int, 4> eq;
+        for (int i = 0; i < 4; ++i) {
+            const int g = anchor_dof(an, dofs, i);
+            eq[i] = g >= 0 ? dofs.equation(g) : -1;
+        }
         const double g[4] = {-dir(0), -dir(1), dir(0), dir(1)};   // ∂U/∂u
         Eigen::Matrix<double, 4, 4> Ke;
         for (int i = 0; i < 4; ++i)
@@ -164,8 +165,8 @@ void assemble_structural_stiffness(const mesh::Mesh& mesh, const DofMap& dofs,
             for (int k = 0; k < 3; ++k) {
                 Xe(k, 0) = mesh.x[ge.nodes[k]];
                 Xe(k, 1) = mesh.y[ge.nodes[k]];
-                eq[2 * k + 0] = dofs.equation(dofs.global_dof(ge.nodes[k], 0));
-                eq[2 * k + 1] = dofs.equation(dofs.global_dof(ge.nodes[k], 1));
+                eq[2 * k + 0] = dofs.equation(geogrid_dof(ge, dofs, k, 0));
+                eq[2 * k + 1] = dofs.equation(geogrid_dof(ge, dofs, k, 1));
             }
             Eigen::Matrix<double, 6, 6> Ke = Eigen::Matrix<double, 6, 6>::Zero();
             for (int q = 0; q < geogrid::kGaussCount; ++q) {
@@ -185,6 +186,7 @@ void assemble_structural_stiffness(const mesh::Mesh& mesh, const DofMap& dofs,
     {
         const auto ncpts = iface::nc_points();
         for (const auto& ie : structures.interfaces) {
+            if (!ie.active) continue;
             iface::NodeCoords Xe;
             for (int k = 0; k < 3; ++k) { Xe(k, 0) = mesh.x[ie.soil_nodes[k]]; Xe(k, 1) = mesh.y[ie.soil_nodes[k]]; }
             for (int q = 0; q < iface::kPointCount; ++q) {
@@ -209,6 +211,7 @@ void assemble_structural_stiffness(const mesh::Mesh& mesh, const DofMap& dofs,
     {
         const auto ncpts5 = iface::nc_points5();
         for (const auto& ie : structures.interfaces5) {
+            if (!ie.active) continue;
             iface::NodeCoords5 Xe;
             for (int k = 0; k < 5; ++k) { Xe(k, 0) = mesh.x[ie.soil_nodes[k]]; Xe(k, 1) = mesh.y[ie.soil_nodes[k]]; }
             for (int q = 0; q < iface::kPointCount5; ++q) {

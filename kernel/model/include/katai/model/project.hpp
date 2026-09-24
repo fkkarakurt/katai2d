@@ -249,6 +249,12 @@ struct StructElement {
     // They use the adjacent soil's Rinter unless iface_material >= 0 (a soil material override).
     bool iface_pos = false, iface_neg = false;
     int iface_material = -1;
+    // Interface elastic stiffnesses [kN/m3 = kPa per metre of relative movement]: normal kn and
+    // shear ks. 0 = derived from the adjacent soil (R_inter^2 G over a virtual thickness of 0.1
+    // element lengths), which is what every file before v19 means. A joint whose stiffness is
+    // known -- measured, or given by a design guide or a reference solution -- is entered here,
+    // since the derived value follows the mesh and the soil, not the joint.
+    double iface_kn = 0.0, iface_ks = 0.0;
     // CROSS PERMEABILITY in a groundwater calculation (docs/k2d-format.md, `flow_barrier`). A wall
     // or interface is a line the water either crosses freely, cannot cross at all, or crosses
     // against a resistance:

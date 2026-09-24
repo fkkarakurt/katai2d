@@ -675,6 +675,9 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         bool active = true;      // installed in this phase; inactive = the seam is tied (continuous soil)
         std::string name;        // drawn element name (for the force-diagram output)
         int flow_barrier = 0;    // 0 permeable / 1 impermeable / 2 semi-permeable (model vocabulary)
+        // Which sides carry an interface, in the builder's frame: "right" is the side the unit
+        // normal (nx, ny) points into, "left" the twin side. A side without one is bonded.
+        bool iface_right = true, iface_left = true;
     };
     std::vector<WallSpec> walls;
     std::vector<char> plate_is_wall(pr.structs.size(), 0);
@@ -705,6 +708,12 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             const double ux = a_is_toe ? s.x2 : s.x1, uy = a_is_toe ? s.y2 : s.y1;   // top end
             w.toe_x = tx; w.toe_y = ty;
             w.nx = (uy - ty) / len; w.ny = -(ux - tx) / len;   // unit normal of the wall line
+            // The drawn line's POSITIVE side is the one on the right walking from its first point
+            // to its second, normal (dy, -dx)/len -- the side the Studio draws the "+" marks on.
+            // The builder's right side is +(nx, ny), the normal of the toe->top direction, so the
+            // two frames agree when the first point is the toe and are mirrored otherwise.
+            w.iface_right = a_is_toe ? s.iface_pos : s.iface_neg;
+            w.iface_left = a_is_toe ? s.iface_neg : s.iface_pos;
             if (std::fabs(dx) <= 1e-6 * len) {                 // VERTICAL: validated x-column split
                 w.seam = katai::core::split_mesh_at_wall(mesh, 0.5 * (s.x1 + s.x2),
                                                          std::min(s.y1, s.y2), std::max(s.y1, s.y2));
@@ -767,6 +776,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             const double G = sm.E / (2.0 * (1.0 + sm.nu));
             const double avg = len / std::max<size_t>(1, w.seam.size() / (order == 15 ? 4 : 2));
             katai::core::iface::interface_stiffness(Rinter, G, avg, 0.1, w.ip.kn, w.ip.ks);
+            if (s.iface_kn > 0.0) w.ip.kn = s.iface_kn;   // entered: the joint's own stiffness
+            if (s.iface_ks > 0.0) w.ip.ks = s.iface_ks;
             // A JOINT AGAINST ROCK CANNOT BORROW A STRENGTH THE ROCK DOES NOT HAVE. The two
             // lines below read the material's c' and phi', and a Hoek-Brown material's are the
             // schema DEFAULTS -- 1 kPa and 30 degrees -- because that model never reads them.
@@ -895,6 +906,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             const double G = sm.E / (2.0 * (1.0 + sm.nu));
             const int nedges = std::max<int>(1, ((int)sp.seam.size() - 1) / per_edge);
             katai::core::iface::interface_stiffness(Rinter, G, len / nedges, 0.1, sp.ip.kn, sp.ip.ks);
+            if (s.iface_kn > 0.0) sp.ip.kn = s.iface_kn;
+            if (s.iface_ks > 0.0) sp.ip.ks = s.iface_ks;
             // A JOINT AGAINST ROCK CANNOT BORROW A STRENGTH THE ROCK DOES NOT HAVE. The two
             // lines below read the material's c' and phi', and a Hoek-Brown material's are the
             // schema DEFAULTS -- 1 kPa and 30 degrees -- because that model never reads them.
@@ -1143,6 +1156,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     const auto in_soil = [&](double x, double y) {
         return katai::core::ploc::locate_point(mesh, x, y).found;
     };
+    std::vector<std::array<double, 4>> anchor_ends;   // drawn end points, per anchor: a (x,y), b (x,y)
     for (size_t si = 0; si < pr.structs.size(); ++si) {
         const auto& s = pr.structs[si];
         if (s.kind != model::StructKind::Anchor || !struct_on(si)) continue;
@@ -1229,6 +1243,11 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                          " m. Refine the mesh around the anchor if that matters.");
         }
         structures.anchors.push_back(an);
+        {
+            const double sx = in1 ? s.x1 : s.x2, sy = in1 ? s.y1 : s.y2;
+            anchor_ends.push_back(an.node_b >= 0 ? std::array<double, 4>{s.x1, s.y1, s.x2, s.y2}
+                                                 : std::array<double, 4>{sx, sy, 1e300, 1e300});
+        }
         diag_specs.push_back({1, s.name, structures.anchors.size() - 1, structures.anchors.size(), Ls});
         record(si, snap0);
     }
@@ -1240,6 +1259,22 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     const auto tie_twins = [&](int twin, int original) {
         for (int c = 0; c < 2; ++c) dofs.tie(dofs.global_dof(twin, c), dofs.global_dof(original, c));
         tied_nodes.push_back({twin, original});
+    };
+    // WHAT IS DRAWN ON A WALL HANGS ON THE WALL. An embedded wall's translations are its own
+    // DOFs, joined to the soil only through the interfaces, and the mesh node at a point of the
+    // wall line is the SOIL beside it. Anchors, geogrids, plates and point loads find their node
+    // by position, so without this an anchor drawn from the wall tensioned the retained ground
+    // against itself and the wall never felt it -- measured on an anchored sheet pile: 1.8 kN
+    // left of a 20 kN prestress, the free-length wall held by the interfaces alone. Every node of
+    // an active wall's line (either twin) is therefore mapped to the wall's own translation.
+    std::vector<std::array<int, 2>> wall_dof_at((size_t)mesh.node_count, std::array<int, 2>{-1, -1});
+    const size_t plain_plate_count = structures.plates.size();   // the walls' plates follow these
+    const auto attach_to_wall = [&wall_dof_at](const std::vector<int>& nr, const std::vector<int>& nl,
+                                               const std::vector<int>& dx, const std::vector<int>& dy) {
+        for (size_t i = 0; i < nr.size(); ++i) {
+            wall_dof_at[(size_t)nr[i]] = {dx[i], dy[i]};
+            wall_dof_at[(size_t)nl[i]] = {dx[i], dy[i]};
+        }
     };
     for (const auto& w : walls) {
         // silent-drop-ok: an inactive wall is not dropped -- the phase asked for it to be absent, and
@@ -1268,14 +1303,15 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         const double k0 = (w.soil_mat >= 0 && w.soil_mat < (int)k0_by_mat.size()) ? k0_by_mat[w.soil_mat] : 0.5;
         const double fac = k0 * w.nx * w.nx + w.ny * w.ny;   // sigma_n / sigma'_v (vertical -> k0)
         if (w.order == 15) {
-            katai::core::WallBuild5 wb = katai::core::build_embedded_wall5(mesh, w.seam, toe, dofs, w.pp, w.ip);
+            katai::core::WallBuild5 wb = katai::core::build_embedded_wall5(mesh, w.seam, toe, dofs, w.pp, w.ip,
+                                                                           w.iface_right, w.iface_left);
+            attach_to_wall(wb.node_r, wb.node_l, wb.dof_x, wb.dof_y);
             const auto ncp = katai::core::iface::nc_points5();
             for (auto& ie : wb.interfaces)
                 for (int q = 0; q < 5; ++q) {
                     const int nd = ie.soil_nodes[ncp[q].node];
                     ie.sigma_n0[q] = fac * eff_sigma_v(mesh.x[nd], mesh.y[nd]);
                 }
-            dofs.fix(wb.dof_phi.front());
             const size_t p0 = structures.plates5.size();
             for (const auto& pe : wb.plates) structures.plates5.push_back(pe);
             const size_t if0 = structures.interfaces5.size();
@@ -1286,14 +1322,15 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             if (structures.interfaces5.size() > if0)
                 iface_diags.push_back({w.name, 15, if0, structures.interfaces5.size()});
         } else {
-            katai::core::WallBuild wb = katai::core::build_embedded_wall(mesh, w.seam, toe, dofs, w.pp, w.ip);
+            katai::core::WallBuild wb = katai::core::build_embedded_wall(mesh, w.seam, toe, dofs, w.pp, w.ip,
+                                                                         w.iface_right, w.iface_left);
+            attach_to_wall(wb.node_r, wb.node_l, wb.dof_x, wb.dof_y);
             const auto ncp = katai::core::iface::nc_points();
             for (auto& ie : wb.interfaces)
                 for (int q = 0; q < 3; ++q) {
                     const int nd = ie.soil_nodes[ncp[q].node];
                     ie.sigma_n0[q] = fac * eff_sigma_v(mesh.x[nd], mesh.y[nd]);
                 }
-            dofs.fix(wb.dof_phi.front());   // remove the toe rotation mode (tied translation, free phi)
             const size_t p0 = structures.plates.size();
             for (const auto& pe : wb.plates) structures.plates.push_back(pe);
             const size_t if0 = structures.interfaces.size();
@@ -1342,6 +1379,61 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         }
         record(sp.si, snap0);
     }
+    // Rebind the structures built above (they came first, by position) onto the wall DOFs.
+    {
+        const auto on_wall = [&wall_dof_at](int n) {
+            return n >= 0 && n < (int)wall_dof_at.size() && wall_dof_at[(size_t)n][0] >= 0;
+        };
+        for (auto& an : structures.anchors) {
+            if (on_wall(an.node_a)) { an.end_dof[0] = wall_dof_at[(size_t)an.node_a][0]; an.end_dof[1] = wall_dof_at[(size_t)an.node_a][1]; }
+            if (on_wall(an.node_b)) { an.end_dof[2] = wall_dof_at[(size_t)an.node_b][0]; an.end_dof[3] = wall_dof_at[(size_t)an.node_b][1]; }
+        }
+        for (auto& ge : structures.geogrids)
+            for (int k = 0; k < 3; ++k)
+                if (on_wall(ge.nodes[k])) {
+                    ge.trans_dof[2 * k + 0] = wall_dof_at[(size_t)ge.nodes[k]][0];
+                    ge.trans_dof[2 * k + 1] = wall_dof_at[(size_t)ge.nodes[k]][1];
+                }
+        // A plain plate meeting the wall (a strut, a slab) shares its translation there -- a
+        // hinged connection, which is what two plates meeting at a node are everywhere else.
+        for (size_t pi = 0; pi < plain_plate_count; ++pi) {
+            auto& pe = structures.plates[pi];
+            for (int k = 0; k < 3; ++k)
+                if (pe.trans_dof[2 * k] < 0 && on_wall(pe.nodes[k])) {
+                    pe.trans_dof[2 * k + 0] = wall_dof_at[(size_t)pe.nodes[k]][0];
+                    pe.trans_dof[2 * k + 1] = wall_dof_at[(size_t)pe.nodes[k]][1];
+                }
+        }
+    }
+    // A JOINT NEEDS GROUND ON BOTH SIDES. Where a phase has excavated the soil on one side of a
+    // wall (or of a soil-soil interface), the nodes there are orphaned and fixed further down,
+    // and the joint would hold the wall against points fixed in space while pressing it with the
+    // earth pressure of the removed soil (its sigma_n0) -- the excavation never unloaded the wall.
+    // Measured on an anchored sheet pile with interfaces: the lower anchor ended in COMPRESSION
+    // (-2.4 kN) because the pit side still pushed. Such a joint is switched off for the phase; it
+    // keeps its place in the arrays, so the phase chain's carried state stays aligned.
+    if (!act.empty()) {
+        const std::vector<char> na = katai::core::active_nodes(mesh, act);
+        const auto live = [&](int n) { return n >= 0 && n < mesh.node_count && na[(size_t)n]; };
+        // The structure side is a wall's own DOF (always there), or a mesh node's: the other soil
+        // of a soil-soil joint, or the bonded side of a one-sided wall -- which the wall holds.
+        std::vector<char> held((size_t)mesh.node_count, 0);
+        for (const auto& p : structures.plates)
+            for (int d : p.trans_dof) if (d >= 0 && d < 2 * mesh.node_count) held[(size_t)(d / 2)] = 1;
+        for (const auto& p : structures.plates5)
+            for (int d : p.trans_dof) if (d >= 0 && d < 2 * mesh.node_count) held[(size_t)(d / 2)] = 1;
+        const auto side_live = [&](int gdof) {
+            return gdof >= 2 * mesh.node_count || live(gdof / 2) || held[(size_t)(gdof / 2)];
+        };
+        for (auto& ie : structures.interfaces) {
+            for (int k = 0; k < 3; ++k)
+                if (!live(ie.soil_nodes[k]) || !side_live(ie.struct_dof[2 * k])) ie.active = false;
+        }
+        for (auto& ie : structures.interfaces5) {
+            for (int k = 0; k < 5; ++k)
+                if (!live(ie.soil_nodes[k]) || !side_live(ie.struct_dof[2 * k])) ie.active = false;
+        }
+    }
     const bool has_interfaces = !structures.interfaces.empty() || !structures.interfaces5.empty();
 
     // Embedded beams (pile rows / nails): a beam line cuts the mesh at any orientation; skin + foot
@@ -1385,8 +1477,16 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             const double t = (double)i / (nbn - 1);
             bx[i] = s.x1 + t * (s.x2 - s.x1); by[i] = s.y1 + t * (s.y2 - s.y1);
         }
-        if (by.front() > by.back()) {   // build_embedded_beam: node 0 = toe (foot) -> deeper (lower y) end
-            std::reverse(bx.begin(), bx.end()); std::reverse(by.begin(), by.end());
+        // build_embedded_beam: node 0 = toe (foot), the end that is NOT the connection point -- the
+        // lower end, and for an exactly horizontal pile the higher-x one, since the connection
+        // point takes the lower-x end there. Ordering by y alone left a horizontal pile drawn
+        // left to right with its foot AT its connection point, and the far end with no base.
+        {
+            double hx = 0.0, hy = 0.0;
+            embedded_connection_point(s, hx, hy);
+            if (bx.front() == hx && by.front() == hy) {   // front is s.(x1,y1) exactly (t = 0)
+                std::reverse(bx.begin(), bx.end()); std::reverse(by.begin(), by.end());
+            }
         }
         // CONNECTION POINT (`conn`). Hinged -- the default when no structure
         // shares the point -- ties the beam's top translations to the mesh node there, which the
@@ -1456,6 +1556,31 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         record(si, snap0);
     }
     const bool has_embedded = !structures.embedded_beams.empty();
+    // AN ANCHOR THAT ENDS ON A FREE PILE PULLS THE PILE. A free connection is the grout body of
+    // a ground anchor: the beam carries the force into the ground through its skin. The anchor
+    // finds its end node by position, like every point attachment, and the mesh node there is
+    // the SOIL -- so the free length used to pull the ground beside the grout body, which then
+    // carried nothing (measured: 0.6-3.8 kN along a grout body behind a 20 kN tieback, whose
+    // free length the model had tied to the soil instead). An end drawn exactly on a free
+    // beam's node takes that node's translations. A hinged beam needs nothing: its connection
+    // node's translations already are the mesh node's.
+    for (size_t ai = 0; ai < structures.anchors.size() && ai < anchor_ends.size(); ++ai) {
+        auto& an = structures.anchors[ai];
+        for (int e = 0; e < 2; ++e) {
+            if (an.end_dof[2 * e] >= 0) continue;   // already on a wall
+            const double px = anchor_ends[ai][2 * e], py = anchor_ends[ai][2 * e + 1];
+            if (px > 1e299) continue;               // a fixed far end
+            for (const auto& eb : structures.embedded_beams) {
+                if (eb.connection != katai::core::ebeam::Connection::Free) continue;
+                for (size_t k = 0; k < eb.node_x.size(); ++k)
+                    if (std::hypot(eb.node_x[k] - px, eb.node_y[k] - py) < 1e-6 &&
+                        eb.dof_x[k] >= 0 && eb.dof_y[k] >= 0) {
+                        an.end_dof[2 * e] = eb.dof_x[k];
+                        an.end_dof[2 * e + 1] = eb.dof_y[k];
+                    }
+            }
+        }
+    }
 
     // Compliant (absorbing) base: only a Dynamic phase that asked for it frees the base u_x --
     // every static phase and the rigid-base dynamic default keep the user's fixities bit-for-bit.
@@ -1542,6 +1667,11 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         const auto carry = [&](int n) { if (n >= 0 && n < mesh.node_count) carried[(size_t)n] = 1; };
         for (const auto& p : structures.plates) for (int n : p.nodes) carry(n);
         for (const auto& p : structures.plates5) for (int n : p.nodes) carry(n);
+        // ... nor a node whose DOFs a plate moves on: the bonded side of a one-sided wall.
+        for (const auto& p : structures.plates)
+            for (int d : p.trans_dof) if (d >= 0 && d < 2 * mesh.node_count) carry(d / 2);
+        for (const auto& p : structures.plates5)
+            for (int d : p.trans_dof) if (d >= 0 && d < 2 * mesh.node_count) carry(d / 2);
         // A twin tied to a node that an active element still holds is not orphaned either: the two
         // are one unknown. Only when neither side has an active element is the pair fixed.
         if (!tied_nodes.empty()) {
@@ -1828,8 +1958,10 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                      dnum(mesh.y[best]) + "), " + dnum(bestd) + " m from where it is drawn (" +
                      dnum(L.x1) + ", " + dnum(L.y1) + ") -- the element there is " +
                      dnum(h_elem) + " m. Refine the mesh there if that matters.");
-        const int ex = dofs.equation(dofs.global_dof(best, 0));
-        const int ey = dofs.equation(dofs.global_dof(best, 1));
+        // A load on the line of an embedded wall acts on the wall, not on the soil beside it.
+        const bool on_wall = wall_dof_at[(size_t)best][0] >= 0;
+        const int ex = dofs.equation(on_wall ? wall_dof_at[(size_t)best][0] : dofs.global_dof(best, 0));
+        const int ey = dofs.equation(on_wall ? wall_dof_at[(size_t)best][1] : dofs.global_dof(best, 1));
         if (ex >= 0) { f[ex] += L.qx1; f_loads[ex] += L.qx1; }
         if (ey >= 0) { f[ey] += L.qy1; f_loads[ey] += L.qy1; }
     }

@@ -136,7 +136,15 @@ namespace katai::model {
 // material law and, measured on the oedometer, often in FEWER Newton iterations rather than more,
 // because the equilibrium iteration stops grinding against integration noise. Either way the
 // older build silently substitutes its own number for the one the file names.
-inline constexpr int kProjectFileVersion = 18;
+// v19 (2026-09): INTERFACE STIFFNESS (`structs[i].iface_kn`, `iface_ks`). Until this a joint's
+// elastic stiffness could only be derived -- R_inter^2 G of the adjacent soil over a virtual
+// thickness of a tenth of an element -- so a joint whose stiffness IS known, from a test, a design
+// guide or a reference solution, could not be given it, and the value the run used moved with the
+// mesh. An older build reads no such key and solves every joint at the derived stiffness: the
+// same drawing with different compliance at the wall, which is the most sensitive place in a
+// retaining-wall model. Written only when set, so every older file is byte-identical below the
+// version line.
+inline constexpr int kProjectFileVersion = 19;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -629,6 +637,8 @@ inline std::string project_to_json(const Project& p) {
         wfield(o, "material", (double)s.material);
         wfield(o, "iface_pos", s.iface_pos); wfield(o, "iface_neg", s.iface_neg);
         wfield(o, "iface_material", (double)s.iface_material);
+        if (s.iface_kn != 0.0) wfield(o, "iface_kn", s.iface_kn);
+        if (s.iface_ks != 0.0) wfield(o, "iface_ks", s.iface_ks);
         wfield(o, "conn", (double)s.conn);
         wfield(o, "flow_barrier", (double)s.flow_barrier);
         wfield(o, "hyd_res", s.hydraulic_resistance);
@@ -896,6 +906,8 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             s.iface_pos = j.flag("iface_pos", false);
             s.iface_neg = j.flag("iface_neg", false);
             s.iface_material = (int)j.num("iface_material", -1);
+            s.iface_kn = j.num("iface_kn", 0.0);
+            s.iface_ks = j.num("iface_ks", 0.0);
             // Connection point of an embedded beam. An unknown value must not land on the
             // default quietly: hinged and free are different structures, not different settings.
             const int cnv = (int)j.num("conn", 0);

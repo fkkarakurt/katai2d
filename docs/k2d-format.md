@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **18** · Current `.res` version: **10**
+Current `.k2d` version: **19** · Current `.res` version: **10**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -43,7 +43,10 @@ of time -- and reports the answer as an ordinary consolidation result.
 , and **v18** the Hoek-Brown rock model
 (`materials[i].model` = 6 and its five parameters `sigci`, `mi`, `gsi`, `hbD`, `sigpsi`), which an
 older build cannot read as anything: the model index is beyond the enum it knows, so the material
-falls back to a placeholder and the rock is analysed as something else entirely.
+falls back to a placeholder and the rock is analysed as something else entirely,
+and **v19** the interface stiffnesses (`structs[i].iface_kn`, `iface_ks`), which an older build
+would ignore and solve every joint at the stiffness it derives from the adjacent soil and the mesh
+-- a different compliance at the wall, the most sensitive place in a retaining-wall model.
 Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
@@ -314,6 +317,8 @@ A gap wider than the tolerance is real geometry and stays empty.
 | `iface_pos` | bool | — | `false` | Positive-side interface attached |
 | `iface_neg` | bool | — | `false` | Negative-side interface attached |
 | `iface_material` | int | — | `-1` | Soil material override for the interfaces (−1 = adjacent soil) |
+| `iface_kn` | num | kN/m³ | `0` | Interface normal stiffness (stress per unit relative normal movement). `0` = derived from the adjacent soil: E_oed,i / t_v with G_i = R_inter² G, ν_i = 0.45 and a virtual thickness t_v of 0.1 × the element length. Written only when set |
+| `iface_ks` | num | kN/m³ | `0` | Interface shear stiffness; `0` = derived, G_i / t_v. Written only when set |
 | `conn` | int | — | `0` | **Embedded beam only** — how the connection point (the pile top: the end with the highest y, or for an exactly horizontal pile the lowest x) is attached. `0` hinged: the beam's top translations *are* the soil's there — the same displacement, with the rotation left free — the setting for a pile top that no other structure shares, and what makes a pile loadable at its head. `1` free: coupled to the soil through the skin springs only, which is the setting for a grout body, so a ground anchor does not shed axial force at the connection. The mesher carries the connection point as a node either way, so switching this changes the physics and not the mesh |
 | `flow_barrier` | int | — | `0` | Cross permeability in a groundwater calculation: 0 fully permeable (no effect on flow), 1 impermeable (the two sides get separate pore-pressure DOFs), 2 semi-permeable (a hydraulic resistance `hyd_res` across the line). Plates and interfaces only |
 | `hyd_res` | num | day | `0` | Hydraulic resistance d/k of a semi-permeable barrier: the head difference divided by the discharge per unit area of wall |

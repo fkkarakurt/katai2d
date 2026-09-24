@@ -275,6 +275,10 @@ NB_MODULE(_core, m) {
         .def_rw("iface_pos", &api::StructElement::iface_pos)
         .def_rw("iface_neg", &api::StructElement::iface_neg)
         .def_rw("iface_material", &api::StructElement::iface_material)
+        .def_rw("iface_kn", &api::StructElement::iface_kn,
+                "interface normal stiffness [kN/m3]; 0 = derived from the adjacent soil")
+        .def_rw("iface_ks", &api::StructElement::iface_ks,
+                "interface shear stiffness [kN/m3]; 0 = derived from the adjacent soil")
         .def_rw("conn", &api::StructElement::conn,
                 "embedded beam only: connection point of the pile top -- 0 hinged (its "
                 "translations are the soil's there; the default), 1 free (coupled through "

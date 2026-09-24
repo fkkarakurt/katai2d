@@ -227,9 +227,8 @@ inline AnchorForce anchor_force(const AnchorElement& an, const mesh::Mesh& mesh,
     if (Lgeom < 1e-30) return {};
     const Eigen::Vector2d dir = dvec / Lgeom;
     const double kk = an.EA / (an.L > 0.0 ? an.L : Lgeom);
-    const int gdof[4] = {dofs.global_dof(an.node_a, 0), dofs.global_dof(an.node_a, 1),
-                         an.node_b >= 0 ? dofs.global_dof(an.node_b, 0) : -1,
-                         an.node_b >= 0 ? dofs.global_dof(an.node_b, 1) : -1};
+    const int gdof[4] = {anchor_dof(an, dofs, 0), anchor_dof(an, dofs, 1),
+                         anchor_dof(an, dofs, 2), anchor_dof(an, dofs, 3)};
     const double g[4] = {-dir(0), -dir(1), dir(0), dir(1)};
     double U = 0.0;
     for (int i = 0; i < 4; ++i)
@@ -262,8 +261,8 @@ inline std::vector<ForceStation> geogrid_force_diagram(
     geogrid::Dof u = geogrid::Dof::Zero();
     for (int k = 0; k < 3; ++k) {
         X(k, 0) = mesh.x[ge.nodes[k]]; X(k, 1) = mesh.y[ge.nodes[k]];
-        u(2 * k + 0) = disp[dofs.global_dof(ge.nodes[k], 0)];
-        u(2 * k + 1) = disp[dofs.global_dof(ge.nodes[k], 1)];
+        u(2 * k + 0) = disp[geogrid_dof(ge, dofs, k, 0)];
+        u(2 * k + 1) = disp[geogrid_dof(ge, dofs, k, 1)];
     }
     const Eigen::Vector2d A(X(0, 0), X(0, 1));
     const auto gxi = geogrid::gauss_xi();
@@ -385,7 +384,10 @@ std::vector<InterfaceStation> interface_diagram_impl(
             InterfaceStation st;
             st.s = s_acc; st.x = x; st.y = y;
             st.slip = du_s; st.gap = du_n;
-            if (elastic) {
+            if (!ie.active) {
+                // The ground on one side is not there in this phase: the joint carries nothing.
+                st.tau = 0.0; st.sigma_n = 0.0; st.slipping = false;
+            } else if (elastic) {
                 // ELASTIC report: τ = k_s·Δu_s, σ_n = k_n·Δu_n — NO Coulomb cap, NO tension
                 // cut-off, NO sigma_n0. For the dynamic (seismic) phase: that system solves
                 // the interface ELASTICALLY (k_n,k_s) and starts from zero (not at rest) →

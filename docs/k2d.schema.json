@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["katai2d"],
   "properties": {
-    "katai2d": { "type": "integer", "minimum": 1, "maximum": 18 },
+    "katai2d": { "type": "integer", "minimum": 1, "maximum": 19 },
     "name": { "type": "string" },
     "axisymmetric": { "type": "boolean" },
     "initial_procedure": { "type": "integer", "minimum": 0, "maximum": 2 },
@@ -231,6 +231,8 @@
         "iface_pos": { "type": "boolean" },
         "iface_neg": { "type": "boolean" },
         "iface_material": { "type": "integer" },
+        "iface_kn": { "type": "number", "minimum": 0 },
+        "iface_ks": { "type": "number", "minimum": 0 },
         "conn": { "type": "integer", "minimum": 0, "maximum": 1 },
         "flow_barrier": { "type": "integer", "minimum": 0, "maximum": 2 },
         "hyd_res": { "type": "number" },

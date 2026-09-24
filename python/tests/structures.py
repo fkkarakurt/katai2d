@@ -111,6 +111,40 @@ text = katai.project_to_json(built)
 back, _ = katai.project_from_json(text)
 check(katai.project_to_json(back) == text, "structures round-trip through the .k2d text exactly")
 
+# A wall's interface: which side, which strength, which stiffness -- all through the
+# public surface. Before this the strength needed prj._structs[...] and the stiffness could
+# not be entered at all.
+pi = katai.Project("Interface data", mesh_size=2.0, auto_refine=False)
+ground = pi.materials.mohr_coulomb("Sand", E=3e4, nu=0.3, c=5, phi=32, gamma=19)
+joint = pi.materials.mohr_coulomb("Joint", E=3e4, nu=0.3, c=0, phi=20, gamma=0)
+pi.geometry.rectangle(0, 0, 20, 10, material=ground)
+pi.structures.plate((10, 10), (10, 2), EA=1e7, EI=1e5, interfaces="positive",
+                    iface_material=joint, iface_kn=1.0e5, iface_ks=1.0e4, name="Sheet")
+pi.structures.interface((2, 10), (2, 4), iface_kn=2.0e5, name="Slip")
+bi = pi.build()
+w = bi.structs[0]
+check(w.iface_pos and not w.iface_neg, "interfaces='positive' puts one on the positive side only")
+check(w.iface_material == joint.index, "iface_material names the joint's strength by handle")
+check(w.iface_kn == 1.0e5 and w.iface_ks == 1.0e4, "the joint's stiffness is entered")
+check(bi.structs[1].iface_kn == 2.0e5 and bi.structs[1].iface_ks == 0.0,
+      "a bare interface takes a stiffness too (0 = derived)")
+check(katai.validate_project(bi).ok(), "and the project satisfies the input contract")
+ti = katai.project_to_json(bi)
+check('"iface_kn":100000' in ti.replace(" ", "") and katai.project_to_json(katai.project_from_json(ti)[0]) == ti,
+      "the stiffness is written and round-trips")
+for bad, why in ((dict(iface_kn=-1.0), "a negative stiffness"),
+                 (dict(iface_material=0), "a bare index instead of a material"),):
+    try:
+        pi.structures.plate((12, 10), (12, 2), EA=1e7, EI=1e5, interfaces="both", **bad)
+        check(False, f"{why} is refused")
+    except (ValueError, TypeError):
+        check(True, f"{why} is refused")
+try:
+    pi.structures.plate((14, 10), (14, 2), EA=1e7, EI=1e5, iface_ks=1e4)
+    check(False, "an interface stiffness on a plate with no interface is refused")
+except ValueError:
+    check(True, "an interface stiffness on a plate with no interface is refused")
+
 # The extent has to contain the elements, or the mesher never sees them: the wall here
 # toes at y = 6 inside the block, but a pile driven BELOW the soil must still fit.
 deep = katai.Project("Deep pile", mesh_size=2.0)

@@ -356,7 +356,8 @@ class _Structures:
         self._prj = prj
 
     def _add(self, kind, a, b, name, material_index, *, barrier=None,
-             resistance=0.0, interfaces=None, coarseness=1.0, conn=None):
+             resistance=0.0, interfaces=None, coarseness=1.0, conn=None,
+             iface_material=None, iface_kn=None, iface_ks=None):
         S = _core.StructElement()
         S.kind = kind
         S.name = name
@@ -374,19 +375,42 @@ class _Structures:
                 raise ValueError("a semi-permeable line needs resistance=d/k [day] > 0")
         if conn is not None:
             S.conn = _pick(_CONNECTION, conn, "connection")
+        # The interface's own strength and stiffness. Strength: the soil material it is reduced
+        # from (a MaterialHandle), instead of the soil beside it. Stiffness [kN/m3]: normal and
+        # shear, instead of the value derived from that soil and the mesh.
+        if iface_material is not None:
+            if not isinstance(iface_material, MaterialHandle):
+                raise TypeError("iface_material must be a material from prj.materials")
+            S.iface_material = iface_material.index
+        for key, v in (("iface_kn", iface_kn), ("iface_ks", iface_ks)):
+            if v is None:
+                continue
+            if not v > 0.0:
+                raise ValueError(f"{key} must be a positive stiffness in kN/m3 (got {v})")
+            setattr(S, key, float(v))
+        if (iface_material is not None or iface_kn is not None or iface_ks is not None) and                 kind != _core.StructKind.Interface and not (S.iface_pos or S.iface_neg):
+            raise ValueError("iface_material / iface_kn / iface_ks describe an interface; "
+                             "give the plate interfaces='both', 'positive' or 'negative'")
         self._prj._structs.append(S)
         return StructHandle(len(self._prj._structs) - 1, name)
 
     def plate(self, a, b, *, EA, EI, w=0.0, nu=0.0, Mp=0.0, Np=0.0,
               elastoplastic=None, name="Plate", interfaces=None, barrier=None,
-              resistance=0.0, coarseness=1.0):
+              resistance=0.0, coarseness=1.0, iface_material=None, iface_kn=None,
+              iface_ks=None):
         """A wall, lining or slab: EA [kN/m], EI [kN m2/m], self-weight w [kN/m/m].
 
         ``Mp`` / ``Np`` (0 = elastic) make it elastoplastic -- the plastic moment
         and axial force it cannot exceed. ``interfaces='both'`` puts a soil-
         structure interface on each side, which is what makes a wall able to slip
-        rather than glue the soil to it. ``barrier='impermeable'`` makes it a
-        groundwater screen ('semi_permeable' needs ``resistance`` = d/k [day])."""
+        rather than glue the soil to it; 'positive' is the side on the right
+        walking from ``a`` to ``b``, 'negative' the left, and a side without an
+        interface is bonded to the wall. The interface takes the strength of the
+        soil beside it reduced by that soil's ``Rinter``, or of ``iface_material``
+        (a material from ``prj.materials``); ``iface_kn`` / ``iface_ks`` [kN/m3]
+        set its normal and shear stiffness (default: derived from that soil).
+        ``barrier='impermeable'`` makes it a groundwater screen
+        ('semi_permeable' needs ``resistance`` = d/k [day])."""
         M = _core.PlateMaterial()
         M.name, M.EA, M.EI, M.w, M.nu = name, EA, EI, w, nu
         M.Mp, M.Np = Mp, Np
@@ -395,9 +419,14 @@ class _Structures:
         # Pass elastoplastic=False explicitly to keep a stated capacity DORMANT.
         M.elastoplastic = (Mp > 0.0 or Np > 0.0) if elastoplastic is None else elastoplastic
         self._prj._plates.append(M)
-        return self._add(_core.StructKind.Plate, a, b, name, len(self._prj._plates) - 1,
-                         barrier=barrier, resistance=resistance, interfaces=interfaces,
-                         coarseness=coarseness)
+        try:
+            return self._add(_core.StructKind.Plate, a, b, name, len(self._prj._plates) - 1,
+                             barrier=barrier, resistance=resistance, interfaces=interfaces,
+                             coarseness=coarseness, iface_material=iface_material,
+                             iface_kn=iface_kn, iface_ks=iface_ks)
+        except (TypeError, ValueError):
+            self._prj._plates.pop()   # a refused plate leaves no orphan material behind
+            raise
 
     def anchor(self, a, b, *, EA, spacing=1.0, prestress=0.0, Fmax_tens=0.0,
                Fmax_comp=0.0, elastoplastic=None, name="Anchor", coarseness=1.0):
@@ -455,13 +484,15 @@ class _Structures:
                          coarseness=coarseness)
 
     def interface(self, a, b, *, name="Interface", barrier=None, resistance=0.0,
-                  coarseness=1.0):
+                  coarseness=1.0, iface_material=None, iface_kn=None, iface_ks=None):
         """A bare soil-structure interface line: it takes the strength of the soil
-        beside it, reduced by that soil's ``Rinter``. Use this for a slip surface
-        that has no structure on it; a wall's own interfaces come from
+        beside it, reduced by that soil's ``Rinter`` -- or of ``iface_material``.
+        ``iface_kn`` / ``iface_ks`` [kN/m3] set its stiffness. Use this for a slip
+        surface that has no structure on it; a wall's own interfaces come from
         ``plate(..., interfaces='both')``."""
         return self._add(_core.StructKind.Interface, a, b, name, -1,
-                         barrier=barrier, resistance=resistance, coarseness=coarseness)
+                         barrier=barrier, resistance=resistance, coarseness=coarseness,
+                         iface_material=iface_material, iface_kn=iface_kn, iface_ks=iface_ks)
 
 
 class _Displacements:
