@@ -241,6 +241,18 @@ inline bool solve_static_phase(
                            "integrator could do within its guard, not the one the tolerance "
                            "asks for; raise the guard (KATAI_HS_MAXSUB) or loosen the "
                            "integration tolerance to make the two agree.");
+    if (nr.stagnation_accepted > 0) {
+        char worst[32];
+        std::snprintf(worst, sizeof(worst), "%.2e", nr.worst_accepted_residual);
+        add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A019", "",
+                       std::to_string(nr.stagnation_accepted) +
+                           " increment(s) stopped converging before the phase's tolerance and "
+                           "were kept at their best iterate, with an out-of-balance force of up "
+                           "to " + std::string(worst) +
+                           " of the load scale. The answer carries that much unbalanced force. "
+                           "Re-run with a finer or coarser mesh, or more load steps, to see "
+                           "whether it moves.");
+    }
     if (!nr.converged) {
         R.message = non_convergence_message(nr);
         return false;

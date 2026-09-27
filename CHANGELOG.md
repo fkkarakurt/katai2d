@@ -6,6 +6,50 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### Cohesionless soil is no longer reported as collapsing, a pushed footing reaches its settlement, and an undrained Safety run is refused
+
+Two plane-strain / axisymmetric phases that stopped while nothing had failed, found by rebuilding
+external worked examples:
+
+| | before | now |
+|---|---|---|
+| smooth rigid wall moved 4 mm from c = 0, φ = 41° sand, 20 steps | "incremental limit (collapse) load" at 1% | full movement; thrust 141.29 kN/m against Rankine's 145.94 (−3.2%, tri6) |
+| same, ψ = 20° | "collapse" at 0% | full movement; 142.04 kN/m (−2.7%) |
+| rigid footing pushed 50 mm into sand (axisymmetric, 15-noded, c = 1, φ = 30°, ψ = 0), 20 steps | out of iterations at 20% | full settlement in 31 s |
+| same, 0.25 m elements | out of iterations at 80% | full settlement, `K2D-A019` |
+
+* **A singular tangent is first asked whether it is a vertex.** With c = 0 the Mohr-Coulomb apex
+  is the stress-free state and its tangent is exactly zero, so a node whose stress points had all
+  lost their stress carried no stiffness and the factorisation refused. Three halvings later the
+  phase printed a collapse load. A refused solve now retries the same increment with the tangent
+  of every such point replaced by 10⁻³ of its elastic operator (`kVertexFloor`), and the phase
+  keeps that floor. Only the tangent changes — the residual an increment must reach is the same —
+  and the answer shows it: 141.29 kN/m at a floor of 10⁻³ and at 10⁻¹. A genuine mechanism still
+  ends in a refusal or a stall.
+* **A prescribed displacement is predicted into the ground.** It entered each increment through
+  the fixed nodes alone, so the first iterate strained one row of elements by the whole increment
+  (out-of-balance force 22 times the reference) and Newton spent its budget walking out of
+  stresses the converged field never has. Each such increment now starts from the linear
+  response to it, `K_ff du = r − Δλ K_fp ū`, with `K_fp ū` measured as the directional derivative
+  of the internal force along the prescribed motion; the start is kept only when its residual is
+  below the plain start's.
+* **A stagnated increment below 10⁻³ is kept and said so (`K2D-A019`).** On refined meshes of
+  perfectly plastic soil Newton can stop descending at ~10⁻³ with a fixed set of plastic points,
+  far from the 10⁻⁶ the Mohr-Coulomb default asks for. An increment that has spent every retry and
+  is about to be cut back is now kept at its best iterate when that iterate is below 10⁻³ of the
+  load scale; the phase reports how many and the worst. Measured on the footing: 0.03% on the
+  mesh where 10⁻⁶ is reachable. The Safety search is exempt (`K2D-A006`).
+* **An undrained soil in a Safety run is refused (`K2D-G017`).** The search re-solves the ground
+  from the unstressed state, so every trial loaded an undrained soil with its whole self-weight,
+  put that weight into the pore water and reported a factor of safety far too low — with no
+  warning. Measured on an embankment on clay rebuilt from a published tutorial (Mohr-Coulomb,
+  c′ = 10 kPa, φ′ = 25°): 1.82 drained against 1.8 published, and 0.73 undrained against 1.4.
+  The drained factor and the phase's "ignore undrained behaviour" still run; a short-term factor
+  needs the search to start from the parent phase, which is not done yet. Undrained (B), whose
+  strength does not read the effective stress, is not refused.
+* New test `test_python_solver_robustness` (Rankine thrust; footing force the same at 20 and 60
+  steps, −0.08%; the undrained Safety refusal and both of its remedies).
+
 ### A wall with interfaces carries what is drawn on it, and an excavation unloads it
 
 An anchored sheet pile with interfaces on both sides, rebuilt from a published worked example

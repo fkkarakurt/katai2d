@@ -111,6 +111,16 @@ set_tests_properties(test_python_structures PROPERTIES
   LABELS "python;api;model"
   ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
 
+# Two prescribed-displacement phases that used to fail while nothing had failed: c = 0 sand
+# reported as collapsing at a singular tangent, and a footing out of iterations after a first
+# iterate that strained one row of elements by the whole increment. Checked against Rankine
+# and against the same footing at three times the load steps.
+add_test(NAME test_python_solver_robustness
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/solver_robustness.py)
+set_tests_properties(test_python_solver_robustness PROPERTIES
+  LABELS "python;analysis;slow"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
 # The schema-coverage gate: every key the .k2d writer emits must be reachable,
 # faithful and writable through the bindings. The key universe is extracted by
 # importing check_k2d_spec.py itself, so this gate and the format gate can never

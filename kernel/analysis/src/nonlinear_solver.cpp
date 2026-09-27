@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -197,6 +198,8 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     // value cur_target·ū.
     const bool has_presc = presc.size() == dofs.total_dofs();
     const bool has_cf = constant_force.size() == neq;
+    // A prescribed displacement that actually moves something: the predictor below is for it.
+    const bool presc_active = has_presc && presc.lpNorm<Eigen::Infinity>() > 0.0;
     double cur_lambda = 0.0, cur_target = 0.0;
 
     // HYBRID HS TANGENT POLICY: increments start with the fast CONTINUUM tangent; if an
@@ -230,6 +233,18 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             break;
         }
     bool hs_consistent_mode = false;
+    // Set once the linear solver has refused a tangent: from then on the phase assembles with the
+    // vertex floor (InternalForceAssembler::vertex_floor). A refusal used to go straight to cutting
+    // the increment back, and three refusals in a row were reported as a collapse load. Measured on
+    // a rigid wall translated away from a cohesionless backfill (c = 0, phi = psi = 41, tri6): the
+    // phase stopped at 1% of a 4 mm movement and called it a collapse; with the floor it carries
+    // the whole movement to 3.2% of Rankine's active thrust (0.16% on 15-noded elements, where the
+    // old code happened to pass). Nothing had failed: points at the stress-free apex carry a zero
+    // tangent, and a node surrounded by them has no stiffness at all. The answer does not depend
+    // on the floor: 141.29 kN/m at 1e-3 and at 1e-1. A mechanism is not removed by it -- the floor adds
+    // stiffness only where the exact tangent is identically zero, and the residual is unchanged --
+    // so a genuine limit load still ends in a refusal or a stall, now on its own merits.
+    bool vertex_floor_mode = false;
     // Once an increment has been abandoned for a stalled line search, the phase judges every
     // attempt from then on against the worst of the last few residuals instead of the latest.
     bool ls_open = false;
@@ -280,6 +295,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         // The time share is proportional to this increment's Δλ (SoftSoilCreep; time_interval=0 → 0, old path).
         fasm.dt_day = options.time_interval * std::max(0.0, cur_target - cur_lambda);
         fasm.substep_tol = options.substep_tolerance;
+        fasm.vertex_floor = vertex_floor_mode ? kVertexFloor : 0.0;
         return fasm.assemble(u_struct, du_free, build_tangent, tmode, astate, ramp, builder,
                              &result.timings);
     };
@@ -366,6 +382,55 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         Eigen::VectorXd du_free = Eigen::VectorXd::Zero(neq);
         prev_sc = committed;  // sigma_c,0 = sigma_0, where the iteration's stress walk starts
         std::fill(prev_deps.begin(), prev_deps.end(), 0.0);
+        // Set when the predictor below moved the start. Such a start is not accepted as it stands:
+        // its out-of-balance force can already be under the tolerance -- on a linear problem it
+        // always is -- while carrying the rounding of the directional derivative, measured at
+        // 1e-8 of a plate moment that one Newton correction returns to 1e-15. So at least one
+        // correction is taken from it.
+        bool predicted = false;
+        if (presc_active) {
+            // THE DISPLACEMENT PREDICTOR. A prescribed displacement enters an increment through
+            // the fixed DOFs alone, so the first iterate is the committed field with only those
+            // nodes moved: the whole increment is taken up by the one row of elements touching
+            // them. Measured on a rigid footing pushed into sand (axisymmetric, 15-noded, c = 1,
+            // phi = 30, psi = 0): that iterate carried an out-of-balance force 22 times the
+            // reference, hundreds of stress points were returned from strains the converged
+            // field never has, and Newton spent about 25 iterations walking out of that state
+            // before converging quadratically in five -- so at 20 load steps the phase ran out
+            // of iterations at 20% of the settlement, and at 100 steps at 37%.
+            //
+            // The predictor moves the free DOFs by the linear response to the increment first:
+            // K_ff(committed) du = r(committed) - dlam * K_fp u_bar. K_fp u_bar is not assembled
+            // anywhere -- the structural elements scatter free rows only -- so it is measured as
+            // the directional derivative of the internal force along the prescribed motion, a
+            // one-sided difference at the committed state. The start is KEPT only if its
+            // out-of-balance force is below the plain start's, so no increment starts worse than
+            // it did before, and what Newton converges to is decided by the residual, not by
+            // where it started.
+            const double tgt = cur_target;
+            const double step = tgt - lambda;
+            const double eps = 1.0e-5 * step;
+            cur_target = lambda;  // the committed state: no prescribed increment yet
+            builder.clear();
+            const Eigen::VectorXd f0 = assemble(du_free, true, &builder);
+            const math::CsrMatrix& k0 = builder.build_cached(kt_cache);
+            cur_target = lambda + eps;
+            const Eigen::VectorXd f_eps = assemble(du_free, false, nullptr);
+            const Eigen::VectorXd r_lin = (target - f0) - (step / eps) * (f_eps - f0);
+            cur_target = tgt;
+            const double r_plain = (target - assemble(du_free, false, nullptr)).norm();
+            try {
+                const Eigen::VectorXd du0 = linear_solve(k0, r_lin);
+                const double r_pred = (target - assemble(du0, false, nullptr)).norm();
+                if (du0.allFinite() && r_pred < r_plain) {
+                    du_free = du0;
+                    predicted = true;
+                }
+            } catch (const math::SingularSystem&) {
+                // No predictor at a singular committed tangent; the plain start stands.
+            }
+            ++result.timings.n_solve;
+        }
         // A traction has no committed value stored anywhere -- the structural elements are
         // total-displacement formulations, so the state at the start of an increment is
         // whatever the first assembly of that increment computes. It is recorded there.
@@ -379,6 +444,9 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         int ls_window = ls_open ? std::max(kStallEscalationWindow, options.line_search_window)
                                 : std::max(1, options.line_search_window);
         bool step_converged = false;
+        // The best iterate this attempt reached, for the stagnation acceptance below.
+        double best_rnorm = std::numeric_limits<double>::infinity();
+        Eigen::VectorXd best_du = du_free;
         // How this increment ended, if it did not converge. Set at each exit from the
         // iteration loop so the abandonment is named where it happens rather than
         // guessed afterwards from the iteration count.
@@ -398,6 +466,10 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             const Eigen::VectorXd f_int = assemble(du_free, true, &builder, &probe);
             const Eigen::VectorXd residual = target - f_int;
             const double rnorm = residual.norm();
+            if (rnorm < best_rnorm) {
+                best_rnorm = rnorm;
+                best_du = du_free;
+            }
             measure_convergence(probe, f_int, residual, rnorm, cf_norm, ref, rtol,
                                 result.convergence);
             // The history is kept to the LARGEST window this increment could ever use, and only
@@ -424,7 +496,8 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             }
             const bool global_ok =
                 csp_gate ? result.convergence.force_ok() : (rnorm <= rtol * ref);
-            if (global_ok && (!enforce_local || result.convergence.enforced_ok())) {
+            if (global_ok && (!enforce_local || result.convergence.enforced_ok()) &&
+                !(predicted && iter == 0)) {
                 // This iterate is the one about to be committed, so its integration is the one
                 // the answer is walked along: record the guard here and nowhere else. Trial
                 // iterates that were discarded are not part of the path and do not count.
@@ -521,6 +594,27 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             du_free += alpha * delta;
         }
 
+        // STAGNATION ACCEPTANCE. Only an increment that is about to be CUT BACK is looked at --
+        // every retry above still gets its chance first, so a run that converged before this rule
+        // existed converges on exactly the same path. See kStagnationAccept for the measurement.
+        const bool would_cut_back =
+            !step_converged &&
+            !(ended == NewtonResult::Abandonment::SolveRefused && !vertex_floor_mode) &&
+            !(has_fd_tangent && !hs_consistent_mode) &&
+            !(ended == NewtonResult::Abandonment::NoDescent && !ls_open);
+        if (would_cut_back && ended != NewtonResult::Abandonment::SolveRefused &&
+            rtol < kStagnationAccept && best_rnorm <= kStagnationAccept * ref) {
+            du_free = best_du;
+            assemble(du_free, false, nullptr);  // the trial states of the iterate being kept
+            ++result.stagnation_accepted;
+            result.worst_accepted_residual =
+                std::max(result.worst_accepted_residual, best_rnorm / ref);
+            step_converged = true;
+            if (debug)
+                std::fprintf(stderr, "  lambda %.4f: stagnated at %.3e of the reference; accepted\n",
+                             target_lambda, best_rnorm / ref);
+        }
+
         if (step_converged) {
             hs_consistent_mode = false;  // increment closed → back to the cheap continuum path
             u_free += du_free;
@@ -537,6 +631,15 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             lambda = target_lambda;
             result.load_factor = lambda;
             dlam = std::min(init_dlam, dlam * 1.5);  // allow recovery
+        } else if (ended == NewtonResult::Abandonment::SolveRefused && !vertex_floor_mode) {
+            // A refused solve is first asked whether it was a vertex and not a mechanism: the SAME
+            // increment is retried with the floor on and dlam untouched, and the phase keeps the
+            // floor, the same latch as the two retries below and for the same reason.
+            vertex_floor_mode = true;
+            ++result.vertex_floor_retries;
+            if (debug)
+                std::fprintf(stderr, "  lambda %.4f: tangent refused; retrying the increment with "
+                                     "the vertex floor (dlam untouched)\n", lambda);
         } else if (has_fd_tangent && !hs_consistent_mode) {
             // Hybrid tangent: continuum failed to converge this increment → retry the SAME
             // increment with the consistent (FD) tangent without touching dlam; the

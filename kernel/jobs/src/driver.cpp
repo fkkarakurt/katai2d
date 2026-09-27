@@ -2356,6 +2356,42 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                            "factor of safety without it.");
                 return R;
             }
+            // AN UNDRAINED SOIL CANNOT ENTER A SAFETY RUN THAT STARTS FROM THE UNSTRESSED STATE.
+            // Every trial of the search applies the whole self-weight again from zero, and an
+            // undrained material turns that loading into excess pore pressure: the ground's own
+            // weight ends up in the water, the effective stress -- and with it the frictional
+            // strength -- is a fraction of the one the phases built, and the factor of safety
+            // comes out far too LOW. Measured on an embankment on clay rebuilt from a published
+            // tutorial (Mohr-Coulomb, c' = 10, phi' = 25): 1.82 drained against 1.8 published,
+            // and 0.73 with the clay undrained against 1.4 published -- reported with no warning.
+            // The undrained factor belongs to the pore pressures the construction generated on
+            // top of a drained geostatic state, which is what a search started from the parent
+            // phase would read; this build does not start there yet (P1-S2).
+            // silent-drop-scope: none -- this loop only looks for an undrained material to
+            // refuse; it builds nothing.
+            for (int e = 0; e < mesh.element_count; ++e) {
+                if (!act.empty() && !act[e]) continue;
+                const int mi = mesh.element_material[e];
+                if (mi < 0 || mi >= (int)models.size()) continue;
+                const auto& mm = models[(size_t)mi];
+                // Undrained (B) -- c_u with phi = 0 -- is not caught: its strength does not read
+                // the effective stress, so the pore pressure the reloading puts in it moves nothing.
+                if (!mm.undrained || mm.ignore_undrained || !(mm.friction_angle > 1e-9)) continue;
+                const std::string name =
+                    mi < (int)pr.materials.size() ? pr.materials[(size_t)mi].name : std::string();
+                refuse(R, "K2D-G017", name,
+                       "Material \"" + name + "\" is undrained and active in a Safety analysis. "
+                       "The strength-reduction search in this build re-solves the ground from "
+                       "the unstressed state, so every trial loads an undrained soil with its "
+                       "whole self-weight: that weight is carried by excess pore pressure, the "
+                       "effective stress is far below the one the phases built, and the factor "
+                       "of safety would come out far too low. For the long-term factor, run the "
+                       "Safety phase with the material drained (or set the phase to ignore "
+                       "undrained behaviour); a short-term factor from the construction's excess "
+                       "pore pressures needs the search to start from the parent phase, which "
+                       "this build does not do yet.");
+                return R;
+            }
             // What starting from the unstressed state means once structures are in it, said
             // whenever one is: a structure is present from the first increment of every trial, so
             // it also carries whatever the ground's settlement under its own weight does to it --

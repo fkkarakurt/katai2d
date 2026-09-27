@@ -360,6 +360,13 @@ public:
     // material properties: a tolerance published as a soil parameter is the mistake this tree has
     // already made once.
     double substep_tol = 0.0;
+    // A fraction of the ELASTIC operator substituted for a tangent that came back exactly zero
+    // (a stress point returned to a vertex of its yield surface). 0 = off, the exact tangent,
+    // which is what every solve uses until the linear solver refuses one: then the Newton loop
+    // retries that increment with the floor on. Only the tangent changes -- the internal force,
+    // and therefore the residual an increment has to drive to tolerance, is exactly the same,
+    // so a floor can change how an answer is reached and never what the answer is.
+    double vertex_floor = 0.0;
 
     // Internal-force (and, if build_tangent, consistent-tangent) assembly. Since Δε = B·du_e,
     // f_int is a pure function of du_free (of u_free+du_free for structural elements) given
@@ -487,9 +494,19 @@ public:
                     mp = &mg;
                 }
                 const MaterialModel& matg = *mp;
-                if (probe) rep = typename Kin::Report{};
+                const bool floor_here = build_tangent && vertex_floor > 0.0;
+                if (probe || floor_here) rep = typename Kin::Report{};
                 Kin::integrate(matg, committed[gi], dstrain, trial[gi], dt, tm, dt_day,
-                               probe ? &rep : nullptr, substep_tol);
+                               (probe || floor_here) ? &rep : nullptr, substep_tol);
+                // A point returned to a VERTEX -- the Mohr-Coulomb apex, the tension apex --
+                // hands back a tangent that is exactly zero, which is the correct derivative:
+                // the returned stress there does not depend on the strain at all. With c = 0
+                // the apex is the stress-free state, so every point that has lost contact
+                // carries no stiffness, and a node surrounded by such points makes K_T
+                // singular without any mechanism having formed. See vertex_floor.
+                if (floor_here && rep.plastic &&
+                    dt.cwiseAbs().maxCoeff() <= 1.0e-12 * rep.elastic.cwiseAbs().maxCoeff())
+                    dt = vertex_floor * rep.elastic;
                 typename Kin::Strain sigma = Kin::stress(trial[gi]);
                 if (probe) {
                     LocalErrorPartial& acc = probe_buf_[e];

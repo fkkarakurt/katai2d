@@ -42,6 +42,21 @@ enum class Kinematics { PlaneStrain, Axisymmetric };
 // Why it is not simply the default is measured in NewtonOptions::line_search_window.
 inline constexpr int kStallEscalationWindow = 5;
 
+// The fraction of the elastic operator a stress point at a yield-surface vertex is given once the
+// linear solver has refused a tangent (InternalForceAssembler::vertex_floor). It changes the path
+// Newton takes and never the residual it has to reach, so it is chosen for iteration count only.
+inline constexpr double kVertexFloor = 1.0e-3;
+
+// The out-of-balance force, relative to the phase's load scale, below which an increment that
+// has STAGNATED -- every retry spent, about to be cut back -- is kept at its best iterate instead.
+// Measured on a rigid footing pushed into sand (axisymmetric, 15-noded, c = 1, phi = 30, psi = 0):
+// on refined meshes Newton stopped descending at ~1.5e-3 with a constant set of plastic points,
+// hundreds of iterations short of the 1e-6 the Mohr-Coulomb default asks for, and the phase was
+// cut back to failure. Accepting at 1e-3 moved the footing force 0.03% on the mesh where 1e-6 is
+// reachable, and a tolerance of 1e-2 moved it 0.6% on the one where it is not. Never silent: every
+// acceptance is counted and the phase says so (K2D-A019).
+inline constexpr double kStagnationAccept = 1.0e-3;
+
 struct NewtonOptions {
     int load_steps = 1;       // (initial) number of steps the external load is split into
     int max_iterations = 50;  // maximum iterations per step
@@ -364,6 +379,15 @@ struct NewtonResult {
     // different answer for it, must be able to say so. Zero on the overwhelming majority of runs,
     // which is what makes a non-zero one worth reading.
     int line_search_escalations = 0;
+    // Refused solves that were retried with the vertex floor (kVertexFloor) before the increment
+    // was cut back: at most one per solve, because the floor then stays on. Non-zero means the
+    // tangent went singular somewhere and the phase went on with the floor.
+    int vertex_floor_retries = 0;
+    // Increments kept at a stagnated iterate (kStagnationAccept), and the largest relative
+    // out-of-balance force any of them was kept at. Zero on a run that met its tolerance
+    // everywhere; otherwise the answer carries that much unbalanced force and the phase says so.
+    int stagnation_accepted = 0;
+    double worst_accepted_residual = 0.0;
     // The reason the last abandoned increment ended. When the solve did not converge
     // this is the increment that reached the minimum size and stopped it; on a solve
     // that did converge it names an increment that was abandoned and then recovered by
