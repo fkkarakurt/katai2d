@@ -111,6 +111,14 @@ set_tests_properties(test_python_structures PROPERTIES
   LABELS "python;api;model"
   ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
 
+# A phase inherits what the phase before it switched off: an excavated region, a structure
+# not yet installed. An empty activation vector means "everything active" to the engine.
+add_test(NAME test_python_phase_inheritance
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/phase_inheritance.py)
+set_tests_properties(test_python_phase_inheritance PROPERTIES
+  LABELS "python;api"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
 # Two prescribed-displacement phases that used to fail while nothing had failed: c = 0 sand
 # reported as collapsing at a singular tangent, and a footing out of iterations after a first
 # iterate that strained one row of elements by the whole increment. Checked against Rankine

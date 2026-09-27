@@ -908,8 +908,7 @@ class Project:
                 setattr(initial, field, value)
         pr.initial = initial
 
-        # Staged phases: inherit the previous phase's effective state; write only
-        # the vectors a toggle touches.
+        # Staged phases: inherit the previous phase's effective state.
         phases = []
         for ph, activate, deactivate in self._phase_toggles:
             touched_loads = touched_polys = touched_disps = False
@@ -933,15 +932,23 @@ class Project:
                     touched_structs = True
                 else:
                     raise ValueError(f"cannot toggle {h!r}")
-            if touched_loads:
+            # An EMPTY vector means "everything active" to the engine (Phase::active_poly), not
+            # "as the phase before" -- so a vector is written whenever the inherited state has
+            # anything switched off, touched or not. Writing it only when this phase toggled
+            # something brought an excavated region back in the next phase that did not mention
+            # regions: measured on a linear-elastic block, the excavation floor heaved 13.3 mm and
+            # the following phase, which changed nothing, settled it 12.9 mm back. Installed
+            # structures and switched-off loads came back the same way. A class with everything
+            # active still writes nothing, so a file without deactivations is byte-identical.
+            if touched_loads or 0 in load_state:
                 ph.load_active = list(load_state)
-            if touched_polys:
+            if touched_polys or 0 in poly_state:
                 ph.poly_active = list(poly_state)
-            if touched_disps:
+            if touched_disps or 0 in disp_state:
                 ph.disp_active = list(disp_state)
-            if touched_hydros:
+            if touched_hydros or 0 in hydro_state:
                 ph.hydro_active = list(hydro_state)
-            if touched_structs:
+            if touched_structs or 0 in struct_state:
                 ph.struct_active = list(struct_state)
             # A phase's horizontal water table spans the model, like the project's own.
             if ph.water_override and not ph.wx:

@@ -6,6 +6,33 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A script phase no longer brings back what an earlier phase excavated
+
+Found by rebuilding a published deep-excavation benchmark (Berlin sand, anchored diaphragm wall
+with interfaces, dewatering, four excavation stages) from a Python script.
+
+* **Activation was not inherited by the script surface.** `prj.phases` promises that a phase lists
+  only what it changes, but a phase's activation vector was written only when that phase toggled
+  something of that class — and to the engine an empty vector means *everything active*, not *as
+  before*. So the first phase after an excavation that did not mention regions put the excavated
+  soil back, and any phase that did not mention structures switched on every structure not yet
+  installed, prestressed anchors included. Measured on a linear-elastic block: the excavation
+  heaved its floor 13.3 mm and the next phase, which changed nothing, settled it 12.9 mm back. In
+  the benchmark every anchor stage undid the excavation before it and the wall moved *away* from
+  the pit. A vector is now written whenever the inherited state has anything switched off; a
+  file with no deactivation is byte-identical to before. Files written by the GUI were not
+  affected. New test `test_python_phase_inheritance` (fails on the old surface: 14.2 mm of
+  movement in a phase that changes nothing).
+* **The vertex floor is added to every plastic stress point, not substituted for a zero tangent.**
+  In the same benchmark the first anchor's prestress phase stopped at 90% as a "collapse" with the
+  soil elastic everywhere except at the top of the wall, where cohesionless points sat in the
+  corner and tension regions of the yield surface: rank-deficient tangents that are not zero, which
+  the floor did not touch. With the floor added to every plastic point once a tangent has been
+  refused, all eleven phases complete. Only the tangent changes; the residual is the same.
+* The Python `displacement` of a result now says what it is: what that phase did — the increment
+  of a plastic or consolidation phase, the peak of a dynamic phase, the mechanism of a Safety
+  phase — not the total since the start.
+
 ### Cohesionless soil is no longer reported as collapsing, a pushed footing reaches its settlement, and an undrained Safety run is refused
 
 Two plane-strain / axisymmetric phases that stopped while nothing had failed, found by rebuilding

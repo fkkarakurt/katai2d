@@ -761,7 +761,11 @@ NB_MODULE(_core, m) {
                      "not return for the strains they were given, and the force residual cannot "
                      "see that because it is assembled from those stresses")
         .def_prop_ro("displacement", [](const api::SolveResult& r) { return r.disp; },
-                     "full DOF vector (2*node_count), [m] -- copied to numpy")
+                     "what THIS phase did, not the total since the start: nodal [ux, uy] "
+                     "(2*node_count), [m], copied to numpy. A plastic or consolidation phase "
+                     "reports its increment -- the total after phase k is the sum of those up "
+                     "to it, which is the GUI's 'cumulative' view; a dynamic phase reports its "
+                     "peak, a Safety phase the mechanism of the last stable trial")
         .def_prop_ro("pore", [](const api::SolveResult& r) { return r.pore; },
                      "nodal pore pressure [kN/m2]")
         .def_prop_ro("node_x", [](const api::SolveResult& r) { return r.mesh.x; })

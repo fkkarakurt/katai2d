@@ -42,8 +42,8 @@ enum class Kinematics { PlaneStrain, Axisymmetric };
 // Why it is not simply the default is measured in NewtonOptions::line_search_window.
 inline constexpr int kStallEscalationWindow = 5;
 
-// The fraction of the elastic operator a stress point at a yield-surface vertex is given once the
-// linear solver has refused a tangent (InternalForceAssembler::vertex_floor). It changes the path
+// The fraction of the elastic operator added to every plastic stress point's tangent once the
+// linear solver has refused one (InternalForceAssembler::vertex_floor). It changes the path
 // Newton takes and never the residual it has to reach, so it is chosen for iteration count only.
 inline constexpr double kVertexFloor = 1.0e-3;
 

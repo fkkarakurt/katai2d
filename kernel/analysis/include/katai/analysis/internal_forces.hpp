@@ -360,8 +360,9 @@ public:
     // material properties: a tolerance published as a soil parameter is the mistake this tree has
     // already made once.
     double substep_tol = 0.0;
-    // A fraction of the ELASTIC operator substituted for a tangent that came back exactly zero
-    // (a stress point returned to a vertex of its yield surface). 0 = off, the exact tangent,
+    // A fraction of the ELASTIC operator added to the tangent of every plastic stress point
+    // (below: a vertex returns a tangent of exactly zero, its neighbours a rank-deficient one).
+    // 0 = off, the exact tangent,
     // which is what every solve uses until the linear solver refuses one: then the Newton loop
     // retries that increment with the floor on. Only the tangent changes -- the internal force,
     // and therefore the residual an increment has to drive to tolerance, is exactly the same,
@@ -503,10 +504,14 @@ public:
                 // the returned stress there does not depend on the strain at all. With c = 0
                 // the apex is the stress-free state, so every point that has lost contact
                 // carries no stiffness, and a node surrounded by such points makes K_T
-                // singular without any mechanism having formed. See vertex_floor.
-                if (floor_here && rep.plastic &&
-                    dt.cwiseAbs().maxCoeff() <= 1.0e-12 * rep.elastic.cwiseAbs().maxCoeff())
-                    dt = vertex_floor * rep.elastic;
+                // singular without any mechanism having formed. The corners and the tension
+                // regions next to it are rank-deficient without being zero, and near a free
+                // surface of cohesionless soil every one of them is present at once: measured
+                // at the top of an embedded wall, where the tangent went singular with the soil
+                // otherwise elastic and not one stress point at the apex. So the floor is added
+                // to every plastic point's tangent, not substituted for a zero one. See
+                // vertex_floor.
+                if (floor_here && rep.plastic) dt += vertex_floor * rep.elastic;
                 typename Kin::Strain sigma = Kin::stress(trial[gi]);
                 if (probe) {
                     LocalErrorPartial& acc = probe_buf_[e];
