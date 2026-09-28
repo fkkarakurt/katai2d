@@ -25,6 +25,15 @@ struct StrengthReductionOptions {
     double srf_max = 2.5;        // assumed unstable upper bracket
     int bisection_iterations = 12;
     NewtonOptions newton{};      // per-trial nonlinear solve controls
+    // INCREMENTAL strength reduction (safety_analysis): the ground is brought to equilibrium
+    // under its own weight ONCE, at full strength, and the strength is then reduced step by step
+    // from each converged state -- the step growing while it converges and halving when it does
+    // not -- until a step of fos_resolution x SRF fails. The factor of safety is the middle of
+    // that last bracket. Off (or KATAI_SRM_BISECTION set, or anything the incremental path does
+    // not carry) falls back to the bisection, which solves every trial from the unstressed state.
+    bool incremental = true;
+    double msf_step = 0.1;           // the first strength-reduction increment
+    double fos_resolution = 1e-3;    // relative width of the final bracket
 };
 
 // Bisect the strength reduction factor to the slope's factor of safety. The base

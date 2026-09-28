@@ -199,16 +199,22 @@ void test_local_criteria_cost() {
                 loose.umax, 100.0 * d_loose, bound.umax, 100.0 * d_bound, tight.umax,
                 loose.iterations, bound.iterations, tight.iterations);
 
-    // Both directions, so neither half can pass vacuously: the global-only stop at the shipped
-    // tolerance MISSES the converged answer, and binding the local criteria at the same
-    // tolerance FINDS it.
-    check(d_loose > 5e-4,
-          "the shipped tolerance, global criterion only, stops more than 0.05% short");
+    // RE-MEASURED 2026-09-27. Until then the global-only stop at the shipped tolerance missed the
+    // converged answer by more than 0.05%, and binding the local criteria found it for fewer
+    // iterations than tightening the global tolerance: the Newton iteration converged linearly,
+    // because the Hardening Soil tangent was not the derivative of the stress update (the shear
+    // yield gradient lacked its sigma3 term). With that term the returned tangent equals the
+    // finite-difference one, the iteration is quadratic, and the global-only stop lands 0.0002%
+    // from the four-decades-tighter answer. What survives is the half that did not depend on
+    // the defect: the criteria find the converged answer, at no more cost than tightening.
+    check(d_loose < 5e-4,
+          "the shipped tolerance, global criterion only, is within 0.05% of the converged answer "
+          "now that the iteration is quadratic");
     check(d_bound < 5e-4,
           "binding the local criteria at the SAME tolerance lands within 0.05% of the "
           "four-decades-tighter answer");
-    check(bound.iterations < tight.iterations,
-          "and it gets there in fewer iterations than tightening the global tolerance costs");
+    check(bound.iterations <= tight.iterations,
+          "and it costs no more iterations than tightening the global tolerance");
 
     // What it costs where it buys nothing: the criteria must not be free to ignore, but they
     // must also not be paid for twice. The loose run is the one that was wrong, so the extra

@@ -22,6 +22,16 @@ public:
 
     int width() const { return nthreads_; }
 
+    // The pool serves ONE job at a time. A second thread asking while a job is running used to
+    // write its own job over the first one's -- the function, the range and the count of
+    // workers still out -- so the workers ran pieces of the wrong job, the count never came back
+    // to zero, and two jobs solved concurrently in one process hung or crashed (measured: 8 copies
+    // of test_jobs in parallel, most rounds hung and some segfaulted). Whoever finds it busy runs
+    // the whole range on its own thread instead; every caller writes only to per-index storage,
+    // so the answer is the same either way.
+    bool try_acquire() { return busy_.try_lock(); }
+    void release() { busy_.unlock(); }
+
     // Split [0,n) into nthreads_ fixed contiguous blocks; block 0 on the caller,
     // 1..nthreads_-1 on the workers. On return all blocks have finished.
     void run(int n, const std::function<void(int, int)>& fn) {
@@ -101,6 +111,7 @@ private:
     }
 
     int nthreads_ = 1;
+    std::mutex busy_;
     std::vector<std::thread> workers_;
     std::mutex m_;
     std::condition_variable cv_work_, cv_done_;
@@ -121,7 +132,16 @@ void parallel_for(int n, const std::function<void(int, int)>& fn) {
         fn(0, n);
         return;
     }
-    Pool::instance().run(n, fn);
+    Pool& pool = Pool::instance();
+    if (!pool.try_acquire()) {
+        fn(0, n);
+        return;
+    }
+    struct Release {
+        Pool& p;
+        ~Release() { p.release(); }
+    } release{pool};
+    pool.run(n, fn);
 }
 
 int parallel_threads() {

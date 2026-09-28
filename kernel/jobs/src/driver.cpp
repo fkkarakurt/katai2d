@@ -1665,8 +1665,20 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     if (!act.empty()) {
         std::vector<char> carried(mesh.node_count, 0);
         const auto carry = [&](int n) { if (n >= 0 && n < mesh.node_count) carried[(size_t)n] = 1; };
-        for (const auto& p : structures.plates) for (int n : p.nodes) carry(n);
-        for (const auto& p : structures.plates5) for (int n : p.nodes) carry(n);
+        // Only where the plate MOVES ON the node's own DOFs. A wall with interfaces stands on DOFs
+        // of its own (trans_dof) and reaches the soil node beside it only through the interface;
+        // once a phase has removed the ground on both sides and the interface with it, that node
+        // is held by nothing. Counting it as carried left it unfixed -- a zero row in the
+        // stiffness, which PARDISO passed by perturbing the pivot and handing the node an
+        // arbitrary displacement, and which the portable backend rightly refused.
+        for (const auto& p : structures.plates)
+            for (int k = 0; k < 3; ++k)
+                if (p.trans_dof[(size_t)(2 * k)] < 0 || p.trans_dof[(size_t)(2 * k + 1)] < 0)
+                    carry(p.nodes[(size_t)k]);
+        for (const auto& p : structures.plates5)
+            for (int k = 0; k < 5; ++k)
+                if (p.trans_dof[(size_t)(2 * k)] < 0 || p.trans_dof[(size_t)(2 * k + 1)] < 0)
+                    carry(p.nodes[(size_t)k]);
         // ... nor a node whose DOFs a plate moves on: the bonded side of a one-sided wall.
         for (const auto& p : structures.plates)
             for (int d : p.trans_dof) if (d >= 0 && d < 2 * mesh.node_count) carry(d / 2);
@@ -2457,9 +2469,13 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 warn(R, "K2D-A006", "Safety",
                      "This Safety phase is asked for a tolerated error of " +
                          dnum(io.numeric.tolerance) +
-                         ", looser than the strength-reduction search's own 1e-3. The factor of "
-                         "safety it reports will be too HIGH, not merely less precise: measured "
-                         "on the Griffiths and Lane benchmark, +2.0% at 1e-2 and +45.6% at 1e-1.");
+                         ", looser than the strength-reduction search's own 1e-3. It governs the "
+                         "self-weight solve only: every strength-reduction step is held to 1e-3, "
+                         "because a step accepted early carries its out-of-balance force into the "
+                         "next and the factor would come out too HIGH (measured on the Griffiths "
+                         "and Lane benchmark: +26% at 1e-1 before the steps were held). A search "
+                         "that carries structural elements solves independent trials instead, "
+                         "where a looser rule inflates the factor by up to +0.6% at 1e-1.");
             if (!katai::core::solve_safety_phase(mesh, dofs, models, profiles, f, solver,
                                                  structures, sfin, R))
                 return R;

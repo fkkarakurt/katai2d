@@ -53,10 +53,11 @@ void test_berlin_triaxial() {
     // Parameterised by the integration tolerance, because the distance from the plateau is a
     // function of it -- see the plateau check below.
     double q50_err = -1.0, epsv_max_contr = 0.0, epsv_final = 0.0, q_final = 0.0;
-    const auto walk = [&](double stol) {
+    const auto walk = [&](double stol, double pp0) {
         Eigen::Vector3d sig(sigma3, sigma3, sigma3);
-        double gp = 0, pp = sigma3, eps1 = 0, epsv = 0;
+        double gp = 0, pp = pp0, eps1 = 0, epsv = 0;
         q50_err = -1.0; epsv_max_contr = 0.0; epsv_final = 0.0; q_final = 0.0;
+        bool q50_read = false;   // the error is signed now, so it cannot double as its own flag
         for (int s = 0; s < 12000; ++s) {
             double dlat = 0.0; HsIntegrated r;
             for (int it = 0; it < 30; ++it) {
@@ -69,13 +70,17 @@ void test_berlin_triaxial() {
             sig = r.stress; gp = r.gamma_p; pp = r.pp; eps1 += 5e-6;
             epsv_max_contr = std::fmax(epsv_max_contr, epsv);  // peak contraction (positive)
             const double q = sig(0) - sig(2);
-            if (q50_err < 0 && q >= 0.5 * qf) q50_err = std::fabs((q / eps1) - E50) / E50;
+            if (!q50_read && q >= 0.5 * qf) { q50_err = (q / eps1 - E50) / E50; q50_read = true; }
             q_final = q; epsv_final = epsv;
             if (eps1 > 0.05) break;
         }
         return q_final;
     };
-    walk(0.0);   // the shipped integration tolerance
+    // THE HYPERBOLA, on its own: the same test with the cap out of reach (pp = 2 sigma3), so the
+    // shear surface is the only one yielding and the secant at q_f/2 must be E50 itself.
+    walk(0.0, 2.0 * sigma3);
+    const double q50_shear = q50_err;
+    walk(0.0, sigma3);   // the shipped integration tolerance, normally consolidated
     // Printed to three decimals, not one: what this line is read for is HOW CLOSE the deviator
     // gets to its plateau, and the two returns of the failure bound that this tree once carried
     // were recorded as differing by 0.16% of q_f. One decimal cannot show a difference that size,
@@ -86,7 +91,19 @@ void test_berlin_triaxial() {
     // Deviatoric (shear) agreement -- unchanged from the shear-dominated validation.
     const double q_shipped = q_final;
     check(close(q_shipped, qf, 5e-3), "q reaches the qf plateau (perfect plasticity at failure)");
-    check(q50_err >= 0 && q50_err < 0.05, "secant at qf/2 = E50 (HS hyperbola)");
+    // Measured 2026-09-27: -0.01% with the cap out of reach. This used to be one 5% band on the
+    // normally consolidated walk, which the cap shares -- a band ten times wider than the thing
+    // it stood for, and one that passed only because the cap calibration could not reach this
+    // sand's K0 of 0.38 and had parked alpha at 80, where the cap is all but volumetric.
+    std::printf("  secant at q_f/2 against E50: shear surface alone %+.4f%% | normally "
+                "consolidated, cap yielding too %+.3f%%\n", 100.0 * q50_shear, 100.0 * q50_err);
+    check(std::fabs(q50_shear) < 5e-3, "secant at qf/2 = E50 when only the shear surface yields");
+    // From an isotropic normally consolidated state the cap yields as well (the path raises p on
+    // a cap that passes through the start), so the response is SOFTER than the hyperbola -- by
+    // 9.8% with the cap calibrated to K0 = 0.38 and Eoed_ref. Asserted as a direction and a
+    // bound, not as agreement with a number nobody measured.
+    check(q50_err < 0.0 && q50_err > -0.15,
+          "with the cap yielding too the secant is softer than E50, and by less than 15%");
     // Volumetric: initial contraction then net dilation.
     check(epsv_max_contr > 2e-4 && epsv_max_contr < 3e-3,
           "initial volumetric contraction (cap), small peak ~0.1%");
@@ -110,17 +127,21 @@ void test_berlin_triaxial() {
     // returning along the consistent direction De.n_s (a seam, KATAI_HS_MCPROJ). Re-measured, that
     // return leaves the deviator at exactly the SAME 99.686% and still costs the strip footing, so
     // it was removed. The direction below is what the record now rests on.
-    const double q_tight = walk(1e-8);
-    std::printf("  plateau vs integration tolerance: shipped %.3f%% of qf -> stol 1e-8 %.3f%%\n",
+    //
+    // CORRECTED 2026-09-27: the shortfall was not the tolerance. The yield function of a shear
+    // plane depends on sigma3 through E_i, q_a and E_ur, and its gradient left that dependence
+    // out, so every hardening substep was inconsistent to FIRST order; a tighter tolerance meant
+    // smaller substeps, which shrank that error, which is why tightening looked like the cure.
+    // With the full gradient the shipped tolerance reaches the plateau (measured 100.000% at both
+    // 1e-5 and 1e-8), so what is asserted now is that it is reached, at both, and that the
+    // tolerance no longer decides where the deviator ends.
+    const double q_tight = walk(1e-8, sigma3);
+    std::printf("  plateau vs integration tolerance: shipped %.5f%% of qf -> stol 1e-8 %.5f%%\n",
                 100.0 * q_shipped / qf, 100.0 * q_tight / qf);
-    // Absolute distance on both sides, not the signed shortfall: at 1e-8 the deviator lands
-    // 0.03% ABOVE q_f (the drift loop's own convergence), and a signed comparison would call an
-    // arbitrarily large overshoot an improvement.
-    check(std::fabs(qf - q_tight) < std::fabs(qf - q_shipped),
-          "tightening the integration moves the deviator TOWARDS the failure plateau, which is "
-          "what makes the shortfall integration error rather than a defect in the bound");
-    check(close(q_tight, qf, 1e-3),
-          "...and it gets within 0.1% of it, so the plateau is reached and not merely approached");
+    check(close(q_shipped, qf, 1e-4),
+          "the shipped integration tolerance reaches the failure plateau (within 0.01%)");
+    check(close(q_tight, qf, 1e-4),
+          "...and so does a tight one, so the plateau is reached and not merely approached");
 }
 
 } // namespace

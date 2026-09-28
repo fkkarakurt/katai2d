@@ -386,7 +386,12 @@ void case_008(const Oedometer& O) {
                 100.0 * std::fabs(u_sub_file - u_sub_base) / u_sub_base);
     check(u_sub_file == u_sub_seam,
           "substep tolerance: file == seam, bit for bit -- one control, two routes");
-    check(std::fabs(u_sub_file - u_sub_base) / u_sub_base > 1e-4,
+    // Any difference proves the value reaches the material routine; a threshold on its SIZE
+    // proved how inaccurate the looser integration was. It was 1e-4 until 2026-09-27, when the
+    // Hardening Soil yield gradient got its sigma3 term and a 1e-3 integration of this case came
+    // within 0.0041% of the default -- the third time on this case that a guard proving a
+    // control is read by the size of a difference decayed as the defect behind it was fixed.
+    check(u_sub_file != u_sub_base,
           "and a looser constitutive integration changes the answer, so the file's value is "
           "genuinely reaching the material routine rather than the environment's default");
 

@@ -2,6 +2,10 @@
 
 #include <mkl.h>
 
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -10,6 +14,37 @@
 
 namespace katai::math {
 namespace {
+
+// Developer instrumentation, off unless KATAI_PARDISO_PROFILE is set: wall time per phase,
+// summed over the process and printed at exit. Measuring the solver is how a setting earns
+// its place, so the measurement lives with the solver rather than in a scratch copy of it.
+struct PhaseClock {
+    std::atomic<long long> ns[3] = {0, 0, 0};   // 0: phase 12, 1: phase 22, 2: phase 33
+    std::atomic<long long> n[3] = {0, 0, 0};
+    bool on = std::getenv("KATAI_PARDISO_PROFILE") != nullptr;
+    ~PhaseClock() {
+        if (!on) return;
+        std::fprintf(stderr, "[pardiso] analysis+factor %lld x %.3f ms | factor %lld x %.3f ms | "
+                             "solve %lld x %.3f ms\n",
+                     n[0].load(), n[0] ? ns[0] / 1e6 / n[0] : 0.0, n[1].load(),
+                     n[1] ? ns[1] / 1e6 / n[1] : 0.0, n[2].load(), n[2] ? ns[2] / 1e6 / n[2] : 0.0);
+    }
+};
+PhaseClock& phase_clock() {
+    static PhaseClock c;
+    return c;
+}
+struct PhaseTimer {
+    int k;
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    ~PhaseTimer() {
+        PhaseClock& c = phase_clock();
+        if (!c.on) return;
+        c.ns[k] += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::steady_clock::now() - t0).count();
+        ++c.n[k];
+    }
+};
 
 // Our index type must be exactly the same size as MKL's integer interface,
 // otherwise we cannot pass the arrays to PARDISO directly (lp64 → 32-bit).
@@ -76,6 +111,24 @@ PardisoSolver::PardisoSolver(MatrixType type) : type_(type) {
     // pardisoinit fills sensible iparm defaults for the given mtype.
     pardisoinit(handle_.data(), &mtype, control_.data());
     control_[34] = 1;  // zero-based (C-style) indexing
+    // Developer override for measuring settings, e.g. KATAI_PARDISO_IPARM=7=0,10=0 (zero-based
+    // index=value). Never set by the program itself.
+    if (const char* e = std::getenv("KATAI_PARDISO_IPARM")) {
+        std::string s(e);
+        std::size_t pos = 0;
+        while (pos < s.size()) {
+            const std::size_t comma = s.find(',', pos);
+            const std::string item = s.substr(pos, comma == std::string::npos ? std::string::npos
+                                                                              : comma - pos);
+            const std::size_t eq = item.find('=');
+            if (eq != std::string::npos) {
+                const int i = std::atoi(item.substr(0, eq).c_str());
+                if (i >= 0 && i < 64 && i != 34) control_[i] = std::atoi(item.substr(eq + 1).c_str());
+            }
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+        }
+    }
 }
 
 PardisoSolver::~PardisoSolver() {
@@ -122,6 +175,7 @@ void PardisoSolver::factorize(const CsrMatrix& matrix) {
         MKL_INT phase = 22;  // numerical factorization only (analysis preserved)
         MKL_INT idum = 0;
         double ddum = 0.0;
+        PhaseTimer timer{1};
         pardiso(handle_.data(), &maxfct, &mnum, &mtype, &phase, &dimension_,
                 values_.data(), row_ptr_.data(), col_indices_.data(), &idum, &nrhs,
                 control_.data(), &msglvl, &ddum, &ddum, &error);
@@ -147,6 +201,7 @@ void PardisoSolver::factorize(const CsrMatrix& matrix) {
     MKL_INT idum = 0;
     double ddum = 0.0;
 
+    PhaseTimer timer{0};
     pardiso(handle_.data(), &maxfct, &mnum, &mtype, &phase, &dimension_,
             values_.data(), row_ptr_.data(), col_indices_.data(), &idum, &nrhs,
             control_.data(), &msglvl, &ddum, &ddum, &error);
@@ -196,9 +251,12 @@ void PardisoSolver::solve(const Scalar* rhs, Scalar* solution) {
         rhs_in = scratch.data();
     }
 
-    pardiso(handle_.data(), &maxfct, &mnum, &mtype, &phase, &dimension_,
-            values_.data(), row_ptr_.data(), col_indices_.data(), &idum, &nrhs,
-            control_.data(), &msglvl, const_cast<Scalar*>(rhs_in), solution, &error);
+    {
+        PhaseTimer timer{2};
+        pardiso(handle_.data(), &maxfct, &mnum, &mtype, &phase, &dimension_,
+                values_.data(), row_ptr_.data(), col_indices_.data(), &idum, &nrhs,
+                control_.data(), &msglvl, const_cast<Scalar*>(rhs_in), solution, &error);
+    }
 
     if (error != 0)
         throw SolveError(std::string("PARDISO solve failed: ") + pardiso_error_text(error));

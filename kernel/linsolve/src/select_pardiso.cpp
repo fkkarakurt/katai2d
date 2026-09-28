@@ -6,6 +6,9 @@
 // pattern-reuse logic, and it is covered by its own tests.
 
 #include <katai/linsolve/direct_solver.hpp>
+
+#include <cstdlib>
+#include <string>
 #include <katai/math/pardiso_solver.hpp>
 
 namespace katai::linsolve {
@@ -38,6 +41,10 @@ private:
 } // namespace
 
 std::unique_ptr<DirectSolver> make_direct_solver(MatrixType type) {
+    // KATAI_LINSOLVE=eigen runs this build on the portable backend, so a result the portable
+    // configuration disputes can be reproduced without a second build tree.
+    if (const char* e = std::getenv("KATAI_LINSOLVE"); e && std::string(e) == "eigen")
+        return make_eigen_solver(type);
     return std::make_unique<PardisoDirectSolver>(type);
 }
 

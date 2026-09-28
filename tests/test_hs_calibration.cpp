@@ -53,16 +53,17 @@ void test_closed_form_Kp() {
     check(close(katai::core::hs_cap_Kp(p, K0), Kp, 1e-9), "hs_cap_Kp = K1 K2/(K1-K2)");
 }
 
-// Berlin Sand III (Eoed_ref = E50_ref, very stiff cap, phi=38deg): the K0^NC = 0.38 input is
-// at the edge of / outside the HS model's achievable (K0^NC, Eoed_ref) set. This is NOT a
-// solver defect -- it is a property of the model: E50, Eoed and Eur together admit only a
-// certain range of K0^NC, and an input outside that range cannot be reproduced; the nearest
-// achievable value is the honest answer. The von Mises cap coincides with the axisymmetric
-// reduction of a Lode-dependent qtilde cap on the oedometer path, so the achievable set does
-// not depend on that choice. Our calibration matches Eoed_ref EXACTLY (the primary stiffness)
-// and reports the nearest-feasible K0 (~0.42 > 0.38). (See hardening-soil-formulation.md
-// sec 4e.)
-void test_berlin_k0nc_intrinsic_limit() {
+// Berlin Sand III (Eoed_ref = E50_ref, very stiff cap, phi = 38 deg), K0^NC = 0.38.
+//
+// CORRECTED 2026-09-27. This used to assert that 0.38 is outside what the model can reproduce --
+// "a property of the model, not a solver defect" -- and that the nearest the calibration could
+// get was ~0.42. It was a property of the CALIBRATION: the oedometer probe it bisects on started
+// from an isotropic state at 2% of p_ref and read K0 at p_ref as though the path had forgotten
+// that start. It had not (at alpha = 2.4 the reading was 0.405 from a 2 kPa start, 0.453 from a
+// 20 kPa one), and no alpha brought the reading down to 0.38. Started on the K0^NC line itself,
+// the probe reads 0.38 exactly for alpha = 2.16, and a normally consolidated walk holds that K0
+// at every stress level.
+void test_berlin_k0nc_reached() {
     HardeningSoilParams p;
     p.p_ref = 100; p.E50_ref = 105e3; p.Eur_ref = 315e3; p.Eoed_ref = 105e3;
     p.m = 0.55; p.nu_ur = 0.2; p.friction = 38 * kPi / 180;
@@ -70,14 +71,20 @@ void test_berlin_k0nc_intrinsic_limit() {
     katai::core::hs_calibrate_cap(p, 0.38);
     double Eoed, K0;
     katai::core::hs_oedometer_probe(p, Eoed, K0);
-    std::printf("  Berlin Sand III: alpha=%.2f beta=%.3e -> K0=%.4f (input 0.38, nearest-feasible)"
+    std::printf("  Berlin Sand III: alpha=%.3f beta=%.3e -> K0=%.4f (input 0.38)"
                 " Eoed=%.0f (target 105000)\n", p.cap_alpha, p.cap_beta, K0, Eoed);
-    // Eoed (primary stiffness) reproduced exactly.
     check(close(Eoed, p.Eoed_ref, 1e-2), "Berlin: Eoed_ref reproduced exactly");
-    // K0 cannot reach the input 0.38 (the model's intrinsic restricted range): it sits at the
-    // nearest-feasible floor (~0.42). Assert it is that behaviour, not 0.38.
-    check(K0 > 0.40 && K0 < 0.45, "Berlin: K0 = nearest-feasible ~0.42 (NOT input 0.38)");
-    check(K0 > 0.38, "Berlin: reproduced K0 exceeds input 0.38 (restricted K0^NC range)");
+    check(std::fabs(K0 - 0.38) < 1e-3, "Berlin: the input K0^NC = 0.38 is reproduced");
+    // Away from the start and from p_ref: a normally consolidated oedometer walk keeps K0^NC,
+    // which is what the calibration is for (c = 1 kPa, so only nearly scale-free).
+    Eigen::Vector3d s(60.0, 60.0 * 0.38, 60.0 * 0.38);
+    double gp = katai::core::hs_initial_gamma_p(p, s), pp = katai::core::hs_initial_pp(p, s);
+    while (s(0) < 800.0) {
+        const auto r = katai::core::hs_integrate(p, s, gp, pp, Eigen::Vector3d(2e-4, 0, 0));
+        s = r.stress; gp = r.gamma_p; pp = r.pp;
+    }
+    std::printf("  Berlin Sand III: K0 at sigma1 = %.0f kPa on the NC line %.4f\n", s(0), s(2) / s(0));
+    check(std::fabs(s(2) / s(0) - 0.38) < 5e-3, "Berlin: K0^NC held along the normally consolidated line");
 }
 
 } // namespace
@@ -85,7 +92,7 @@ void test_berlin_k0nc_intrinsic_limit() {
 int main() {
     test_closed_form_Kp();
     test_calibrate_general_soil();
-    test_berlin_k0nc_intrinsic_limit();
+    test_berlin_k0nc_reached();
     if (g_failures == 0) {
         std::printf("OK: HS cap calibration (K0^NC + Eoed_ref) verified\n");
         return 0;

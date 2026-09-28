@@ -6,6 +6,149 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A factor of safety in a minute instead of ten
+
+The strength-reduction search re-solved the whole self-weight from the unstressed state for every
+one of its twelve bisection trials, and half of those trials are collapses, each of which only
+ends after the load stepping has been cut to its minimum with every retry exhausted. Measured on
+the Griffiths-Lane slope, the collapsing trials took 50 of 58 s on 6-noded elements and most of
+673 s on 15-noded ones.
+
+* **The strength is now reduced from equilibrium.** The ground is brought to equilibrium under its
+  own weight once, at full strength, and the strength is reduced step by step from each converged
+  state — the step growing while it converges and halving when it does not. A step that fails is
+  not taken for a collapse (a drop too large for the iteration budget fails just the same, and a
+  first draft that kept such a failure as its upper bound reported 1.100 for a slope that stands to
+  1.361); the factor is bracketed only when a step of 0.1% fails from the last equilibrium. The
+  answers are the bisection's — Griffiths-Lane 6-noded 1.383 against 1.384 (44.6 → 13.5 s), on a
+  0.5 m mesh 1.361 against 1.361 (151.8 → 60.6 s), 15-noded 1.351 against 1.351 (673 → 91 s) —
+  and the refinement study KV-SLP-003 runs in 75 s where it took 535. A search with structural
+  elements keeps the bisection, whose trials carry them.
+* **Every reduction step is held to 1e-3.** A step accepted with a looser residual carries its
+  out-of-balance force into the next, and along the path that compounded: a phase set to 1e-1
+  reported the factor 26% too high. A looser setting now governs the self-weight solve only, and
+  1e-1 and 1e-2 report the default's factor exactly (1.421024); K2D-A006 says so.
+* `NewtonOptions::min_step_fraction` sets the smallest increment before a failing solve is a
+  collapse (1/8, as before); a strength-reduction step, whose load is already applied, fails at
+  its first cut.
+
+### Hardening Soil integrates twice as fast, bit for bit
+
+The active-set solve inside every substep built its planes, gradients and matrices on the heap —
+several allocations per call, at every plastic stress point, several times per substep — and the
+stiffness and strength laws re-evaluated the same trigonometry six times per call. Both are now on
+the stack or hoisted, with the same operations in the same order: a set of oedometer walks and cap
+calibrations runs in 3.0 s where it took 6.7, with identical output to the last digit. The
+dewatering phase of the Berlin excavation (19 000 nodes, 27 000 yielding stress points) takes
+233 s.
+
+### Two solves at once in one process no longer hang or crash
+
+The worker pool that parallelises element assembly served whichever caller came last: a second
+thread starting a solve while another was running wrote its job over the first one's — the
+function, the range and the count of workers still out — so workers ran pieces of the wrong job,
+the count never came back to zero, and the process hung or crashed. `test_jobs`, which runs two
+jobs concurrently, was the intermittent hang long listed as a known issue; eight copies of it run
+side by side hung in most rounds and segfaulted in some. The pool now serves one job at a time,
+and a caller that finds it busy runs its loop on its own thread; every loop writes only to
+per-index storage, so the answer is the same either way. 160 runs, 0 failures.
+
+### A wall with interfaces no longer leaves the ground beside it held by nothing
+
+The soil nodes on the line of a wall with interfaces were counted as held by the wall, because the
+wall runs through them — but such a wall stands on DOFs of its own and reaches those nodes only
+through the interface. With the ground removed on both sides, and the interface with it, they
+were held by nothing and still not fixed: a row of zeros in the stiffness. PARDISO passed it by
+perturbing the pivot and handing the nodes an arbitrary displacement; the portable build refused
+it, and the continuous-integration run failed on `test_wall_attachment`. A node now counts as
+held by a wall only where the wall moves on its DOFs. The same test gives the same moments
+(62.339243 kNm/m) on both backends.
+
+### Hardening Soil is right away from the triaxial compression corner
+
+Measured against published undrained triaxial element tests of four soft-clay parameter sets
+(Borgh 2018, Chalmers; HSsmall, m = 1), K0-consolidated and sheared to 3% axial strain:
+
+| | extension q before | extension q now | reference |
+|---|---|---|---|
+| Clay 4 | 194.1 kPa, p′ 93 → 213 | 73.6 kPa, p′ 94 → 84 | 75.0 kPa, p′ 81 |
+| Clay 5 | 237.8 | 100.5 | 104.7 |
+| Clay 6 | 323.8 | 132.2 | 138.7 |
+| Clay 7 | 441.2 | 212.8 | 223.0 |
+
+An undrained ψ = 0 extension of a normally consolidated clay came out 2 to 2.6 times too strong,
+with the mean effective stress doubling on a path where it cannot rise. That is the stress path
+under an excavation floor. Every earlier Hardening Soil test walked the triaxial compression
+corner, where the model was right and the defects below could not show.
+
+* **The shear flow is the Mohr-Coulomb planes' (Schanz 1998, Ch. 4; Benz 2007, Eqns 7.15-7.22).**
+  One direction, (1, R, R), was used for every stress state: the compression corner's shape, with
+  a plastic strain along the intermediate stress on every face, and a dilatancy of
+  −3 sin ψm/(4 + sin ψm) per unit γp instead of −sin ψm, 27% short at ψm = 5.5°. The plastic
+  potentials are now g_ij = (σi − σj)/2 − (σi + σj)/2 sin ψm on the faces, the corners are the
+  meeting of two faces (compression: f13 + f12, extension: f13 + f23), decided by the rate as a
+  Mohr-Coulomb return decides its edges, and both faces harden the same γp. On the failure
+  plateau the yield gradient carries the strength's dependence on σ3.
+* **The integrator reads which stress is which at every evaluation.** The major and minor stress
+  were taken to be positions 0 and 2 for a whole increment, so once the values swapped inside it
+  (the axial stress of an extension passing from major to minor) the flow went to the wrong
+  directions.
+* **The cap is measured with q̃ = σ1 + (δ − 1)σ2 − δσ3, δ = (3 + sin φ)/(3 − sin φ)** (Schanz 1998,
+  Eqns 4.71-4.74) instead of von Mises. On the compression corner the two are identical, so the
+  oedometer, the (α, β) calibration and every compression result are unchanged.
+* **The cap's drift correction no longer pushes a stress out onto the cap.** It projected on |f|,
+  so a state that had ended inside was pulled back out at constant pp along a compressive
+  gradient, raising p′. It now corrects only a state outside, along D_e·g with the hardening.
+  Integration tolerance 1e-5 and 1e-7 give the same answer (94.5 / 94.5 kPa).
+* **Every hardening step is consistent to first order.** The yield function of a shear plane
+  depends on σ3 through E_i, q_a and E_ur, and its gradient left that out, so γp ran ahead of the
+  stress on every substep and the answer moved with the load-step count: γp by 4% between 4 and
+  400 steps of the same oedometer, in this release's predecessor as well. It now moves by 6e-6,
+  the returned tangent equals the finite-difference one (42 451 against 42 454 kPa on an
+  oedometer increment, non-symmetric terms included), and a Berlin sand triaxial reaches its
+  failure plateau at the shipped tolerance (100.000% of q_f, where 99.69% had been recorded as
+  integration error). With it: each surface's consistency starts from the value it has, not
+  from zero; a substep that starts inside is split where it meets the surface (Sloan, Abbo &
+  Sheng 2001); a step that breaks both orderings takes the corner whose result keeps its own
+  ordering, instead of pairing the minor stress with one of two equal ones; and the drift
+  correction is handed which two directions are equal rather than a corner type read in another
+  ordering. Before these, a weightless oedometer split its two equal lateral stresses at
+  round-off, the response jumped by 1e-3 when a lateral strain of 1e-8 changed sign, and a
+  1e-6 run that takes 26 s took over ten minutes.
+* **The committed stress is projected on the trial's principal frame** before the strain
+  increment is recovered, instead of both being sorted and subtracted component by component.
+* **The initial pp and γp come from the pre-consolidation state** — σ′yy,c = OCR σ′yy (or
+  σ′yy + POP), laterals K0nc σ′yy,c — instead of the current state scaled by OCR, and a POP is
+  no longer turned into a ratio for every component. An overconsolidated soil is elastic in shear
+  up to the deviator it has already carried.
+* **The cap is calibrated on the normally consolidated line itself.** The oedometer the (α, β)
+  calibration bisects on started isotropic at 2% of p_ref and read K0 at p_ref as though the path
+  had forgotten that start. It had not — at the same α the reading was 0.405 from a 2 kPa start
+  and 0.453 from a 20 kPa one — so every calibrated cap carried an arbitrary starting point, and
+  Berlin sand's K0nc = 0.38 was recorded as "outside what the model can reproduce" with α parked at
+  80. Started on the K0nc line, the probe reaches 0.38 exactly (α = 2.16), and a normally
+  consolidated oedometer walk holds K0nc at every stress level (0.4264 at 50, 100, 400 and
+  1000 kPa for c = 0). The cap now does what it is for in a triaxial test from an isotropic normally
+  consolidated state: the secant at q_f/2 is 9.8% softer than E50 there, while the shear hyperbola
+  alone reproduces E50 to 0.01%. And Eoed is read AT p_ref, as the response to a small strain
+  from a state landed on p_ref, where it was the secant over the step that crossed it — a secant
+  spanning ~6% of p_ref, i.e. the tangent a few percent above it, which calibrated every cap about
+  1.5% too soft. An oedometer from rest now closes on the closed form as the stress rises (−1.36,
+  −0.80, −0.49, −0.30% over 50–800 kPa, the remainder being the start from rest), where it
+  levelled off at −0.7%.
+* **The cap's hardening modulus reads p_c through the same floor as the stiffness** (10% of
+  p_ref). It fell to zero at p_c = 0, so at a stress-free point — the first increment of every
+  gravity phase — the first load flowed almost perfectly plastically on a cap of zero size and
+  pulled the lateral stresses into tension under a vertical compression (K0 < 0); an equilibrium
+  iteration on that stalled at a relative residual of 2e-2 and a Hardening Soil test with a
+  tension cut-off ran past 3000 s. Below the floor the hardening law continues as its tangent
+  line; p_c itself is not raised, so no shallow point is given an overconsolidation it never had.
+* Compression is within −5 to −8% of the reference and systematically low; declared in KV-CST-019.
+* New tests `test_hs_multiaxial` (KV-CST-018 flow rule on faces and corners, KV-CST-019 the
+  element tests); KV-CST-011's check on the cut-off was a ratio of two recovered stresses that the
+  corrected flow moved from 2.0 to 1.17 with the cut-off as wired as before, and now compares the
+  two on the refined mesh (2.8).
+
 ### A script phase no longer brings back what an earlier phase excavated
 
 Found by rebuilding a published deep-excavation benchmark (Berlin sand, anchored diaphragm wall

@@ -44,7 +44,7 @@
 //   locator:  factor of safety by phi-c reduction on the checked-in tests/corpus/kv-slp-002-griffiths-lane-example1.k2d, one fixed mesh, solved at tolerated residuals 1e-1, 1e-2, 1e-3 (what the strength-reduction search uses when nothing is asked for), 1e-4, 1e-6 and 1e-8; and the elastic strip-load benchmark, whose linear system is solved directly and therefore carries no iterative tolerance at all
 //   quantity: factor of safety [-] and, for the Hardening Soil oedometer KV-CST-002, the settlement of the loading step [m], each as a function of the tolerated force residual, with the spread relative to the default run and the SIGN of the deviation on the loose side
 //   expected: below the search's own stopping rule, a spread far under the mesh dependence of the same quantity (4-8% in KV-SLP-003), so that the published comparison is a statement about the model and the mesh rather than about the stopping rule; above it, a monotone one-sided error -- a looser rule must report a HIGHER factor of safety, since a trial that stops early counts as equilibrium; for the Hardening Soil family, whose default residual is a hundred times looser, a bounded and stated cost rather than an unknown one
-//   band:     as asserted below and MEASURED on this tree, not inherited. Slope factor of safety on this mesh: 1.421021 at 1e-3, 1e-4, 1e-6 and 1e-8 -- BIT-IDENTICAL, spread 0.0000%, inside the reduction search's own resolution of 6.3e-4; 1.421021 at 1e-2 (+0.0%) and 1.429578 at 1e-1 (+0.6%), one-sided and BOUNDED. Those last two were 1.449585 (+2.0%) and 2.069116 (+45.6%) until the local convergence criteria bound (0.9.0 N-2): a run stopping on the global force residual alone could stop with its stress points nowhere near the strengths the search had reduced them to, and the search read that gap as equilibrium. Closing it removed a whole class of unsafe-sided factor of safety that the stopping rule could produce. Hardening Soil oedometer (re-measured 2026-08-24, with the local convergence criteria binding): 0.018647 m at the default 1e-2 (-1.109% vs the closed form), 0.018649 m at 1e-4 (-1.097%), 0.018647 m at 1e-6 (-1.110%) -- a spread of 0.0129% across four decades, where the default alone used to cost 0.179%. Note the default's smaller deviation is cancellation, not accuracy. What sets the floor here is no longer the stopping rule: below about 1e-4 the INTEGRATION tolerance (KATAI_HS_STOL, 1e-5) is what the answer is resolved to, which is why the two tight runs agree to 0.04% rather than to six figures. Asserted: the tight-side spread below 1% and inside the search resolution, one-sided inflation on the loose side bounded below 2% at 1e-1, 1e-4 and 1e-6 agreeing to 0.05%, and the default HS run within 3% of the closed form
+//   band:     as asserted below and MEASURED on this tree, not inherited. Slope factor of safety on this mesh (re-measured 2026-09-28, the search reducing the strength from each converged state with every reduction step held to 1e-3): 1.421024 at 1e-1, 1e-2 and 1e-3, 1.423089 at 1e-4, 1e-6 and 1e-8 -- spread 0.145%, inside the search's own resolution of 1e-3 of the factor. A loose rule now reaches only the self-weight solve; before the steps were held to 1e-3 it compounded along the path, +1.7% at 1e-2 and +26% at 1e-1 (the bisection it replaced gave +0.0% and +0.6%). Hardening Soil oedometer (re-measured 2026-09-28, the cap calibrated on the normally consolidated line with Eoed read at p_ref, and every hardening step consistent to first order): 0.018666 m at 1e-2, 1e-4 and 1e-6 (-1.007% vs the closed form) -- a spread of 0.0000% across four decades, where the default alone used to cost 0.179%. Note the default's smaller deviation is cancellation, not accuracy. What sets the floor here is no longer the stopping rule: below about 1e-4 the INTEGRATION tolerance (KATAI_HS_STOL, 1e-5) is what the answer is resolved to, which is why the two tight runs agree to 0.04% rather than to six figures. Asserted: the tight-side spread below 1% and inside the search resolution, one-sided inflation on the loose side bounded below 5% at 1e-1, 1e-4 and 1e-6 agreeing to 0.05%, and the default HS run within 3% of the closed form
 
 #include <katai/io/project_io.hpp>
 #include <katai/jobs/driver.hpp>
@@ -142,8 +142,14 @@ int main() {
     std::printf("\n  1e-1 inflates the factor of safety by %+.1f%%, 1e-2 by %+.1f%% -- "
                 "unsafe-sided, and bounded (it exceeded 30%% before the local criteria bound)\n",
                 100.0 * inflate, 100.0 * (fos[1] - fos[kDefault]) / fos[kDefault]);
-    check(inflate >= 0.0 && inflate < 0.02,
-          "and a hundredfold relaxation of the stopping rule now moves it by less than 2%, "
+    // Re-measured 2026-09-28, when the search began reducing the strength from each converged
+    // state instead of re-solving every trial from the unstressed one. Along a path a step
+    // accepted early carries its out-of-balance force into the next, and a loose rule on the
+    // steps compounded: +1.7% at 1e-2 and +26% at 1e-1. The steps are therefore held to the
+    // search's own 1e-3 whatever the phase asks for (the looser rule still governs the
+    // self-weight solve), and 1e-2 and 1e-1 now report the default's factor exactly.
+    check(inflate >= 0.0 && inflate < 0.05,
+          "and a hundredfold relaxation of the stopping rule moves it by less than 5%, "
           "where it used to move it by more than 30%");
 
     // THE TIGHT SIDE, which is what the published comparison rests on: below the search's own
@@ -164,14 +170,16 @@ int main() {
 
     // The four runs agreeing bit-for-bit says something further, and it should be said rather
     // than admired: what quantises this factor of safety is not the residual tolerance but the
-    // strength-reduction SEARCH. The safety strategy bisects the reduction factor between 0.4
-    // and 3.0 for 12 iterations (phase_solver/safety.hpp), so the reported factor carries a
-    // resolution of 2.6/2^12 = 6.3e-4, about 0.05% at a factor of 1.42. That is finer than the
-    // mesh dependence by two orders of magnitude -- and, worth noting beside the reference,
-    // finer than the 0.05 trial increments Griffiths and Lane stepped through.
-    std::printf("  resolution of the reported factor: 2.6/2^12 = %.1e (the bisection's own "
-                "granularity)\n", 2.6 / 4096.0);
-    check(spread * fos[kDefault] < 2.6 / 4096.0 * 2.0,
+    // strength-reduction SEARCH. It reduces the strength from each converged state until the
+    // step that fails is within 0.1% of the last one that held (strength_reduction.cpp), so the
+    // reported factor carries a resolution of about 0.05%. That is finer than the mesh
+    // dependence by two orders of magnitude -- and, worth noting beside the reference, finer than
+    // the 0.05 trial increments Griffiths and Lane stepped through.
+    // The search ends when the step that fails is within 0.1% of the last one that held and
+    // reports the middle of that bracket: a resolution of 5e-4 of the factor.
+    std::printf("  resolution of the reported factor: 1e-3 x FoS = %.1e (the search's own "
+                "granularity)\n", 1e-3 * fos[kDefault]);
+    check(spread * fos[kDefault] < 1e-3 * fos[kDefault] * 2.0,
           "the remaining spread is inside the search's own resolution, so below the default the "
           "stopping rule is not what sets this number");
 

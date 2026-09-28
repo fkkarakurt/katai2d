@@ -129,6 +129,12 @@ struct NewtonOptions {
     // KATAI_CONV_NOLOCAL turns it off for a whole run, which is how the comparison above is
     // reproduced; KATAI_CONV_LOCAL forces it on where a caller has switched it off.
     bool enforce_local_criteria = true;
+    // The smallest increment, as a fraction of the initial one, before a solve that keeps
+    // failing is declared a collapse. 1/8 is the load-stepping rule. A solve whose external
+    // load is held constant -- a strength-reduction step, where what changes is the material and
+    // not the load -- gains nothing from a smaller increment of a load that is already applied,
+    // so it passes 1 and fails at its first cut, after every retry has had its chance.
+    double min_step_fraction = 0.125;
 };
 
 // Plate (structural wall/beam) embedded in soil — 3-node Timoshenko beam (see

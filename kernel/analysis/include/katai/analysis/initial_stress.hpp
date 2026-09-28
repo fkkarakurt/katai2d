@@ -235,7 +235,6 @@ inline void seed_preconsolidation(const mesh::Mesh& mesh,
                 gs.pp = softsoil::ss_initial_pp(sp, sig_cp, ocr_eq);
                 continue;
             }
-            const double ocr = ocr_eq;
             // Seed with the parameter set the FIRST integrate_point will actually use. The whole
             // job of hs_initial_gamma_p is to put the pre-stress exactly ON the shear surface
             // (gamma_p = fbar(q0)), and fbar depends on E_ur. But hs_forward evaluates the model
@@ -247,9 +246,15 @@ inline void seed_preconsolidation(const mesh::Mesh& mesh,
             // reported "equilibrated 0%". gamma_hist = 0 is the seed's own state (no strain history
             // yet), so pe is exactly what the first evaluation uses. Plain HS (G0_ref = 0) gets its
             // params back unchanged -> bit-for-bit.
+            // The seed itself is the pre-consolidation state the K0 procedure defines -- the
+            // in-situ vertical stress raised by the OCR or the POP, on the K0nc line -- not the
+            // current state scaled: see hs_seed_from_history.
             const auto pe_seed = hs_small_strain_params(models[mat].hs, 0.0);
-            gs.pp = hs_initial_pp(pe_seed, sig_cp, ocr);
-            gs.gamma_p = hs_initial_gamma_p(pe_seed, sig_cp);
+            const HsSeed seed = hs_seed_from_history(pe_seed, -gs.stress(0), -gs.stress(1),
+                                                     -gs.stress(2), -gs.stress_zz, oc[mat].mode,
+                                                     oc[mat].OCR, oc[mat].POP);
+            gs.pp = seed.pp;
+            gs.gamma_p = seed.gamma_p;
         }
     }
 }

@@ -1,6 +1,8 @@
 #include <katai/analysis/strength_reduction.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <vector>
 
 namespace katai::core {
@@ -124,6 +126,99 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
     double lo = options.srf_min, hi = options.srf_max;
     SafetyResult res;
     NewtonResult trial;
+
+    // --- INCREMENTAL: one gravity solve, then the strength reduced from equilibrium ---------
+    // The bisection below re-solves the whole self-weight for every trial, and half of its
+    // trials are collapses, each of which only ends after the load stepping has been cut down to
+    // its minimum with every retry exhausted: measured on the Griffiths-Lane slope, 7 collapsing
+    // trials of 12 took 50 of 58 s (tri6) and most of 673 s (tri15). Reducing the strength from
+    // each converged state meets the collapse once, at the end.
+    //
+    // It is taken only where every piece of state it carries forward is carried: no structural
+    // element (their datum and plastic state would need the constant-force bookkeeping of a
+    // chained phase) and a search that starts unstressed, as every Safety phase in this build
+    // does. Anything else keeps the bisection.
+    const bool has_structures = !structures.plates.empty() || !structures.anchors.empty() ||
+                                !structures.geogrids.empty() || !structures.interfaces.empty() ||
+                                !structures.plates5.empty() || !structures.interfaces5.empty() ||
+                                !structures.embedded_beams.empty();
+    const bool incremental = options.incremental && initial_state.empty() && !has_structures &&
+                             std::getenv("KATAI_SRM_BISECTION") == nullptr;
+    if (incremental) {
+        NewtonResult base_run;
+        if (try_srf(1.0, base_run)) {
+            // Equilibrium at full strength: FoS >= 1. Walk the strength down from it.
+            res.ok = true;
+            res.mechanism = base_run;
+            double srf = 1.0;
+            std::vector<GaussState> states = base_run.gauss_states;
+            Eigen::VectorXd u_total = base_run.displacement;
+            const Eigen::VectorXd no_load = Eigen::VectorXd::Zero(gravity_load.size());
+            NewtonOptions step_opt = options.newton;
+            step_opt.load_steps = 1;
+            step_opt.min_step_fraction = 1.0;   // the load is constant: a failed step is a collapse
+            // Every reduction step is held to at least the search's own 1e-3, whatever the phase
+            // asks for. A step accepted with a looser residual carries its out-of-balance force
+            // into the next one, and along the path that compounds: measured on the
+            // Griffiths-Lane slope, 1e-1 on the steps inflated the factor by +26% (1e-2 by +1.7%)
+            // where independent trials had given +0.6%. A looser setting still applies to the
+            // self-weight solve, and the driver says so (K2D-A006).
+            step_opt.tolerance = std::min(step_opt.tolerance, 1.0e-3);
+            // A step that fails is not a collapse: a strength drop too large for the iteration
+            // budget fails just the same, and measured on a 0.5 m mesh of the Griffiths-Lane slope
+            // the first step (1.0 -> 1.1) did exactly that while every smaller step towards 1.1
+            // converged in three or four iterations -- a search that kept 1.1 as its upper bound
+            // reported 1.100 where the slope stands to 1.361. So a failure only halves the step,
+            // the search moves on from every new equilibrium, and the factor is bracketed only by a
+            // step no larger than the resolution failing from the last converged state.
+            double step = options.msf_step;
+            double failed_at = -1.0;            // set only by a step at the resolution failing
+            bool ever_failed = false;
+            for (int guard = 0; guard < 400; ++guard) {
+                double next = srf + step;
+                if (next > options.srf_max) {
+                    if (srf >= options.srf_max) break;
+                    next = options.srf_max;
+                }
+                std::vector<MaterialModel> m = materials;
+                for (auto& mm : m) factor_strength(mm, next);
+                std::vector<MaterialProfile> p = profile;
+                for (auto& pp : p) pp.c_inc /= next;
+                NewtonResult r;
+                bool ok = false;
+                try {
+                    r = solve_nonlinear(mesh, dofs, m, no_load, linear_solve, step_opt, states,
+                                        active_element, base, {}, gravity_load, p);
+                    ok = r.converged;
+                } catch (...) {
+                    ok = false;
+                }
+                if (ok) {
+                    srf = next;
+                    states = r.gauss_states;
+                    u_total += r.displacement;
+                    r.displacement = u_total;
+                    res.mechanism = std::move(r);
+                    step *= ever_failed ? 1.25 : 1.5;   // stride out again, more warily once burnt
+                } else {
+                    ever_failed = true;
+                    if (next - srf <= options.fos_resolution * srf) {
+                        failed_at = next;               // even the smallest step fails: collapse
+                        res.bracketed = true;
+                        break;
+                    }
+                    step = std::max(0.5 * (next - srf), 0.5 * options.fos_resolution * srf);
+                }
+                if (srf >= options.srf_max) break;
+            }
+            res.fos = failed_at > 0.0 ? 0.5 * (srf + failed_at) : srf;
+            return res;
+        }
+        // No equilibrium at full strength: the factor is below 1, and the bisection finds it.
+        hi = std::min(hi, 1.0);
+        res.bracketed = true;
+    }
+
     for (int i = 0; i < options.bisection_iterations; ++i) {
         const double mid = 0.5 * (lo + hi);
         if (try_srf(mid, trial)) { lo = mid; res.mechanism = trial; res.ok = true; }

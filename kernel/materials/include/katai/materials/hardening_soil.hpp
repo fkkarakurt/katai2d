@@ -42,24 +42,50 @@ struct HardeningSoilParams {
     // (POWER-LAW hardening parameter).
     double cap_alpha = 1.0;  // α  (cap aspect ratio; ellipse height α·p_c on the q axis)
     double cap_beta = 0.0;   // β (0 = cap off)
+    // K0 of normally consolidated states: the path the cap was calibrated on, and the lateral
+    // ratio of the pre-consolidation state the initial hardening variables are seeded from
+    // (hs_seed_from_history). 0 = not given, Jaky's 1 - sin phi is used.
+    double K0nc = 0.0;
 
     // Elastic bulk modulus K_e = Eur/(3(1−2ν)) (at σ3).
     double bulk(double sigma3) const {
         return Eur(sigma3) / (3.0 * (1.0 - 2.0 * nu_ur));
     }
 
+    // The stress below which the stress-dependent laws read this value instead: 10% of p_ref.
+    // E_i, E_ur and the strength read the minor stress through it, and the cap's hardening
+    // modulus reads p_c through it.
+    double p_limit() const { return 0.1 * p_ref; }
+
     // Cap hardening power law ε_v^(p-cap) = (β/(1−m))(p_c/p_ref)^(1−m). m=1 is the logarithmic
     // special case, ε_v^(p-cap) = β·ln(p_c/p_ref).
-    double cap_ev_from_pc(double pc) const {  // ε_v^(p-cap)(p_c)
+    //
+    // Below p_limit the law continues as the straight line tangent to it there: the hardening
+    // modulus is a stiffness, and like the elastic stiffness it reads p_limit below p_limit.
+    // Without that the modulus fell to ZERO at p_c = 0 -- every stress-free point, the first
+    // increment of every gravity phase and every freshly placed fill -- so the first load
+    // flowed almost perfectly plastically on a cap of zero size, pulled the lateral stresses
+    // into tension under a vertical compression, and left the equilibrium iteration stalled.
+    // (m = 1 also sent ε_v to minus infinity there.) Raising p_c itself to p_limit instead would
+    // have given every shallow point an overconsolidation it never had.
+    double cap_ev_power(double pc) const {
         if (std::fabs(1.0 - m) < 1e-12) return cap_beta * std::log(pc / p_ref);
         return cap_beta / (1.0 - m) * std::pow(pc / p_ref, 1.0 - m);
     }
+    double cap_ev_from_pc(double pc) const {  // ε_v^(p-cap)(p_c)
+        const double pl = p_limit();
+        if (pc >= pl) return cap_ev_power(pc);
+        return cap_ev_power(pl) - (pl - pc) / cap_hardening_modulus(pl);
+    }
     double cap_pc_from_ev(double ev) const {  // p_c(ε_v^(p-cap))
+        const double pl = p_limit();
+        const double el = cap_ev_power(pl);
+        if (ev < el) return std::max(0.0, pl - (el - ev) * cap_hardening_modulus(pl));
         if (std::fabs(1.0 - m) < 1e-12) return p_ref * std::exp(ev / cap_beta);
         return p_ref * std::pow((1.0 - m) * ev / cap_beta, 1.0 / (1.0 - m));
     }
     double cap_hardening_modulus(double pc) const {  // H_cap = dp_c/dε_v^pc = (p_ref/β)(p_c/p_ref)^m
-        return (p_ref / cap_beta) * std::pow(pc / p_ref, m);
+        return (p_ref / cap_beta) * std::pow(std::max(pc, p_limit()) / p_ref, m);
     }
 
     // Stress-dependent scale factor ((c·cosφ + σ·sinφ)/(c·cosφ + p_ref·sinφ))^m.

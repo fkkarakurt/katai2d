@@ -207,7 +207,7 @@
 //   locator:  a Hardening Soil column carries its own weight, so the vertical stress stays compressive and the ground keeps its stiffness, and a prescribed edge then stretches it horizontally, which drives the HORIZONTAL stress into tension. That separation is what makes the case converge with the cap active: a weightless block pulled the same way simply comes apart, and the earlier attempts did exactly that (2%, 4%, 54%, 17%, 37% of the applied load before collapse -- an unconverged run's load fraction is not a measurement, and those did not even order themselves). The imposed strain is 2e-4
 //   quantity: the largest principal stress anywhere in the model after a converged run, and the run's peak displacement, from the checked-in tests/corpus/kv-cst-011-tension-cutoff-hs.k2d [kPa; m]
 //   expected: the yield condition itself -- no principal stress above sigma_t -- together with the identity that a cut-off the tension never reaches must change nothing at all
-//   band:     as asserted below. With the cut-off at zero the largest principal stress in the model is +1.4753 kPa against +3.1220 kPa for the same soil without it, and the residual is shown to be STRESS RECOVERY rather than the return mapping: nodal stresses are extrapolated and averaged from the Gauss points, which the return caps exactly, so a recovery residual must vanish with the element size -- measured 1.4753 kPa at h = 1 m falling to 0.3346 kPa at h/2, a factor of 4.41 for a factor of 2, roughly the second order an extrapolation should show. A third density (h/4) was tried and did not converge on this fixture, so the trend is stated over the two that were measured rather than three that were not. The pair that makes this more than a difference: with sigma_t = 5 kPa, above anything the run reaches, the result is BIT-IDENTICAL to the same model with the cut-off switched off (9.547553e-04 m twice over), so the cap is provably inert until it bites, while sigma_t = 0 moves the same model to 8.995284e-04 m. Until 2026-08-13 none of this happened: `K2D-M001` had declared since 2026-08-08 that only the Mohr-Coulomb return read the cut-off, while the schema switches it on by DEFAULT, so every Hardening Soil, HS small, Soft Soil and Soft Soil Creep run in this engine allowed tension past sigma_t -- a systematic error in the unsafe direction
+//   band:     as asserted below. With the cut-off at zero the largest principal stress in the model is +1.7999 kPa against +2.1005 kPa for the same soil without it (2026-09, after the Hardening Soil flow was put on the Mohr-Coulomb planes; +1.5073 against +3.0123 before), and the residual is shown to be STRESS RECOVERY rather than the return mapping: nodal stresses are extrapolated and averaged from the Gauss points, which the return caps exactly, so a recovery residual must vanish with the element size -- measured 1.7999 kPa at h = 1 m falling to 0.3657 kPa at h/2, a factor of 4.92 for a factor of 2 -- and on that refined mesh the same soil without the cut-off carries 1.0276 kPa, 2.8 times as much. A third density (h/4) was tried and did not converge on this fixture, so the trend is stated over the two that were measured rather than three that were not. The pair that makes this more than a difference: with sigma_t = 5 kPa, above anything the run reaches, the result is BIT-IDENTICAL to the same model with the cut-off switched off (9.547553e-04 m twice over), so the cap is provably inert until it bites, while sigma_t = 0 moves the same model to 8.995284e-04 m. Until 2026-08-13 none of this happened: `K2D-M001` had declared since 2026-08-08 that only the Mohr-Coulomb return read the cut-off, while the schema switches it on by DEFAULT, so every Hardening Soil, HS small, Soft Soil and Soft Soil Creep run in this engine allowed tension past sigma_t -- a systematic error in the unsafe direction
 //
 // verify: KV-STR-005
 //   oracle:   closed_form
@@ -3355,8 +3355,20 @@ void oracle_tension_cutoff(const m::Project& pr) {
     // bit-for-bit.
     std::printf("      cut-off OFF / ON ratio: %.4f\n",
                 on.max_principal > 0.0 ? off.max_principal / on.max_principal : 0.0);
-    check(off.ok && off.max_principal > 1.8 * on.max_principal,
-          "the cut-off substantially reduces the tension the same soil carries");
+    // A RATIO of two recovered stresses was the wrong instrument, and a correct change to the
+    // model showed it. When the Hardening Soil flow rule was put on the Mohr-Coulomb planes
+    // (2026-09) -- no plastic strain along the intermediate stress on a face, where the old
+    // single direction put some into sigma_zz -- the tension the column carries WITHOUT the
+    // cut-off fell from 3.0123 to 2.1005 kPa, while the leftover WITH it stayed a recovery
+    // residual (1.7999 kPa at h, 0.3657 at h/2). The ratio fell to 1.17 with the cut-off exactly
+    // as wired as before. The capped field's leftover is extrapolation and vanishes with the
+    // element size (asserted below); the uncapped maximum falls with the mesh too (2.1005 ->
+    // 1.0276 kPa at h/2: it sits at a corner of the driven edge), so neither number is a
+    // property of the soil alone. What separates a wired cut-off from an unwired one is the
+    // comparison ON THE SAME REFINED MESH, where the recovery leftover is small: 1.0276 against
+    // 0.3657, a factor of 2.8, where an unwired cut-off reads 1.0 (asserted below that).
+    check(off.ok && off.max_principal > on.max_principal,
+          "the cut-off reduces the tension the same soil carries");
     // Whether the residual is the RECOVERY or the RETURN is not a matter of opinion: the return
     // mapping caps every Gauss point exactly, so a residual that is recovery overshoot must
     // vanish with the element size, while one left by the return mapping would not. Measured:
@@ -3369,6 +3381,11 @@ void oracle_tension_cutoff(const m::Project& pr) {
                 on.max_principal, on2.max_principal, on.max_principal / on2.max_principal);
     check(on2.ok && on2.max_principal < 0.5 * on.max_principal,
           "and the tension left over falls with the mesh: it is stress recovery, not the return");
+    const TcRead off2 = read_tension_cutoff(build_tension_cutoff_at(false, 0.0, kTcDx, 0.5 * kTcHm));
+    std::printf("      max principal without the cut-off: h %.4f -> h/2 %.4f kPa\n",
+                off.max_principal, off2.max_principal);
+    check(off2.ok && off2.max_principal > 2.0 * on2.max_principal,
+          "on the refined mesh the soil without the cut-off carries over twice the tension");
 
     // (b) THE PAIR THAT MAKES IT MORE THAN A DIFFERENCE. Set sigma_t above anything the run
     // reaches and the cap must do NOTHING -- not approximately, bit-for-bit nothing, because the

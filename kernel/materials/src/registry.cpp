@@ -149,6 +149,7 @@ MaterialModel build_hs_core(const MaterialParams& p) {
 
 MaterialModel build_hs(const MaterialParams& p) {
     MaterialModel mm = build_hs_core(p);
+    mm.hs.K0nc = k0nc_of(p);
     hs_calibrate_cap(mm.hs, k0nc_of(p));   // cap_alpha/beta from K0^NC + Eoed
     return mm;
 }
@@ -160,6 +161,7 @@ MaterialModel build_hss(const MaterialParams& p) {
     // (G0/Gur <= 20). The driver says so when the cap bites (K2D-M004) -- a G0 quietly reduced
     // is a different soil from the one the file asked for.
     mm.hs.G0_ref = std::min(p.G0_ref, mm.hs.G0_ref_cap());
+    mm.hs.K0nc = k0nc_of(p);
     hs_calibrate_cap(mm.hs, k0nc_of(p));
     return mm;
 }

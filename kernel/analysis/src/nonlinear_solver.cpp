@@ -342,7 +342,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     // so the tri6 benchmarks are unchanged.
     result.iteration_limit = options.max_iterations;
     const double init_dlam = 1.0 / options.load_steps;
-    const double min_dlam = init_dlam / 8.0;  // smaller -> declare collapse
+    const double min_dlam = init_dlam * options.min_step_fraction;  // smaller -> collapse
     double lambda = 0.0;        // committed load fraction
     double dlam = init_dlam;    // current increment size
     result.converged = true;
@@ -545,13 +545,52 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 solved = false;
                 ++result.refused_solves;
                 ended = NewtonResult::Abandonment::SolveRefused;
-                if (debug)
+                if (debug) {
                     std::fprintf(stderr, "  lambda %.4f iter %d  SOLVE REFUSED: %s\n",
                                  target_lambda, iter, refusal.what());
+                    // Which equations carry no stiffness at all: a row of zeros is a degree of
+                    // freedom nothing holds, the commonest reason for a refusal that is not a
+                    // mechanism.
+                    std::vector<int> eq_gdof(neq, -1);
+                    for (int g = 0; g < dofs.total_dofs(); ++g)
+                        if (dofs.equation(g) >= 0) eq_gdof[dofs.equation(g)] = g;
+                    int shown = 0;
+                    for (int r = 0; r < kt.rows && shown < 12; ++r) {
+                        double mx = 0.0;
+                        for (int k = kt.row_ptr[r]; k < kt.row_ptr[r + 1]; ++k)
+                            mx = std::max(mx, std::fabs(kt.values[k]));
+                        if (mx > 0.0) continue;
+                        const int g = eq_gdof[r];
+                        const int nn = mesh.node_count;
+                        if (g >= 0 && g < 2 * nn)
+                            std::fprintf(stderr, "      zero row: eq %d = node %d comp %d at (%.4f, %.4f)\n",
+                                         r, g / 2, g % 2, mesh.x[g / 2], mesh.y[g / 2]);
+                        else
+                            std::fprintf(stderr, "      zero row: eq %d = extra dof %d\n", r, g);
+                        ++shown;
+                    }
+                }
             }
             result.timings.linear_solve += elapsed(t_lin);
             ++result.timings.n_solve;
             if (!solved) break;   // abandon the increment -> outer loop cuts back
+
+            // Developer diagnostic (KATAI_NL_TANGENT_CHECK): is K_T the derivative of the
+            // internal force along the direction just solved for? A Newton iteration whose full
+            // step keeps being cut to alpha ~ 1e-3 near the solution is either walking a kinked
+            // residual or carrying a tangent that is not its derivative; this tells which.
+            if (debug && std::getenv("KATAI_NL_TANGENT_CHECK") != nullptr) {
+                const Eigen::VectorXd kd = kt * delta;
+                const double dn = delta.lpNorm<Eigen::Infinity>();
+                for (double rel_h : {1e-4, 1e-6, 1e-8}) {
+                    const double h = rel_h / std::max(dn, 1e-30);
+                    const Eigen::VectorXd fp = assemble(du_free + h * delta, false, nullptr);
+                    const Eigen::VectorXd fm = assemble(du_free - h * delta, false, nullptr);
+                    const Eigen::VectorXd fd = (fp - fm) / (2.0 * h);
+                    std::fprintf(stderr, "      tangent check h*|d|=%.0e: |fd-Kd|/|Kd| = %.3e\n",
+                                 rel_h, (fd - kd).norm() / std::max(kd.norm(), 1e-300));
+                }
+            }
 
             // Backtracking line search: the consistent tangent gives fast local
             // convergence but a full Newton step can overshoot far from the
@@ -684,6 +723,17 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         for (int d = 0; d < dofs.total_dofs(); ++d)
             if (dofs.is_fixed(d)) result.displacement[d] += result.load_factor * presc(d);
     result.timings.total = elapsed(t_start);
+    if (std::getenv("KATAI_NL_PROFILE") != nullptr) {
+        const auto& t = result.timings;
+        std::fprintf(stderr,
+                     "[nl-profile] total %.3f s | tangent %.3f s (%d) | residual %.3f s (%d) | "
+                     "csr %.3f s | linear %.3f s (%d) | other %.3f s | neq %d | %s\n",
+                     t.total, t.assemble_tangent, t.n_tangent, t.assemble_residual, t.n_residual,
+                     t.csr_build, t.linear_solve, t.n_solve,
+                     t.total - t.assemble_tangent - t.assemble_residual - t.csr_build -
+                         t.linear_solve,
+                     neq, result.converged ? "converged" : "not converged");
+    }
     return result;
 }
 

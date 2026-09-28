@@ -29,6 +29,7 @@
 #include <katai/linsolve/direct_solver.hpp>
 #include <katai/mesh/mesh.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -226,6 +227,51 @@ void test_g1_integrate_point_identity() {
           "K0NC develops through the FULL FE path (2%)");
 }
 
+// (g5) On fixed principal axes (no shear strain) the FE wrapper must hand the kernel exactly the
+// increment the element applied, position by position -- including across a step in which the
+// ORDER of the principal values changes. The path: K0 normally consolidated in an oedometer, then
+// an isochoric extension (eps_yy up, eps_xx down) until the vertical stress, the major one, has
+// fallen below the lateral one. Until 2026-09-28 the wrapper sorted the committed principals on
+// their own and subtracted them from the sorted trial -- the pattern that fed the Hardening Soil
+// kernel strains the element never applied. Measured here with that wrapper the difference was
+// 1.3e-13: the two stresses are equal at the moment they cross, so pairing them the wrong way
+// round costs almost nothing on this path. The wrapper now projects the committed stress on the
+// trial's frame, so the identity holds by construction rather than by that coincidence.
+void test_g5_wrapper_follows_the_axes_through_a_swap() {
+    std::printf("-- (g5) FE wrapper == kernel on fixed axes, through an ordering swap --\n");
+    const MaterialModel m = ss_model();
+    const double p0 = 50.0;
+    GaussState gs;
+    gs.stress = Eigen::Vector3d(-p0, -p0, 0.0); gs.stress_zz = -p0; gs.pp = p0;
+    Eigen::Matrix3d Dt;
+    for (int i = 0; i < 100; ++i) {   // K0 NC state
+        GaussState tr;
+        integrate_point(m, gs, Eigen::Vector3d(0.0, -5e-4, 0.0), tr, Dt);
+        gs = tr;
+    }
+    // The kernel chain on the same axes: compression-positive, positions (x, y, z).
+    Eigen::Vector3d ks(-gs.stress(0), -gs.stress(1), -gs.stress_zz);
+    double kpp = gs.pp;
+    double worst = 0.0;
+    bool swapped = false;
+    for (int i = 0; i < 120; ++i) {
+        const double d = 2.5e-4;   // isochoric in plane strain: eps_xx = -eps_yy
+        GaussState tr;
+        integrate_point(m, gs, Eigen::Vector3d(-d, d, 0.0), tr, Dt);
+        gs = tr;
+        const auto r = ss_step(m.ssoil, ks, kpp, Eigen::Vector3d(d, -d, 0.0));
+        ks = r.sig; kpp = r.pp;
+        worst = std::max({worst, rel(-gs.stress(0), ks(0)), rel(-gs.stress(1), ks(1)),
+                          rel(-gs.stress_zz, ks(2)), rel(gs.pp, kpp)});
+        swapped = swapped || (-gs.stress(1) < -gs.stress(0));
+    }
+    std::printf("   after extension: FE (sxx, syy, szz) = (%.4f, %.4f, %.4f) | kernel (%.4f, %.4f, "
+                "%.4f) | worst relative difference %.2e\n",
+                -gs.stress(0), -gs.stress(1), -gs.stress_zz, ks(0), ks(1), ks(2), worst);
+    check(swapped, "the vertical stress passed below the lateral one (teeth: the order changed)");
+    check(worst < 1e-8, "FE path == kernel chain at every step, across the swap (1e-8)");
+}
+
 void test_g2_frame_indifference() {
     std::printf("-- (g2) frame indifference: 30-deg rotated path, stresses rotated back --\n");
     const MaterialModel m = ss_model();
@@ -356,6 +402,7 @@ int main() {
     test_triaxial_mc_failure();
     std::printf("\nSTAGE 2 -- FE constitutive wiring\n\n");
     fe::test_g1_integrate_point_identity();
+    fe::test_g5_wrapper_follows_the_axes_through_a_swap();
     std::printf("\n");
     fe::test_g2_frame_indifference();
     std::printf("\n");
