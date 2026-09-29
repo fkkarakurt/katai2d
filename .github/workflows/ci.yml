@@ -27,7 +27,7 @@ jobs:
         run: choco install ninja --no-progress -y
 
       - name: Python for the gates and the bindings
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
