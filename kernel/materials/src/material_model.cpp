@@ -65,14 +65,19 @@ HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
     // trial's order any more, and the cut-off reads its argument as descending -- so it is
     // applied to the sorted values and the result put back in place.
     bool capped = false;
+    Eigen::Matrix3d Jcap = Eigen::Matrix3d::Identity();   // d r_capped / d r, by position
     {
         int perm[3] = {0, 1, 2};
         std::sort(perm, perm + 3, [&](int a, int b) { return r[a] > r[b]; });
         double rs[3] = {r[perm[0]], r[perm[1]], r[perm[2]]};
         const LameConstants lc = lame_from(Eur, pe.nu_ur);
-        capped = apply_rankine_cap(rs, sigma_t_cap, lc.lambda, lc.mu);
+        Eigen::Matrix3d Js;   // in the sorted order the cut-off works in
+        capped = apply_rankine_cap(rs, sigma_t_cap, lc.lambda, lc.mu, &Js);
         if (capped)
-            for (int i = 0; i < 3; ++i) r[perm[i]] = rs[i];
+            for (int i = 0; i < 3; ++i) {
+                r[perm[i]] = rs[i];
+                for (int j = 0; j < 3; ++j) Jcap(perm[i], perm[j]) = Js(i, j);
+            }
     }
 
     // Analytic consistent (continuum) tangent: the shared principal-space assembly (spin +
@@ -83,6 +88,8 @@ HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
     Eigen::Matrix3d Jten;
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j) Jten(i, j) = Jcomp(2 - i, 2 - j);
+    // The cut-off acts after the model's own return, so its Jacobian comes after it in the chain.
+    if (capped) Jten = Jcap * Jten;
     const int src[3] = {pv[0].src, pv[1].src, pv[2].src};
     const LameConstants lame_ur = lame_from(Eur, nu);
 

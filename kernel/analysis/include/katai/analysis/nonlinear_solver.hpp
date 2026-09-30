@@ -135,6 +135,13 @@ struct NewtonOptions {
     // not the load -- gains nothing from a smaller increment of a load that is already applied,
     // so it passes 1 and fails at its first cut, after every retry has had its chance.
     double min_step_fraction = 0.125;
+    // An increment that fails is ABANDONED without the two stronger retries (the consistent
+    // tangent of the finite-difference models, the non-monotone line-search window). For a caller
+    // to whom a failure only means "try a smaller step" -- a strength-reduction step far from the
+    // final bracket -- those retries decide nothing and cost most of the search: measured on a
+    // Hardening Soil embankment, each failed reduction step spent 120 to 213 iterations and one
+    // to five minutes, a converged one 6 to 24 iterations. Off everywhere else.
+    bool quick_abandon = false;
 };
 
 // Plate (structural wall/beam) embedded in soil — 3-node Timoshenko beam (see
@@ -177,12 +184,22 @@ struct AnchorElement {
     double Fmax_comp = -1.0;                // max compressive force (positive); ≤0 ⇒ unbounded
     // Prestress (lock-off force) per metre of wall, tension-positive. An anchor or strut is
     // almost never installed slack: it is tensioned against the wall, and that force is what
-    // holds the excavation before any further movement occurs. The anchor then behaves as an
-    // elastic spring FROM that state — N = N0 + (EA/L)·(U − U_p) with U measured from the
-    // installation datum the phase chain carries — which is what a prestressed anchor means in
-    // this program: the lock-off force is applied once, and afterwards the force follows the wall.
+    // holds the excavation before any further movement occurs. In the phase that installs it the
+    // anchor is the JACK: it holds exactly the lock-off force whatever the wall does (lock_off
+    // below), and at the end of that phase it is locked where the wall has come to. From the
+    // next phase on it is an elastic spring from that state -- N = N0 + (EA/L)·(U − U_p), U_p
+    // the elongation it was locked at -- so the force follows the wall from the lock-off force.
     // 0 ⇒ installed slack, i.e. what every KATAI anchor was before this field existed.
     double prestress = 0.0;
+    // THE INSTALLATION PHASE OF A PRESTRESSED ANCHOR: the anchor applies its lock-off force and
+    // nothing else (no stiffness), and its committed elongation follows the wall, so the phase
+    // ends with the anchor carrying exactly the lock-off force. Until 2026-09-30 the anchor was a
+    // spring from the start of that phase, and the wall's movement towards it in the same phase
+    // unloaded it: measured on a tie-back excavation rebuilt from a published tutorial (lock-off
+    // 500 and 1000 kN), 15% of each lock-off force was left at the end of its own phase, and the
+    // wall moved four times as far as it should -- with no message. Set by the phase driver for
+    // an anchor installed in a static phase.
+    bool lock_off = false;
     int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
     // The global DOFs the ends act on when they are NOT the mesh node's own, [a_x,a_y, b_x,b_y];
     // -1 = the node's DOF. An end drawn on an embedded wall pulls the WALL, whose translations

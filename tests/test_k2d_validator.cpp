@@ -187,9 +187,11 @@ int main() {
     probe(base, [](m::Project& p) { p.initial_procedure = m::InitialProcedure::Safety; },
           "initial_procedure", W, "initial Safety with staged phases present");
     // A Safety run solves the structural elements with the soil (K2D-G016 refused every active one
-    // until 2026-09). One is still refused, in the initial procedure and in a Safety phase alike: a
-    // PRESTRESSED anchor, whose lock-off force belongs to a ground that has already moved while the
-    // search starts from the unstressed one. The same anchor slack, and every other element, pass.
+    // until 2026-09). One is still refused where the search has to start from the unstressed
+    // state -- the initial procedure, or a Safety phase that installs it: a PRESTRESSED anchor,
+    // whose lock-off force belongs to a ground that has already moved. A Safety phase that
+    // continues from the phase that installed it starts from that phase, lock-off force included,
+    // and passes. The same anchor slack, and every other element, pass.
     probe(base,
           [](m::Project& p) {
               p.initial_procedure = m::InitialProcedure::Safety;
@@ -198,10 +200,18 @@ int main() {
           "initial.struct", E, "initial Safety with a prestressed anchor active");
     probe(base,
           [](m::Project& p) {
+              p.phases[2].struct_active = {1, 0, 1};
               p.phases[3].struct_active = {0, 1, 0};
               p.anchors[0].prestress = 50.0;
           },
-          "phases[3].struct", E, "a Safety phase with a prestressed anchor active");
+          "phases[3].struct", E, "a Safety phase that installs a prestressed anchor");
+    probe_accepts(base,
+                  [](m::Project& p) {
+                      p.phases[3].struct_active = {0, 1, 0};
+                      p.anchors[0].prestress = 50.0;
+                  },
+                  "phases[3].struct",
+                  "a Safety phase continuing a prestressed anchor from the phase before");
     probe_accepts(base, [](m::Project& p) { p.initial_procedure = m::InitialProcedure::Safety; },
                   "initial.struct",
                   "initial Safety with a plate, a slack anchor and an interface active");

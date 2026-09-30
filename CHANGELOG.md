@@ -6,6 +6,259 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A factor of safety for Hardening Soil and Soft Soil, in minutes and independent of the path
+
+Started from the phase before it, a Safety phase could reduce the strength of a Hardening Soil or
+Soft Soil material, and the answer depended on the route the search took: reduced together with
+their hardening, the same embankment on Hardening Soil reported 1.864 along one sequence of
+reduction steps and 1.676 along another, and a run took from five minutes to more than forty. In
+a Safety phase these materials now take part as the Mohr-Coulomb material with their own c',
+phi', psi and nu_ur and a stiffness taken from the state the phase starts from (K2D-A020). The
+embankment of a published tutorial gives 1.821 on 15-noded elements against 1.8 published (and
+1.823 with the same strength modelled in Mohr-Coulomb), with the Safety phase itself in about two
+minutes.
+
+The search itself also stopped spending most of its time on steps it only halves: a reduction
+step far from the final bracket that does not converge is abandoned as soon as it stops making
+progress, without the stronger retries (the consistent tangent, the non-monotone line search)
+that decide nothing there. Steps within two resolutions of the bracket keep every retry.
+
+### Plates that meet are joined rigidly
+
+Each drawn plate numbered its own rotations, so two plates meeting at a node kept two independent
+rotations there and every joint was a hinge, with nothing said. On a plate on elastic ground
+loaded at mid-span the moment under the load was +56.65 kNm/m in one piece and -0.23 kNm/m with
+the plate drawn as two pieces meeting there, its sign reversing a metre away; a tunnel lining,
+which has to be drawn as the chords of its arc, carried its ring force with no bending at all. A
+rotation at a node an earlier plate already turns is now the same unknown. KV-STR-015: the plate
+drawn in two pieces gives the moments of the plate drawn in one, to 0.
+
+A plate with interfaces (a wall on its own degrees of freedom) had the same joint, and worse: a
+wall that is not vertical was split from the soil -- and built, with its interfaces -- up to a
+metre past its drawn end, so a lining chord or a slab ending inside the soil was longer than drawn
+and the force report of each piece ran into the next (a wall drawn from x = 3 to 9 m reported
+forces to 9.75 m, and at a joint 59.49 kNm/m on one side against 52.37 on the other). A wall is
+now split and built only where it is drawn, the ends of walls that meet are one point, and a plate
+ending on a wall's end turns with it: the two-piece wall with interfaces gives the moment of the
+one-piece wall to 3.8e-4.
+
+### The ground surface drains in a consolidation phase with no flow boundaries drawn
+
+With no flow boundaries declared, the drained boundary was the set of boundary nodes at the
+highest elevation of the whole mesh, inactive regions included. With a fill not yet placed on
+top, no active node drained and the ground consolidated as a sealed body; with it placed, only
+its crest drained and the ground surface beside it stayed sealed. The upward-facing exposed
+surface of the active ground now drains -- the ground surface, the fill's crest and slopes, an
+excavation floor -- and the sides and base stay impermeable, as before.
+
+### The initial phase is drained
+
+The ground's own weight was carried over geological time, so an initial phase that only sets up
+that state generates no excess pore pressure, whatever the drainage type. A non-level K0 phase's
+equilibrium step (and a gravity phase's whole self-weight) loaded Undrained (A) soil undrained,
+and every later phase inherited a pore pressure nobody had generated: a Safety phase on an
+undrained slope differed from the same slope drained although nothing had been loaded yet. An
+initial phase that also applies a load or a prescribed displacement keeps the soil's drainage
+type for that load's response, as before.
+
+### Free water presses on the ground it stands against
+
+The pore pressure enters the calculation as a load on the soil it is in, and on the boundary of
+that soil it leaves a term that only the pressure of free water standing against the boundary
+balances. That pressure was never applied. Where the ground surface is at the water table the term
+is zero and nothing was missing; anywhere else -- an excavation dug below the water table, a lake
+or river bed, the upstream face of a dam -- the water's push on the ground was left out, and the
+unbalanced term lifted the face by the full water pressure. An elastic column dug 4 m below the
+water table heaved exactly twice the closed form (the dry pit's, although the water stood in it),
+and a submerged excavation rebuilt from a published tutorial collapsed in its last stage with a
+strut force four times too high. The water's pressure is now applied on the exposed boundary of the
+active ground (a wall's split seam stays interior until one side is dug away), from the phase's own
+water conditions; the column heaves 18.17 mm against 17.83 mm from the closed form, the difference
+being the unit weight of water (9.81 against the closed form's 10).
+
+### A prestressed anchor holds its lock-off force through the phase that installs it
+
+A lock-off force was applied when the anchor was activated, and from that moment the anchor was a
+spring: the wall's movement towards it in the same phase unloaded it. On a tie-back excavation
+rebuilt from a published tutorial only 15% of each lock-off force (500 and 1000 kN) was left at the
+end of its own phase, and the wall moved about four times as far as it should, with no message --
+the unsafe side for the anchor and the wall alike. In the phase that installs it the anchor now
+holds exactly its lock-off force, with no stiffness of its own (the jack), and is locked where the
+wall has come to; from the next phase on it is a spring from that force. KV-STR-001 pins both
+halves: the installation phase is the same field as no anchor plus the lock-off force as a point
+load (0 m difference) with the anchor reporting exactly 500 kN on soft ground, and a later load
+phase is the slack-anchor response with the anchor at 500 kN plus what the spring picks up.
+
+### A consolidation phase carries plastic soil
+
+An elastoplastic consolidation step was one Newton solve with no line search and no cut-back, held
+to a criterion that compared the out-of-balance FORCE with the size of the flow term, which in a
+dissipation step is tiny: on an embankment over Hardening Soil sand a step balanced to 7e-6 of the
+forces in play oscillated for its whole iteration budget and stopped the phase. Soft Soil,
+Hardening Soil and a Mohr-Coulomb fill activated in a consolidation phase all failed in the first
+time step, at any number of steps, or ran for half an hour with no progress. Each balance is now
+measured on its own scale (force against the forces in play, volume against the step's flow and
+volume change), a line search judges both together, an iterate that stops descending below 1e-3 of
+the force scale is kept and counted as a static phase keeps it, and a step that does not converge
+is cut in two with its load increment, down to 1/64. The embankment's first construction phase now
+runs with Hardening Soil sand, a Mohr-Coulomb fill and Soft Soil layers.
+
+### Values entered without their switch are no longer dropped
+
+Rinter, K0nc, K0, OCR and POP each take effect only with a switch that selects them, and the Python
+interface set the value and left the switch alone: Rinter = 0.5 ran as a rigid interface and POP =
+25 kPa as a normally consolidated soil, with nothing said. A value given now brings its switch with
+it (OCR and POP together without saying which is refused), and a project file with a value its
+switch leaves unread is warned about. The automatic K0 now reads a POP as well: it raises the
+lateral stress point by point, K0nc (s'v + POP) - nu/(1 - nu) POP, where it used to reach only the
+cap of the advanced models.
+
+### A Safety phase starts from the ground the phases before it built
+
+A Safety phase used to re-solve the whole model from the unstressed state -- the self-weight
+applied again from zero, under each reduced strength -- and read its factor of safety from that
+second construction rather than from the one the engineer had staged. Three things followed. A
+prestressed anchor and an undrained soil had to be refused, because a lock-off force means
+nothing on unstressed ground and an undrained soil loaded from zero carries its own weight in
+the water. Every structure carried the settlement of the whole self-weight, including what
+happened before it was installed. And the answer depended on how many steps that second
+construction was given: a geosynthetic-reinforced wall that had just carried its own weight at
+full strength was reported with a factor of safety of 0.80 on 8 load steps and 1.07 on 40.
+
+A Safety phase that follows other phases now starts where they left the ground: their stresses
+and pore pressures, the structures with the forces and plastic state they carried (a lock-off
+force included), and their internal force held as the load while the strength is reduced from
+there. Whatever the Safety phase itself changes -- an element removed, a load switched -- is first
+carried at full strength, as a Plastic phase would carry it. An embankment on clay rebuilt from a
+published tutorial now gives 1.82 drained and 1.42 undrained, against 1.8 and 1.4 published (the
+undrained case was refused; from zero it had given 0.73). A prestressed anchor installed before
+the Safety phase takes part, and on the sliding block of KV-STR-010 the factor meets the closed
+form with the anchor at its capacity to +0.09%. Hardening Soil and Soft Soil, refused in a Safety
+analysis because reducing their strength from zero is path-unstable, are accepted from a parent
+phase. A Safety run with no phase before it, or with a structure installed in the Safety phase
+itself, still starts from the unstressed state, and the refusals stay for that start.
+
+### Cohesionless Hardening Soil no longer carries strength it does not have near the surface
+
+The Hardening Soil model reads its stiffness at the minor principal stress, floored at a tenth of
+the reference pressure so that the stiffness never falls to zero at a stress-free point. The
+failure deviator read the same floored stress. So a cohesionless point shallower than that floor
+carried the strength of the floor instead of its own: on a sand of 30 degrees, a deviator of 20 kPa
+at zero confinement, an apparent cohesion of up to 6 kPa — on the unsafe side, and largest exactly
+where a footing's bearing capacity is decided. The floor now applies to the stiffness only; the
+failure deviator, the asymptote of the hyperbola and the mobilised friction angle read the stress
+itself, and a stress-free point is at the apex, not on the failure plateau, so a compression takes
+it into the cone by hardening. A point
+sheared at 2 kPa of confinement now fails at 5.38 kPa, the Mohr-Coulomb value of its own stress,
+where it used to hold 26.9 (a test pins it); a point pulled past the apex is returned to it, with a
+zero tangent there.
+
+With the true strength, shallow points reach the failure line, and two things that had never been
+exercised there were wrong. A point brought onto the line other than by hardening along it — a
+column loaded from zero stress, whose first elastic trial lies beyond the line — kept the plastic
+shear strain it had before, far inside the surface its stress had reached; it now carries at least
+the hardening the line implies. And the yield function that decides whether a trial is plastic
+switched between the hyperbola and the Mohr-Coulomb excess at the failure deviator instead of taking
+the larger of the two, so it jumped there. Both left a discontinuity in the response that held the
+equilibrium iteration: the corpus oedometer, whose column starts stress-free, took 531 s to reach a
+tolerated error of 1e-6 and now takes 10 s, and at the default tolerance 8 s instead of 52 s, with
+the loading settlement closer to the closed form than before.
+
+### Hardening Soil flows cleanly along the edge of its cap
+
+The cap of the Hardening Soil model measures the deviator with q̃ = σ1 + (δ − 1)σ2 − δσ3, which
+has an edge wherever two principal stresses are equal — and every point of a normally consolidated
+ground starts on that edge, its two horizontal stresses equal. There the cap was one surface with
+the averaged gradient, which does not hold the stress on the edge: loaded in compression, the
+substeps alternated between the edge and a face and the stress returned jumped with the strain
+increment. Measured on a strip footing on sand, 0.2% of the plastic points jumped at every
+equilibrium iteration, deep ones included, and the iteration stalled. At an edge the cap is now two
+faces with one hardening (Koiter), unless both shear planes of the corner are already flowing and
+holding the edge — four surfaces in a three-dimensional stress space would be singular. The
+preconsolidation seeded into an initial state is measured with the same q̃, so a state whose
+principals are not pairwise equal (a slope, a history under an inclined surface) starts on the cap
+the model reads rather than outside it.
+
+The test that decides whether a substep yields in shear now reads the yield surface with the
+stiffness of the stress it tests, as the flow and the drift correction already did. On a path that
+lowers the minor stress the surface shrinks faster than the deviator falls, and the frozen test
+called the start of every such substep elastic while its end point yielded.
+
+A strip footing pushed into cohesionless sand with this model used to stop at 5 to 7% of its
+settlement; it now reaches the full settlement, at a bearing pressure within 2% of the collapse
+pressure the Mohr-Coulomb model of the same strength reaches on the same mesh.
+
+### Hardening Soil dilates only where its rule says it does
+
+The mobilised dilatancy of the Hardening Soil model follows Rowe's law above a mobilised friction of
+three quarters of the friction angle's sine and is zero below it; a zero or negative dilatancy angle
+is taken as it is. The threshold was missing — Rowe was applied as soon as it turned positive, i.e.
+from the critical-state angle, which lies below the threshold whenever the dilatancy angle is large
+(with phi = psi = 41 degrees the soil dilated from the first increment of shear) — and a negative
+dilatancy angle, which the input accepts, was silently read as zero. The small-strain variant is
+unaffected: below the critical state it contracts by its own rule, which a test already pins. A new
+test pins the three branches.
+
+### The line search finds its step in fewer tries
+
+A rejected trial step used to be halved, so the step of 1/16 that a plastic mechanism typically
+needs cost five evaluations of the whole internal force — on a Hardening Soil footing, three quarters
+of the run time went into them. The next trial is now the minimum of the quadratic through the
+residual at the start, its slope along the Newton step and the rejected trial, kept between a tenth
+and a half of the last one. The acceptance test is unchanged, so no worse step can be taken, and the
+worst case is the halving it replaces. The whole test suite runs in 671 s instead of 771 s.
+
+### An iteration that creeps near a limit state is steered out of it
+
+Near a limit state many stress points sit on the corners of their yield surfaces or change between
+elastic and plastic from one iterate to the next. The tangent is exact on the side each point is
+on, the full Newton step lands on the other side, and the line search can only take a sliver of it:
+a 30-degree slope of sand on 15-noded elements spent 200 iterations at steps of 1e-3 before its
+increment was accepted as stagnated, its force residual long under the tolerance and its local
+criteria never. After three steps in a row cut to under a quarter, the plastic points' tangents now
+get a share of their elastic stiffness — a tenth, doubling while the iteration still creeps, halving
+with every good step — which steers the direction towards the elastic-stiffness iteration that
+crosses those corners without having to see them. The residual the increment has to reach is
+unchanged. The slope takes 32 s instead of 257 s with the same displacements to 1e-6; the
+self-weight phase of a geosynthetic-reinforced wall on the same elements, which gave up at 78% of
+its weight, now carries all of it; and a strip footing on cohesionless sand pushed to 0.3 m, which
+stopped at 69% of the settlement, now stops at 77% on the same collapse pressure (283.0 against
+283.5 kPa) -- past the limit load, where how far a non-associated mechanism can be followed depends
+on the path the iteration takes.
+
+An increment that runs out of iterations while its residual has not fallen by a tenth over its last
+thirty iterates is now recorded as a stall rather than as a spent budget; it keeps its whole budget
+first. The distinction matters because a budget is never published as a capacity: with the floor a
+collapsing footing finds a hair of descent at every iterate, and without this the Prandtl footing of
+the corpus refused to name its limit load.
+
+### A phase that stops short keeps the state it last equilibrated
+
+A phase that could not reach its full load published its load factor and nothing else — no
+displacement, no stress, no reactions — and a footing pushed to collapse under an imposed
+settlement reported a footing force of 0.0. The collapse load and the mechanism are read off
+exactly that last equilibrated state, so the phase now carries it, and still reports that it
+stopped: nothing continues from it. On a Tresca footing loaded past its capacity the reactions of
+the kept state balance the equilibrated load to 1e-16, at N_c = 5.148 against 2 + π = 5.142.
+
+### Hardening Soil hands Newton the tangent of the stress it returns where tension is cut off
+
+A shallow Hardening Soil point pulled into tension is capped after the model's own return, but the
+tangent handed to the equilibrium iteration was the one from before the cap: a principal the cap
+pins to the tensile strength still carried the full elastic stiffness. Measured against a central
+difference of the whole update on 20 000 random loaded states, every capped point disagreed, by up
+to 1e5 relative. The cut-off's own Jacobian — closed form, since with its active set fixed the
+return is affine — is now chained after the model's; the capped points agree to the round-off of
+the difference, and a test holds one and two capped principals to it. The stresses are unchanged
+bit for bit; only the iteration that reaches them is.
+
+The same measurement, repeated from states a previous increment has actually reached rather than
+from arbitrary ones, puts the rest of the Hardening Soil tangent where it should be: away from the
+cut-off it matches the difference to within the increment's own nonlinearity, and the mismatch
+shrinks with the increment. What remains is at shallow points, where one increment is large next
+to the stress it starts from — a gap between the continuum and the algorithmic tangent, not a wrong
+branch.
+
 ### A factor of safety in a minute instead of ten
 
 The strength-reduction search re-solved the whole self-weight from the unstressed state for every

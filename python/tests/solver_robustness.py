@@ -108,18 +108,22 @@ def slope_safety(drainage, *, ignore=False):
     return ok, codes, job.results()[-1].fos
 
 
-# 3. An undrained soil in a Safety run. The search re-solves the ground from the unstressed
-#    state, so every trial loaded the undrained clay with its whole self-weight, put that weight
-#    into the pore water and reported a factor of safety far too low (0.73 against 1.4 on a
-#    published embankment), with no warning. Refused now (K2D-G017); the remedies still run.
-ok, codes, _ = slope_safety("undrained_a")
-check(not ok and "K2D-G017" in codes,
-      "an Undrained (A) soil with phi' > 0 in a Safety phase is refused (K2D-G017)")
+# 3. An undrained soil in a Safety run. The search used to re-solve the ground from the
+#    unstressed state, so every trial loaded the undrained clay with its whole self-weight, put
+#    that weight into the pore water and reported a factor of safety far too low (0.73 against
+#    1.4 on a published embankment), with no warning; it was refused (K2D-G017) until the search
+#    could start from the phase before. A Safety phase now starts from that phase's state, so the
+#    undrained soil runs and generates only what the strength reduction itself makes it generate.
+ok_u, codes_u, fos_u = slope_safety("undrained_a")
+check(ok_u and "K2D-G017" not in codes_u and fos_u > 0,
+      f"an Undrained (A) soil with phi' > 0 in a Safety phase after the initial phase runs "
+      f"from that phase (FoS {fos_u:.3f})")
 ok_d, codes_d, fos_d = slope_safety("drained")
 check(ok_d and "K2D-G017" not in codes_d and fos_d > 0,
-      f"the drained remedy runs (FoS {fos_d:.3f})")
+      f"the drained slope runs (FoS {fos_d:.3f})")
 ok_i, codes_i, fos_i = slope_safety("undrained_a", ignore=True)
 check(ok_i and "K2D-G017" not in codes_i and abs(fos_i - fos_d) < 1e-9,
-      f"so does ignoring undrained behaviour, to the drained factor bit for bit ({fos_i:.3f})")
+      f"and ignoring undrained behaviour gives the drained factor bit for bit ({fos_i:.3f}) -- "
+      f"the initial phase is drained whatever the drainage type, so the two start alike")
 
 sys.exit(1 if failures else 0)

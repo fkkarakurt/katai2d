@@ -13,6 +13,8 @@
 // phase falls through to the driver's common result tail, exactly as it
 // always has.
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -45,7 +47,84 @@ struct SafetyPhase {
     double tolerance = 0.0;
     int load_steps = 0;
     int max_iterations = 0;
+    // THE PARENT PHASE'S STATE, when the search starts from it (see safety_analysis): its
+    // committed stresses, its internal force (soil + structures, equation space) and the
+    // structures' carried state. All empty = the search re-solves the ground from the unstressed
+    // state, as a Safety run with no phase before it must.
+    std::vector<GaussState> parent_state;
+    Eigen::VectorXd parent_force;
+    StructuralInit parent_structures;
+    bool from_parent() const { return !parent_state.empty() && parent_force.size() > 0; }
 };
+
+// THE ADVANCED MODELS ENTER A SAFETY SEARCH AS MOHR-COULOMB. Reducing the strength of a
+// hardening model moves its yield surfaces and its hardening together, and the factor the search
+// ends on then depends on the path it happened to take: measured on an embankment on Hardening
+// Soil rebuilt from a published tutorial, the same model reported 1.864 along one sequence of
+// reduction steps and 1.676 along another, depending only on whether one step converged. The
+// strength reduction is defined on the Mohr-Coulomb strength these models share (c', phi', psi),
+// so in a Safety phase each Hardening Soil or Soft Soil material becomes the Mohr-Coulomb material
+// with that strength and nu_ur, with the stiffness it has in the state the phase starts from --
+// one Young's modulus per material, from the mean stress of its stress points there (E50 at the
+// mean minor principal stress for Hardening Soil, 3(1 - 2 nu_ur) p' / kappa* for Soft Soil). The
+// stiffness does not decide a limit state; the strength does, and that is the soil's own.
+inline std::vector<MaterialModel> safety_equivalents(const katai::mesh::Mesh& mesh,
+                                                     const std::vector<MaterialModel>& models,
+                                                     const std::vector<GaussState>& state,
+                                                     const std::vector<char>& active,
+                                                     std::vector<std::string>* converted = nullptr) {
+    std::vector<MaterialModel> out = models;
+    const int ne = mesh.element_count;
+    const int ng = ne > 0 ? (int)(state.size() / (size_t)ne) : 0;
+    for (size_t mi = 0; mi < models.size(); ++mi) {
+        const MaterialModel& m = models[mi];
+        const bool hs = m.type == MaterialType::HardeningSoil;
+        const bool ss = m.type == MaterialType::SoftSoil || m.type == MaterialType::SoftSoilCreep;
+        if (!hs && !ss) continue;
+        // Mean minor principal and mean effective stress (compression positive) over the material.
+        double s3 = 0.0, pm = 0.0;
+        int n = 0;
+        for (int e = 0; e < ne && ng > 0; ++e) {
+            if (mesh.element_material[e] != (int)mi || (!active.empty() && !active[e])) continue;
+            for (int g = 0; g < ng; ++g) {
+                const GaussState& gs = state[(size_t)e * ng + g];
+                const double sx = -gs.stress(0), sy = -gs.stress(1), txy = -gs.stress(2);
+                const double sz = -gs.stress_zz;
+                const double c = 0.5 * (sx + sy), r = std::hypot(0.5 * (sx - sy), txy);
+                s3 += std::min({c - r, sz});
+                pm += (sx + sy + sz) / 3.0;
+                ++n;
+            }
+        }
+        if (n > 0) { s3 /= n; pm /= n; }
+        MaterialModel mc = m;
+        mc.type = MaterialType::MohrCoulomb;
+        if (hs) {
+            const auto& h = m.hs;
+            const double sphi = std::sin(h.friction), cphi = std::cos(h.friction);
+            const double num = h.cohesion * cphi + std::max(s3, h.p_limit()) * sphi;
+            const double den = h.cohesion * cphi + h.p_ref * sphi;
+            mc.youngs_modulus = h.E50_ref * (den > 0.0 ? std::pow(num / den, h.m) : 1.0);
+            mc.poisson_ratio = h.nu_ur;
+            mc.cohesion = h.cohesion;
+            mc.friction_angle = h.friction;
+            mc.dilatancy_angle = h.dilatancy;
+        } else {
+            const bool creep = m.type == MaterialType::SoftSoilCreep;
+            const double kap = creep ? m.ssc.kap_star : m.ssoil.kap_star;
+            const double nu = creep ? m.ssc.nu_ur : m.ssoil.nu_ur;
+            mc.youngs_modulus = 3.0 * (1.0 - 2.0 * nu) * std::max(pm, 1.0) / std::max(kap, 1e-9);
+            mc.poisson_ratio = nu;
+            mc.cohesion = creep ? m.ssc.c : m.ssoil.c;
+            mc.friction_angle = creep ? m.ssc.phi : m.ssoil.phi;
+            mc.dilatancy_angle = creep ? m.ssc.psi : m.ssoil.psi;
+        }
+        out[mi] = mc;
+        if (converted) converted->push_back(std::to_string(mi));
+    }
+    return out;
+}
+
 
 // Solve the phase. Fills the factor of safety, the honest lower-bound flag,
 // the mechanism displacement and the recovered nodal stresses in R. Returns
@@ -54,8 +133,10 @@ struct SafetyPhase {
 //
 // `structures` are the phase's active structural elements and `f` must already carry their
 // self-weight: both enter every trial of the search (safety_analysis states what the reduction
-// does and does not touch). No structural force diagram is produced for this phase -- the state
-// the search stops at is a re-solve from the unstressed ground, not the state the phases built.
+// does and does not touch). With in.from_parent() the search starts from the parent phase's
+// equilibrium (safety_analysis states how); otherwise it re-solves the ground from the unstressed
+// state. No structural force diagram is produced for this phase either way -- the state the
+// search stops at is the ground at the limit of its reduced strength, not a state to design for.
 inline bool solve_safety_phase(
     const katai::mesh::Mesh& mesh, const DofMap& dofs,
     const std::vector<MaterialModel>& models, const std::vector<MaterialProfile>& profiles,
@@ -76,12 +157,16 @@ inline bool solve_safety_phase(
     // confined block). factor_strength does reduce the soft-soil strength too (defensive), but
     // until a path-stable Safety -- strength reduction from the geostatic equilibrium, a tracked
     // follow-up -- the honest refusal stands: ask for Mohr-Coulomb strength for the Safety check.
-    if (in.has_hardening || in.has_softsoil) {
-        R.message = "Safety analysis (phi-c reduction) for Hardening Soil / Soft Soil is not "
-                    "supported yet (reducing strength from a stress-free state is path-unstable "
-                    "with a cap model and would report a misleading factor of safety). For a "
-                    "slope factor of safety, use a Mohr-Coulomb material with the same c' and "
-                    "phi' -- the standard strength-reduction model.";
+    // From the parent phase's equilibrium the reduction is path-stable for these models too: the
+    // cap is where the phases left it and nothing is re-loaded from zero, so the gate below is the
+    // unstressed start's alone.
+    if ((in.has_hardening || in.has_softsoil) && !in.from_parent()) {
+        R.message = "Safety analysis (phi-c reduction) for Hardening Soil / Soft Soil cannot "
+                    "start from the unstressed state (reducing strength from a stress-free state is path-unstable "
+                    "with a cap model and would report a misleading factor of safety). Run the "
+                    "Safety analysis as a phase after the initial phase (or after the phase that "
+                    "builds the ground), and the search starts from the state it built; or use a "
+                    "Mohr-Coulomb material with the same c' and phi'.";
         return false;
     }
     // HOEK-BROWN HAS NOTHING FOR phi-c REDUCTION TO HOLD, and the failure is silent in the
@@ -121,14 +206,34 @@ inline bool solve_safety_phase(
                 "was made over.";
             return false;
         }
+    if (in.from_parent() && (in.has_hardening || in.has_softsoil))
+        add_diagnostic(R, DiagnosticSeverity::Note, "K2D-A020", "Safety",
+                       "The Hardening Soil / Soft Soil materials take part in this Safety phase "
+                       "as Mohr-Coulomb materials with their own c', phi', psi and nu_ur, and a "
+                       "stiffness taken from the stress state the phase starts from. Their "
+                       "hardening is not reduced with the strength: reduced together, the factor "
+                       "of safety depended on the path of the search.");
     StrengthReductionOptions sopt;
     sopt.srf_min = 0.4; sopt.srf_max = 3.0; sopt.bisection_iterations = 12;
     sopt.newton = NewtonOptions{in.load_steps > 0 ? in.load_steps : 8,
                                 in.max_iterations > 0 ? in.max_iterations : 120,
                                 in.tolerance > 0.0 ? in.tolerance : 1e-3};
     const auto sr =
-        safety_analysis(mesh, dofs, f, models, solver, sopt, {}, in.active, profiles, structures);
+        in.from_parent()
+            ? safety_analysis(mesh, dofs, f,
+                              safety_equivalents(mesh, models, in.parent_state, in.active),
+                              solver, sopt, in.parent_state, in.active, profiles, structures,
+                              in.parent_force, in.parent_structures)
+            : safety_analysis(mesh, dofs, f, models, solver, sopt, {}, in.active, profiles,
+                              structures);
     R.fos = sr.fos;
+    if (sr.start_failed) {
+        R.message = "Safety analysis: the ground did not reach equilibrium at full strength under "
+                    "this phase's own changes to the phase before it (activated or removed "
+                    "elements, loads or water), so no factor of safety is defined. Make those "
+                    "changes in a Plastic phase first and run the Safety phase after it.";
+        return false;
+    }
     if (!sr.ok) {
         R.message = "Safety analysis: the slope did not reach equilibrium even at the lowest "
                     "strength factor (it may already be unstable, or under-restrained).";

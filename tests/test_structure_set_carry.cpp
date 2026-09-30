@@ -228,14 +228,16 @@ void superposition_on_a_linear_model() {
     check(max_abs_diff(C[4].disp, Rl[1].disp) <= 1e-9,
           "(c) and the displacement increment is the released run's");
 
-    // (d) A prestressed anchor activated in the chain applies its lock-off force in that phase.
+    // (d) A prestressed anchor activated in the chain is its jack in that phase: it applies its
+    // lock-off force and nothing else, and ends the phase carrying exactly that force. Its twin is
+    // the chain with NO anchor in that phase and the lock-off force as a load along its axis.
     m::Project pre = model(true);
     pre.anchors[0].prestress = kN0;
     pre.phases = {phase("q1", {1, 0}, {1, 0, 0}), phase("anchor", {1, 1}, {1, 0, 0})};
     m::Project slack = model(true);
     slack.loads[2].qx1 = slack.loads[2].qx2 = kN0 * dir(0);
     slack.loads[2].qy1 = slack.loads[2].qy2 = kN0 * dir(1);
-    slack.phases = {phase("q1", {1, 0}, {1, 0, 0}), phase("anchor", {1, 1}, {1, 0, 1})};
+    slack.phases = {phase("q1", {1, 0}, {1, 0, 0}), phase("anchor", {1, 0}, {1, 0, 1})};
     const auto Pp = solve(pre, InitialPhase::K0Procedure);
     const auto Ps = solve(slack, InitialPhase::K0Procedure);
     check(Pp.size() == 3 && Pp[2].ok && Ps.size() == 3 && Ps[2].ok,
@@ -246,7 +248,15 @@ void superposition_on_a_linear_model() {
                 Pp[2].max_disp, Ps[2].max_disp, peak(Mp), peak(Mq), rel_gap(Mp, Mq));
     check(Pp[2].max_disp > 1e-5, "(d) the lock-off force moves the wall (teeth)");
     check(max_abs_diff(Pp[2].disp, Ps[2].disp) <= 1e-9 && rel_gap(Mp, Mq) <= 1e-9,
-          "(d) the prestressed anchor equals a slack anchor plus its lock-off as a point force");
+          "(d) the prestressed anchor equals no anchor plus its lock-off as a point force");
+    if (const auto* tf = force_of(Pp[2], "Tie")) {
+        std::printf("      anchor force at the end of its phase: %.9f kN (lock-off %.0f)\n",
+                    tf->max_N, kN0);
+        check(std::fabs(tf->max_N - kN0) <= 1e-9 * kN0,
+              "(d) and it ends its installation phase at exactly the lock-off force");
+    } else {
+        check(false, "(d) the prestressed anchor is reported");
+    }
 }
 
 void nil_activation_on_the_interface_wall() {

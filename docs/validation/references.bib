@@ -137,7 +137,7 @@
 }
 
 @misc{katai,
-  title = {KATAI 2D input contract (docs/k2d-format.md, anchors[i].prestress): for node-to-node and fixed-end anchors a lock-off force is applied when the anchor is activated, after which the anchor behaves as an elastic spring from that state; the equivalence used as the oracle is the statement that a constant internal force N0 along the anchor axis is, in the residual, an external force of the same magnitude and direction -- so the same problem can be built twice from different primitives},
+  title = {KATAI 2D input contract (docs/k2d-format.md, anchors[i].prestress): in the phase that activates it a node-to-node or fixed-end anchor holds its lock-off force and is locked at the end of that phase, after which it behaves as an elastic spring from that state; the equivalences used as the oracle are that a constant force N0 along the anchor axis is, in the residual, an external force of the same magnitude and direction, and that on a linear-elastic model a later phase's increment is superposable -- so the same problem can be built twice from different primitives},
   note  = {cited by KV-STR-001},
 }
 
@@ -167,21 +167,26 @@
 }
 
 @misc{kataig,
+  title = {KATAI 2D input contract (docs/k2d-format.md, structs of type plate): a plate is a beam on the mesh nodes it is drawn along, and plates that share a node are rigidly connected there (translations and rotation), so a plate drawn as two consecutive lines is the same structure as the plate drawn as one},
+  note  = {cited by KV-STR-015},
+}
+
+@misc{kataih,
   title = {KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res) -- a barrier is Fully permeable (no effect on flow), Impermeable (a full separation of the pore-pressure degrees of freedom of the interface node pairs, zero cross permeability), or Semi-permeable with a HYDRAULIC RESISTANCE d/k in units of time, the head difference dh across the wall divided by the average discharge q through it per unit area, d/k = dh/q. Read against Darcy's law in series: the two halves of a confined aquifer and the screen between them are three resistances the same discharge passes through},
   note  = {cited by KV-FLW-004},
 }
 
-@misc{kataih,
+@misc{kataii,
   title = {KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res) for the three cross-permeability cases and what each means (fully permeable, the default: no effect on flow; impermeable: separate pore-pressure degrees of freedom on the two sides; semi-permeable: a hydraulic resistance d/k); and the drained limit of Biot consolidation, as in KV-STR-006 -- once the excess pore pressure is gone the coupled problem IS the drained problem, which this program solves by an independent path (solve_nonlinear, with a real Coulomb return on the joint)},
   note  = {cited by KV-STR-007},
 }
 
-@misc{kataii,
+@misc{kataij,
   title = {KATAI 2D input contract (docs/k2d-format.md, tol) for the tolerated error every criterion is measured against; the deformation convergence criteria as a FAMILY are stated in full in the locator (and in kernel/analysis/include/katai/analysis/nonlinear_solver.hpp, NewtonResult::Convergence, and internal_forces.hpp, LocalErrorProbe). THE SAME STIFFNESS PARAMETER CAN BE WRITTEN AS EITHER OF TWO RECIPROCALS: elastic work over total, or total over elastic. Only total over elastic has the behaviour the parameter exists to show -- exactly unity while the solution is fully elastic, approaching zero at failure -- and supports the uses built on it (a mechanism is suspected below CSP 0.5, collapse below 0.015). The inverted form is >= 1 and GROWS without bound as a mechanism forms, which would make the stiffness-weighted force error loosen towards failure instead of tightening. Implemented as total over elastic, deliberately, and this case is what holds it there},
   note  = {cited by KV-NUM-013},
 }
 
-@misc{kataij,
+@misc{kataik,
   title = {KATAI 2D input-safety property (no input may be discarded in silence): the independent path is the same problem with the object drawn where the mesh actually takes it, plus global vertical equilibrium of the support reactions},
   note  = {cited by KV-DIA-001},
 }
@@ -274,6 +279,11 @@
 @misc{geostatic,
   title = {geostatic K0 equilibrium of submerged level ground; Terzaghi effective-stress principle},
   note  = {cited by KV-NUM-003},
+}
+
+@misc{global1921,
+  title = {global equilibrium of the kept state (support reactions = the equilibrated share of the footing load) and Prandtl (1921) for a weightless Tresca (phi = 0) half-space},
+  note  = {cited by KV-FND-016},
 }
 
 @misc{incremental,

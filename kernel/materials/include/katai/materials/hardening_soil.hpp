@@ -53,8 +53,9 @@ struct HardeningSoilParams {
     }
 
     // The stress below which the stress-dependent laws read this value instead: 10% of p_ref.
-    // E_i, E_ur and the strength read the minor stress through it, and the cap's hardening
-    // modulus reads p_c through it.
+    // E_i and E_ur read the minor stress through it, and the cap's hardening modulus reads p_c
+    // through it. The STRENGTH does not: it is a stiffness floor, and the failure criterion is
+    // Mohr-Coulomb in the stress itself (see hs_integrate, stiff_at).
     double p_limit() const { return 0.1 * p_ref; }
 
     // Cap hardening power law ε_v^(p-cap) = (β/(1−m))(p_c/p_ref)^(1−m). m=1 is the logarithmic

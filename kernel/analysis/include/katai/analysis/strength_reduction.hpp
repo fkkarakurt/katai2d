@@ -60,6 +60,9 @@ struct SafetyResult {
     // (A laterally-confined block under self-weight, an over-restrained boundary, or a model with no
     // destabilizing load never collapses; reporting the cap as a definitive FoS would be misleading.)
     bool bracketed = false;
+    // Started from a parent phase, and the ground did not carry this phase's own configuration
+    // change at full strength (the SRF = 1 step): no factor of safety is defined.
+    bool start_failed = false;
 };
 // profile: optional depth gradient (materials/material_model.hpp MaterialProfile), passed
 // through to solve_nonlinear as-is. If c'_inc is GIVEN, the φ-c reduction divides c'_ref
@@ -78,6 +81,15 @@ struct SafetyResult {
 // this search does not have, and kept alone it would push the two faces apart with nothing in
 // the soil to balance it. A prestressed anchor has the same problem with no such fix -- its
 // lock-off force presupposes a ground that has already moved -- and is refused by the caller.
+//
+// baseline + init_struct: START FROM A PARENT PHASE. Given initial_state (the parent's committed
+// stresses) together with baseline (the parent's internal force in equation space -- soil plus
+// structures at init_struct, exactly the constant force a chained phase holds), the search does
+// not re-solve the self-weight: the SRF = 1 state is the parent's equilibrium plus this phase's
+// own configuration change (gravity_load - baseline, ramped as a chained phase ramps it; a nil
+// step when nothing changed), and the strength is reduced incrementally from it with the structures carried from
+// init_struct (datum + plastic state). Interfaces keep their sigma_n0, a lock-off force is part
+// of the carried anchor state, and undrained soil keeps the pore pressures the phases built.
 SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                              const Eigen::VectorXd& gravity_load,
                              const std::vector<MaterialModel>& materials,
@@ -86,6 +98,8 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                              const std::vector<GaussState>& initial_state = {},
                              const std::vector<char>& active_element = {},
                              const std::vector<MaterialProfile>& profile = {},
-                             const Structures& structures = {});
+                             const Structures& structures = {},
+                             const Eigen::VectorXd& baseline = {},
+                             const StructuralInit& init_struct = {});
 
 } // namespace katai::core

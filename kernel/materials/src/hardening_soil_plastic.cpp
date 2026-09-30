@@ -391,7 +391,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     // substep the same sweep sits inside 6e-5 relative, on the number that sequence extrapolates
     // to (tests/study_hs_integration.cpp `point`, which is how both columns were measured).
     struct Stiff {
-        double s3, Eur, Ei, qa, qf;
+        double s3, s3raw, Eur, Ei, qa, qf;
         Eigen::Matrix3d De;
     };
     // The stiffness and strength laws read the MINOR principal stress (Benz 2007, Eqn 7.19), and
@@ -402,14 +402,28 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     const double law_cc = p.cohesion * std::cos(p.friction);
     const double law_s = std::sin(p.friction);
     const double law_den = law_cc + p.p_ref * law_s;
+    // THE FLOOR IS A STIFFNESS FLOOR. p_limit exists so that E_i and E_ur do not fall to zero
+    // (and the hyperbola's 2/E_i blow up) at a stress-free point; it is not part of the failure
+    // criterion, which is Mohr-Coulomb in the stress itself. Until 2026-09-29 the strength read the
+    // floored stress too, so a cohesionless point shallower than p_limit carried q_f(p_limit) --
+    // on a sand of phi = 30 degrees a deviator of 20 kPa at zero confinement, an apparent cohesion
+    // of 5.8 kPa, on the unsafe side and largest exactly where a footing's bearing capacity is
+    // decided. q_f, q_a = q_f/R_f and the mobilised friction angle now read the minor stress
+    // itself. (Reading q_a at the floored stress instead -- a hyperbola far flatter than the
+    // strength it ends at -- put the shallow points of a column loaded from zero on the failure
+    // plateau after almost no hardening, where they flipped between plateau and hardening and held
+    // the equilibrium iteration at 1e-3.) Only the stress-free point itself needs guarding, where
+    // q/q_a is 0/0: q_a is kept above its value at a thousandth of the floor.
+    const double qf_min = 2.0 * (law_cc + 1e-3 * plim * law_s) / (1.0 - law_s);
     auto stiff_at = [&](const Eigen::Vector3d& s) {
         Stiff k;
-        k.s3 = std::max(s.minCoeff(), plim);
+        k.s3raw = s.minCoeff();
+        k.s3 = std::max(k.s3raw, plim);
         const double g = std::pow((law_cc + k.s3 * law_s) / law_den, p.m);
         k.Eur = p.Eur_ref * g;
         k.Ei = 2.0 * (p.E50_ref * g) / (2.0 - p.Rf);
-        k.qf = 2.0 * (law_cc + k.s3 * law_s) / (1.0 - law_s);
-        k.qa = k.qf / p.Rf;
+        k.qf = 2.0 * (law_cc + k.s3raw * law_s) / (1.0 - law_s);
+        k.qa = std::max(k.qf, qf_min) / p.Rf;
         k.De = detail::hs_elastic(k.Eur, nu);
         return k;
     };
@@ -478,7 +492,36 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     auto fbar_p = [&](double q, const Stiff& k) {
         const double r = 1.0 - q / k.qa; return (2.0 / k.Ei) / (r * r) - 2.0 / k.Eur;
     };
-    auto spm_of = [&](double q, const Stiff& k) { return dil.from_q(q, k.s3); };
+    auto spm_of = [&](double q, const Stiff& k) { return dil.from_q(q, k.s3raw); };
+    // Beyond the Mohr-Coulomb apex (q_f <= 0: the minor stress in tension past c cot phi) no
+    // deviator is admissible and the hyperbola has no meaning; the failure branch takes over.
+    auto beyond = [&](double q, const Stiff& k) { return q >= k.qf; };
+    // The shear yield function OF A STRESS: f = fbar(q; E_i, q_a, E_ur) - gamma_p, with E_i, q_a and
+    // E_ur read at that stress's own minor principal -- they are part of the surface, so the
+    // surface is a function of the stress alone. Scaled to be dimensionless, continuous across the
+    // failure deviator (past it, the Mohr-Coulomb excess).
+    //
+    // Until 2026-09-29 the ACTIVATION tests read the surface with the stiffness of the state the
+    // substep starts from, while the flow (whose gradient carries dfbar/dsigma3) and the drift
+    // correction read it at the stress itself. On any path that lowers sigma3 -- the ground next to
+    // a footing -- the deviator falls while the surface shrinks faster: the frozen test said
+    // "elastic" at the start of every substep and the Euler end point said "plastic", the two
+    // evaluations of the modified Euler pair disagreed at every size, the error estimate never
+    // shrank faster than the substep, and 29% of the integrations of a footing on sand ran to the
+    // 200-substep ceiling with a max stress error of 1e-3.
+    //
+    // The two parts are joined by a MAX, not switched between at q = q_f: the hyperbola's value there
+    // is generally positive (the surface has not hardened to failure yet) and the excess is zero, so
+    // a switch jumps -- and a trial just past the failure deviator, far outside the hardening
+    // surface, read as barely on it. Measured on the corpus oedometer, whose column starts stress
+    // free: +9.2% on the loading settlement and four times the run time, back to -1.0% with the max.
+    auto fshear_at = [&](const Eigen::Vector3d& s, double gpv) {
+        const Stiff ks = stiff_at(s);
+        const double qq = s.maxCoeff() - s.minCoeff();
+        const double excess = (qq - ks.qf) / (1.0 + std::fabs(ks.qf));
+        if (!(ks.qf > 0.0)) return excess;       // past the apex: no hyperbola to read
+        return std::max((fbar(std::min(qq, ks.qf), ks) - gpv) / (1.0 + std::fabs(gpv)), excess);
+    };
     auto pc_of = [&](double evv) { return cap_on ? p.cap_pc_from_ev(evv) : pp_n; };
     // The Mohr-Coulomb failure function of the plane (i, j), i the larger: f = s_i - s_j - q_f(s_j),
     // q_f(s) = (c cot phi + s) 2 sin phi/(1 - sin phi). Its gradient carries the dependence of the
@@ -506,10 +549,10 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
         pl.n(j) = -0.5 * (1.0 + spm);
         pl.m = Eigen::Vector3d::Zero();
         if (at_fail) {
-            // The failure strength reads the minor stress through the same floor as the
-            // stiffness (see Stiff), so below it the strength does not move with sigma_j.
+            // The failure strength reads the minor stress itself (see Stiff): d q_f/d sigma_j at
+            // every depth, shallow or not.
             pl.m(i) = 1.0;
-            pl.m(j) = -1.0 - (s(j) > plim ? dqf_ds : 0.0);
+            pl.m(j) = -1.0 - dqf_ds;
         } else {
             const double qij = s(i) - s(j);
             const double fp = fbar_p(qij, k);
@@ -522,13 +565,15 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
             // oedometer). Where two stresses share the minimum the derivative is split between
             // them, so a corner stays symmetric.
             const double s3 = k.s3;
-            if (s3 > plim) {
+            {
                 // In closed form. E_i and E_ur scale with the same stiffness factor g(sigma3),
                 // dg/dsigma3 = g m sin(phi)/(c cos(phi) + sigma3 sin(phi)), and q_a = q_f/R_f is
-                // linear in sigma3; fbar = A - 2q/E_ur with A = (2/E_i) q/(1 - q/q_a).
+                // linear in sigma3; fbar = A - 2q/E_ur with A = (2/E_i) q/(1 - q/q_a). Below the
+                // floor the stiffness no longer moves with sigma3; q_a does, down to its guard.
                 const double sphi = std::sin(p.friction);
-                const double r = p.m * sphi / (p.cohesion * std::cos(p.friction) + s3 * sphi);
-                const double dqa = 2.0 * sphi / ((1.0 - sphi) * p.Rf);
+                const double r = s3 > plim ? p.m * sphi / (p.cohesion * std::cos(p.friction) + s3 * sphi)
+                                           : 0.0;
+                const double dqa = k.qf > qf_min ? 2.0 * sphi / ((1.0 - sphi) * p.Rf) : 0.0;
                 const double w = 1.0 - qij / k.qa;
                 const double A = (2.0 / k.Ei) * qij / w;
                 const double dfd3 = -A * r - (2.0 / k.Ei) * qij * qij / (k.qa * k.qa * w * w) * dqa +
@@ -572,8 +617,9 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
         r.tangent = De;
         const double pp = pc_of(ev_in);
         const Eigen::Vector3d sig_tr = s_in + De * de_in;
-        const double q_tr = sig_tr.maxCoeff() - sig_tr.minCoeff();
-        const bool as0 = fbar(q_tr, k) - gp_in > 1e-12 * (1.0 + std::fabs(gp_in));
+        // A trial at or past the failure deviator is a shear trial, whatever the hyperbola says:
+        // past q_a it changes sign, and a trial that far out used to be read as inside.
+        const bool as0 = fshear_at(sig_tr, gp_in) > 1e-12;
         const bool ac0 = cap_on && fcap(sig_tr, pp) > 1e-10 * (1.0 + pp * pp);
         if (!as0 && !ac0) return r;
         r.plastic = true;
@@ -592,7 +638,11 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
         }();
         const double q = s_in(o.a) - s_in(o.c);
         const double spm = spm_of(q, k);
-        const bool at_fail = q >= k.qf - 1e-9 * (1.0 + k.qf);
+        // On the plateau: a positive deviator at the Mohr-Coulomb line. A state with no deviator
+        // at all -- a stress-free point, whose q_f is zero too -- is at the apex, not on the
+        // plateau, and a compression takes it into the cone by hardening.
+        const bool at_fail = q >= k.qf - 1e-9 * (1.0 + std::fabs(k.qf)) &&
+                             q > 1e-12 * (1.0 + s_in.cwiseAbs().maxCoeff());
         const double H = at_fail ? 0.0 : 1.0;   // d gamma_p per unit multiplier of a plane
         const double pmean = mean(s_in);
         const double Hcap = cap_on ? p.cap_hardening_modulus(pp) : 0.0;
@@ -617,34 +667,74 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
                 planes[nplanes] = plane(s_in, i, j, spm, at_fail, k);
                 const double qij = s_in(i) - s_in(j);
                 // The same failure strength as the plateau test, the drift correction and the
-                // Mohr-Coulomb bound use: read at the floored minor stress. Written here with
-                // the raw one, a stress point shallower than the floor carried two failure
-                // surfaces at once -- this consistency pulled it down to the raw strength while
-                // everything else held it at the floored one -- and a strip footing on
-                // c = 5 kPa sand stopped converging at 99% of its service load.
-                fp[nplanes] = at_fail ? qij - p.q_failure(std::max(s_in(j), plim))
-                                      : fbar(qij, k) - gp_in;
+                // Mohr-Coulomb bound use (Stiff::qf, the minor stress itself). They must agree: when
+                // this line read the raw stress while the others read a floored one, a shallow
+                // point carried two failure surfaces at once and a strip footing on c = 5 kPa sand
+                // stopped converging at 99% of its service load.
+                fp[nplanes] = at_fail ? qij - p.q_failure(s_in(j)) : fbar(qij, k) - gp_in;
                 ++nplanes;
             };
             add(o.a, o.c);
             if (corner == kCompression) add(o.a, o.b);
             if (corner == kExtension) add(o.b, o.c);
             std::array<char, 2> on{1, 1};
-            const Eigen::Vector3d nc = cap_on ? cap_grad(s_in, o, corner) : Eigen::Vector3d::Zero();
-            const double fc_in = cap_on ? fcap(s_in, pp) : 0.0;
+            // THE CAP AT A CORNER IS TWO FACES TOO. q~ is piecewise linear in the ordered
+            // principals, so the cap has an edge wherever two of them are equal, exactly as the
+            // shear hexagon does, and it is treated the same way: each face with its own gradient
+            // and its own value where the substep starts, both hardening the one pp (Koiter).
+            // With both active the linearised consistency puts the end state on both faces, i.e.
+            // back on the edge, and a face whose multiplier comes out negative is dropped -- so
+            // the response is continuous where the flow joins or leaves the edge.
+            //
+            // Until 2026-09-29 a corner carried ONE cap surface with the averaged gradient. The
+            // face flow of this cap drives the two smaller stresses together (it is how a K0
+            // state loaded in compression behaves), and once they met the averaged surface did
+            // not hold them there: substep after substep alternated between face and corner, and
+            // the stress returned jumped with the strain increment. Measured on a strip footing on
+            // normally consolidated sand (every point starts ON that edge, sigma_xx = sigma_zz),
+            // 0.2% of the plastic points jumped at every Newton iteration, deep ones included, and
+            // the iteration stalled with the line search finding no descent.
+            const Order o_b = corner == kCompression ? Order{o.a, o.c, o.b}
+                                                     : Order{o.b, o.a, o.c};   // the other face
+            const Eigen::Vector3d nc = cap_on ? cap_grad(s_in, o, kFace) : Eigen::Vector3d::Zero();
+            const Eigen::Vector3d nc_b = (cap_on && corner != kFace) ? cap_grad(s_in, o_b, kFace)
+                                                                     : Eigen::Vector3d::Zero();
+            auto fcap_o = [&](const Order& oo) {
+                const double qt = s_in(oo.a) + (delta - 1.0) * s_in(oo.b) - delta * s_in(oo.c);
+                const double pm = mean(s_in);
+                return qt * qt / (alpha * alpha) + pm * pm - pp * pp;
+            };
+            const Eigen::Vector3d nc_avg =
+                (cap_on && corner != kFace) ? cap_grad(s_in, o, corner) : nc;
+            const double fc_in = cap_on ? fcap_o(o) : 0.0;
+            const double fc_b = (cap_on && corner != kFace) ? fcap_o(o_b) : 0.0;
+            bool ac_b = ac && corner != kFace;
             // Koiter: a surface with a negative multiplier is dropped and the rest re-solved.
-            for (int pass = 0; pass < 6; ++pass) {
-                std::array<Eigen::Vector3d, 3> ns, ms;
-                std::array<double, 3> f0s{};
-                std::array<int, 3> kind{};   // 0 = shear plane, 1 = cap
+            for (int pass = 0; pass < 8; ++pass) {
+                std::array<Eigen::Vector3d, 4> ns, ms;
+                std::array<double, 4> f0s{};
+                std::array<int, 4> kind{};   // 0 = shear plane, 1 = cap
                 int na = 0;
                 if (as)
                     for (int i = 0; i < nplanes; ++i)
                         if (on[i]) { ns[na] = planes[i].n; ms[na] = planes[i].m; f0s[na] = fp[i]; kind[na] = 0; ++na; }
-                if (ac) { ns[na] = nc; ms[na] = nc; f0s[na] = fc_in; kind[na] = 1; ++na; }
+                // Where BOTH shear planes of the corner are active they already hold the stress on
+                // the edge (equal values of the two planes mean equal stresses), and the cap flows
+                // there with the one gradient the two faces share by symmetry. Two cap faces on
+                // top of them would be four surfaces in a three-dimensional stress space, and
+                // that system is singular -- measured: a multiplier of exactly zero and the edge
+                // split by 2e-4 of the mean stress in undrained extension.
+                const bool shear_edge = as && nplanes == 2 && on[0] && on[1];
+                const bool cap_avg = shear_edge && (ac || ac_b);
+                if (cap_avg) {
+                    ns[na] = nc_avg; ms[na] = nc_avg; f0s[na] = std::max(fc_in, fc_b); kind[na] = 1; ++na;
+                } else {
+                    if (ac) { ns[na] = nc; ms[na] = nc; f0s[na] = fc_in; kind[na] = 1; ++na; }
+                    if (ac_b) { ns[na] = nc_b; ms[na] = nc_b; f0s[na] = fc_b; kind[na] = 1; ++na; }
+                }
                 if (na == 0) { sol.dsig = De * de_in; sol.tangent = De; sol.as = sol.ac = false; return false; }
-                using SmallMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 3, 3>;
-                using SmallVec = Eigen::Matrix<double, Eigen::Dynamic, 1, 0, 3, 1>;
+                using SmallMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 4, 4>;
+                using SmallVec = Eigen::Matrix<double, Eigen::Dynamic, 1, 0, 4, 1>;
                 SmallMat A(na, na);
                 SmallVec b(na);
                 for (int i = 0; i < na; ++i) {
@@ -670,7 +760,13 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
                 if (as)
                     for (int i = 0; i < nplanes; ++i)
                         if (on[i]) { if (dl(idx) < 0.0) { on[i] = 0; dropped = true; } ++idx; }
-                if (ac) { if (dl(idx) < 0.0) { ac = false; dropped = true; } ++idx; }
+                if (cap_avg) {
+                    if (dl(idx) < 0.0) { ac = ac_b = false; dropped = true; }
+                    ++idx;
+                } else {
+                    if (ac) { if (dl(idx) < 0.0) { ac = false; dropped = true; } ++idx; }
+                    if (ac_b) { if (dl(idx) < 0.0) { ac_b = false; dropped = true; } ++idx; }
+                }
                 if (dropped) {
                     bool any = false;
                     for (int i = 0; i < nplanes; ++i) any = any || on[i];
@@ -679,7 +775,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
                 }
                 Eigen::Vector3d ep = Eigen::Vector3d::Zero();
                 double dgp = 0.0, dev = 0.0;
-                Eigen::Matrix<double, 3, Eigen::Dynamic, 0, 3, 3> N(3, na), M(3, na);
+                Eigen::Matrix<double, 3, Eigen::Dynamic, 0, 3, 4> N(3, na), M(3, na);
                 for (int i = 0; i < na; ++i) {
                     ep += dl(i) * ns[i];
                     N.col(i) = ns[i];
@@ -692,7 +788,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
                 sol.dev = dev;
                 sol.tangent = De - De * N * lu.solve(M.transpose() * De);
                 sol.as = as;
-                sol.ac = ac;
+                sol.ac = ac || ac_b;
                 return true;
             }
             sol.dsig = De * de_in; sol.tangent = De; sol.as = sol.ac = false;
@@ -765,9 +861,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
         // The larger of the two surfaces, each scaled to its own units: continuous in the stress,
         // and zero where the path first meets either one.
         auto f_at = [&](const Eigen::Vector3d& s) {
-            const double qq = s.maxCoeff() - s.minCoeff();
-            const double fs = std::max((fbar(std::min(qq, k.qf), k) - gp_in) / (1.0 + std::fabs(gp_in)),
-                                       (qq - k.qf) / (1.0 + k.qf));
+            const double fs = fshear_at(s, gp_in);
             const double fc = cap_on ? fcap(s, pp) / (1.0 + pp * pp) : -1.0;
             return std::max(fs, fc);
         };
@@ -810,23 +904,24 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
         return (int)kFace;
     };
     auto correct_drift = [&](Eigen::Vector3d& s, double& gp_io, double& ev_io,
-                             bool as_act, bool ac_act, bool at_fail, int tie_i, int tie_j) {
+                             bool as_act, bool ac_act, bool at_fail, int tie_i, int tie_j) -> bool {
         for (int it = 0; it < 5; ++it) {
             const Stiff k = stiff_at(s);   // the correction moves sigma3, so it moves these too
             const Order o = order_of(s);
             const int corner = corner_of(o, tie_i, tie_j);
             const double ppc = pc_of(ev_io);
             const double qd = s(o.a) - s(o.c);
-            const double fs = at_fail ? (qd - k.qf) : (fbar(qd, k) - gp_io);
+            const bool fail_here = at_fail || beyond(qd, k);
+            const double fs = fail_here ? (qd - k.qf) : (fbar(qd, k) - gp_io);
             const double fcp = cap_on ? fcap(s, ppc) : -1.0;
             bool corr = false;
-            if (as_act && fs > 1e-9 * (1.0 + std::fabs(gp_io) + k.qf)) {
+            if (as_act && fs > 1e-9 * (1.0 + std::fabs(gp_io) + std::fabs(k.qf))) {
                 const double spm = spm_of(qd, k);
-                const Plane main = plane(s, o.a, o.c, spm, at_fail, k);
+                const Plane main = plane(s, o.a, o.c, spm, fail_here, k);
                 Eigen::Vector3d n = main.n;
-                double h = at_fail ? 0.0 : 1.0;
-                if (corner == kCompression) { n += plane(s, o.a, o.b, spm, at_fail, k).n; h *= 2.0; }
-                if (corner == kExtension) { n += plane(s, o.b, o.c, spm, at_fail, k).n; h *= 2.0; }
+                double h = fail_here ? 0.0 : 1.0;
+                if (corner == kCompression) { n += plane(s, o.a, o.b, spm, fail_here, k).n; h *= 2.0; }
+                if (corner == kExtension) { n += plane(s, o.b, o.c, spm, fail_here, k).n; h *= 2.0; }
                 const Eigen::Vector3d Den = k.De * n;
                 const double dlam_d = fs / (main.m.dot(Den) + h);
                 s -= dlam_d * Den;
@@ -860,11 +955,32 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
             const Order o = order_of(s);
             const int corner = corner_of(o, tie_i, tie_j);
             const double over = (s(o.a) - s(o.c)) - k.qf;
-            if (over > 1e-12 * (1.0 + k.qf)) {
+            if (k.qf <= 0.0) {
+                // Past the apex no deviator is admissible: the stress IS the apex, -c cot(phi)
+                // (the tension cut-off applied after this return then takes what it allows).
+                if (over > 0.0) {
+                    s.setConstant(law_s > 1e-12 ? -law_cc / law_s : 0.0);
+                    return true;
+                }
+            } else if (over > 1e-12 * (1.0 + k.qf)) {
                 s(o.a) -= over;
                 if (corner == kExtension) s(o.b) -= over;
             }
+            // A state ON the failure line is on the hardening surface too: the hyperbola ends at
+            // q_f, so gamma_p there is at least fbar(q_f). A state brought to the line by this
+            // bound (or by the cap, or by a path that reached it before it hardened -- a column
+            // loaded from zero, whose first elastic trial lies past the line) carried the gamma_p
+            // of before, far inside what the stress had reached: an admissible stress on an
+            // inadmissible surface. The next increment then chose between the plateau and a
+            // hardening return that pulled the whole stress back to the stale surface, and a
+            // perturbation of 1e-6 of the Newton step flipped it -- measured: 1.2 kPa jumps in a
+            // column at 1.25 kPa, holding the equilibrium iteration at 2e-3.
+            const double qn = s.maxCoeff() - s.minCoeff();
+            const Stiff kn = stiff_at(s);
+            if (kn.qf > 0.0 && qn >= kn.qf - 1e-9 * (1.0 + kn.qf))
+                gp_io = std::max(gp_io, fbar(kn.qf, kn));
         }
+        return false;
     };
 
     Eigen::Vector3d sig = sigma_n;
@@ -874,7 +990,11 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     // continuum tangent (an elastic increment returns this one).
     Eigen::Matrix3d tangent = k_n.De;
 
-    const double env_tol = hs_env_substep_tol();
+    // The environment override is for a RUN's tolerance. The calibration integrates at its own
+    // (kHsCalibrationTol), which the override must not reach: alpha and beta are properties of the
+    // material, and a sweep of the run tolerance that silently re-calibrated the cap measured two
+    // things at once.
+    const double env_tol = stol == kHsCalibrationTol ? 0.0 : hs_env_substep_tol();
     const double tol = env_tol > 0.0 ? env_tol
                                      : (stol > 0.0 ? stol : hs_default_substep_tol());
     // Ceiling on the measured subdivision. It is a GUARD, not a policy: an increment that asks
@@ -914,6 +1034,15 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     // that law assumes, so the estimate is taken TWICE: once over the full increment, then again
     // over the substep the first pass proposed, where the law does hold. Both passes are
     // continuous functions of the strain increment; no branch chooses between them.
+    //
+    // KEEP IT. On 2026-09-30 it was replaced by the textbook per-substep rule dT sqrt(STOL/e)
+    // (Sloan, Abbo & Sheng 2001), on the argument that e is the Euler step's error and falls with
+    // dT^2, so this rule over-subdivides. It does -- by about sqrt(n) -- and the over-subdivision is
+    // what this walk needs: it is first order where a surface, a corner or the plateau is met
+    // inside a substep, and the per-substep rule, blind to that, let the error through. Measured on
+    // a strip footing pushed into sand: the per-substep rule at STOL 1e-5 gave 291.5 kPa, 4% above
+    // the 279.8 kPa the same run converges to at 1e-6 (this rule at 1e-5: 280.3) -- faster, and
+    // unsafe. The walk has to become second order at its events before this can change.
     double nreal = 1.0;
     if (replaying) {
         // Replay: the subdivision is uniform, so its one step size reproduces it exactly.
@@ -958,9 +1087,12 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
         if (k1.plastic || k2.plastic) {
             any_plastic = true;
             tangent = k2.plastic ? k2.tangent : k1.tangent;
-            correct_drift(sig, gp, ev, k1.as || k2.as, k1.ac || k2.ac,
+            // A state returned to the apex does not depend on the strain at all: its derivative is
+            // zero (the solver's vertex floor is what keeps such a point from making K_T singular).
+            if (correct_drift(sig, gp, ev, k1.as || k2.as, k1.ac || k2.ac,
                           k1.at_fail || k2.at_fail, k2.plastic ? k2.tie_i : k1.tie_i,
-                          k2.plastic ? k2.tie_j : k1.tie_j);
+                          k2.plastic ? k2.tie_j : k1.tie_j))
+                tangent.setZero();
         }
         if (plan_out) ++plan_out->n;
         T += dT;
@@ -969,7 +1101,6 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     // integration did not meet its tolerance, and the caller is told so rather than handed a
     // number that looks like every other one.
     const int accepted = taken, clipped = (nreal >= (double)kMaxSubsteps) ? 1 : 0;
-
     HsIntegrated out;
     out.stress = sig;
     out.gamma_p = gp;

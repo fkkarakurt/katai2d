@@ -72,22 +72,41 @@ inline constexpr double kNoTensionCap = 1e300;
 // the cap -- not a fully coupled multi-surface solve across both sets. The correction is
 // compressive, so it moves away from the tensile side of the base model's surfaces; what it can
 // in principle touch is the cap of the Hardening Soil family, and that is not iterated back.
-// The tangent handed to Newton is the base model's, so convergence may take extra iterations
-// where the cut-off is active, but the converged stress is the one returned here.
+//
+// With the active set fixed the return is AFFINE in its input, so its Jacobian dr_out/dr_in
+// (sorted order) is exact and written out below when `jac` is given; a caller whose tangent is
+// analytic chains it after its own. Until 2026-09-29 the Hardening Soil tangent skipped it and
+// handed Newton the uncapped Jacobian at every capped point -- measured against a central
+// difference of the whole update, EVERY capped point was wrong, by up to 1e5 relative (a row
+// the cap pins to sigma_t still carried the full elastic stiffness). The apex (|A| = 3) has a
+// zero Jacobian, which is what the solver's vertex floor exists for.
 // Returns true when the cap did anything.
-inline bool apply_rankine_cap(double* r, double sigma_t, double lambda, double mu) {
+inline bool apply_rankine_cap(double* r, double sigma_t, double lambda, double mu,
+                              Eigen::Matrix3d* jac = nullptr) {
     if (r[0] <= sigma_t) return false;                     // the largest principal is admissible
     const double s0 = r[0], s1 = r[1], s2 = r[2];
+    if (jac) jac->setIdentity();
     // |A| = 1
+    const double a1 = lambda / (lambda + 2.0 * mu);
     double dl0 = (s0 - sigma_t) / (lambda + 2.0 * mu);
     double n1 = s1 - lambda * dl0, n2 = s2 - lambda * dl0;
-    if (n1 <= sigma_t) { r[0] = sigma_t; r[1] = n1; r[2] = n2; return true; }
+    if (n1 <= sigma_t) {
+        r[0] = sigma_t; r[1] = n1; r[2] = n2;
+        if (jac) { (*jac)(0, 0) = 0.0; (*jac)(1, 0) = -a1; (*jac)(2, 0) = -a1; }
+        return true;
+    }
     // |A| = 2
+    const double a2 = lambda / (2.0 * (lambda + mu));
     const double S2 = (s0 + s1 - 2.0 * sigma_t) / (2.0 * (lambda + mu));
     n2 = s2 - lambda * S2;
-    if (n2 <= sigma_t) { r[0] = sigma_t; r[1] = sigma_t; r[2] = n2; return true; }
+    if (n2 <= sigma_t) {
+        r[0] = sigma_t; r[1] = sigma_t; r[2] = n2;
+        if (jac) { jac->row(0).setZero(); jac->row(1).setZero(); (*jac)(2, 0) = -a2; (*jac)(2, 1) = -a2; }
+        return true;
+    }
     // |A| = 3: hydrostatic tension apex
     r[0] = r[1] = r[2] = sigma_t;
+    if (jac) jac->setZero();
     return true;
 }
 

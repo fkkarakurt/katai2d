@@ -3,6 +3,8 @@
 //   (a) OCR raises the automatic K0 (elastic unloading: K0 = K0nc*OCR - nu/(1-nu)*(OCR-1)); it was
 //       silently ignored for MC/LE geostatics before -- pinned against the hand formula;
 //   (b) NC control: OCR = 1 leaves K0 = 1 - sin(phi) untouched;
+//   (b') a POP raises it too, point by point: sigma'_h = K0nc (sigma'_v + POP) - nu/(1-nu) POP --
+//       the OCR formula at OCR = (sigma'_v + POP)/sigma'_v; it reached only the cap seed before;
 //   (c) Hardening Soil + Undrained (B) is REFUSED (it silently behaved like Undrained (A));
 //   (d) plate Mp/Np is a FEATURE (M-N hinge): a real capacity SOLVES; the GUI-default trap
 //       (elastoplastic checked, both capacities 0 = unlimited) stays an honest refusal.
@@ -73,6 +75,26 @@ void test_ocr_k0() {
               ocr > 1.0 ? "OCR = 2 raises K0 per K0nc*OCR - nu/(1-nu)*(OCR-1) (2%)"
                         : "OCR = 1 leaves K0 = 1 - sin(phi) (2%)");
     }
+}
+
+void test_pop_k0() {
+    std::printf("-- (b') automatic K0 with a pre-overburden pressure, depth by depth --\n");
+    m::Project pr = mc_column(1.0);
+    pr.materials[0].oc_mode = 2;
+    pr.materials[0].POP = 36.0;
+    const auto M = katai::app::mesh_from_project(pr, 0.5, 6);
+    const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
+    const bool ok = res.size() == 1 && res[0].ok;
+    check(ok, "K0 phase with a POP ran");
+    if (!ok) { if (!res.empty()) std::printf("   (%s)\n", res[0].message.c_str()); return; }
+    // Mid-depth, dry: sigma'_v = 18 x 4 = 72 kPa, so OCR = 108/72 = 1.5 there.
+    const double sv = 18.0 * kH / 2.0, pop = 36.0, k0nc = 0.5;
+    const double k0_ex = (k0nc * (sv + pop) - 0.3 / 0.7 * pop) / sv;
+    const double k0_fe = measured_k0(res[0]);
+    std::printf("   POP = 36 kPa: K0 = %.4f at mid-depth (formula %.4f, err %+.2f%%; K0nc %.4f)\n",
+                k0_fe, k0_ex, 100.0 * (k0_fe - k0_ex) / k0_ex, k0nc);
+    check(std::fabs(k0_fe - k0_ex) < 0.02 * k0_ex,
+          "POP raises K0 per K0nc (s'v + POP) - nu/(1-nu) POP, at the depth it is read (2%)");
 }
 
 void test_hs_undrained_b_refusal() {
@@ -488,6 +510,7 @@ void test_nonporous_drainage() {
 int main() {
     std::printf("INPUT AUDIT pins -- silently-ignored inputs now honest (fixed or refused)\n\n");
     test_ocr_k0();
+    test_pop_k0();
     std::printf("\n");
     test_hs_undrained_b_refusal();
     std::printf("\n");

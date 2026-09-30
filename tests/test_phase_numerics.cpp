@@ -24,15 +24,15 @@
 //   locator:  tests/corpus/kv-cst-002-hs-oedometer.k2d (Hardening Soil, whose answer is known from KV-NUM-007 to move with the tolerance) solved four ways per control: default, control set in the FILE, the same control passed through the seam, and both set at once with different values
 //   quantity: settlement of the oedometer top [m] and the file round trip of the four control fields
 //   expected: file == seam bit-for-bit on every control; the control demonstrably reaches the solver; seam wins when both are set (documented precedence); and the four fields survive a write/read round trip
-//   band:     exact -- these are identity checks, not approximations. Measured on this tree (2026-08-24, with the local convergence criteria binding): default 0.018647102 m; tolerance 1e-6 from the file 0.018646941 m, identical to the seam to 0.0e+00; on the staged phase alone 0.018643754 m, which differs again and is what "per phase" means; 4 load increments 0.018643176 m against 40's 0.018647102 m. TWO OF THIS CASE'S GUARDS DECAYED AND WERE REWRITTEN, both for the same reason and both recorded rather than quietly repaired. (1) The tolerated error used to be proved READ by showing the answer moved when it changed; it moves by 0.0009% now, because the default run already stands on the converged answer, so the proof is taken where the control lands instead -- the run reports the tolerance it ran under (1e-6 against the default's 1e-2), it demonstrably MET it, and reaching it cost 473 iterations against 194. (2) The ITERATION LIMIT was pinned at a threshold of 3; it is 5 now. The threshold is RECORDED AND CHECKED rather than pinned-and-asserted: the recorded value has to straddle the boundary (it converges, one below it refuses), which is two solves and exactly the proof a scan would give, and the scan runs only when that straddle stops holding -- and then it reports the value it found. Searching from scratch every run cost up to a hundred two-phase solves and made this file the slowest test in the suite by a factor of two, which is a real price for a property that changes about once a year. There turned out to be TWO thresholds and the old check conflated them: at 5 the run stops REFUSING but survives by cutting increments back, so it walks a different load path and lands 0.1796% away; only from 6 does it reproduce the default bit for bit. A guard that proves a control is read by pointing at a difference stops proving anything when the difference is the defect being fixed -- which has now happened three times on this case
+//   band:     exact -- these are identity checks, not approximations. Measured on this tree (2026-08-24, with the local convergence criteria binding): default 0.018647102 m; tolerance 1e-6 from the file 0.018646941 m, identical to the seam to 0.0e+00; on the staged phase alone 0.018643754 m, which differs again and is what "per phase" means; 4 load increments 0.018643176 m against 40's 0.018647102 m. TWO OF THIS CASE'S GUARDS DECAYED AND WERE REWRITTEN, both for the same reason and both recorded rather than quietly repaired. (1) The tolerated error used to be proved READ by showing the answer moved when it changed; it moves by 0.0009% now, because the default run already stands on the converged answer, so the proof is taken where the control lands instead -- the run reports the tolerance it ran under (1e-6 against the default's 1e-2), it demonstrably MET it, and reaching it cost 473 iterations against 194. (2) The ITERATION LIMIT was pinned at a threshold of 3; it is 5 now. The threshold is RECORDED AND CHECKED rather than pinned-and-asserted: the recorded value has to straddle the boundary (it converges, one below it refuses), which is two solves and exactly the proof a scan would give, and the scan runs only when that straddle stops holding -- and then it reports the value it found. Searching from scratch every run cost up to a hundred two-phase solves and made this file the slowest test in the suite by a factor of two, which is a real price for a property that changes about once a year. There turned out to be TWO thresholds and the old check conflated them: at 5 the run stops REFUSING but survives by cutting increments back, so it walks a different load path and lands 0.1796% away; only from 6 does it reproduce the default bit for bit. A guard that proves a control is read by pointing at a difference stops proving anything when the difference is the defect being fixed -- which has now happened three times on this case. 2026-09-29, once the Hardening Soil response lost its discontinuities near the failure line: the threshold is 4 and the two thresholds coincide (at 4 the run already reproduces the default bit for bit); reaching 1e-6 costs 200 iterations against the default's 160 (it was 473 against 194), and the default settlement is 0.018842867 m
 
 // verify: KV-NUM-009
 //   oracle:   closed_form
 //   source:   Schanz, T., Vermeer, P.A. & Bonnier, P.G. (1999). The Hardening Soil model: formulation and verification. Beyond 2000 in Computational Geotechnics, Balkema, 281-296 -- the Hardening Soil oedometric stiffness law, integrated over one-dimensional primary loading -- the same closed form KV-CST-002 is measured against; the error-decomposition procedure is the solution-verification one this program already applies to meshes (Roache 1994; Celik et al. 2008, ASME J. Fluids Eng. 130(7):078001), here applied on the axis a path-dependent model actually discretises
 //   locator:  E_oed = E_oed^ref ((c cos(phi) + sigma_1 sin(phi))/(c cos(phi) + p_ref sin(phi)))^m (compression-positive sigma_1), integrated over the vertical stress range of each sweep; tests/corpus/kv-cst-002-hs-oedometer.k2d, swept on three axes independently -- mesh density 0.5/0.25/0.125 m, load increments 10/20/40/80/160 at a converged tolerance with the seating phase pinned, and the stress range walked over 50-100, 100-200 and 200-400 kPa -- and then the SAME calibrated material walked as a one-dimensional oedometer at the stress point (katai::core::hs_integrate, built through the registry entry the driver uses), where none of those axes exist
 //   quantity: settlement of the oedometer top [m] on each sweep, and the same settlement computed at the stress point [m]
-//   expected: the mesh contributes nothing (a weightless column has a uniform strain field, which is exact in the element space); the load path is now below its own noise, so no order can be computed from it and no GCI quoted; the deviation from the closed form is ONE-SIGNED and closes as the stress rises; and the boundary-value run reproduces the constitutive routine, which is what makes the remainder a model deviation rather than an FE error
-//   band:     no band is published for this case, deliberately, and the measurements are why. Mesh: 85 -> 1105 nodes changes the answer by 5.6e-16 relative, which is round-off. Load path: 10 -> 160 increments moves it by 0.020% -- until 2026-08-20 this axis was worth 2.9 percentage points, and it was not the load path: the stress-point integrator held the stress-dependent moduli fixed at the state each INCREMENT started from, a first-order error in the increment that no substep tolerance can see (0.9.0 N-1; the same fixture's material point moved 4.5% over a 32x outer refinement at a fixed integration tolerance of 1e-6 before the fix, and 6e-5 after). What is left is not a convergent sequence, so no order may be computed from it. Tolerance: 1e-4 and 1e-6 agree to 0.043%. Deviation: -1.3335% over 50-100 kPa, -0.9873% over 100-200, -0.6088% over 200-400 -- one-signed, largest just below p_ref, closing as the stress rises. The same three ranges at the STRESS POINT, no FE at all: -1.3490%, -0.9518%, -0.9130%, the worst of the three 0.305 pp from its FE counterpart, so at most a third of a percentage point of the deviation can be the finite element method and the rest is the model's distance from the idealised power law. Backends: the case that used to split between PARDISO and Eigen (+0.6419% against +0.4583% over 100-200) now agrees to 15 significant figures on all three ranges. Ceiling: THE CEILING HAS BEEN LIFTED. Refining the seating phase to 160 increments at 1e-6 used to stop converging altogether rather than getting better -- the tolerated error is an absolute residual, so shrinking the increment does not shrink what each one must achieve, and on a confining stress starting near zero the increments that could not achieve it were the ones whose stress points sat furthest from their own material law. Requiring those points to settle (0.9.0 N-2) carries the refined path through: 0.018640386 m, 0.0360% from the file's own 40 increments. The check that pinned the ceiling is now the one the study needed all along and could not ask while the run refused -- refining the seating path fourfold must not move the answer
+//   expected: the mesh contributes nothing (a weightless column has a uniform strain field, which is exact in the element space); the load path is below its own noise -- successive refinements do not shrink what they change -- so no order can be computed from it and no GCI quoted; the deviation from the closed form is ONE-SIGNED, and at the stress point, loaded from rest as the column is, the SAME at every stress level (c = 0 and a power law make primary loading self-similar); and the boundary-value run reproduces the constitutive routine, which is what makes the remainder a model deviation rather than an FE error
+//   band:     no band is published for this case, deliberately, and the measurements are why. Mesh: 85 -> 1105 nodes changes the answer by 5.6e-16 relative, which is round-off. Load path: 10 -> 160 increments moves it by 0.020% -- until 2026-08-20 this axis was worth 2.9 percentage points, and it was not the load path: the stress-point integrator held the stress-dependent moduli fixed at the state each INCREMENT started from, a first-order error in the increment that no substep tolerance can see (0.9.0 N-1; the same fixture's material point moved 4.5% over a 32x outer refinement at a fixed integration tolerance of 1e-6 before the fix, and 6e-5 after). What is left is not a convergent sequence, so no order may be computed from it: since 2026-09-29 it is a drift of 3.5e-7 relative over the 16x refinement whose steps GROW as the increments shrink (the per-increment tolerances accumulating), where it used to be sign noise. Tolerance: 1e-4 and 1e-6 agree to 0.043%. Deviation (2026-09-29, once the strength stopped reading the stiffness floor -- see (c)): -0.0706% over 50-100 kPa, -0.0706% over 100-200, -0.4259% over 200-400. The same three ranges at the STRESS POINT loaded from rest, no FE at all: -0.0701%, -0.0705%, -0.0706% -- one-signed and the same at every level, the power law's self-similarity. FE and stress point agree to 5e-4 pp on the first two ranges; on 200-400 they are 0.355 pp apart, and that is integration, not the FE: the first seating increment of that range (0 -> 5 kPa from rest) saturates the 200-substep guard and says so (K2D-A012), and with the guard at 2000 the FE lands on -0.0706% too. (Before 2026-09-29: -1.33/-0.99/-0.61% FE and -1.35/-0.95/-0.91% at a stress point started at 0.5 kPa isotropic -- the floored strength held every shallow point off the failure line, and a start at 0.5 kPa isotropic is a different path from rest: it gives -1.23/-0.73/-0.45% today.) Backends: the case that used to split between PARDISO and Eigen (+0.6419% against +0.4583% over 100-200) now agrees to 15 significant figures on all three ranges. Ceiling: THE CEILING HAS BEEN LIFTED. Refining the seating phase to 160 increments at 1e-6 used to stop converging altogether rather than getting better -- the tolerated error is an absolute residual, so shrinking the increment does not shrink what each one must achieve, and on a confining stress starting near zero the increments that could not achieve it were the ones whose stress points sat furthest from their own material law. Requiring those points to settle (0.9.0 N-2) carries the refined path through: 0.018640386 m, 0.0360% from the file's own 40 increments. The check that pinned the ceiling is now the one the study needed all along and could not ask while the run refused -- refining the seating path fourfold must not move the answer
 
 // verify: KV-NUM-010
 //   oracle:   closed_form
@@ -265,7 +265,7 @@ void case_008(const Oedometer& O) {
     // and proves exactly the same straddle, and the scan runs only if the recorded value has
     // stopped being the boundary. Then it reports the new one loudly. A guard that cannot decay
     // silently was the whole point; paying a hundred solves for it every run was not.
-    constexpr int kRecordedThreshold = 5;   // 2026-08-24; it was 3 before the local criteria bound
+    constexpr int kRecordedThreshold = 4;   // 2026-09-29 (5 on 2026-08-24, 3 before the local criteria bound)
     const auto converges_at = [&](int limit, double* u_out) {
         const double u = settlement(all_phases(base, 0.0, 0, limit), mesh, {}, &ok);
         if (u_out) *u_out = u;
@@ -325,7 +325,7 @@ void case_008(const Oedometer& O) {
     // makes it a patience setting rather than an accuracy one.
     // Recorded-then-searched, for the same reason and at the same saving as the threshold above:
     // this scan could run to 96 full solves on its own.
-    constexpr int kRecordedSettled = 6;   // 2026-08-24, one above the threshold
+    constexpr int kRecordedSettled = 4;   // 2026-09-29: AT the threshold (6 on 2026-08-24, one above it)
     const auto reproduces_default = [&](int limit) {
         double u = 0.0;
         return converges_at(limit, &u) && u == u_default;
@@ -522,15 +522,20 @@ void case_009(const Oedometer& O) {
               "less than 0.1%");
 
         // Is what is left a convergent sequence, or noise? The estimator needs
-        // phi(d) = phi_exact + C d^p, which requires successive differences of one sign and a
-        // stable ratio. Count how many of the three overlapping triplets even keep their sign.
-        int monotone = 0;
+        // phi(d) = phi_exact + C d^p with p > 0: successive differences of one sign AND shrinking
+        // as the increment is halved (e32/e21 > 1). Count the overlapping triplets that look like
+        // that. Sign alone used to be the test, while what was left was sign noise; since
+        // 2026-09-29 it is a one-signed drift whose steps GROW as the increments shrink -- the
+        // per-increment tolerances accumulating -- which is just as far from a convergent
+        // sequence, and the sign test alone would have read it as one.
+        int convergent = 0;
         for (int i = 0; i < 3; ++i) {
             const double e21 = u_path[i + 1] - u_path[i + 2], e32 = u_path[i] - u_path[i + 1];
-            if (e21 != 0.0 && e32 / e21 > 0.0) ++monotone;
+            if (e21 != 0.0 && e32 / e21 > 1.0) ++convergent;
         }
-        std::printf("  of the three overlapping triplets, %d keep a consistent sign\n", monotone);
-        check(monotone < 3,
+        std::printf("  of the three overlapping triplets, %d look convergent (one sign, shrinking)\n",
+                    convergent);
+        check(convergent < 3,
               "the sequence is inside its own noise, so no order may be computed and no GCI "
               "quoted from the load path");
     }
@@ -589,8 +594,12 @@ void case_009(const Oedometer& O) {
         const double de = 2.0e-5;
         for (int i = 0; i < 3 && point_ok; ++i) {
             const double sa = ranges[i][0], sb = ranges[i][1];
-            Eigen::Vector3d sig(0.5, 0.5, 0.5);          // primary loading from near zero, as the
-            double gp = 0.0, pp = 0.5, eps = 0.0;        // column itself is loaded from rest
+            // Primary loading from REST, as the column itself is loaded. This used to start at
+            // 0.5 kPa isotropic, "near zero", because the stress-free point was singular; it is not
+            // any more, and the start is part of the path: from 0.5 kPa isotropic (K = 1) the same
+            // walk gives -1.23/-0.73/-0.45% against -0.07% at every level from rest.
+            Eigen::Vector3d sig(0.0, 0.0, 0.0);
+            double gp = 0.0, pp = 0.0, eps = 0.0;
             double eps_a = 0.0, eps_b = 0.0;
             bool got_a = false, got_b = false;
             for (int k = 0; k < 400000 && !got_b; ++k) {
@@ -624,8 +633,17 @@ void case_009(const Oedometer& O) {
               dev_pt[0] < 0.0 && dev_pt[1] < 0.0 && dev_pt[2] < 0.0,
               "the deviation is ONE-SIGNED on both routes: the model is stiffer than the "
               "idealised law at every stress level, and does not cross at p_ref");
-        check(dev[0] < dev[1] && dev[1] < dev[2],
-              "and the gap CLOSES as the stress rises above p_ref, rather than growing");
+        // From rest, with c = 0 and a power-law stiffness, primary loading is self-similar: the
+        // deviation from the idealised law must be the same at every stress level. (This used to
+        // assert that the gap closed as the stress rose -- a signature of the floored strength,
+        // which broke the similarity below p_limit.)
+        const double pt_spread = std::fmax(std::fabs(dev_pt[0] - dev_pt[1]),
+                                           std::fmax(std::fabs(dev_pt[1] - dev_pt[2]),
+                                                     std::fabs(dev_pt[0] - dev_pt[2])));
+        std::printf("  stress point from rest: the deviation varies by %.4f pp over 50-400 kPa\n",
+                    100.0 * pt_spread);
+        check(pt_spread < 1e-4,
+              "and from rest it is the same at every stress level: the power law's self-similarity");
         double worst = 0.0;
         for (int i = 0; i < 3; ++i) worst = std::fmax(worst, std::fabs(dev[i] - dev_pt[i]));
         std::printf("  FE against the stress point, worst of the three ranges: %.3f pp\n",

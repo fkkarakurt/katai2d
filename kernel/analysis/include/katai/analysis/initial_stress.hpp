@@ -99,6 +99,15 @@ struct K0LayeredOptions {
     // magnitude). σ_h = K0·σ_v on the same total. Both empty = old behaviour bit-for-bit.
     std::vector<char> nonporous;                                // by material id (1 = non-porous)
     std::function<double(double x, double y)> pore;             // u(x,y) ≥ 0 hydrostatic magnitude
+    // PRE-OVERBURDEN PRESSURE on the automatic K0, by material id (empty or 0 = none). With a POP
+    // the overconsolidation ratio is (σ'_v + POP) / σ'_v and changes with depth, so the lateral
+    // stress is σ'_h = K0nc (σ'_v + POP) − ν/(1−ν) POP at each point -- the OCR formula of
+    // k0_overconsolidated written for a POP -- with the same passive clamp. k0 above is then
+    // K0nc; pop_nu is ν (ν_ur for the advanced models) and pop_sin_phi sin φ' for the clamp.
+    // Until 2026-09-30 a POP reached only the cap seed of the advanced models and the geostatic
+    // field kept K0nc: measured on a tie-back excavation rebuilt from a published tutorial,
+    // K0 = 0.515 where the loam's POP of 25 kPa makes it about 0.54 near the wall.
+    std::vector<double> pop, pop_nu, pop_sin_phi;
 };
 
 namespace detail {
@@ -144,7 +153,16 @@ std::vector<GaussState> k0_layered_impl(const mesh::Mesh& mesh, const K0LayeredO
             if (mat >= 0 && mat < static_cast<int>(opt.nonporous.size()) &&
                 opt.nonporous[mat] && opt.pore)
                 sigv -= opt.pore(x, y);
-            const double sigh = k0 * sigv;
+            double sigh = k0 * sigv;
+            const double pop = (mat >= 0 && mat < static_cast<int>(opt.pop.size())) ? opt.pop[mat] : 0.0;
+            if (pop > 0.0 && sigv < 0.0) {
+                const double nu = std::clamp(opt.pop_nu[mat], 0.0, 0.49);
+                const double sp = opt.pop_sin_phi[mat];
+                const double sv_mag = -sigv;
+                double sh_mag = k0 * (sv_mag + pop) - nu / (1.0 - nu) * pop;
+                sh_mag = std::clamp(sh_mag, 0.0, (1.0 + sp) / std::max(1e-6, 1.0 - sp) * sv_mag);
+                sigh = -sh_mag;
+            }
             GaussState& s = states[static_cast<size_t>(e) * E::kGaussCount + g];
             s.stress << sigh, sigv, 0.0;
             s.stress_zz = sigh;

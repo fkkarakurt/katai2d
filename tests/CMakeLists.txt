@@ -73,6 +73,7 @@ katai_add_test(test_boussinesq katai::analysis)  # Boussinesq strip load (P0.8b)
 katai_add_test(test_flamant katai::analysis)     # Flamant point/line load sigma_z=2P/pi.z (Phase A.3)
 katai_add_test(test_nonlinear katai::analysis)   # Newton-Raphson skeleton (P1.1)
 katai_add_test(test_prandtl katai::analysis)     # Prandtl Nc=5.14 limit load (phi=0, P1.3)
+katai_add_test(test_failed_phase_state katai::jobs katai::mesh katai::analysis katai::model)  # a phase that stops short keeps its last equilibrated displacement, stress and reactions
 katai_add_test(test_bearing_phi katai::analysis) # Reissner Nc(phi=20deg) bearing capacity (P1.3)
 katai_add_test(test_mesher_pipeline katai::analysis)  # mesher -> tri6 -> FEM (P1.4e)
 katai_add_test(test_tri15_pipeline katai::fem)   # mesher -> tri15 -> FEM end to end (P1.5)
@@ -171,6 +172,7 @@ if(TARGET test_input_corpus)
 endif()
 katai_add_test(test_phase_water katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-003: staged dewatering (.k2d v4 per-phase water) against the effective-stress closed form -- the second capability the anchored-excavation benchmark needed
 katai_add_test(test_anchor_prestress katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-001: the anchor lock-off force (.k2d v3) against an equivalent external-force model -- the first structural case in the matrix, and the input every anchored excavation needs
+katai_add_test(test_plate_joint katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-015: plates meeting at a node are joined rigidly -- a plate drawn in two pieces carries the moments of the plate drawn in one
 katai_add_test(test_driven_structures katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-009: a plate on a settling support and anchors on driven edges, read from the force report against closed forms -- the anchor report used to drop a driven node's motion
 katai_add_test(test_safety_structures katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-STR-010: a Safety run with its structures, on the sliding block -- the interface reduced with the soil, a plate's weight and an anchor's capacity carried unreduced, each against a closed form
 if(TARGET test_safety_structures)

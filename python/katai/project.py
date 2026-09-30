@@ -130,7 +130,12 @@ class _Materials:
 
     For an undrained material the pore fluid's stiffness Kw/n follows the equivalent
     undrained Poisson ratio ``nu_u`` (0.495 by default), or Skempton's B if
-    ``und_mode=1, skempton_B=...`` is given instead. Both are per material."""
+    ``und_mode=1, skempton_B=...`` is given instead. Both are per material.
+
+    A parameter that needs a switch brings its switch with it: ``Rinter=`` turns the
+    rigid interface off, ``k0nc=`` / ``k0=`` turn the automatic values off, ``OCR=``
+    selects the OCR stress history and ``POP=`` the pre-overburden pressure (giving
+    both without ``oc_mode`` is refused). Pass the switch explicitly to override."""
 
     def __init__(self, prj):
         self._prj = prj
@@ -157,7 +162,27 @@ class _Materials:
             m.ky = k
         if kx is not None: m.kx = kx
         if ky is not None: m.ky = ky
-        for field, value in extra.items():
+        # A value given is a value meant. Several parameters only take effect with a switch that
+        # selects them (Rinter with rinter_rigid off, K0nc / K0 with the automatic value off, OCR /
+        # POP with the stress-history mode), and a value given without its switch used to be
+        # dropped with no word: Rinter=0.5 on a wall's soil ran with a rigid interface, POP=25 ran
+        # normally consolidated. The switch now follows the value unless it is given explicitly.
+        implied = []
+        if "Rinter" in extra and "rinter_rigid" not in extra:
+            implied.append(("rinter_rigid", False))
+        if "k0nc" in extra and "k0nc_auto" not in extra:
+            implied.append(("k0nc_auto", False))
+        if "k0" in extra and "k0_auto" not in extra:
+            implied.append(("k0_auto", False))
+        if "oc_mode" not in extra:
+            if "POP" in extra and "OCR" in extra:
+                raise ValueError(f"Material '{name}': give OCR or POP, not both (or say which "
+                                 "one applies with oc_mode=1 for OCR, oc_mode=2 for POP)")
+            if "POP" in extra:
+                implied.append(("oc_mode", 2))
+            elif "OCR" in extra:
+                implied.append(("oc_mode", 1))
+        for field, value in list(extra.items()) + implied:
             if not hasattr(m, field):
                 raise ValueError(f"Material has no parameter '{field}'")
             setattr(m, field, value)
@@ -691,13 +716,15 @@ class _Phases:
     def safety(self, name="Safety", **kw):
         """phi-c reduction -> the factor of safety of this phase's ground and structures.
 
-        The search re-solves the phase's active regions, loads and structural
-        elements under reduced strength from an unstressed state; the stresses
-        the earlier phases left are not its starting point. An interface's
-        strength is reduced with the soil's; a plate's, anchor's, geogrid's or
-        embedded beam's own capacity is not. A prestressed anchor cannot enter a
-        search from the unstressed state, so it must be deactivated in this
-        phase (``deactivate=[...]``) or the run is refused (K2D-G016)."""
+        The strength is reduced from the state the earlier phases built: their
+        stresses and pore pressures, and the structures with the forces they
+        carry (a prestressed anchor's lock-off force included). Anything this
+        phase changes is carried first at full strength. An interface's strength
+        is reduced with the soil's; a plate's, anchor's, geogrid's or embedded
+        beam's own capacity is not. A structure installed in the Safety phase
+        itself has no state to start from: the search then re-solves the ground
+        from the unstressed state, where a prestressed anchor (K2D-G016) and an
+        undrained soil with friction (K2D-G017) are refused."""
         return self._add(name, _core.PhaseType.Safety, **kw)
 
     def transient_flow(self, name, *, duration, steps, **kw):

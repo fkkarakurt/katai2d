@@ -769,7 +769,15 @@ public:
             const double N0 = an.prestress;
             double N = N0 + kk * (U - Up_c), Dt = kk;
             const double Ft = an.Fmax_tens, Fc = an.Fmax_comp;
-            if (Ft > 0.0 && N > Ft)        { N = Ft;  (*st.anchor_t)[ai] = U - (Ft - N0) / kk; Dt = 0.0; }
+            if (an.lock_off && N0 != 0.0) {
+                // The jack holds the lock-off force (never more than the anchor carries) while the
+                // wall moves, and the anchor is locked where the wall ends up: the elongation it
+                // commits is the one at which N0 + k(U - U_p) is the force it holds.
+                N = (Ft > 0.0 && N0 > Ft) ? Ft : (Fc > 0.0 && N0 < -Fc) ? -Fc : N0;
+                (*st.anchor_t)[ai] = U - (N - N0) / kk;
+                Dt = 0.0;
+            }
+            else if (Ft > 0.0 && N > Ft)   { N = Ft;  (*st.anchor_t)[ai] = U - (Ft - N0) / kk; Dt = 0.0; }
             else if (Fc > 0.0 && N < -Fc)  { N = -Fc; (*st.anchor_t)[ai] = U + (Fc + N0) / kk; Dt = 0.0; }
             else                           { (*st.anchor_t)[ai] = Up_c; }
             for (int i = 0; i < 4; ++i) {

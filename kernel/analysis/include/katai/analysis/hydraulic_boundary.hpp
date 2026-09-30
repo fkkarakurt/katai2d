@@ -24,6 +24,7 @@
 #include <cmath>
 #include <vector>
 
+#include <katai/mesh/boundary_extraction.hpp>
 #include <katai/mesh/mesh.hpp>
 
 namespace katai::core {
@@ -66,8 +67,8 @@ inline double phreatic_surface_at(const std::vector<double>& wx,
 
 // Drainage-boundary mask for a time-dependent flow phase (consolidation / fully-coupled): a boundary
 // node on a prescribed-head or seepage flow edge drains (excess pore = 0). With NO flow BCs declared
-// (`have_flow_bcs` false) the model top is taken as draining (sensible foundation/embankment
-// default); everything else is impermeable (natural). Nodes touched only by inactive (excavated)
+// (`have_flow_bcs` false) the upward-facing exposed surface of the active ground drains (the
+// ground surface, fill surfaces, excavation floors); everything else is impermeable. Nodes touched only by inactive (excavated)
 // elements carry no pore DOF -> drained.
 inline std::vector<char> flow_drained_nodes(const std::vector<FlowEdge>& edges, bool have_flow_bcs,
                                             const katai::mesh::Mesh& mesh,
@@ -93,10 +94,19 @@ inline std::vector<char> flow_drained_nodes(const std::vector<FlowEdge>& edges, 
                                    h.kind == FlowEdgeKind::Seepage)) drained[node] = 1;
         }
     } else {
-        double ytop = -1e30;
-        for (int node : mesh.boundary_nodes) ytop = std::fmax(ytop, mesh.y[node]);
-        for (int node : mesh.boundary_nodes)
-            if (mesh.y[node] > ytop - 1e-6 * std::fmax(1.0, yscale)) drained[node] = 1;
+        // THE GROUND SURFACE DRAINS: every exposed face of the ACTIVE ground that looks upwards --
+        // the surface beside an embankment as well as its crest and slopes, the floor of an
+        // excavation, the top of a fill placed in layers. Until 2026-09-30 the default drained
+        // only the boundary nodes at the highest elevation of the whole mesh, inactive regions
+        // included: with a fill not yet placed on top, no active node drained at all and the
+        // ground consolidated as a sealed body; with it placed, only the crest drained and the
+        // ground surface beside it stayed sealed. Found rebuilding a staged road embankment from
+        // a published tutorial. The sides and the base stay impermeable, as before.
+        (void)yscale;
+        for (const auto& ed : katai::mesh::extract_exposed_edges(mesh, act)) {
+            if (!(ed.ny > 1e-3)) continue;
+            for (int i = 0; i < ed.npe; ++i) drained[ed.node[i]] = 1;
+        }
     }
     if (!act.empty()) {
         std::vector<char> touched(mesh.node_count, 0);

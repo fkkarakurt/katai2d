@@ -226,22 +226,27 @@ void test_restart_identity() {
     }
 }
 
-// A refused linear solve is an ANSWER. Found by this test on its first honest run: a confined
-// column dissipating an excess pore pressure larger than its Mohr-Coulomb strength drives the
-// coupled tangent singular, the verifying backend refuses to return a vector that does not satisfy
-// the system -- and the elastoplastic Biot core let that refusal escape the call stack and ABORT
-// THE PROCESS (0xC0000409). The static solver has caught the same refusal since it began checking
-// its answers; both coupled cores now do too. A solver may report that it could not solve; it may
-// never answer by terminating, because a crash is the one result no engineering judgement can be
-// applied to.
+// A column driven THROUGH ITS STRENGTH while it consolidates. Found by this test on its first
+// honest run: the verifying backend refused a singular coupled tangent and the elastoplastic Biot
+// core let that refusal escape the call stack and ABORT THE PROCESS (0xC0000409); both coupled
+// cores have caught it since, and this test then pinned "reports that it could not solve".
+//
+// It could not solve because its Newton could not, not because there is nothing to solve: the
+// column is laterally confined, so no mechanism is available and the stress path simply runs up
+// the Mohr-Coulomb envelope. Since 2026-09-30 the core carries it (line search, a cut step,
+// stagnation acceptance), and what is checked is the answer: every stress point on or inside the
+// envelope, the ones that reached it ON it, and the vertical effective stress the pore pressure
+// handed over. A solver may still report that it could not solve; it may never answer by
+// terminating, and it may never be allowed to stop short where a solution exists.
 void test_refused_solve_is_an_answer() {
-    std::printf("\n-- (2) a singular tangent is REFUSED, not aborted --\n");
+    std::printf("\n-- (2) a confined column driven through its strength is carried --\n");
     constexpr double W = 0.2, H = 1.0, E = 1000.0, nu = 0.0, u0 = 10.0;
     constexpr double k = 1.0e-4, gamma_w = 10.0, kw_over_n = 1.0e9;
     Column c = make_column(W, H, 1, 8);
-    // c' = 2 kPa, phi = 25 deg: with nu = 0 the horizontal effective stress stays zero while the
-    // vertical one climbs to u0 = 10 kPa as the pore pressure dissipates, so the stress path runs
-    // straight through the Mohr-Coulomb envelope (failure would need sigma_1 <= 3.14 c' = 6.3 kPa).
+    // c' = 2 kPa, phi = 25 deg. The column carries no load, so the initial excess pressure u0 is
+    // balanced by nothing but the skeleton: as it dissipates it pushes the grains apart, the path
+    // runs into the tension side of the envelope, and the stress points end at its apex region
+    // (sigma_1 near zero, the tension the Mohr-Coulomb surface allows used up).
     MaterialModel mc; mc.type = MaterialType::MohrCoulomb;
     mc.youngs_modulus = E; mc.poisson_ratio = nu;
     mc.cohesion = 2.0; mc.friction_angle = 0.44; mc.dilatancy_angle = 0.0;
@@ -252,10 +257,33 @@ void test_refused_solve_is_an_answer() {
     const auto r = katai::core::solve_consolidation_plastic(
         c.mesh, c.dofs, mm, perm, gamma_w, kw_over_n, c.drained, {}, p0, 2.0, 40, {},
         nullptr, nonsym_factory());
-    std::printf("   converged = %d, steps recorded = %zu (the run RETURNED)\n",
-                (int)r.converged, r.series.times.size());
-    check(!r.converged, "the core reports that it could not solve, instead of terminating");
-    check(!r.series.times.empty(), "and it hands back the steps it did complete");
+    std::printf("   converged = %d, steps recorded = %zu, stagnant steps %d, deepest cut 1/%d\n",
+                (int)r.converged, r.series.times.size(), r.stagnation_accepted,
+                1 << r.steps_cut);
+    check(r.converged, "the core carries the column to the end of the phase");
+    check(!r.series.times.empty(), "and hands back every step");
+    if (!r.converged || r.committed.empty()) return;
+    // Compression positive magnitudes of the three principal stresses (plane strain: xx, yy, xy
+    // in the plane, zz out of it).
+    const double sphi = std::sin(mc.friction_angle), cphi = std::cos(mc.friction_angle);
+    double worst_f = -1e300, max_s1 = 0.0;
+    int on_envelope = 0;
+    for (const auto& g : r.committed) {
+        const double sx = -g.stress(0), sy = -g.stress(1), txy = -g.stress(2), sz = -g.stress_zz;
+        const double cen = 0.5 * (sx + sy), rad = std::hypot(0.5 * (sx - sy), txy);
+        const double a = cen + rad, b = cen - rad;
+        const double s1 = std::max({a, b, sz}), s3 = std::min({a, b, sz});
+        const double f = (s1 - s3) - (s1 + s3) * sphi - 2.0 * mc.cohesion * cphi;
+        worst_f = std::max(worst_f, f);
+        max_s1 = std::max(max_s1, s1);
+        if (std::fabs(f) <= 1e-6 * u0) ++on_envelope;
+    }
+    std::printf("   largest yield function %.3e kPa, points on the envelope %d of %zu, largest "
+                "sigma_1 %.4f kPa (failure begins at %.4f)\n", worst_f, on_envelope,
+                r.committed.size(), max_s1, 2.0 * mc.cohesion * cphi / (1.0 - sphi));
+    check(worst_f <= 1e-6 * u0, "no stress point lies outside the Mohr-Coulomb envelope");
+    check(on_envelope > (int)r.committed.size() / 2,
+          "the path did reach the envelope, and the points that reached it are on it");
 }
 
 // ---------------------------------------------------------------------------------------------

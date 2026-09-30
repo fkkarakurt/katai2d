@@ -153,6 +153,10 @@ struct ConsolidationPlasticResult {
     ConsolidationResult series;                // times / displacement / pore (same as LE)
     std::vector<GaussState> committed;         // final effective Gauss states (for the phase chain)
     bool converged = true;                     // did every step converge
+    // Time steps kept at a stagnated iterate (below kStagnationAccept of the force scale), and the
+    // deepest halving a time step needed (0 = none; n = a step was carried in pieces of 1/2^n).
+    int stagnation_accepted = 0;
+    int steps_cut = 0;
 };
 
 

@@ -596,11 +596,14 @@ void test_moment_criterion() {
                     c.force_error > 0.0 ? c.moment_error / c.force_error : 0.0);
         measured = measured && c.has_moment && r.nr.converged;
         never_binds = never_binds && c.moment_ok() && c.moment_error <= c.force_error;
-        if (prev >= 0.0 && !(c.moment_error < prev)) falls = false;
+        // Falls -- or has already reached round-off, where there is nothing left to fall: since
+        // the line search picks its trial steps by interpolation (2026-09-29) the tolerance of
+        // 1e-3 already lands this run at 6e-13, and 1e-4 cannot improve on round-off.
+        if (prev >= 0.0 && !(c.moment_error < prev) && !(c.moment_error < 1e-10)) falls = false;
         prev = c.moment_error;
     }
     check(measured, "the plastic plate carries a moment criterion at every tolerance");
-    check(falls, "the moment residual FALLS as the tolerance tightens (1.5e-4 -> 4.5e-5 -> ...), "
+    check(falls, "the moment residual FALLS as the tolerance tightens, until round-off, "
                  "so it is a residual and m_ref has not collapsed");
     check(never_binds,
           "the rotational rows converge at least as fast as the translational ones (measured "

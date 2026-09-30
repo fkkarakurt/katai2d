@@ -436,7 +436,25 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // a pore pressure nobody had generated.
         // Reported per material, because a phase that quietly stops being undrained
         // is the difference between a short-term and a long-term answer.
-        if (io.config && io.config->ignore_undrained && models.back().undrained) {
+        // THE INITIAL PHASE IS DRAINED. The ground's own weight was carried over geological time:
+        // an initial K0 or gravity phase generates no excess pore pressure whatever the drainage
+        // type says. Until 2026-09-30 the non-level K0 phase's equilibrium step (and a gravity
+        // phase's whole load) loaded Undrained (A) soil undrained, and every phase after it
+        // inherited a pore pressure nobody had generated: a Safety phase on an undrained slope
+        // then differed from the same slope drained although nothing had been loaded yet.
+        // Only while the phase does nothing BUT set up that state: an initial phase that also
+        // applies a load or a prescribed displacement is asked for that load's response, and an
+        // undrained soil then answers undrained, as it always has.
+        bool initial_state_phase =
+            !io.chained && (phase == InitialPhase::K0Procedure ||
+                            phase == InitialPhase::GravityLoading);
+        for (size_t li = 0; li < pr.loads.size() && initial_state_phase; ++li)
+            if (!io.config || io.config->active_load(li)) initial_state_phase = false;
+        for (size_t di = 0; di < pr.disps.size() && initial_state_phase; ++di)
+            if (!io.config || io.config->active_disp(di)) initial_state_phase = false;
+        if (initial_state_phase && models.back().undrained) {
+            models.back().ignore_undrained = true;
+        } else if (io.config && io.config->ignore_undrained && models.back().undrained) {
             models.back().ignore_undrained = true;
             note(R, "K2D-A008", m.name,
                  "This phase ignores undrained behaviour, so material \"" + m.name +
@@ -592,7 +610,9 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // mass is usually assumed to be in, so the default is defensible -- but it must not be
         // arrived at silently, because the user could equally have meant the 0.3 a jointed,
         // relaxed mass shows. This is the one place in the run that can say so.
-        if (m.model == model::SoilModel::HoekBrown && m.k0_auto)
+        // Said where the K0 is used: the initial K0 procedure. A gravity-loading start never reads it.
+        if (m.model == model::SoilModel::HoekBrown && m.k0_auto && !io.chained &&
+            phase == InitialPhase::K0Procedure)
             warn(R, "K2D-A017", m.name,
                  "\"" + m.name + "\" uses the Hoek-Brown model, which has no phi', so the "
                  "automatic K0 = 1 - sin(phi') falls back on this material's unused friction box "
@@ -718,7 +738,13 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 w.seam = katai::core::split_mesh_at_wall(mesh, 0.5 * (s.x1 + s.x2),
                                                          std::min(s.y1, s.y2), std::max(s.y1, s.y2));
             } else {                                           // GENERAL: split along the segment, key by s
-                const auto seg = katai::core::split_mesh_at_segment(mesh, tx, ty, ux, uy, 1e-3, len + 1.0);
+                // Split up to the drawn end and no further. The window ran to len + 1 m, harmless
+                // where a wall ends at the ground surface and wrong everywhere else: a wall, a
+                // lining chord or a slab ending inside the soil was split -- and built, with its
+                // interfaces -- a metre past its end (measured: a wall drawn from x = 3 to 9 m
+                // reported forces to x = 9.75 m).
+                const auto seg = katai::core::split_mesh_at_segment(mesh, tx, ty, ux, uy, 1e-3,
+                                                                    len * (1.0 + 1e-6));
                 for (const auto& p : seg) w.seam.push_back({p.orig, p.dup, p.s});
             }
             // The line is not on mesh edges, so the mesh cannot be split along it and the wall
@@ -1040,6 +1066,15 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                            b.if3 > a.if3 || b.if5 > a.if5 || b.eb > a.eb || b.extra > a.extra;
         if (built) struct_records.push_back(r);
     };
+    // PLATES THAT MEET ARE JOINED RIGIDLY. Each drawn plate numbers its own rotations, and until
+    // 2026-09-30 two plates meeting at a node kept two independent rotations there: every joint
+    // was a hinge, with nothing said. Measured on a plate on elastic ground loaded at mid-span: in
+    // one piece M = +56.65 kNm/m under the load, drawn as two pieces meeting there M = -0.23, and
+    // the sign reversed a metre away -- so every tunnel lining, drawn as the chords of its arc,
+    // carried its ring force with no bending at all. A rotation at a node that an earlier plate
+    // already turns there is now the same unknown (DofMap::tie); each plate still owns its DOFs,
+    // so a plate installed in a later phase is carried like any other.
+    std::unordered_map<int, int> plate_rotation_at;   // mesh node -> the first plate rotation there
     for (size_t si = 0; si < pr.structs.size(); ++si) {
         const auto& s = pr.structs[si];
         if (s.kind != model::StructKind::Plate || plate_is_wall[si]) continue;   // walls built below
@@ -1080,7 +1115,12 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             }
         }
         std::vector<int> rot(chain.size());
-        for (size_t i = 0; i < chain.size(); ++i) rot[i] = dofs.add_extra_dof();
+        for (size_t i = 0; i < chain.size(); ++i) {
+            rot[i] = dofs.add_extra_dof();
+            const auto it = plate_rotation_at.find(chain[i]);
+            if (it == plate_rotation_at.end()) plate_rotation_at.emplace(chain[i], rot[i]);
+            else dofs.tie(rot[i], it->second);
+        }
         const size_t p0 = structures.plates.size();
         for (size_t e = 0; 2 * e + 2 < chain.size(); ++e) {
             const int A = chain[2 * e], B = chain[2 * e + 2], M = chain[2 * e + 1];
@@ -1276,6 +1316,49 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             wall_dof_at[(size_t)nl[i]] = {dx[i], dy[i]};
         }
     };
+    // WALLS THAT MEET ARE JOINED RIGIDLY, to each other and to the plates that meet them. A wall
+    // with interfaces moves on its own degrees of freedom, and an end of one wall at the end of
+    // another -- the chords of a tunnel lining with interfaces, the two legs of a bent wall -- or
+    // a slab on a wall's head had its own translations and rotation there: the walls touched only
+    // through the soil, the joint was free, and the force report of each ran into the other.
+    // Measured on a plate on elastic ground loaded at a joint of two walls: 59.49 kNm/m on one
+    // side of the joint and 52.37 on the other. The ends are now one point: the same unknowns.
+    struct WallEnd { double x, y; int dof[3]; };
+    std::vector<WallEnd> wall_ends;
+    const auto is_master = [&dofs](int d) {
+        for (int g = 0; g < dofs.total_dofs(); ++g)
+            if (dofs.master_of(g) == d) return true;
+        return false;
+    };
+    const auto root_of = [&dofs](int d) { const int m = dofs.master_of(d); return m >= 0 ? m : d; };
+    const auto join_dofs = [&](int a, int b) {
+        if (a < 0 || b < 0) return;
+        const int ra = root_of(a), rb = root_of(b);
+        if (ra == rb) return;
+        if (dofs.master_of(a) < 0 && !is_master(a)) dofs.tie(a, rb);
+        else if (dofs.master_of(b) < 0 && !is_master(b)) dofs.tie(b, ra);
+    };
+    const auto join_wall_ends = [&](const std::vector<int>& node_r, const std::vector<int>& dx,
+                                    const std::vector<int>& dy, const std::vector<int>& dphi) {
+        if (node_r.empty()) return;
+        for (size_t k : {size_t(0), node_r.size() - 1}) {
+            const double x = mesh.x[node_r[k]], y = mesh.y[node_r[k]];
+            const double tol = 1e-6 * (1.0 + std::fabs(x) + std::fabs(y));
+            for (const auto& e : wall_ends)
+                if (std::fabs(e.x - x) <= tol && std::fabs(e.y - y) <= tol) {
+                    join_dofs(dx[k], e.dof[0]);
+                    join_dofs(dy[k], e.dof[1]);
+                    join_dofs(dphi[k], e.dof[2]);
+                }
+            // A plate on the soil ending at this point (a slab on the wall's head) turns with it.
+            for (int n = 0; n < mesh.node_count; ++n) {
+                if (std::fabs(mesh.x[n] - x) > tol || std::fabs(mesh.y[n] - y) > tol) continue;
+                const auto it = plate_rotation_at.find(n);
+                if (it != plate_rotation_at.end()) join_dofs(dphi[k], it->second);
+            }
+            wall_ends.push_back({x, y, {dx[k], dy[k], dphi[k]}});
+        }
+    };
     for (const auto& w : walls) {
         // silent-drop-ok: an inactive wall is not dropped -- the phase asked for it to be absent, and
         // its seam is tied so that the ground across the line is continuous, exactly as without it.
@@ -1306,6 +1389,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             katai::core::WallBuild5 wb = katai::core::build_embedded_wall5(mesh, w.seam, toe, dofs, w.pp, w.ip,
                                                                            w.iface_right, w.iface_left);
             attach_to_wall(wb.node_r, wb.node_l, wb.dof_x, wb.dof_y);
+            join_wall_ends(wb.node_r, wb.dof_x, wb.dof_y, wb.dof_phi);
             const auto ncp = katai::core::iface::nc_points5();
             for (auto& ie : wb.interfaces)
                 for (int q = 0; q < 5; ++q) {
@@ -1325,6 +1409,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             katai::core::WallBuild wb = katai::core::build_embedded_wall(mesh, w.seam, toe, dofs, w.pp, w.ip,
                                                                          w.iface_right, w.iface_left);
             attach_to_wall(wb.node_r, wb.node_l, wb.dof_x, wb.dof_y);
+            join_wall_ends(wb.node_r, wb.dof_x, wb.dof_y, wb.dof_phi);
             const auto ncp = katai::core::iface::nc_points();
             for (auto& ie : wb.interfaces)
                 for (int q = 0; q < 3; ++q) {
@@ -1749,6 +1834,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         !structures.interfaces5.empty() || !structures.embedded_beams.empty();
     bool static_carry_used = false;      // set by the static tail when it actually consumed carry
     bool static_carry_missing = false;   // chained + structures, but no carriable parent state
+    bool static_failed = false;          // stopped short; its last equilibrated state is kept
     // Matched by drawn structure, so that a phase which activates or removes a structure still
     // carries every other one (build_structural_carry states the three cases). carry_plan.full_datum
     // is the parent's total displacement in THIS phase's DOF numbering -- the datum every consumer
@@ -1760,6 +1846,18 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                                                          2 * mesh.node_count, carry_init);
         if (carry_plan.carried) carry_src = &ps;
     }
+    // A prestressed anchor installed in this phase is its jack for the phase (AnchorElement::
+    // lock_off): it holds its lock-off force and is locked where the wall comes to. Installed =
+    // not carried from the parent. Static phases only -- a Safety search, a consolidation and a
+    // dynamic phase do not install anchors against a jack, and the Safety search refuses a new
+    // prestressed anchor outright (K2D-G016).
+    if (phase == InitialPhase::K0Procedure || phase == InitialPhase::GravityLoading)
+        for (size_t ai = 0; ai < structures.anchors.size(); ++ai) {
+            auto& an = structures.anchors[ai];
+            if (an.prestress == 0.0) continue;
+            an.lock_off = !carry_plan.carried ||
+                          (ai < carry_plan.new_anchor.size() && carry_plan.new_anchor[ai]);
+        }
     // A wall or interface that was active in the parent and is inactive here leaves its two sides
     // where the joint let them go -- apart, if it slipped or opened -- and ties them for this phase's
     // increments. The ground is fine with that: it carries its stresses, not a displacement datum. A
@@ -1926,6 +2024,44 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         katai::core::assemble_axisym_gravity(mesh, dofs, gamma, f);   // r-weighted body force
     } else {
         katai::core::assemble_gravity(mesh, dofs, gamma, f, act);
+    }
+    // FREE WATER AGAINST THE EXPOSED GROUND. The pore load above is the effective-stress split of
+    // the total stress over the ACTIVE soil, and on the boundary of that soil it leaves a term p n
+    // that only an external water pressure balances. Where the ground surface is at or above the
+    // water table p is zero there and nothing is missing; wherever free water stands against the
+    // ground -- an excavation dug below the water table, a lake or river bed, the upstream face
+    // of a dam -- p is not zero and the water's own pressure on that face has to be applied. Until
+    // 2026-09-30 it was not, and the unbalanced term lifted every such face by the full water
+    // pressure: an elastic column dug 4 m below the water table heaved exactly twice the closed
+    // form ((gamma_sat - gamma_w) h H / E_oed against gamma_sat h H / E_oed), and a submerged
+    // excavation rebuilt from a published tutorial collapsed in its last stage. Applied on the
+    // exposed boundary (active faces no other active element shares in space, so a wall's split
+    // seam is interior until one side is dug away), with the pore pressure the phase's own water
+    // conditions give there; not on a boundary whose normal displacement is fixed, where the
+    // ground continues and the reaction already carries whatever acts there.
+    if (water || flow) {
+        const auto pore_at_node = [&](int n) {
+            if (flow) return kGammaWater * std::fmax(0.0, (*flow_head)(n) - mesh.y[n]);
+            return kGammaWater * std::fmax(0.0, water_table_at(pr, mesh.x[n], io.config) - mesh.y[n]);
+        };
+        for (const auto& ed : katai::mesh::extract_exposed_edges(mesh, act)) {
+            const int comp = std::fabs(ed.nx) >= std::fabs(ed.ny) ? 0 : 1;
+            const bool held = dofs.equation(dofs.global_dof(ed.node[0], comp)) < 0 &&
+                              dofs.equation(dofs.global_dof(ed.node[ed.npe - 1], comp)) < 0;
+            if (held) continue;
+            std::vector<int> chain(ed.node.begin(), ed.node.begin() + ed.npe);
+            std::vector<double> tx(ed.npe), ty(ed.npe);
+            bool wet = false;
+            for (int i = 0; i < ed.npe; ++i) {
+                const double pw = pore_at_node(chain[i]);
+                wet = wet || pw > 0.0;
+                tx[i] = -pw * ed.nx;
+                ty[i] = -pw * ed.ny;
+            }
+            if (!wet) continue;
+            if (axi) katai::core::assemble_axisym_traction_varying(mesh, dofs, chain, tx, ty, f);
+            else katai::core::assemble_surface_traction_varying(mesh, dofs, chain, tx, ty, f);
+        }
     }
     // External point loads (kept separate too: for the embedded-wall K0 baseline only loads ramp,
     // while self-weight is carried by the seeded geostatic state).
@@ -2102,6 +2238,22 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // via vertical integration; reuses the eff_unit_weight / ground_surface lambdas built above.
     katai::core::K0LayeredOptions k0opt;
     k0opt.k0 = k0_by_mat;
+    // A POP on the automatic K0 (the OCR case is folded into k0_by_mat above; a POP makes the
+    // ratio depth-dependent, so it is applied point by point in the layered seed).
+    for (size_t mi = 0; mi < pr.materials.size(); ++mi) {
+        const auto& m = pr.materials[mi];
+        if (!(m.k0_auto && m.oc_mode == 2 && m.POP > 0.0)) continue;
+        if (k0opt.pop.empty()) {
+            k0opt.pop.assign(pr.materials.size(), 0.0);
+            k0opt.pop_nu.assign(pr.materials.size(), 0.0);
+            k0opt.pop_sin_phi.assign(pr.materials.size(), 0.0);
+        }
+        const bool adv = models[mi].type != katai::core::MaterialType::LinearElastic &&
+                         models[mi].type != katai::core::MaterialType::MohrCoulomb;
+        k0opt.pop[mi] = m.POP;
+        k0opt.pop_nu[mi] = adv ? m.nu_ur : m.nu;
+        k0opt.pop_sin_phi[mi] = std::sin(m.phi * kPi / 180.0);
+    }
     k0opt.eff_unit_weight = eff_unit_weight;
     k0opt.ground_surface = ground_surface;
     // Total-stress targets are seeded in total stress (header note): u(x,y) hydrostatic. For
@@ -2333,6 +2485,18 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // the refusals and the honest lower-bound reporting are engine-owned. On success the phase
         // falls through to the common result tail, exactly as before.
         if (phase == InitialPhase::Safety) {
+            // A SAFETY PHASE AFTER OTHER PHASES STARTS FROM THE STATE THEY BUILT (since 2026-09-30):
+            // the parent's committed stresses and pore pressures, its structures carried as a
+            // chained phase carries them, and the parent's internal force held as the constant
+            // load -- so the strength is reduced from the equilibrium the engineer constructed,
+            // not from a second construction of it from zero. That start is taken whenever every
+            // structure active here was active in the parent (a structure installed in the
+            // Safety phase itself has no state to start from); otherwise, and for a Safety run
+            // with no phase before it, the search re-solves the ground from the unstressed state
+            // and the refusals below apply to that start.
+            const bool safety_from_parent =
+                io.chained && !init.empty() && io.prev && io.prev->ok && !axi &&
+                (!any_struct_carry || (carry_plan.carried && carry_plan.installed == 0));
             // THE STRUCTURES TAKE PART IN THE SEARCH (since 2026-09). Until then the search
             // was handed none of them, and an active geogrid, anchor, plate carrying 150 kN/m/m or
             // embedded beam returned the factor of safety of the same mesh with the element
@@ -2341,15 +2505,15 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // stated with safety_analysis: an interface's strength is reduced with the soil's, a
             // structure's own capacity is not.
             //
-            // One element still cannot enter, and it is refused rather than approximated: a
-            // PRESTRESSED anchor. The search re-solves the ground from the unstressed state, and a
-            // lock-off force is a force applied to a ground that has already moved -- on the
-            // unstressed mesh it would pull the wall into soil that carries no stress yet, with
-            // nothing in the search to say when the anchor was locked. Starting the search from the
-            // parent phase is what gives that force a meaning, and this build does not do that yet.
+            // One element cannot enter a search that starts from the unstressed state, and there it
+            // is refused rather than approximated: a PRESTRESSED anchor. A lock-off force is a force
+            // applied to a ground that has already moved -- on the unstressed mesh it would pull the
+            // wall into soil that carries no stress yet, with nothing in the search to say when the
+            // anchor was locked. Started from the parent phase (safety_from_parent) the anchor comes
+            // with the force it was locked off at, and it takes part like any other element.
             // silent-drop-scope: none -- this loop only looks for a prestressed anchor to refuse; it
             // builds nothing, and every element it passes over was built by its own loop above.
-            for (size_t si = 0; si < pr.structs.size(); ++si) {
+            for (size_t si = 0; si < pr.structs.size() && !safety_from_parent; ++si) {
                 const auto& s = pr.structs[si];
                 if (s.kind != model::StructKind::Anchor || !struct_on(si)) continue;
                 if (s.material < 0 || s.material >= (int)pr.anchors.size()) continue;
@@ -2358,17 +2522,19 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 refuse(R, "K2D-G016", line_subject(s.name, s.x1, s.y1, s.x2, s.y2),
                        "Anchor \"" + s.name + "\" is prestressed (lock-off force " +
                            dnum(am.prestress) +
-                           " kN) and active in a Safety analysis. The strength-reduction search in "
-                           "this build re-solves the ground from the unstressed state, and a "
-                           "lock-off force belongs to a ground that has already moved: applied to "
-                           "the unstressed mesh it would pull on soil that carries no stress yet, "
-                           "and the factor of safety would depend on that. Plates, geogrids, "
-                           "embedded beams, interfaces and anchors without prestress do take part "
-                           "in the search. Deactivate this anchor in the Safety phase to obtain the "
-                           "factor of safety without it.");
+                           " kN) and active in a Safety analysis that has to start from the "
+                           "unstressed state -- it is the first phase, or a structure is installed "
+                           "in the Safety phase itself. A lock-off force belongs to a ground that "
+                           "has already moved: applied to the unstressed mesh it would pull on soil "
+                           "that carries no stress yet, and the factor of safety would depend on "
+                           "that. Run the Safety phase after the phase that installs the anchor "
+                           "(the search then starts from that phase, lock-off force included), or "
+                           "deactivate the anchor in the Safety phase.");
                 return R;
             }
             // AN UNDRAINED SOIL CANNOT ENTER A SAFETY RUN THAT STARTS FROM THE UNSTRESSED STATE.
+            // (Started from the parent phase it can, and does: the search then reads the pore
+            // pressures the construction generated, which is what the short-term factor is.)
             // Every trial of the search applies the whole self-weight again from zero, and an
             // undrained material turns that loading into excess pore pressure: the ground's own
             // weight ends up in the water, the effective stress -- and with it the frictional
@@ -2378,10 +2544,10 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // and 0.73 with the clay undrained against 1.4 published -- reported with no warning.
             // The undrained factor belongs to the pore pressures the construction generated on
             // top of a drained geostatic state, which is what a search started from the parent
-            // phase would read; this build does not start there yet (P1-S2).
+            // phase reads.
             // silent-drop-scope: none -- this loop only looks for an undrained material to
             // refuse; it builds nothing.
-            for (int e = 0; e < mesh.element_count; ++e) {
+            for (int e = 0; e < mesh.element_count && !safety_from_parent; ++e) {
                 if (!act.empty() && !act[e]) continue;
                 const int mi = mesh.element_material[e];
                 if (mi < 0 || mi >= (int)models.size()) continue;
@@ -2392,16 +2558,18 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 const std::string name =
                     mi < (int)pr.materials.size() ? pr.materials[(size_t)mi].name : std::string();
                 refuse(R, "K2D-G017", name,
-                       "Material \"" + name + "\" is undrained and active in a Safety analysis. "
-                       "The strength-reduction search in this build re-solves the ground from "
-                       "the unstressed state, so every trial loads an undrained soil with its "
+                       "Material \"" + name + "\" is undrained and active in a Safety analysis "
+                       "that has to start from the unstressed state -- it is the first phase, or "
+                       "a structure is installed in the Safety phase itself -- so every trial "
+                       "loads an undrained soil with its "
                        "whole self-weight: that weight is carried by excess pore pressure, the "
                        "effective stress is far below the one the phases built, and the factor "
                        "of safety would come out far too low. For the long-term factor, run the "
                        "Safety phase with the material drained (or set the phase to ignore "
-                       "undrained behaviour); a short-term factor from the construction's excess "
-                       "pore pressures needs the search to start from the parent phase, which "
-                       "this build does not do yet.");
+                       "undrained behaviour); for the short-term factor from the construction's "
+                       "excess pore pressures, run the Safety phase after the construction phase "
+                       "with no structure newly installed in it, and the search starts from "
+                       "there.");
                 return R;
             }
             // What starting from the unstressed state means once structures are in it, said
@@ -2413,7 +2581,15 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 for (size_t si = 0; si < pr.structs.size(); ++si) {
                     if (struct_on(si)) ++n_active;
                 }
-                if (n_active > 0)
+                if (n_active > 0 && safety_from_parent)
+                    note(R, "K2D-A018", "Safety",
+                         "The factor of safety includes the " + std::to_string(n_active) +
+                             " active structural element(s), continued from the phase before "
+                             "with the forces and plastic state that phase left them in. No "
+                             "structural force is reported for this phase: the state the search "
+                             "stops at is the ground at the limit of its reduced strength, not a "
+                             "state to design the structures for.");
+                else if (n_active > 0)
                     note(R, "K2D-A018", "Safety",
                          "The factor of safety includes the " + std::to_string(n_active) +
                              " active structural element(s). The strength-reduction search "
@@ -2460,6 +2636,26 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             sfin.tolerance = io.numeric.tolerance;
             sfin.load_steps = io.numeric.steps;
             sfin.max_iterations = io.numeric.max_iterations;
+            if (safety_from_parent) {
+                // The parent's internal force, assembled exactly as a chained phase assembles its
+                // baseline: the soil at the committed stresses plus the structures at their carried
+                // datum and plastic state (which already holds the interfaces' sigma_n0 and every
+                // anchor's lock-off force).
+                sfin.parent_state = init;
+                sfin.parent_force = Eigen::VectorXd::Zero(dofs.equation_count());
+                katai::core::assemble_internal_force(mesh, dofs, init, sfin.parent_force, act);
+                // ...and the force of the excess pore pressure the parent left (a consolidation
+                // stopped short, an undrained construction phase), exactly as a chained phase
+                // holds it: the short-term factor of safety is the one that reads it.
+                katai::core::add_excess_pore_force(mesh, dofs, models, profiles, init, act, axi,
+                                                   sfin.parent_force);
+                if (any_struct_carry) {
+                    sfin.parent_force += katai::core::structural_internal_force(
+                        mesh, dofs, models, structures, carry_init,
+                        katai::core::Kinematics::PlaneStrain);
+                    sfin.parent_structures = carry_init;
+                }
+            }
             // A loose stopping rule does not add scatter to a factor of safety, it adds BIAS,
             // and always the unsafe way: the search reads "this trial converged" as "the slope
             // stands", so a solver allowed to stop early makes it stand at strengths it cannot
@@ -2964,8 +3160,12 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                                              solver, structures, diag_specs, iface_diags,
                                              carry_init,
                                              struct_baseline ? &carry_plan.full_datum : nullptr,
-                                             stin, R, io.out_states))
-            return R;
+                                             stin, R, io.out_states)) {
+            // A phase that stopped short still publishes its last equilibrated state for viewing
+            // (static_phase.hpp): it goes through the view tail below and stays failed.
+            if (R.disp.size() != 2 * mesh.node_count) return R;
+            static_failed = true;
+        } else {
         static_carry_used = static_carry;
         static_carry_missing = io.chained && any_struct_carry && !static_carry;
         // What the next phase needs to find this phase's structures again by structure: the
@@ -2974,6 +3174,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         R.struct_state.records = struct_records;
         R.struct_state.install_datum = katai::core::install_datum_full(structures, dofs);
         R.struct_state.node_dofs = 2 * mesh.node_count;
+        }
         }  // end ramp/solve (non-consolidation)
         }  // end normal (non-Safety) solve
     } catch (const std::exception& e) {
@@ -2994,6 +3195,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             R.pore[n] = kGammaWater * std::fmax(0.0, water_table_at(pr, mesh.x[n], io.config) - mesh.y[n]);
     R.active = act;             // phase element activity (empty = all active)
     R.mesh = std::move(mesh);   // the (possibly split) mesh the GUI must render
+    if (static_failed) return R;   // viewable, not ok: R.message is the non-convergence account
     R.ok = true;
     R.message = "Solved: max |u| = " + std::to_string(R.max_disp);
     if (static_carry_used) {

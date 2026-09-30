@@ -13,6 +13,7 @@
 #include <katai/jobs/driver.hpp>
 #include <katai/model/project.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -144,21 +145,44 @@ void test_ocr_memory() {
 void test_pop_memory() {
     std::printf("-- POP = 100 kPa: previously ignored silently, now an equivalent-ratio seed --\n");
     const double q = 10.0;
-    double u0 = 0, up = 0; std::string msg;
     m::Project pp = ss_column();
     pp.materials[0].oc_mode = 2; pp.materials[0].POP = 100.0;
     add_surcharge_phase(pp, q);
-    const bool ok = run_column(pp, u0, up, msg);
+    const auto M = katai::app::mesh_from_project(pp, 0.5, 6);
+    const auto res = M.ok ? katai::app::solve_phases(pp, M.mesh, InitialPhase::K0Procedure)
+                          : std::vector<katai::app::SolveResult>{};
+    const bool ok = res.size() == 2 && res[0].ok && res[1].ok;
     check(ok, "POP = 100 column converged");
-    if (!ok) { std::printf("   (%s)\n", msg.c_str()); return; }
+    if (!ok) { std::printf("   (%s)\n", res.empty() ? "no result" : res.back().message.c_str()); return; }
     // q = 10 stays inside the preconsolidation EVERYWHERE (sigma_v0 + q < sigma_v0 + POP), so the
-    // whole depth responds elastically -- a tighter band than the OCR case is justified (the
-    // remaining deviation is the kernel's p' >= 1 kPa floor near the stress-free surface).
-    const double uk = -kKap * elastic_integral(q, 0.15, kK0nc);
-    std::printf("   u_POP = %.4f (elastic kappa* form %.4f, err %+.1f%%)\n", up, uk,
+    // whole depth responds elastically.
+    //
+    // A POP raises the automatic K0 point by point (K0 = [K0nc (s'v + POP) - nu/(1-nu) POP] / s'v,
+    // clamped at passive), so the initial mean stress -- and the kappa* stiffness it sets -- grows
+    // towards the surface. The elastic integral is taken with that C(z), numerically, and compared
+    // one metre down: above it sigma'_v -> 0 makes the integrand logarithmically singular, which a
+    // 0.5 m mesh cannot resolve and where the kernel's p' >= 1 kPa floor acts (at the surface the
+    // two differ by 11%, all of it in that strip).
+    const double sphi = std::sin(25.0 * 3.14159265358979323846 / 180.0);
+    const double kp = (1.0 + sphi) / (1.0 - sphi), nu_ur = 0.15, z0 = 1.0;
+    const double Bq = (1.0 + nu_ur) / (3.0 * (1.0 - nu_ur));
+    double uk = 0.0;
+    const int nz = 20000;
+    for (int i = 0; i < nz; ++i) {
+        const double z = z0 + (i + 0.5) * (kH - z0) / nz, sv = kGammaSoil * z, pop = 100.0;
+        const double k0 = std::clamp((kK0nc * (sv + pop) - nu_ur / (1.0 - nu_ur) * pop) / sv, 0.0, kp);
+        const double C = (1.0 + 2.0 * k0) / 3.0;
+        uk -= kKap * std::log(1.0 + Bq * q / (C * sv)) * ((kH - z0) / nz);
+    }
+    const auto& R = res[1];
+    double s = 0.0; int n = 0;
+    for (int i = 0; i < R.mesh.node_count; ++i)
+        if (std::fabs(R.mesh.y[i] - (kH - z0)) < 1e-6) { s += R.disp[i * 2 + 1]; ++n; }
+    const double up = n > 0 ? s / n : 0.0;
+    std::printf("   u_POP at 1 m depth = %.5f (elastic kappa* form %.5f, err %+.1f%%)\n", up, uk,
                 100.0 * (up - uk) / std::fabs(uk));
-    check(std::fabs(up - uk) < 0.10 * std::fabs(uk),
-          "POP response matches the elastic kappa* integral (10%)");
+    check(n > 0 && std::fabs(up - uk) < 0.05 * std::fabs(uk),
+          "POP response matches the elastic kappa* integral below the surface strip (5%)");
 }
 
 void test_undrained_refusal() {

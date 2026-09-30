@@ -309,6 +309,19 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
     if (m.e_init < 0.0)
         r.add(Severity::Error, path("e_init"),
               who + "the initial void ratio cannot be negative (got " + num(m.e_init) + ")");
+    // A value that its switch leaves unread. Measured on models rebuilt from published tutorials:
+    // an interface reduction of 0.5 and a pre-overburden pressure of 25 kPa were entered and ran
+    // as a rigid interface and a normally consolidated soil, with nothing said.
+    if (m.rinter_rigid && m.Rinter != 1.0)
+        r.add(Severity::Warning, path("Rinter"),
+              who + "Rinter = " + num(m.Rinter) + " is entered but the interface is set to rigid, "
+                    "so the strength beside a wall is the soil's own (Rinter = 1). Turn "
+                    "rinter_rigid off to use it");
+    if (m.oc_mode == 0 && (m.OCR != 1.0 || m.POP != 0.0))
+        r.add(Severity::Warning, path("oc_mode"),
+              who + (m.OCR != 1.0 ? "OCR = " + num(m.OCR) : "POP = " + num(m.POP) + " kPa") +
+                  " is entered but no stress history is selected (oc_mode = 0), so the soil "
+                  "starts normally consolidated. Set oc_mode to 1 (OCR) or 2 (POP) to use it");
 
     // -- Stiffness and strength, by the fields the chosen model actually reads --
     const bool le = m.model == SoilModel::LinearElastic;
@@ -377,7 +390,10 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
         if (m.c < 0.0)
             r.add(Severity::Error, path("c"),
                   who + "cohesion cannot be negative (got " + num(m.c) + " kN/m2)");
-        if (m.psi > m.phi)
+        // Not for Hoek-Brown: its strength is the Hoek-Brown curve and its phi box is unused, so a
+        // dilatancy angle checked against it refused a valid rock mass (psi = 35 against the
+        // box's default 30, on a limestone rebuilt from a published tunnel tutorial).
+        if (m.psi > m.phi && m.model != SoilModel::HoekBrown)
             r.add(Severity::Error, path("psi"),
                   who + "the dilatancy angle cannot exceed the friction angle (psi = " +
                       num(m.psi) + " > phi = " + num(m.phi) + " degrees)");
@@ -707,20 +723,22 @@ inline ValidationReport validate_project(const model::Project& p) {
         }
     }
 
-    // A PRESTRESSED ANCHOR CANNOT ENTER A SAFETY RUN. The strength-reduction search re-solves the
-    // ground from the unstressed state with the phase's structural elements in it, and a lock-off
+    // A PRESTRESSED ANCHOR CANNOT ENTER A SAFETY RUN THAT STARTS FROM THE UNSTRESSED STATE: the
+    // initial Safety procedure, or a Safety phase in which the anchor is installed. A lock-off
     // force belongs to a ground that has already moved: on the unstressed mesh it would pull on
-    // soil that carries no stress yet. Every other structural element takes part in the search.
-    // (Until 2026-09 the search was handed none of them and every active element was refused
-    // here.) The engine refuses the same condition (K2D-G016); saying it here refuses the project
-    // before a mesh is built.
+    // soil that carries no stress yet. A Safety phase whose anchor was already active in the phase
+    // it continues from starts from that phase's state (lock-off force included) and is accepted.
+    // Every other structural element takes part in the search. The engine refuses the same
+    // condition (K2D-G016); saying it here refuses the project before a mesh is built.
     {
-        const auto first_active = [&p](const model::Phase& ph, size_t& count) -> const char* {
+        const auto first_active = [&p](const model::Phase& ph, const model::Phase* before,
+                                       size_t& count) -> const char* {
             const char* name = nullptr;
             count = 0;
             for (size_t i = 0; i < p.structs.size(); ++i) {
                 const auto& s = p.structs[i];
                 if (s.kind != model::StructKind::Anchor || !ph.active_struct(i)) continue;
+                if (before && before->active_struct(i)) continue;   // carried, lock-off and all
                 if (s.material < 0 || s.material >= (int)p.anchors.size()) continue;
                 if (!(p.anchors[(size_t)s.material].prestress > 0.0)) continue;
                 if (!name) name = s.name.c_str();
@@ -728,28 +746,37 @@ inline ValidationReport validate_project(const model::Project& p) {
             }
             return name;
         };
-        const auto refuse_safety = [&](const model::Phase& ph, const std::string& where) {
+        const auto refuse_safety = [&](const model::Phase& ph, const model::Phase* before,
+                                       const std::string& where) {
             size_t count = 0;
-            const char* name = first_active(ph, count);
+            const char* name = first_active(ph, before, count);
             if (!name) return;
             r.add(Severity::Error, where,
                   "prestressed anchor \"" + std::string(name) + "\"" +
                       (count > 1 ? " and " + std::to_string(count - 1) + " other(s) are"
                                  : std::string(" is")) +
-                      " active in a Safety analysis. The strength-reduction search in this build "
-                      "re-solves the ground from the unstressed state, and a lock-off force "
-                      "belongs to a ground that has already moved: applied to the unstressed mesh "
-                      "it would pull on soil that carries no stress yet, and the factor of safety "
-                      "would depend on that. Plates, geogrids, embedded beams, interfaces and "
-                      "anchors without prestress do take part in the search. Deactivate the "
-                      "prestressed anchors in this phase to obtain the factor of safety without "
-                      "them");
+                      " active in a Safety analysis without having been active in the phase it "
+                      "continues from, so the search would have to start from the unstressed "
+                      "state, and a lock-off force belongs to a ground that has already moved: "
+                      "applied to the unstressed mesh it would pull on soil that carries no stress "
+                      "yet, and the factor of safety would depend on that. Install the anchor in "
+                      "a Plastic phase before the Safety phase (the search then starts from that "
+                      "phase, lock-off force included), or deactivate it in this phase");
         };
         if (p.initial_procedure == model::InitialProcedure::Safety)
-            refuse_safety(p.initial, "initial.struct");
-        for (size_t i = 0; i < p.phases.size(); ++i)
-            if (p.phases[i].type == model::PhaseType::Safety)
-                refuse_safety(p.phases[i], at("phases", i, "struct"));
+            refuse_safety(p.initial, nullptr, "initial.struct");
+        // The phase a Safety phase continues from: the nearest earlier phase that is not itself a
+        // Safety phase (a Safety phase leaves the ground as it found it), else the initial phase.
+        for (size_t i = 0; i < p.phases.size(); ++i) {
+            if (p.phases[i].type != model::PhaseType::Safety) continue;
+            const model::Phase* before = &p.initial;
+            for (size_t j = i; j-- > 0;)
+                if (p.phases[j].type != model::PhaseType::Safety) {
+                    before = &p.phases[j];
+                    break;
+                }
+            refuse_safety(p.phases[i], before, at("phases", i, "struct"));
+        }
     }
 
     // -- Water -----------------------------------------------------------------

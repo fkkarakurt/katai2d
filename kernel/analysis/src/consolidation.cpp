@@ -3,6 +3,10 @@
 // and tri15, and every consumer sees declarations only.
 #include <katai/math/solve_error.hpp>   // SingularSystem: a refused solve is an answer
 #include <katai/analysis/consolidation.hpp>
+#include <katai/analysis/nonlinear_solver.hpp>   // kStagnationAccept
+
+#include <functional>
+#include <limits>
 
 namespace katai::core {
 
@@ -208,7 +212,7 @@ ConsolidationPlasticResult consolidation_plastic_impl(
     // current increment dv. trial Gauss states are written. Returns the sparse A + Hcsr (for the RHS).
     auto assemble = [&](const Eigen::VectorXd& dv, math::SparseMatrixBuilder& Ab,
                         math::SparseMatrixBuilder& Hb, math::SparseMatrixBuilder& Lb,
-                        Eigen::VectorXd& f_int, TangentMode mode) {
+                        Eigen::VectorXd& f_int, TangentMode mode, double dt) {
         f_int.setZero(ndisp);
         for (int e = 0; e < mesh.element_count; ++e) {
             if (!active.empty() && !active[e]) continue;
@@ -319,59 +323,167 @@ ConsolidationPlasticResult consolidation_plastic_impl(
     for (const auto& mm : materials) if (mm.type == MaterialType::HardeningSoil) any_hs = true;
     const TangentMode tmode = any_hs ? TangentMode::kContinuum : TangentMode::kConsistent;
 
-    for (int step = 0; step < nsteps && R.converged; ++step) {
-        // baseline internal force of the committed (start-of-step) effective state
+    // ONE TIME STEP of length h carrying the load increment df_step, from the committed state.
+    // Monolithic coupled Newton with the robustness the static solver has:
+    //
+    //  * TWO CRITERIA, EACH ON ITS OWN SCALE. Equilibrium is a force balance and is measured against
+    //    the forces in play -- the committed internal force, the load increment and the force of the
+    //    pore pressure (L p) -- and continuity is a volume balance, measured against its own terms.
+    //    They used to share one reference, the larger of |df| and |dt H p|, which in a dissipation
+    //    step with no load is the continuity term alone: measured on an embankment over Hardening
+    //    Soil sand, a step whose out-of-balance force was 1.7e-3 kN against 237 kN in play (7e-6)
+    //    was held to 3e-8 kN, oscillated there for the whole iteration budget, and stopped the
+    //    phase as "did not converge".
+    //  * A BACKTRACKING LINE SEARCH on the equilibrium residual (the continuity block is linear,
+    //    so any full step satisfies it).
+    //  * STAGNATION ACCEPTANCE at kStagnationAccept of the force scale (K2D-A019), counted.
+    // Writes the converged increment to (dv, dpv) and leaves the trial states at it.
+    const auto one_step = [&](double h, const Eigen::VectorXd& df_step, Eigen::VectorXd& dv,
+                              Eigen::VectorXd& dpv, bool& stagnant) -> bool {
+        stagnant = false;
         Eigen::VectorXd Bbase;
         { math::SparseMatrixBuilder a0(NT), h0(std::max(1, npore)), l0(ndisp, std::max(1, npore));
           Eigen::VectorXd dvz = Eigen::VectorXd::Zero(ndisp);
-          assemble(dvz, a0, h0, l0, Bbase, tmode); }   // trial == committed here -> Bbase = f_int(committed)
-        Eigen::VectorXd dv = Eigen::VectorXd::Zero(ndisp), dpv = Eigen::VectorXd::Zero(std::max(1, npore));
-        Eigen::VectorXd df = Eigen::VectorXd::Zero(ndisp);
-        if (step == 0 && load_increment) df = *load_increment;
-        bool step_ok = false;
-        for (int it = 0; it < max_newton; ++it) {
+          assemble(dvz, a0, h0, l0, Bbase, tmode, h); }   // trial == committed -> Bbase = f_int(committed)
+        dv = Eigen::VectorXd::Zero(ndisp);
+        dpv = Eigen::VectorXd::Zero(std::max(1, npore));
+        struct Eval {
+            math::CsrMatrix A;
+            Eigen::VectorXd r;
+            double ru = 0.0, rp = 0.0, ref_u = 0.0, ref_p = 0.0;
+        };
+        const auto evaluate = [&](const Eigen::VectorXd& dv_, const Eigen::VectorXd& dpv_) {
+            Eval ev;
             math::SparseMatrixBuilder Ab(NT), Hb(std::max(1, npore)), Lb(ndisp, std::max(1, npore));
             Ab.reserve((std::size_t)mesh.element_count * (3 * N) * (3 * N));
             Eigen::VectorXd f_int;
-            assemble(dv, Ab, Hb, Lb, f_int, tmode);
-            const math::CsrMatrix A = Ab.build();
-            // Newton RHS = −R: equilibrium R_u = (f_int − Bbase) + L·Δp − Δf; continuity R_p computed
-            // from the assembled bottom block (A·x).tail = Lᵀ Δv − S* Δp (S* = ΔtH + S).
-            Eigen::VectorXd r = Eigen::VectorXd::Zero(NT);
-            r.head(ndisp) = df - (f_int - Bbase);
+            assemble(dv_, Ab, Hb, Lb, f_int, tmode, h);
+            ev.A = Ab.build();
+            // Newton RHS = -R: equilibrium R_u = (f_int - Bbase) + L dp - df; continuity from the
+            // assembled bottom block (A x).tail = Lt dv - S* dp (S* = h H + S).
+            ev.r = Eigen::VectorXd::Zero(NT);
+            ev.r.head(ndisp) = df_step - (f_int - Bbase);
+            double pore_force = 0.0;
             if (npore > 0) {
                 const math::CsrMatrix Hc = Hb.build();
                 const math::CsrMatrix Lc = Lb.build();
-                r.head(ndisp).noalias() -= Lc * dpv;                        // − L·Δp
-                Eigen::VectorXd x(NT); x.head(ndisp) = dv; x.tail(npore) = dpv;
-                const Eigen::VectorXd Ax = A * x;
-                r.tail(npore) = dt * (Hc * p) - Ax.tail(npore);             // ΔtH·p_n − (Lᵀ Δv − S*Δp)
-                const double ref = std::max({df.norm(), (dt * (Hc * p)).norm(), 1e-30});
-                if (r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0)) { step_ok = true; break; }
-            } else {
-                const double ref = std::max(df.norm(), 1e-30);
-                if (r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0)) { step_ok = true; break; }
+                ev.r.head(ndisp).noalias() -= Lc * dpv_;
+                Eigen::VectorXd x(NT);
+                x.head(ndisp) = dv_;
+                x.tail(npore) = dpv_;
+                const Eigen::VectorXd Ax = ev.A * x;
+                const Eigen::VectorXd hHp = h * (Hc * p);
+                ev.r.tail(npore) = hHp - Ax.tail(npore);
+                ev.rp = ev.r.tail(npore).norm();
+                // The volume balance's own terms: the flow in the step and the volume change the
+                // displacement makes (L^T dv). The assembled bottom row alone is no scale -- it IS
+                // the balance, zero to round-off once a step has converged.
+                Eigen::VectorXd xv = Eigen::VectorXd::Zero(NT);
+                xv.head(ndisp) = dv_;
+                ev.ref_p = std::max(hHp.norm(), (ev.A * xv).tail(npore).norm());   // |L^T dv|
+                pore_force = (Lc * (p + dpv_)).norm();
             }
-            if (!solve_factory) { step_ok = false; break; }
+            ev.ru = ev.r.head(ndisp).norm();
+            ev.ref_u = df_step.norm() + Bbase.norm() + pore_force;
+            return ev;
+        };
+        const auto converged = [&](const Eval& ev) {
+            return ev.ru <= newton_tol * ev.ref_u + 1e-12 &&
+                   (npore == 0 || ev.rp <= newton_tol * ev.ref_p + 1e-15);
+        };
+        // The line search compares the two balances together, each relative to its own scale:
+        // a step with no load starts in force balance (ru = 0) and out of volume balance, and a
+        // search on the force balance alone would reject every step that restores the volume.
+        const auto worse = [&](const Eval& a, const Eval& b) {   // is a no better than b?
+            const double su = std::max({a.ref_u, b.ref_u, 1e-300});
+            const double sp = std::max({a.ref_p, b.ref_p, 1e-300});
+            const double ma = a.ru / su + (npore > 0 ? a.rp / sp : 0.0);
+            const double mb = b.ru / su + (npore > 0 ? b.rp / sp : 0.0);
+            return ma >= mb;
+        };
+        const auto rp_ok = [&](const Eval& ev) {
+            return npore == 0 || ev.rp <= newton_tol * ev.ref_p + 1e-15;
+        };
+        Eval cur = evaluate(dv, dpv);
+        Eigen::VectorXd best_dv = dv, best_dpv = dpv;
+        bool best_rp_ok = rp_ok(cur);
+        double best_ru = best_rp_ok ? cur.ru : std::numeric_limits<double>::infinity();
+        for (int it = 0; it < max_newton && !converged(cur); ++it) {
+            if (!solve_factory) return false;
             // A refused linear solve ends THIS time step, exactly as a non-converged Newton
             // does -- the tangent is singular at this iterate, which on this path means the soil
-            // has reached its capacity under the load being consolidated. Letting the refusal
-            // escape aborted the process instead (measured: a confined column driven past its
-            // Mohr-Coulomb strength). Only SingularSystem is caught: a malformed request or a
-            // broken backend raises SolveError and still propagates, because turning one of those
-            // into "did not converge" would publish a modelling answer for a bug.
+            // has reached its capacity under the load being consolidated. Only SingularSystem is
+            // caught: a malformed request or a broken backend raises SolveError and still
+            // propagates, because turning one of those into "did not converge" would publish a
+            // modelling answer for a bug.
             Eigen::VectorXd d;
             try {
-                const auto solve = solve_factory(A);
-                d = solve(r);
-            } catch (const math::SingularSystem&) { step_ok = false; break; }
-            dv += d.head(ndisp);
-            if (npore > 0) dpv += d.tail(npore);
+                const auto solve = solve_factory(cur.A);
+                d = solve(cur.r);
+            } catch (const math::SingularSystem&) { break; }
+            double alpha = 1.0;
+            Eigen::VectorXd dv_n, dpv_n;
+            Eval next;
+            for (int ls = 0; ls < 6; ++ls) {
+                dv_n = dv + alpha * d.head(ndisp);
+                dpv_n = dpv;
+                if (npore > 0) dpv_n += alpha * d.tail(npore);
+                next = evaluate(dv_n, dpv_n);
+                if (!worse(next, cur) || converged(next)) break;
+                alpha *= 0.5;
+            }
+            dv = std::move(dv_n);
+            dpv = std::move(dpv_n);
+            cur = std::move(next);
+            if (rp_ok(cur) && cur.ru < best_ru) {
+                best_ru = cur.ru;
+                best_dv = dv;
+                best_dpv = dpv;
+                best_rp_ok = true;
+            }
         }
-        if (!step_ok) { R.converged = false; break; }
-        v += dv; if (npore > 0) p += dpv; committed = trial;
-        record((step + 1) * dt);
+        if (converged(cur)) return true;
+        if (!best_rp_ok || !(best_ru <= kStagnationAccept * cur.ref_u)) return false;
+        dv = best_dv;
+        dpv = best_dpv;
+        (void)evaluate(dv, dpv);   // the trial states of the iterate being kept
+        stagnant = true;
+        return true;
+    };
+
+    // A step that fails is cut in two, its load increment split with it, down to 1/64 of the
+    // step, as a static phase cuts its load step back. Measured on the same embankment: a Mohr-
+    // Coulomb fill activated in the first step of a consolidation phase could not be carried in
+    // one Newton solve of 40 iterations at any number of time steps, while the same fill in a
+    // Plastic phase -- which cuts its load -- was. Every sub-step that converges is committed and
+    // recorded, so a cut step adds its intermediate times to the series.
+    int depth_used = 0;
+    const std::function<bool(double, double, const Eigen::VectorXd&, int)> advance =
+        [&](double t0, double h, const Eigen::VectorXd& df_step, int depth) -> bool {
+        Eigen::VectorXd dv, dpv;
+        bool stagnant = false;
+        if (one_step(h, df_step, dv, dpv, stagnant)) {
+            v += dv;
+            if (npore > 0) p += dpv;
+            committed = trial;
+            if (stagnant) {
+                ++R.stagnation_accepted;
+            }
+            record(t0 + h);
+            return true;
+        }
+        trial = committed;
+        if (depth >= 6) return false;
+        depth_used = std::max(depth_used, depth + 1);
+        const Eigen::VectorXd half = 0.5 * df_step;
+        return advance(t0, 0.5 * h, half, depth + 1) && advance(t0 + 0.5 * h, 0.5 * h, half, depth + 1);
+    };
+    const Eigen::VectorXd no_load = Eigen::VectorXd::Zero(ndisp);
+    for (int step = 0; step < nsteps && R.converged; ++step) {
+        const Eigen::VectorXd& df = (step == 0 && load_increment) ? *load_increment : no_load;
+        if (!advance(step * dt, dt, df, 0)) R.converged = false;
     }
+    R.steps_cut = depth_used;
     R.committed = committed;
     return R;
 }

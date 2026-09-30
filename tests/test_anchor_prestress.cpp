@@ -9,24 +9,32 @@
 // primitives is a model of a wall with slack anchors, which deflects far more than the real one
 // -- the unsafe direction.
 //
-// The oracle here is an equivalence rather than a formula, and it is exact. For a fixed-end
-// anchor the lock-off force enters the residual as a constant, so
+// The oracle here is an equivalence rather than a formula, and it is exact, in two parts.
 //
-//     prestressed anchor  ==  slack anchor  +  an external force of N0 along its axis,
+// IN THE PHASE THAT INSTALLS IT the anchor is the jack: it holds the lock-off force whatever the
+// ground does, and adds no stiffness, so
 //
-// applied at the node the anchor attaches to. The second model is built from a completely
-// different primitive -- a point load, assembled by a different code path -- so agreement
-// between them is a statement about the implementation and not about the formula. The stiffness
-// must NOT change: a tensioned anchor is no stiffer than a slack one, it merely starts loaded,
-// and the equivalence would fail if the prestress had leaked into the tangent.
+//     prestressed anchor  ==  no anchor at all  +  an external force of N0 along its axis,
+//
+// applied at the node the anchor attaches to, and the anchor reports exactly N0 at the end of the
+// phase -- on soft ground as on rigid ground. (Until 2026-09-30 the anchor was a spring from the
+// start of that phase, the equivalence was with a SLACK anchor plus the force, and the ground's
+// movement towards the anchor unloaded it within its own phase: 15% of the lock-off force was left
+// on a tie-back excavation rebuilt from a published tutorial, and only a rigid soil kept it.)
+//
+// IN THE PHASES AFTER IT the anchor is locked where the ground came to and is an elastic spring
+// from the lock-off force: on a linear-elastic block the increment of a later phase is the
+// response of the block WITH a slack anchor to that phase's load alone, and the anchor force is
+// N0 plus what that slack anchor carries. Both models are built from different primitives -- a
+// point load, a slack anchor -- so agreement between them is a statement about the implementation.
 //
 // verify: KV-STR-001
 //   oracle:   independent_path
-//   source:   KATAI 2D input contract (docs/k2d-format.md, anchors[i].prestress): for node-to-node and fixed-end anchors a lock-off force is applied when the anchor is activated, after which the anchor behaves as an elastic spring from that state; the equivalence used as the oracle is the statement that a constant internal force N0 along the anchor axis is, in the residual, an external force of the same magnitude and direction -- so the same problem can be built twice from different primitives
-//   locator:  N = N0 + (EA/L)(U - U_p) with U the elongation measured from the installation datum; for a fixed-end anchor the only mesh node carries f_int += N*(-dir), so the N0 term is exactly an external nodal force +N0*dir (stated in full)
-//   quantity: the full nodal displacement field of an elastic block anchored by a prestressed fixed-end anchor, against the same block with a slack anchor and an equivalent point load; and the reported anchor force against the lock-off force on a soil made rigid [m; kN]
-//   expected: the two displacement fields identical to solver round-off; the anchor force equal to the lock-off force as the soil stiffness grows, since a wall that cannot move leaves the anchor at exactly the force it was tensioned to; and a prestressed run distinguishable from a slack one, so the field is not silently inert
-//   band:     1e-9 m on the field equivalence, as asserted below -- MEASURED 0.000e+00: the two models assemble the same linear system, so the agreement is exact rather than merely close. 1% on the rigid-soil anchor force, measured 0.016% (499.919 kN against a 500 kN lock-off on a soil 10000x stiffer). 1e-6 on the doubling ratio, measured exactly 2.000000
+//   source:   KATAI 2D input contract (docs/k2d-format.md, anchors[i].prestress): in the phase that activates it a node-to-node or fixed-end anchor holds its lock-off force and is locked at the end of that phase, after which it behaves as an elastic spring from that state; the equivalences used as the oracle are that a constant force N0 along the anchor axis is, in the residual, an external force of the same magnitude and direction, and that on a linear-elastic model a later phase's increment is superposable -- so the same problem can be built twice from different primitives
+//   locator:  installation phase: N = N0 with no stiffness, U_p committed so that N0 + (EA/L)(U - U_p) = N0 at the phase end; later phases: N = N0 + (EA/L)(U - U_p) with U the elongation measured from the installation datum; for a fixed-end anchor the only mesh node carries f_int += N*(-dir), so the N0 term is exactly an external nodal force +N0*dir (stated in full)
+//   quantity: the full nodal displacement field of an elastic block anchored by a prestressed fixed-end anchor, against the same block with no anchor and an equivalent point load, and the reported anchor force against the lock-off force; then the increment of a second phase that loads the block, against the same load on the block with a slack anchor, and the anchor force against N0 plus that slack anchor's force [m; kN]
+//   expected: the installation-phase fields identical to solver round-off and the anchor at exactly the lock-off force on soft ground; the later phase's increment identical to the slack-anchor response and the anchor force N0 plus the slack anchor's; and the response linear in the lock-off force
+//   band:     1e-9 m on both field equivalences and 1e-9 relative on both anchor forces, as asserted below -- the models assemble the same linear systems, so the agreement is exact rather than merely close; 1e-6 on the doubling ratio
 
 #include <katai/analysis/structural_forces.hpp>
 #include <katai/jobs/driver.hpp>
@@ -100,7 +108,7 @@ void add_anchor(m::Project& pr, double prestress) {
 
 struct Run {
     bool ok = false;
-    std::vector<double> disp;
+    std::vector<double> disp;          // the LAST phase's displacement (its own increment)
     double max_disp = 0.0, anchor_N = 0.0;
 };
 
@@ -110,7 +118,7 @@ Run solve(const m::Project& pr) {
     if (!M.ok) { std::printf("      (mesh: %s)\n", M.message.c_str()); return r; }
     const auto res = katai::app::solve_phases(pr, M.mesh,
                                               katai::app::initial_phase_from(pr.initial_procedure));
-    if (res.empty() || !res.back().ok) {
+    if (res.empty() || !res.back().ok || res.size() != pr.phases.size() + 1) {
         std::printf("      (solve: %s)\n", res.empty() ? "no phases" : res.back().message.c_str());
         return r;
     }
@@ -166,10 +174,10 @@ int main() {
     const double ux = dx / L, uy = dy / L;
     std::printf("  anchor axis (%.4f, %.4f), length %.4f m, lock-off %.1f kN\n", ux, uy, L, kN0);
 
+    // --- the installation phase -------------------------------------------------------------
     m::Project a = block(2.0e4);
     add_anchor(a, kN0);
-    m::Project b = block(2.0e4);
-    add_anchor(b, 0.0);
+    m::Project b = block(2.0e4);   // no anchor: the equivalent force alone
     m::Load P;
     P.kind = m::LoadKind::Point;
     P.name = "Equivalent lock-off force";
@@ -182,34 +190,56 @@ int main() {
     const Run ra = solve(a), rb = solve(b), rc = solve(c);
     check(ra.ok && rb.ok && rc.ok, "all three models solve");
     if (!ra.ok || !rb.ok || !rc.ok) { std::printf("\n1 CHECK(S) FAILED\n"); return 1; }
-    std::printf("  prestressed  max|u| = %.9e m,  anchor N = %.4f kN\n", ra.max_disp, ra.anchor_N);
-    std::printf("  slack + load max|u| = %.9e m,  anchor N = %.4f kN\n", rb.max_disp, rb.anchor_N);
-    std::printf("  slack alone  max|u| = %.9e m\n", rc.max_disp);
+    std::printf("  prestressed      max|u| = %.9e m,  anchor N = %.6f kN\n", ra.max_disp, ra.anchor_N);
+    std::printf("  no anchor + load max|u| = %.9e m\n", rb.max_disp);
+    std::printf("  slack alone      max|u| = %.9e m\n", rc.max_disp);
 
     const double diff = field_difference(ra, rb);
     std::printf("  largest nodal difference between the two models = %.3e m\n", diff);
-    check(diff < 1e-9, "the prestressed anchor IS the slack anchor plus its equivalent force");
+    check(diff < 1e-9,
+          "in its installation phase the prestressed anchor IS its lock-off force, with no "
+          "stiffness of its own");
     check(rc.max_disp < 1e-12,
           "and a slack anchor on a weightless block does nothing at all -- so the difference "
           "above is the prestress, not the anchor");
+    check(std::fabs(ra.anchor_N - kN0) <= 1e-9 * kN0,
+          "the anchor ends its installation phase at exactly the lock-off force, on ground that "
+          "moved");
 
-    // The defining property: a wall that cannot move leaves the anchor at exactly the force it
-    // was tensioned to. Stiffening the soil by four orders of magnitude is the cheapest way to
-    // ask that question of the assembled system rather than of the formula.
-    m::Project rigid = block(2.0e8);
-    add_anchor(rigid, kN0);
-    const Run rr = solve(rigid);
-    check(rr.ok, "the rigid-soil model solves");
-    if (rr.ok) {
-        std::printf("  on a soil 10000x stiffer: anchor N = %.4f kN (lock-off %.1f)\n", rr.anchor_N,
-                    kN0);
-        check(std::fabs(rr.anchor_N - kN0) / kN0 < 0.01,
-              "the anchor force equals the lock-off force when the soil cannot move");
+    // --- a later phase: locked, and a spring from the lock-off force --------------------------
+    // A vertical load on the block's surface next to the anchor, applied in a second phase.
+    m::Load Q;
+    Q.kind = m::LoadKind::Point;
+    Q.name = "Later load";
+    Q.x1 = 12.0; Q.y1 = kH;
+    Q.qx1 = 0.0; Q.qy1 = -300.0;
+    m::Project a2 = a;
+    a2.loads.push_back(Q);
+    a2.initial.load_active = {0};
+    m::Phase later;
+    later.name = "Later load";
+    later.type = m::PhaseType::Plastic;
+    later.load_active = {1};
+    a2.phases = {later};
+    m::Project c2 = c;             // the slack anchor carrying the later load alone
+    c2.loads.push_back(Q);
+    const Run ra2 = solve(a2), rc2 = solve(c2);
+    check(ra2.ok && rc2.ok, "the two-phase and the slack-anchor models solve");
+    if (ra2.ok && rc2.ok) {
+        const double d2 = field_difference(ra2, rc2);
+        std::printf("  later phase: increment vs slack anchor under the same load: %.3e m; anchor "
+                    "N = %.6f kN = N0 + %.6f (slack anchor %.6f)\n", d2, ra2.anchor_N,
+                    ra2.anchor_N - kN0, rc2.anchor_N);
+        check(d2 < 1e-9,
+              "after its installation phase the anchor is an elastic spring: a later phase's "
+              "increment is the slack-anchor response to that phase's load");
+        check(std::fabs(ra2.anchor_N - (kN0 + rc2.anchor_N)) <= 1e-9 * kN0,
+              "and its force is the lock-off force plus what the spring picks up");
+        check(std::fabs(rc2.anchor_N) > 1e-3 * kN0,
+              "the later load does reach the anchor, so the check above is not trivially met");
     }
 
-    // A tensioned anchor is not a stiffer anchor. If the prestress had leaked into the tangent,
-    // the equivalence above would already have failed -- this states the reason out loud by
-    // checking that doubling the lock-off force doubles the response of the linear system.
+    // A tensioned anchor is not a stiffer anchor: doubling the lock-off force doubles the response.
     m::Project dbl = block(2.0e4);
     add_anchor(dbl, 2.0 * kN0);
     const Run rd = solve(dbl);

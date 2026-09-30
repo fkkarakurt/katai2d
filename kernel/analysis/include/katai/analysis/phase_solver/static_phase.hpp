@@ -253,8 +253,31 @@ inline bool solve_static_phase(
                            "Re-run with a finer or coarser mesh, or more load steps, to see "
                            "whether it moves.");
     }
+    // The support reactions at the fixed dofs, from committed Gauss states (discrete B^T sigma, no
+    // recovery smoothing): what a support -- or an imposed displacement -- must exert. Soil
+    // contribution (structural end forces on a fixed node are not included in v1; stated in
+    // results.hpp). Free dofs are zeroed so the field reads as "reactions", not "f_int".
+    auto fill_reactions = [&](const std::vector<GaussState>& states) {
+        Eigen::VectorXd f_int = nodal_internal_force_from_gauss(mesh, states, in.axisymmetric, act);
+        R.reaction = Eigen::VectorXd::Zero(2 * mesh.node_count);
+        for (int n = 0; n < mesh.node_count; ++n)
+            for (int c = 0; c < 2; ++c)
+                if (dofs.is_fixed(dofs.global_dof(n, c)))
+                    R.reaction[2 * n + c] = f_int[2 * n + c];
+    };
     if (!nr.converged) {
         R.message = non_convergence_message(nr);
+        // THE LAST EQUILIBRATED STATE IS KEPT. A phase that stops short is, far more often than
+        // not, the analysis the engineer ran it for -- a footing pushed to collapse -- and the
+        // collapse load is read off the state the solver last equilibrated: its displacement, its
+        // mechanism, and the force the imposed displacement needed. Until 2026-09-29 all three were
+        // dropped with the phase, and a displacement-controlled footing that stopped at 69% of its
+        // settlement reported a footing force of 0.0. The solver hands back exactly that state (the
+        // committed displacement and Gauss states at `load_factor`); it is published here, and the
+        // phase still fails: nothing downstream continues from it (out_states is not written).
+        R.disp = nr.displacement.head(mesh.node_count * 2);
+        R.stress = recover_nodal_stresses_from_gauss(mesh, nr.gauss_states, act);
+        fill_reactions(nr.gauss_states);
         return false;
     }
     if (out_states) *out_states = nr.gauss_states;   // committed -> next phase
@@ -283,19 +306,8 @@ inline bool solve_static_phase(
     // initial field + any increments) -- not re-derived from displacement, which would miss K0.
     // Passive (excavated) elements are excluded from the nodal averaging.
     R.stress = recover_nodal_stresses_from_gauss(mesh, nr.gauss_states, act);
-    // Support reactions at the fixed dofs, from the SAME committed states (discrete B^T sigma,
-    // no recovery smoothing): what a support -- or an imposed displacement -- must exert. Soil
-    // contribution (structural end forces on a fixed node are not included in v1; stated in
-    // results.hpp). Free dofs are zeroed so the field reads as "reactions", not "f_int".
-    {
-        Eigen::VectorXd f_int =
-            nodal_internal_force_from_gauss(mesh, nr.gauss_states, in.axisymmetric, act);
-        R.reaction = Eigen::VectorXd::Zero(2 * mesh.node_count);
-        for (int n = 0; n < mesh.node_count; ++n)
-            for (int c = 0; c < 2; ++c)
-                if (dofs.is_fixed(dofs.global_dof(n, c)))
-                    R.reaction[2 * n + c] = f_int[2 * n + c];
-    }
+    // Support reactions from the SAME committed states the stress was recovered from.
+    fill_reactions(nr.gauss_states);
 
     // Structural force diagrams (N/Q/M along each structure): from the converged TOTAL solution
     // (disp_total covers the rotation/independent extra DOFs AND the carried parent datum) + the

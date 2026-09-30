@@ -266,6 +266,7 @@ inline bool solve_consolidation_phase(
         ConsolidationResult series;            // times RELATIVE to the chunk start; [0] = its start
         std::vector<GaussState> committed;     // elastoplastic path: state at the chunk END only
         bool ok = false;
+        int stagnant = 0;                      // time steps kept at a stagnated iterate
     };
     std::vector<double> p_state(mesh.node_count, 0.0);   // excess pore at the chunk start (0 at t=0)
     std::vector<GaussState> state = init;                // committed effective Gauss state
@@ -282,6 +283,7 @@ inline bool solve_consolidation_phase(
                 step_dt, n, in.active, load, plastic_factory, 40, 1e-6, profiles, struct_k,
                 in.pore_tie);
             c.ok = r.converged;
+            c.stagnant = r.stagnation_accepted;
             c.series = std::move(r.series);
             c.committed = std::move(r.committed);
         } else {
@@ -320,7 +322,9 @@ inline bool solve_consolidation_phase(
     // Append EVERY step of a chunk and adopt its end state. Only ever called with a whole chunk:
     // the committed Gauss state exists at its end and nowhere else, so "stop half way through" is
     // spelled as a shorter RE-RUN (identical arithmetic, same state), never as a partial commit.
+    int stagnant_steps = 0;
     auto commit = [&](const Chunk& c) {
+        stagnant_steps += c.stagnant;
         const int n = (int)c.series.times.size() - 1;
         for (int s = 1; s <= n; ++s) {
             double smax = 0.0;
@@ -557,6 +561,13 @@ inline bool solve_consolidation_phase(
                                   disp_total, R);
     }
 
+    if (stagnant_steps > 0)
+        add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A019", "consolidation",
+                       std::to_string(stagnant_steps) +
+                           " time step(s) stopped converging before the phase's tolerance and "
+                           "were kept at their best iterate, with an out-of-balance force below "
+                           "1e-3 of the forces in play. The answer carries that much unbalanced "
+                           "force. Re-run with more, smaller time steps to see whether it moves.");
     committed_out = std::move(committed);
     return true;
 }

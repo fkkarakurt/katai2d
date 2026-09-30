@@ -245,6 +245,21 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     // stiffness only where the exact tangent is identically zero, and the residual is unchanged --
     // so a genuine limit load still ends in a refusal or a stall, now on its own merits.
     bool vertex_floor_mode = false;
+    // THE STALL FLOOR: the same device as the vertex floor, raised while the iteration is creeping.
+    // Near a limit state many stress points sit on the corners of their surfaces or toggle
+    // between elastic and plastic from one iterate to the next; the tangent is exact on the side
+    // each point is on, the full Newton step lands on the other side, and the line search can
+    // only take a hair of it -- measured on a 30-degree cohesionless slope on 15-noded elements,
+    // 200 iterations at steps of 1e-3 before the increment was accepted as stagnated, the global
+    // residual long under its tolerance and the local criteria never. After three such steps in a
+    // row the plastic points' tangents get a share of their elastic stiffness -- 0.1, doubling
+    // while it still creeps, up to the elastic operator itself -- which turns the direction
+    // towards the elastic-stiffness iteration that crosses those kinks without looking at them;
+    // each good step (alpha >= 1/2) halves it again. Lifting it at once on the first good step put
+    // the creep straight back, and on an axisymmetric footing the cycle wandered into a state
+    // with no descent at all. Like the vertex floor it changes the path the
+    // iteration takes, never the residual it has to reach.
+    double stall_floor = 0.0;
     // Once an increment has been abandoned for a stalled line search, the phase judges every
     // attempt from then on against the worst of the last few residuals instead of the latest.
     bool ls_open = false;
@@ -295,7 +310,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         // The time share is proportional to this increment's Δλ (SoftSoilCreep; time_interval=0 → 0, old path).
         fasm.dt_day = options.time_interval * std::max(0.0, cur_target - cur_lambda);
         fasm.substep_tol = options.substep_tolerance;
-        fasm.vertex_floor = vertex_floor_mode ? kVertexFloor : 0.0;
+        fasm.vertex_floor = std::max(vertex_floor_mode ? kVertexFloor : 0.0, stall_floor);
         return fasm.assemble(u_struct, du_free, build_tangent, tmode, astate, ramp, builder,
                              &result.timings);
     };
@@ -388,6 +403,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         // 1e-8 of a plate moment that one Newton correction returns to 1e-15. So at least one
         // correction is taken from it.
         bool predicted = false;
+        stall_floor = 0.0;   // a new increment starts with the plain tangent
         if (presc_active) {
             // THE DISPLACEMENT PREDICTOR. A prescribed displacement enters an increment through
             // the fixed DOFs alone, so the first iterate is the committed field with only those
@@ -452,6 +468,9 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         // guessed afterwards from the iteration count.
         NewtonResult::Abandonment ended = NewtonResult::Abandonment::IterationBudget;
         int stall = 0;  // consecutive iterations that produced no descent
+        int creep = 0;  // consecutive iterations whose step was cut to under 1/4
+        std::vector<double> progress;   // this attempt's residual norms, iterate by iterate
+        stall_floor = 0.0;
         for (int iter = 0; iter < options.max_iterations; ++iter) {
             builder.clear();
             probe.reset_counts();
@@ -597,17 +616,38 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             // solution (the perfectly-plastic tangent is singular/indefinite at
             // yielding points). Shrink alpha until the residual decreases
             // (Armijo). This globalizes Newton without sacrificing its rate.
+            //
+            // The next trial is not simply half the last. The squared residual along the step,
+            // phi(a) = |r(u + a delta)|^2 / 2, has phi(0) and -- delta being the Newton step --
+            // phi'(0) = -|r|^2, and each rejected trial adds phi(a): the minimum of the quadratic
+            // through the three is the next trial, safeguarded to [a/10, a/2] (Dennis & Schnabel
+            // 1983, Alg. A6.3.1). The acceptance test is untouched, so it can only take fewer
+            // evaluations to find the same kind of step, never accept a worse one; and its worst
+            // case is the halving it replaces. Halving needed five residual evaluations to reach
+            // the alpha = 1/16 a plastic mechanism typically asks for, and on a Hardening Soil
+            // footing the line search's evaluations were three quarters of the whole run time.
+            // The floor is the halving's own last trial, 2^-11, and a search that fails ends at
+            // 2^-12 exactly as before.
+            constexpr double kAlphaFloor = 1.0 / 2048.0;
+            const double phi0 = 0.5 * rnorm * rnorm, slope0 = -rnorm * rnorm;
             double alpha = 1.0;
             bool improved = false;
             for (int ls = 0; ls < 12; ++ls) {
                 const Eigen::VectorXd fi = assemble(du_free + alpha * delta,
                                                     false, nullptr);
-                if ((target - fi).norm() < (1.0 - 1.0e-4 * alpha) * gate) {
+                const double rn = (target - fi).norm();
+                if (rn < (1.0 - 1.0e-4 * alpha) * gate) {
                     improved = true;
                     break;
                 }
-                alpha *= 0.5;
+                if (alpha <= kAlphaFloor) break;
+                const double phia = 0.5 * rn * rn;
+                const double curv = phia - phi0 - slope0 * alpha;
+                double next = curv > 0.0 ? -slope0 * alpha * alpha / (2.0 * curv) : 0.5 * alpha;
+                if (!std::isfinite(next)) next = 0.5 * alpha;
+                alpha = std::max(kAlphaFloor, std::clamp(next, 0.1 * alpha, 0.5 * alpha));
             }
+            if (!improved) alpha = 0.5 * kAlphaFloor;
             ++result.total_iterations;
             if (debug)
                 std::fprintf(stderr, "      alpha=%.6f %s |delta|=%.4e |du|=%.4e\n", alpha,
@@ -622,6 +662,19 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             // consecutive failures -- this keeps cutback cheap without spuriously
             // collapsing recoverable steps.
             stall = improved ? 0 : stall + 1;
+            creep = (improved && alpha >= 0.25) ? 0 : creep + 1;
+            if (improved && alpha >= 0.5) {
+                stall_floor *= 0.5;                 // let go gradually: dropping it at once
+                if (stall_floor < 0.01) stall_floor = 0.0;   // put the creep straight back
+            } else if (creep >= 3) {
+                stall_floor = std::min(1.0, stall_floor > 0.0 ? 2.0 * stall_floor : 0.1);
+            }
+            progress.push_back(rnorm);
+            // A quick-abandon caller learns nothing more from an increment that has not reduced
+            // its out-of-balance force by a tenth in fifteen iterations: it is abandoned there.
+            if (options.quick_abandon && progress.size() > 15 &&
+                progress.back() > 0.9 * progress[progress.size() - 16])
+                stall = std::max(stall, 4);
             if (stall >= 4) {
                 ended = NewtonResult::Abandonment::NoDescent;
                 if (debug)
@@ -633,14 +686,28 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             du_free += alpha * delta;
         }
 
+        // A budget that ran out on an iteration which had stopped making progress -- its residual
+        // not down by a tenth over its last thirty iterates, a rate no budget closes -- ended in a
+        // stall, and is recorded as one. The iteration itself is not cut short (a slow increment
+        // that is still converging keeps its whole budget); only the reading of how it ended
+        // changes. With the stall floor a collapsing footing finds a hair of descent at every
+        // iterate, so it used to end on the budget, and a budget is (rightly) never published as
+        // a capacity: measured on the Prandtl footing of the corpus, which then refused to name
+        // its limit load.
+        if (!step_converged && ended == NewtonResult::Abandonment::IterationBudget &&
+            progress.size() > 30 &&
+            progress.back() > 0.9 * progress[progress.size() - 31])
+            ended = NewtonResult::Abandonment::NoDescent;
+
         // STAGNATION ACCEPTANCE. Only an increment that is about to be CUT BACK is looked at --
         // every retry above still gets its chance first, so a run that converged before this rule
         // existed converges on exactly the same path. See kStagnationAccept for the measurement.
         const bool would_cut_back =
             !step_converged &&
             !(ended == NewtonResult::Abandonment::SolveRefused && !vertex_floor_mode) &&
-            !(has_fd_tangent && !hs_consistent_mode) &&
-            !(ended == NewtonResult::Abandonment::NoDescent && !ls_open);
+            (options.quick_abandon || !(has_fd_tangent && !hs_consistent_mode)) &&
+            (options.quick_abandon ||
+             !(ended == NewtonResult::Abandonment::NoDescent && !ls_open));
         if (would_cut_back && ended != NewtonResult::Abandonment::SolveRefused &&
             rtol < kStagnationAccept && best_rnorm <= kStagnationAccept * ref) {
             du_free = best_du;
@@ -679,12 +746,13 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             if (debug)
                 std::fprintf(stderr, "  lambda %.4f: tangent refused; retrying the increment with "
                                      "the vertex floor (dlam untouched)\n", lambda);
-        } else if (has_fd_tangent && !hs_consistent_mode) {
+        } else if (has_fd_tangent && !hs_consistent_mode && !options.quick_abandon) {
             // Hybrid tangent: continuum failed to converge this increment → retry the SAME
             // increment with the consistent (FD) tangent without touching dlam; the
             // remaining increments stay consistent too.
             hs_consistent_mode = true;
-        } else if (ended == NewtonResult::Abandonment::NoDescent && !ls_open) {
+        } else if (ended == NewtonResult::Abandonment::NoDescent && !ls_open &&
+                   !options.quick_abandon) {
             // A STALL IS WHAT THE NON-MONOTONE RULE EXISTS FOR, so the increment is re-entered
             // with the window open before its size is touched -- the same shape as the hybrid
             // tangent above, and for the same reason: when an increment cannot be closed the

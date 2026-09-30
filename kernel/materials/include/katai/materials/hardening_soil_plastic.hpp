@@ -56,7 +56,8 @@ inline Eigen::Matrix3d hs_elastic(double E, double nu) {
 // bindings.
 //
 // HS (Rowe 1962; Schanz & Vermeer 1996):  sinψ_m = (sinφ_m − sinφ_cv)/(1 − sinφ_m·sinφ_cv),
-// cut off to [0, sinψ]. Where Rowe returns a NEGATIVE value the Hardening Soil model takes ψ_m = 0.
+// cut off to [0, sinψ], and only above sinφ_m = 3/4 sinφ (ψ_m = 0 below it); a non-positive ψ is
+// taken as it is. Where Rowe returns a NEGATIVE value the Hardening Soil model takes ψ_m = 0.
 //
 // HSsmall (after Li & Dafalias (2000)): that zero cut-off can give too little plastic
 // volumetric strain, so wherever Rowe is negative the small-strain model puts a small
@@ -86,15 +87,33 @@ inline Eigen::Matrix3d hs_elastic(double E, double nu) {
 struct HsDilatancy {
     double sin_cs = 0.0;        // sinφ_cv (Rowe, from the input φ and ψ)
     double sin_psi = 0.0;       // sinψ — the upper cut-off
+    double sin_phi = 0.0;       // sinφ — the 3/4 sinφ threshold of the HS rule
+    double sin_psi_in = 0.0;    // sinψ as entered, sign kept: the HS rule's ψ <= 0 branch
     double c_cot = 0.0;         // c·cotφ — the cohesion shift of the mobilized-φ definition
     double Mc = 0.0;            // M_c, (ii) (HSsmall branch only)
     double sphi_m_floor = 0.0;  // floor (v) (HSsmall branch only)
     bool li_dafalias = false;   // HSsmall (G0_ref>0) with a usable φ_cv
 
     double operator()(double sphi_m) const {
+        if (!li_dafalias) {
+            // THE HARDENING SOIL RULE, in the form the model is implemented and documented in
+            // practice -- Rowe's law (Schanz & Vermeer 1996) switched on only above a mobilised
+            // friction of 3/4 sin(phi), which neither Rowe nor Benz (2007) states:
+            //   sin phi_m <  3/4 sin phi              -> psi_m = 0
+            //   sin phi_m >= 3/4 sin phi, psi > 0     -> sin psi_m = max(Rowe, 0)
+            //   sin phi_m >= 3/4 sin phi, psi <= 0    -> psi_m = psi
+            //   phi = 0                               -> psi_m = 0
+            // Until 2026-09-30 the threshold was missing -- Rowe was taken as soon as it turned
+            // positive, i.e. from phi_cv, which lies BELOW 3/4 phi whenever psi is large (phi =
+            // psi = 41 degrees puts phi_cv at 0: dilation from the first increment of shear) --
+            // and a negative psi, which the input accepts, was silently read as 0.
+            if (!(sin_phi > 1e-12) || sphi_m < 0.75 * sin_phi) return 0.0;
+            if (!(sin_psi_in > 0.0)) return sin_psi_in;
+            const double rowe = (sphi_m - sin_cs) / (1.0 - sphi_m * sin_cs);
+            return rowe > 0.0 ? std::min(rowe, sin_psi) : 0.0;
+        }
         const double rowe = (sphi_m - sin_cs) / (1.0 - sphi_m * sin_cs);
         if (rowe >= 0.0) return std::min(rowe, sin_psi);
-        if (!li_dafalias) return 0.0;                                   // HS: the zero cut-off
         const double s = std::max(sphi_m, sphi_m_floor);                // floor (v)
         const double Md = 6.0 * s / (3.0 - s);                          // M_d, (iii)
         const double qqa =
@@ -116,6 +135,8 @@ inline HsDilatancy hs_dilatancy(const HardeningSoilParams& p) {
     const double sps = std::sin(p.dilatancy);
     d.sin_cs = (sphi - sps) / (1.0 - sphi * sps);  // critical state
     d.sin_psi = sps > 0.0 ? sps : 0.0;
+    d.sin_phi = sphi;
+    d.sin_psi_in = p.dilatancy_cut ? 0.0 : sps;
     d.c_cot = (sphi > 1e-12) ? p.cohesion * cphi / sphi : 0.0;
     // φ_cv = 0 (a φ = 0 Tresca soil) would divide by zero in (iv) — but it also makes Rowe
     // non-negative everywhere, so the branch is unreachable there; the guard says so rather
@@ -331,11 +352,18 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
 inline double hs_initial_pp(const HardeningSoilParams& p,
                             const Eigen::Vector3d& sig_comp_pos, double OCR = 1.0) {
     const double pm = (sig_comp_pos(0) + sig_comp_pos(1) + sig_comp_pos(2)) / 3.0;
-    const double j3 = 0.5 * ((sig_comp_pos(0) - sig_comp_pos(1)) * (sig_comp_pos(0) - sig_comp_pos(1)) +
-                             (sig_comp_pos(1) - sig_comp_pos(2)) * (sig_comp_pos(1) - sig_comp_pos(2)) +
-                             (sig_comp_pos(2) - sig_comp_pos(0)) * (sig_comp_pos(2) - sig_comp_pos(0)));
+    // The cap's own deviatoric measure q~ = s1 + (delta - 1) s2 - delta s3 (hs_integrate, Benz 2007
+    // Eqn 7.21), so the seeded state is ON the cap the integrator reads. It used to be the von
+    // Mises q, which is the same number only where two principals are equal; with sigma_xy != 0 (a
+    // slope, a POP history under an inclined surface) the seed sat outside the integrator's cap and
+    // the first increment spent itself pulling it back.
+    Eigen::Vector3d s = sig_comp_pos;
+    std::sort(s.data(), s.data() + 3, [](double x, double y) { return x > y; });
+    const double sphi = std::sin(p.friction);
+    const double delta = (3.0 + sphi) / (3.0 - sphi);
+    const double qt = s(0) + (delta - 1.0) * s(1) - delta * s(2);
     const double a = p.cap_alpha;
-    return std::sqrt(j3 / (a * a) + pm * pm) * OCR;
+    return std::sqrt(qt * qt / (a * a) + pm * pm) * OCR;
 }
 
 // Shear hardening initialization (FE initial state): γ^p = f̄(q0). The geostatic K0 state
@@ -345,8 +373,14 @@ inline double hs_initial_pp(const HardeningSoilParams& p,
 // of the pp init (cap). sig_comp_pos = compression-positive principals.
 inline double hs_initial_gamma_p(const HardeningSoilParams& p,
                                  const Eigen::Vector3d& sig_comp_pos) {
+    // The same laws the integrator reads: the stiffness at the floored minor stress, the strength
+    // and the hyperbola's asymptote at the stress itself, guarded at a thousandth of the floor
+    // (hs_integrate, stiff_at). At a stress-free point the raw stiffness is zero and q/q_a 0/0.
     const double s1 = sig_comp_pos.maxCoeff(), s3 = sig_comp_pos.minCoeff();
-    const double Ei = p.Ei(s3), qa = p.q_asymptote(s3), Eur = p.Eur(s3), qf = p.q_failure(s3);
+    const double s3k = std::max(s3, p.p_limit());
+    const double Ei = p.Ei(s3k), Eur = p.Eur(s3k), qf = p.q_failure(s3);
+    const double qa = std::max(qf, p.q_failure(1e-3 * p.p_limit())) / p.Rf;
+    if (qf <= 0.0) return 0.0;
     const double q = std::min(std::max(s1 - s3, 0.0), qf);
     const double fbar = (2.0 / Ei) * q / (1.0 - q / qa) - 2.0 * q / Eur;
     return std::max(fbar, 0.0);

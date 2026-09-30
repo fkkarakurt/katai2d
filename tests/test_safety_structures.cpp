@@ -26,8 +26,8 @@
 //   source:   Griffiths, D.V. & Lane, P.A. (1999). Slope stability analysis by finite elements. Geotechnique 49(3), 387-403 -- the strength reduction factor of the finite-element strength-reduction method, c_f = c / SRF and tan(phi_f) = tan(phi) / SRF; combined with Coulomb friction with adhesion on a planar joint, the same statics as KV-STR-002 (the horizontal force that makes a rigid block slide is the joint's adhesion over the contact width plus the normal force times the tangent of the joint friction angle); KATAI 2D input contract (docs/k2d-format.md: iface_material / Rinter for the interface strength, plates w, anchors Fmax_tens / Lspacing / prestress)
 //   locator:  the checked-in KV-STR-002 block (B = 4 m wide, 1 m high, gamma = 25 kN/m3 so W = 100 kN/m; joint c_w = 2.5 kN/m2, phi_w = 26.6 deg, R_inter = 1) with its imposed slip replaced by a horizontal distributed load on its left face from y = 0.25 to 1 m (H = 40 kN/m unless stated) and run as a Safety procedure. Stated in full: (a) FoS = (B c_w + W tan(phi_w)) / H; (b) FoS = (B c_w + (W + w B) tan(phi_w)) / H with w = 10 kN/m/m; (c) FoS = (B c_w + W tan(phi_w)) / (H - F) with F = 10 kN/m, the anchor horizontal from the block's top-left corner (0, 1) to a fixed point at (-2, 1); an anchor that attaches off its drawn line pulls along the line from the node it attached to, with F cos(theta) against H and F sin(theta) on the normal force, and the closed form is evaluated on that direction
 //   quantity: factor of safety of the Safety procedure [-]
-//   expected: (a) 1.501907 at H = 40, 2.002542 at H = 30, 1.251907 with c_w = 0; (b) 2.002669; (c) 2.002542, 1.716465 at an out-of-plane spacing of 2 m
-//   band:     one bisection interval of the search, (3.0 - 0.4) / 2^12 = 6.35e-4 absolute, as asserted below -- the search reports the midpoint of its last bracket, and nothing else separates it from the closed form on this problem: measured -2.71e-4 / -0.77e-4 / +2.66e-4 for (a), -2.04e-4 for (b) and -0.77e-4 / -2.78e-4 for (c). Four further checks: the plate's weight and the same distributed load give the same factor bit for bit, and so do the anchor and the same point force; an elastic anchor (no capacity) holds the block through the whole search, which reports a lower bound; and the anchor drawn at mid-height attached to the node at y = 0.53125 m, pulled 0.9 deg downward, and read +0.123% against the horizontal closed form -- six bisection intervals -- while the closed form written on the direction it actually pulled along matches within one. The last one is the check that this band can see a structure's geometry, not only its presence
+//   expected: (a) 1.501907 at H = 40, 2.002542 at H = 30, 1.251907 with c_w = 0; (b) 2.002669; (c) 2.002542, 1.716465 at an out-of-plane spacing of 2 m; (e) staged -- a Plastic phase applying H = 40 (and installing an anchor locked off at 5 kN, capacity 10 kN) followed by a Safety phase that continues from it: 1.501907 without the anchor, 2.002542 with it, 1.501907 with the anchor removed in the Safety phase itself
+//   band:     one bisection interval of the search, (3.0 - 0.4) / 2^12 = 6.35e-4 absolute, as asserted below -- the search reports the midpoint of its last bracket, and nothing else separates it from the closed form on this problem: measured -2.71e-4 / -0.77e-4 / +2.66e-4 for (a), -2.04e-4 for (b) and -0.77e-4 / -2.78e-4 for (c). Four further checks: the plate's weight and the same distributed load give the same factor bit for bit, and so do the anchor and the same point force; an elastic anchor (no capacity) holds the block through the whole search, which reports a lower bound; and the anchor drawn at mid-height attached to the node at y = 0.53125 m, pulled 0.9 deg downward, and read +0.123% against the horizontal closed form -- six bisection intervals -- while the closed form written on the direction it actually pulled along matches within one. The last one is the check that this band can see a structure's geometry, not only its presence (e) is held to the incremental search's own resolution, 1.5e-3 x FoS: a Safety phase after other phases reduces the strength from the equilibrium they built, the factor is the middle of a final bracket 1e-3 x SRF wide, and a step accepted at the search's 1e-3 residual can stand up to about that far past the limit -- measured +1.87e-4, +1.74e-3 (0.087%, the anchor at its capacity) and +1.87e-4.
 
 #include <katai/io/project_io.hpp>
 #include <katai/io/validate.hpp>
@@ -266,6 +266,92 @@ void prestressed_anchor_is_refused() {
     check(RO.ok && !raised(RO, "K2D-G016"), "deactivated in the Safety run, it runs");
 }
 
+// A SAFETY PHASE AFTER A PLASTIC PHASE starts from the state that phase built: the load, the
+// anchor with its lock-off force and the joint's stresses are carried, and the strength is reduced
+// from that equilibrium. The closed forms are the same as above -- at the limit the prestressed
+// anchor has yielded to its capacity whatever it was locked off at -- so the same statics hold the
+// continued search. Its resolution is the incremental search's, not the bisection's: the factor
+// is the middle of a final bracket 1e-3 x SRF wide, and a step accepted at the search's 1e-3
+// residual can stand that far past the limit, so the band is 1.5e-3 x FoS.
+std::vector<katai::app::SolveResult> staged(const m::Project& pr) {
+    const auto M = katai::app::mesh_from_project(pr);
+    if (!M.ok) {
+        check(false, "meshed: " + M.message);
+        return {};
+    }
+    return katai::app::solve_phases(pr, M.mesh,
+                                    katai::app::initial_phase_from(pr.initial_procedure));
+}
+
+// The block as a staged model: the initial phase carries the self-weight alone, a Plastic phase
+// applies H (and whatever `setup` installs), and a Safety phase follows it.
+m::Project staged_block(double H) {
+    m::Project pr = block(H);
+    pr.initial_procedure = m::InitialProcedure::GravityLoading;
+    pr.initial.load_active = {0};
+    m::Phase load;
+    load.name = "Load";
+    load.type = m::PhaseType::Plastic;
+    load.load_active = {1};
+    load.struct_active = pr.initial.struct_active;
+    m::Phase safety;
+    safety.name = "Safety";
+    safety.type = m::PhaseType::Safety;
+    safety.load_active = {1};
+    safety.struct_active = pr.initial.struct_active;
+    pr.phases = {load, safety};
+    return pr;
+}
+
+void continued_from_the_phase_before() {
+    std::printf("\n(e) a Safety phase continues from the phase before it\n");
+    const double cap = kB * kCw + kW * tanphi();
+    const auto within = [](double fos, double exact) {
+        return std::fabs(fos - exact) <= 1.5e-3 * exact;
+    };
+    {
+        const auto res = staged(staged_block(40.0));
+        const bool ran = res.size() == 3 && res[2].ok;
+        const double fos = ran ? res[2].fos : -1.0;
+        std::printf("      H = 40 kN/m after a Plastic phase        FoS %.10f  closed form %.6f  "
+                    "(%+.2e)\n", fos, cap / 40.0, fos - cap / 40.0);
+        check(ran && !res[2].fos_lower_bound && within(fos, cap / 40.0),
+              "continued from the loaded block: the closed form");
+    }
+    // The anchor locked off at 5 kN in the Plastic phase: refused from the unstressed state (d),
+    // and here it enters with its lock-off force, yields to its 10 kN capacity as the block goes,
+    // and the factor is (c)'s.
+    m::Project tied = staged_block(40.0);
+    add_anchor(tied, 1.0, true, 10.0, 1.0, 5.0);
+    tied.initial.struct_active = {1, 0};        // installed in the Plastic phase, not before
+    tied.phases[0].struct_active = {1, 1};
+    tied.phases[1].struct_active = {1, 1};
+    bool schema_ok = true;
+    for (const auto& is : katai::io::validate_project(tied).issues)
+        schema_ok &= is.severity != katai::io::Severity::Error;
+    check(schema_ok, "the .k2d contract accepts a prestressed anchor carried into the Safety phase");
+    const auto rt = staged(tied);
+    const bool ran = rt.size() == 3 && rt[2].ok;
+    const double fos = ran ? rt[2].fos : -1.0;
+    const double exact = cap / (40.0 - 10.0);
+    std::printf("      prestressed anchor (5 kN, capacity 10)   FoS %.10f  closed form %.6f  "
+                "(%+.2e)\n", fos, exact, fos - exact);
+    if (rt.size() == 3 && !rt[2].ok) std::printf("      (%s)\n", rt[2].message.c_str());
+    check(ran && !raised(rt[2], "K2D-G016") && within(fos, exact),
+          "a prestressed anchor installed before the Safety phase takes part, at its capacity");
+    // Removed in the Safety phase itself: the search first carries that change at full strength
+    // (the anchor's force released), then reduces -- and the factor is the block's without it.
+    m::Project released = tied;
+    released.phases[1].struct_active = {1, 0};
+    const auto rr = staged(released);
+    const bool ran_r = rr.size() == 3 && rr[2].ok;
+    const double fos_r = ran_r ? rr[2].fos : -1.0;
+    std::printf("      the anchor removed in the Safety phase   FoS %.10f  closed form %.6f  "
+                "(%+.2e)\n", fos_r, cap / 40.0, fos_r - cap / 40.0);
+    check(ran_r && within(fos_r, cap / 40.0),
+          "an anchor removed in the Safety phase leaves the block's own factor");
+}
+
 }  // namespace
 
 int main() {
@@ -274,6 +360,7 @@ int main() {
     plate_weight_enters_the_search();
     anchor_capacity_is_not_reduced();
     prestressed_anchor_is_refused();
+    continued_from_the_phase_before();
     if (g_failures == 0) {
         std::printf("\nOK: interface reduced, plate weight and anchor capacity carried unreduced\n");
         return 0;

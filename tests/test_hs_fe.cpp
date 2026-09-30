@@ -9,6 +9,7 @@
 // (See docs/references/hardening-soil-formulation.md and material_model.hpp hs_forward.)
 #include <katai/materials/material_model.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -146,12 +147,137 @@ void test_confined_loading_admissible() {
     check(ok && prev_gp > 0.0, "confined loading: monotone hardening, q<=qf(sigma3), finite");
 }
 
+// (d) THE TENSION CUT-OFF IS IN THE TANGENT. A shallow point pulled into tension is capped after
+// the model's own return; the tangent handed to Newton has to be the derivative of the capped
+// stress, not of the one before the cap. Until 2026-09-29 it was the latter: a central difference
+// of the whole update disagreed with it at EVERY capped point, by up to 1e5 relative -- the row
+// the cap pins to sigma_t still carried the full elastic stiffness. One and two capped
+// principals, each well inside its active set so the difference does not straddle a switch.
+// With c > 0: a cohesionless point cannot carry tension under Mohr-Coulomb in the first place, so
+// the model's own return already stops it at the apex and the cut-off has nothing left to do.
+void test_tension_cutoff_tangent() {
+    MaterialModel m = make_hs();
+    m.hs.cohesion = 10.0;
+    m.tension_cutoff = true;
+    m.tensile_strength = 0.0;
+    struct Case { Eigen::Vector3d de; int ncap; const char* what; };
+    const Case cases[] = {
+        {Eigen::Vector3d(4e-4, -1e-4, 0.5e-4), 1, "one principal capped: tangent = d(capped)/d(eps)"},
+        {Eigen::Vector3d(2e-4, 2e-4, 0.2e-4), 2, "two principals capped: tangent = d(capped)/d(eps)"},
+    };
+    for (const Case& c : cases) {
+        GaussState g;
+        g.stress = Eigen::Vector3d(-3.0, -4.0, 0.3);   // tension positive: a shallow point
+        g.stress_zz = -8.0;
+        const Eigen::Vector3d sc(8.0, 4.0, 3.0);
+        g.pp = katai::core::hs_initial_pp(m.hs, sc);
+        g.gamma_p = katai::core::hs_initial_gamma_p(m.hs, sc);
+        GaussState t;
+        Eigen::Matrix3d D;
+        bool pl = false;
+        katai::core::hs_forward(m, g, c.de, t, &D, nullptr, &pl);
+        int ncap = 0;
+        for (double s : {0.5 * (t.stress(0) + t.stress(1)) +
+                             std::hypot(0.5 * (t.stress(0) - t.stress(1)), t.stress(2)),
+                         0.5 * (t.stress(0) + t.stress(1)) -
+                             std::hypot(0.5 * (t.stress(0) - t.stress(1)), t.stress(2)),
+                         t.stress_zz})
+            ncap += std::fabs(s) < 1e-9 ? 1 : 0;
+        Eigen::Matrix3d F;
+        const double h = 1e-7 * c.de.norm();
+        for (int k = 0; k < 3; ++k) {
+            Eigen::Vector3d e = Eigen::Vector3d::Zero();
+            e(k) = h;
+            GaussState tp, tm;
+            katai::core::hs_forward(m, g, c.de + e, tp);
+            katai::core::hs_forward(m, g, c.de - e, tm);
+            F.col(k) = (tp.stress - tm.stress) / (2.0 * h);
+        }
+        // Relative to the elastic stiffness where the capped block is zero: with both in-plane
+        // principals pinned to sigma_t the in-plane tangent IS zero, and so is the difference.
+        const double err = (D - F).norm() / std::max(F.norm(), m.hs.Eur(m.hs.p_limit()));
+        std::printf("  tension cut-off tangent: %d capped, |D - FD|/|FD| = %.2e\n", ncap, err);
+        check(pl && ncap == c.ncap && err < 1e-3, c.what);
+    }
+}
+
+// (e) NO STRENGTH BELOW THE STIFFNESS FLOOR. p_limit (= 0.1 p_ref) keeps E_i and E_ur off zero; it
+// is not part of the failure criterion. A cohesionless point sheared at a minor stress of 2 kPa
+// must stop at the Mohr-Coulomb deviator of its own stress, q_f = 2 sigma3 sin(phi)/(1 - sin(phi))
+// = 5.38 kPa at phi = 35 -- not at q_f(p_limit) = 26.9 kPa, which is where it stopped until
+// 2026-09-29: an apparent cohesion of up to 7 kPa on the unsafe side, at exactly the depth a
+// footing's bearing capacity is decided. The vertical strain is driven and the horizontal strain
+// chosen at every step so that sigma_xx stays at -2 kPa.
+void test_strength_is_not_floored() {
+    const MaterialModel m = make_hs();
+    const double s3 = 2.0;
+    GaussState s;
+    s.stress = Eigen::Vector3d(-s3, -s3, 0.0);
+    s.stress_zz = -s3;
+    double qmax = 0.0;
+    bool finite = true;
+    for (int i = 0; i < 4000; ++i) {
+        // Pick eps_xx by two secant corrections so that sigma_xx stays at -s3.
+        double exx = 0.0;
+        GaussState tr; Eigen::Matrix3d tan;
+        for (int it = 0; it < 30; ++it) {
+            integrate_point(m, s, Eigen::Vector3d(exx, -2e-6, 0.0), tr, tan);
+            const double r = tr.stress(0) + s3;
+            if (std::fabs(r) < 1e-10) break;
+            exx -= r / tan(0, 0);
+        }
+        s = tr;
+        if (!s.stress.allFinite()) finite = false;
+        double q, sm; principals(s, q, sm);
+        qmax = std::max(qmax, q);
+    }
+    const double qf = m.hs.q_failure(s3);
+    std::printf("  shallow cohesionless shear: q_max = %.3f kPa, q_f(%.0f kPa) = %.3f, q_f(p_limit) = %.3f\n",
+                qmax, s3, qf, m.hs.q_failure(m.hs.p_limit()));
+    check(finite && qmax <= qf * (1.0 + 1e-3) + 1e-9 && qmax >= 0.97 * qf,
+          "a cohesionless point below p_limit fails at the Mohr-Coulomb deviator of its own stress");
+}
+
+// (f) THE MOBILISED DILATANCY RULE OF HARDENING SOIL. Rowe's law only above a mobilised friction of
+// 3/4 sin(phi); zero below it; a non-positive psi taken as it is above it; HSsmall not affected
+// (its Li & Dafalias branch is pinned in test_hssmall). phi = psi = 41 degrees puts phi_cv at 0,
+// where the rule without the threshold dilated from the first increment of shear.
+void test_mobilised_dilatancy_rule() {
+    auto rule = [](double phi_deg, double psi_deg) {
+        HardeningSoilParams h;
+        h.friction = phi_deg * kPi / 180.0;
+        h.dilatancy = psi_deg * kPi / 180.0;
+        return katai::core::detail::hs_dilatancy(h);
+    };
+    const double s41 = std::sin(41.0 * kPi / 180.0);
+    const auto d41 = rule(41.0, 41.0);
+    const bool below = d41(0.74 * s41) == 0.0;
+    const bool above = std::fabs(d41(0.76 * s41) - 0.76 * s41) < 1e-12;   // phi_cv = 0: Rowe = sin phi_m
+    const auto dneg = rule(35.0, -5.0);
+    const double s35 = std::sin(35.0 * kPi / 180.0);
+    const bool neg_below = dneg(0.7 * s35) == 0.0;
+    const bool neg_above = std::fabs(dneg(0.9 * s35) - std::sin(-5.0 * kPi / 180.0)) < 1e-15;
+    const auto dsmall = rule(35.0, 5.0);   // phi_cv above the threshold: the threshold changes nothing
+    const double scv = dsmall.sin_cs;
+    const bool small_ok = dsmall(0.99 * scv) == 0.0 &&
+                          std::fabs(dsmall(0.5 * (scv + s35)) -
+                                    (0.5 * (scv + s35) - scv) / (1.0 - 0.5 * (scv + s35) * scv)) < 1e-15;
+    std::printf("  dilatancy rule: phi=psi=41 below/above 3/4 sin(phi): %.3f / %.3f; psi=-5 above: %.4f\n",
+                d41(0.74 * s41), d41(0.76 * s41), dneg(0.9 * s35));
+    check(below && above, "HS: psi_m = 0 below 3/4 sin(phi), Rowe above it");
+    check(neg_below && neg_above, "HS: a negative psi is psi_m above the threshold, zero below it");
+    check(small_ok, "HS: where phi_cv lies above the threshold the rule is Rowe's, unchanged");
+}
+
 } // namespace
 
 int main() {
     test_volumetric_then_shear();
     test_frame_indifference();
     test_confined_loading_admissible();
+    test_tension_cutoff_tangent();
+    test_strength_is_not_floored();
+    test_mobilised_dilatancy_rule();
     if (g_failures == 0) {
         std::printf("OK: Hardening Soil FE material point (shear) verified\n");
         return 0;
