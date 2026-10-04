@@ -1126,3 +1126,73 @@ collapsing.
   has its own Newton loop and does not build the probe at all, so a shaking phase's stress points
   are held to the global force residual alone — the state this section was written to end.
 
+
+## 12. A factor of safety that the stopping rule no longer sets (2026-10)
+
+Section 5 measured the factor of safety against the mesh. The strength-reduction search had a
+second dependence that was never put next to it: on how tightly each of its steps is solved.
+The search prescribed the factor at every step and solved for the equilibrium there. Near the
+limit that equilibrium exists but lies far along a developing mechanism, and how far a step got
+towards it was decided by its stopping rule. Measured on a c-phi slope (40 x 20 m, 45 degrees,
+c' = 20 kPa, phi' = 25, psi = 0, 6-noded elements, 1 m mesh), with steps of 0.01 and a budget of
+1000 iterations so that the step size and the budget are taken out of it:
+
+| tolerated residual of the steps | factor of safety (prescribed factor) |
+|---|---|
+| 1e-3 | 1.3903 |
+| 1e-4 | 1.3838 |
+
+The last 0.5% of the factor carried the largest displacement from 9.5 to 78 mm; a step
+accepted at 1e-3 carried its out-of-balance force into the next, and along that stretch the
+answer rose with the looseness -- the unsafe side. The search as it shipped (growing steps,
+120 iterations) reported 1.3874 at 1e-3.
+
+The search now solves for the factor instead of prescribing it: an arc-length constraint on the
+displacement increment (Riks' normal plane), the bordered system for the displacement and the
+factor together, d f_int / d s by a one-sided difference. The factor of safety is read where the
+path stops rising -- its peak, or where it has risen less than the resolution over each of two
+successive doublings of the displacement, which on a perfectly plastic plateau of the form
+s = F - a/u bounds what is left to rise by the resolution. On the same slope:
+
+| tolerated residual | factor of safety (arc length) | time |
+|---|---|---|
+| 1e-3 | 1.38680 | 19 s (the prescribed search: 48 s) |
+| 1e-4 | 1.38665 | 22 s |
+| 1e-5 | 1.38680 | 21 s |
+
+and the step length does not enter it either: a controller aiming at 12 iterations a step took
+117 steps, one aiming at 20 took 35, for the same factor to 4e-5. On 15-noded elements the
+peak is a limit point (the factor falls after it), 1.3658 at 1e-3 in 101 s against the
+prescribed search's 1.3731 in 418 s; at 1e-5 it is 1.3624, so the tolerance still moves this one
+by 0.25%, a third of what it moved the prescribed search.
+
+**Scope.** The continuation is used for ground without structures. A plate, an anchor, a geogrid
+or a pile keeps its own strength while the soil's is reduced, and once the ground has formed a
+mechanism the structure takes the load on and the path keeps rising with the displacement: on
+the anchored excavation of the tutorial set the continuation walked to 3.8 m of displacement for
+1.852, where the prescribed search stops at 1.847 in a quarter of the time. Two alternatives were
+measured and rejected: continuing by arc length from the first failed prescribed step (with
+psi < phi the coarse first steps change the path, 1.3820 at 1e-5), and a step controller that
+grew the step whenever it converged within 25 iterations (faster nowhere, and 0.3% between
+tolerances).
+
+## 13. An increment that cannot reach its tolerance, stopped when that is shown (2026-10)
+
+The stagnation acceptance (K2D-A019) keeps an increment at its best iterate when that lies within
+1e-3 of the load scale, but it was reached only after every retry had been spent. On a phase whose
+tolerance is out of reach that is every increment: an embankment built on clay (Mohr-Coulomb,
+15-noded, the 1e-6 default) took 3478 Newton iterations for 20 increments, each accepted at about
+1e-4 in the end, in 396 s. An increment whose best iterate is inside the band and whose residual
+has not fallen by a tenth over its last thirty iterates is now accepted there, on the same terms.
+
+| the same embankment phase | time | largest displacement |
+|---|---|---|
+| retries spent first (before) | 396 s | 50.8247 mm |
+| stagnation shown, accepted (now) | 79 s | 50.8229 mm |
+| tolerance 1e-3 instead, for comparison | 24.6 s | 50.8179 mm |
+
+The third row is why the default was NOT loosened instead: 1e-3 as the Mohr-Coulomb default was
+measured on the whole suite and failed four cases that 1e-6 reaches -- the Hoek-Brown tunnel's
+stresses moved 11% from the closed form inside the plastic annulus, because a residual relative
+to the total force scale is loose where a large in-situ stress is only slightly unloaded.
+Stopping only where stagnation is shown leaves every phase that converged untouched.

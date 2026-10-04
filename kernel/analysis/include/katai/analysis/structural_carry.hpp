@@ -25,6 +25,17 @@
 
 namespace katai::core {
 
+// The fixed-DOF part of a full global-DOF displacement (Structures::fixed_datum): its value on
+// every DOF this phase holds, zero on the others. An all-zero part is returned EMPTY, so a chain
+// whose fixed DOFs never moved carries nothing new.
+inline Eigen::VectorXd fixed_part(const Eigen::VectorXd& full, const DofMap& dofs) {
+    Eigen::VectorXd v = Eigen::VectorXd::Zero(dofs.total_dofs());
+    bool any = false;
+    for (int g = 0; g < dofs.total_dofs() && g < full.size(); ++g)
+        if (dofs.equation(g) < 0 && full[g] != 0.0) { v[g] = full[g]; any = true; }
+    return any ? v : Eigen::VectorXd();
+}
+
 // Fill `out` from the parent's carried structural state. Returns true only when
 // every member matches the current structure set exactly; on false, `out` is
 // untouched and the caller must not consume the carry.
@@ -107,6 +118,7 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
         if (!child_records.empty() || !build_structural_init(ps, structures, dofs, out)) return plan;
         plan.carried = true;
         plan.full_datum = ps.full_disp;
+        structures.fixed_datum = fixed_part(ps.full_disp, dofs);
         plan.new_anchor.assign(structures.anchors.size(), 0);
         return plan;
     }
@@ -162,6 +174,7 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
     plan.full_datum = map_full(ps.full_disp);
     out = StructuralInit{};
     out.u_datum = to_equations(plan.full_datum);
+    structures.fixed_datum = fixed_part(plan.full_datum, dofs);
 
     // Plastic state, sized for this phase's structures and filled structure by structure.
     size_t skin_total = 0;
@@ -184,7 +197,7 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
 
     // Installation cohorts: the parent's that a kept structure still uses, then one for this phase.
     std::vector<int> cohort_of_parent(ps.install_datum.size(), -1);
-    std::vector<Eigen::VectorXd> cohorts;
+    std::vector<Eigen::VectorXd> cohorts, cohorts_fixed;
     int this_phase = -1;
     for (size_t c = 0; c < child_records.size(); ++c) {
         auto& cr = child_records[c];
@@ -208,7 +221,9 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
                 int& mapped = cohort_of_parent[(size_t)p->install];
                 if (mapped < 0) {
                     mapped = (int)cohorts.size();
-                    cohorts.push_back(to_equations(map_full(ps.install_datum[(size_t)p->install])));
+                    const Eigen::VectorXd full = map_full(ps.install_datum[(size_t)p->install]);
+                    cohorts.push_back(to_equations(full));
+                    cohorts_fixed.push_back(fixed_part(full, dofs));
                 }
                 install = mapped;
             }
@@ -216,6 +231,7 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
             if (this_phase < 0) {
                 this_phase = (int)cohorts.size();
                 cohorts.push_back(out.u_datum);
+                cohorts_fixed.push_back(structures.fixed_datum);
             }
             install = this_phase;
         }
@@ -232,6 +248,7 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
             structures.embedded_beams[i].install = install;
     }
     structures.install_datum = std::move(cohorts);
+    structures.install_fixed = std::move(cohorts_fixed);
     plan.new_anchor.assign(structures.anchors.size(), 0);
     for (size_t c = 0; c < child_records.size(); ++c)
         if (!parent_of[c])
@@ -242,16 +259,20 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
 }
 
 // The installation datums of a phase's structures as FULL global-DOF vectors, for the carry state
-// the next phase reads (StructCarryState::install_datum). Fixed DOFs hold 0: a datum only exists on
-// an equation.
+// the next phase reads (StructCarryState::install_datum): the equation-space datum on a free DOF,
+// and the fixed-DOF datum (Structures::install_fixed) on a fixed one.
 inline std::vector<Eigen::VectorXd> install_datum_full(const Structures& structures,
                                                        const DofMap& dofs) {
     std::vector<Eigen::VectorXd> full;
-    for (const auto& d : structures.install_datum) {
+    for (size_t k = 0; k < structures.install_datum.size(); ++k) {
+        const Eigen::VectorXd& d = structures.install_datum[k];
+        const Eigen::VectorXd* fx =
+            k < structures.install_fixed.size() ? &structures.install_fixed[k] : nullptr;
         Eigen::VectorXd v = Eigen::VectorXd::Zero(dofs.total_dofs());
         for (int g = 0; g < dofs.total_dofs(); ++g) {
             const int eq = dofs.equation(g);
             if (eq >= 0 && eq < d.size()) v[g] = d(eq);
+            else if (eq < 0 && fx && g < fx->size()) v[g] = (*fx)(g);
         }
         full.push_back(std::move(v));
     }

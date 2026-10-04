@@ -69,9 +69,24 @@ struct HardeningSoilParams {
     // into tension under a vertical compression, and left the equilibrium iteration stalled.
     // (m = 1 also sent ε_v to minus infinity there.) Raising p_c itself to p_limit instead would
     // have given every shallow point an overconsolidation it never had.
+    //
+    // THE COHESION SHIFT. The model's cap hardening law reads the pre-consolidation stress shifted
+    // by c cot(phi), like every other stress-dependent law of the model:
+    //     d eps_v^pc / d p_c = (beta/p_ref) ((p_c + c cot phi)/(p_ref + c cot phi))^-m,
+    // so H_cap = (p_ref/beta) ((p_c + c cot phi)/(p_ref + c cot phi))^m and, integrated,
+    //     eps_v^pc = beta/(1-m) (p^_ref/p_ref) (p^_c/p^_ref)^(1-m),  p^ = p + c cot phi.
+    // Until 2026-10 the shift was missing: a cohesive soil's cap was too soft at low stress --
+    // by 7% at 50 kPa and 26% at 20 kPa for c = 5 kPa, phi = 29 degrees, m = 0.8. With c = 0 the
+    // expressions are the old ones exactly. beta is calibrated on the oedometer through these
+    // functions (hs_calibrate_cap), so it follows the law it is used with.
+    double cap_shift() const {
+        const double s = std::sin(friction);
+        return s > 1e-12 ? cohesion * std::cos(friction) / s : 0.0;
+    }
     double cap_ev_power(double pc) const {
-        if (std::fabs(1.0 - m) < 1e-12) return cap_beta * std::log(pc / p_ref);
-        return cap_beta / (1.0 - m) * std::pow(pc / p_ref, 1.0 - m);
+        const double cc = cap_shift(), hr = p_ref + cc, h = pc + cc;
+        if (std::fabs(1.0 - m) < 1e-12) return cap_beta * (hr / p_ref) * std::log(h / hr);
+        return cap_beta / (1.0 - m) * (hr / p_ref) * std::pow(h / hr, 1.0 - m);
     }
     double cap_ev_from_pc(double pc) const {  // ε_v^(p-cap)(p_c)
         const double pl = p_limit();
@@ -82,11 +97,14 @@ struct HardeningSoilParams {
         const double pl = p_limit();
         const double el = cap_ev_power(pl);
         if (ev < el) return std::max(0.0, pl - (el - ev) * cap_hardening_modulus(pl));
-        if (std::fabs(1.0 - m) < 1e-12) return p_ref * std::exp(ev / cap_beta);
-        return p_ref * std::pow((1.0 - m) * ev / cap_beta, 1.0 / (1.0 - m));
+        const double cc = cap_shift(), hr = p_ref + cc;
+        // (ev/beta)(p_ref/hr): with c = 0 the last factor is exactly 1, so the old values return.
+        if (std::fabs(1.0 - m) < 1e-12) return hr * std::exp(ev / cap_beta * (p_ref / hr)) - cc;
+        return hr * std::pow((1.0 - m) * ev / cap_beta * (p_ref / hr), 1.0 / (1.0 - m)) - cc;
     }
-    double cap_hardening_modulus(double pc) const {  // H_cap = dp_c/dε_v^pc = (p_ref/β)(p_c/p_ref)^m
-        return (p_ref / cap_beta) * std::pow(std::max(pc, p_limit()) / p_ref, m);
+    double cap_hardening_modulus(double pc) const {  // H_cap = dp_c/dε_v^pc
+        const double cc = cap_shift();
+        return (p_ref / cap_beta) * std::pow((std::max(pc, p_limit()) + cc) / (p_ref + cc), m);
     }
 
     // Stress-dependent scale factor ((c·cosφ + σ·sinφ)/(c·cosφ + p_ref·sinφ))^m.

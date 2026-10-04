@@ -245,6 +245,22 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     // stiffness only where the exact tangent is identically zero, and the residual is unchanged --
     // so a genuine limit load still ends in a refusal or a stall, now on its own merits.
     bool vertex_floor_mode = false;
+    // THE INITIAL-STIFFNESS FALLBACK. An increment whose Newton direction stopped descending --
+    // every retry above spent -- is re-entered once with the ELASTIC tangent at its plastic
+    // points, full steps and no demand that the residual fall at every step. That iteration is a
+    // contraction, not a descent method: it converges where Newton's direction no longer descends,
+    // which with non-associated flow it can fail to do on a non-smooth surface, but its residual
+    // may rise for an iterate on the way. A monotone line search rejected exactly those iterates.
+    // Measured on initial phases on sloping ground (Mohr-Coulomb and Soft Soil, psi = 0, 15-noded
+    // elements): "did not converge" at 30-70% of the load with Newton, on any tolerance. It is
+    // only ever entered for an increment Newton has already given up on, so every run Newton
+    // closes is untouched; it latches off again when the increment closes.
+    bool elastic_mode = false;
+    // What the convergence family read on the Newton iterate the fallback took over from. The
+    // fallback's own iterates are elastic-stiffness iterates, not the state the increment failed
+    // in: when it fails too, the run reports the Newton one (its CSP is what names a collapse).
+    auto newton_convergence = result.convergence;
+    bool newton_convergence_kept = false;
     // THE STALL FLOOR: the same device as the vertex floor, raised while the iteration is creeping.
     // Near a limit state many stress points sit on the corners of their surfaces or toggle
     // between elastic and plastic from one iterate to the next; the tangent is exact on the side
@@ -275,8 +291,21 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     // element, identical rules to the nonlinear-dynamic (Newmark+Newton) solver -> single source, no
     // drift. The assembler owns the per-solve element topology + fe/ke buffers (built once in its
     // constructor), so the old inline gather/buffers move into it.
-    detail::InternalForceAssembler<E, Kin> fasm(mesh, dofs, materials, active_element,
-                                                structures, profile);
+    // Strength continuation (NewtonOptions::srf_reduce): the assembler reads WORKING copies whose
+    // strength is rewritten for each factor the path visits; everything else reads the originals.
+    const bool srf_mode = static_cast<bool>(options.srf_reduce);
+    std::vector<MaterialModel> srf_materials;
+    Structures srf_structures;
+    std::vector<MaterialProfile> srf_profile;
+    if (srf_mode) {
+        srf_materials = materials;
+        srf_structures = structures;
+        srf_profile = profile;
+    }
+    detail::InternalForceAssembler<E, Kin> fasm(mesh, dofs, srf_mode ? srf_materials : materials,
+                                                active_element,
+                                                srf_mode ? srf_structures : structures,
+                                                srf_mode ? srf_profile : profile);
     typename detail::InternalForceAssembler<E, Kin>::State astate;
     astate.committed = &committed;           astate.trial = &trial;
     astate.anchor_c = &anchor_committed;     astate.anchor_t = &anchor_trial;
@@ -311,6 +340,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         fasm.dt_day = options.time_interval * std::max(0.0, cur_target - cur_lambda);
         fasm.substep_tol = options.substep_tolerance;
         fasm.vertex_floor = std::max(vertex_floor_mode ? kVertexFloor : 0.0, stall_floor);
+        fasm.elastic_tangent = elastic_mode;
         return fasm.assemble(u_struct, du_free, build_tangent, tmode, astate, ramp, builder,
                              &result.timings);
     };
@@ -385,6 +415,228 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     probe.prev_foot = &prev_foot;
     probe.tolerated = rtol;
     result.convergence.tolerated = rtol;
+
+    // ===================================================================================
+    // STRENGTH CONTINUATION BY ARC LENGTH (NewtonOptions::srf_reduce).
+    //
+    // A strength-reduction search that PRESCRIBES the factor s at every step solves, near the
+    // factor of safety, for an equilibrium that exists but lies far away along a developing
+    // mechanism: measured on a c-phi slope, the last 0.5% of s below the factor carried the
+    // displacement from 9.5 to 78 mm, and a Newton iteration asked for it at a prescribed s
+    // crawled for a thousand iterations or was given up, so the factor came out short of the
+    // path's own limit. Here s is an UNKNOWN. Each step prescribes the length of the
+    // displacement increment along the predicted direction instead (Riks' normal plane,
+    // n . du = dl) and solves the bordered system for (du, s):
+    //     r(du, s) = f_held - f_int(du; s) = 0,     K a = r,  K b = df_int/ds,
+    //     du <- du + a - ds b,   ds = (n . (du + a) - dl) / (n . b),
+    // df_int/ds by a one-sided difference of the internal force (one extra residual). Near the
+    // limit the path flattens -- s barely rises while the displacement grows -- and each step
+    // stays a well-posed small one. The factor of safety is where the path stops rising: s
+    // falls (a limit point passed), or it has risen less than the resolution over each of the
+    // last two doublings of the displacement (the plateau of a perfectly plastic mechanism,
+    // where the rise over a doubling is what is left to rise).
+    // Steps are accepted on exactly the criteria of the load-controlled solve (global residual
+    // and the local ones), and the step length follows the iteration count of the last step.
+    // ===================================================================================
+    if (srf_mode) {
+        const auto set_srf = [&](double sf) {
+            srf_materials = materials;
+            srf_structures = structures;
+            srf_profile = profile;
+            options.srf_reduce(srf_materials, srf_structures, srf_profile, sf);
+        };
+        const Eigen::VectorXd held =
+            has_cf ? Eigen::VectorXd(constant_force) : Eigen::VectorXd::Zero(neq);
+        const int max_it = std::max(options.max_iterations, 20);
+        double s_cur = options.srf_start;
+        double dl = -1.0;                 // the arc length (displacement increment norm)
+        int flat = 0;
+        int cut = 0;
+        double s_ctrl_step = options.srf_first_step;   // for steps with no plastic response
+        result.srf = s_cur;
+        result.srf_path.push_back({s_cur, 0.0});
+        set_srf(s_cur);
+        for (int stepn = 0; stepn < 2000; ++stepn) {
+            if (s_cur >= options.srf_max) break;
+            cur_lambda = 0.0;
+            cur_target = 1.0;
+            Eigen::VectorXd du = Eigen::VectorXd::Zero(neq);
+            prev_sc = committed;
+            std::fill(prev_deps.begin(), prev_deps.end(), 0.0);
+            // ---- predictor at the committed state
+            const double eps0 = 1.0e-6 * s_cur;
+            set_srf(s_cur + eps0);
+            const Eigen::VectorXd fe0 = assemble(du, false, nullptr);
+            set_srf(s_cur);
+            builder.clear();
+            const Eigen::VectorXd f00 = assemble(du, true, &builder);
+            const Eigen::VectorXd fs0 = (fe0 - f00) / eps0;
+            Eigen::VectorXd v;
+            bool solved = true;
+            try {
+                v = linear_solve(builder.build_cached(kt_cache), fs0);
+                ++result.timings.n_solve;
+            } catch (const math::SingularSystem&) {
+                solved = false;
+            }
+            if (!solved || !v.allFinite()) break;
+            const double vnorm = v.norm();
+            // With no plastic response the path is vertical in s: such a step is controlled by s.
+            const bool arc = vnorm * options.srf_first_step > 1e-12 * std::max(1.0, u_free.norm()) &&
+                             vnorm > 0.0;
+            Eigen::VectorXd n;
+            double s_try;
+            if (arc) {
+                if (dl < 0.0) dl = options.srf_first_step * vnorm;
+                const double ds_pred = dl / vnorm;
+                du = -ds_pred * v;
+                n = du / du.norm();
+                s_try = s_cur + ds_pred;
+            } else {
+                s_try = s_cur + s_ctrl_step;
+            }
+            // ---- corrector
+            bool conv = false;
+            int its = 0;
+            for (int it = 0; it < max_it; ++it) {
+                its = it + 1;
+                const double eps = 1.0e-6 * s_try;
+                set_srf(s_try + eps);
+                const Eigen::VectorXd fe = arc ? assemble(du, false, nullptr) : Eigen::VectorXd();
+                set_srf(s_try);
+                builder.clear();
+                probe.reset_counts();
+                probe.first_iterate = (it == 0);
+                const Eigen::VectorXd fi = assemble(du, true, &builder, &probe);
+                const Eigen::VectorXd r = held - fi;
+                const double rnorm = r.norm();
+                measure_convergence(probe, fi, r, rnorm, cf_norm, ref, rtol, result.convergence);
+                if (debug)
+                    std::fprintf(stderr, "  srf %.6f it %d rnorm=%.4e rel=%.4e plastic %d/%d %s\n",
+                                 s_try, it, rnorm, rnorm / ref,
+                                 result.convergence.plastic_inaccurate,
+                                 result.convergence.plastic_points, arc ? "arc" : "s-ctrl");
+                const bool global_ok =
+                    csp_gate ? result.convergence.force_ok() : (rnorm <= rtol * ref);
+                if (it > 0 && global_ok && (!enforce_local || result.convergence.enforced_ok())) {
+                    conv = true;
+                    break;
+                }
+                const math::CsrMatrix& kt = builder.build_cached(kt_cache);
+                Eigen::VectorXd a, b;
+                try {
+                    a = linear_solve(kt, r);
+                    ++result.timings.n_solve;
+                    if (arc) {
+                        b = linear_solve(kt, (fe - fi) / eps);
+                        ++result.timings.n_solve;
+                    }
+                } catch (const math::SingularSystem&) {
+                    break;
+                }
+                if (!a.allFinite() || (arc && !b.allFinite())) break;
+                double dsi = 0.0;
+                if (arc) {
+                    const double nb = n.dot(b);
+                    if (std::fabs(nb) < 1e-300) break;
+                    dsi = (n.dot(du) + n.dot(a) - dl) / nb;
+                }
+                const Eigen::VectorXd ddu = arc ? Eigen::VectorXd(a - dsi * b) : a;
+                // A damped step when the full one throws the residual out: the residual at the
+                // trial is compared with the current one, halving up to six times.
+                double alpha = 1.0;
+                for (int ls = 0; ls < 6; ++ls) {
+                    set_srf(s_try + alpha * dsi);
+                    const double rt = (held - assemble(du + alpha * ddu, false, nullptr)).norm();
+                    if (std::isfinite(rt) && rt < std::max(rnorm, 10.0 * rtol * ref)) break;
+                    alpha *= 0.5;
+                }
+                du += alpha * ddu;
+                s_try += alpha * dsi;
+            }
+            result.total_iterations += its;
+            if (conv) {
+                // the trial states of the accepted iterate are the last assembled at s_try
+                committed = trial;
+                anchor_committed = anchor_trial;
+                geogrid_committed = geogrid_trial;
+                interface_committed = interface_trial;
+                interface5_committed = interface5_trial;
+                eskin_committed = eskin_trial;
+                efoot_committed = efoot_trial;
+                plate_committed = plate_trial;
+                plate5_committed = plate5_trial;
+                u_free += du;
+                u_struct += du;
+                const double s_prev = s_cur;
+                s_cur = s_try;
+                result.srf = std::max(result.srf, s_cur);
+                result.srf_path.push_back({s_cur, u_free.cwiseAbs().maxCoeff()});
+                if (debug) {
+                    // e = d ln(s - s0) / d ln u over the last doubling of the displacement
+                    const double un = result.srf_path.back()[1];
+                    double e_dbl = -1.0;
+                    for (size_t j = result.srf_path.size(); j-- > 0;) {
+                        const double uj = result.srf_path[j][1], sj = result.srf_path[j][0];
+                        if (uj <= 0.5 * un && uj > 0.0 && sj > options.srf_start && s_cur > options.srf_start) {
+                            e_dbl = std::log((s_cur - options.srf_start) / (sj - options.srf_start)) /
+                                    std::log(un / uj);
+                            break;
+                        }
+                    }
+                    std::fprintf(stderr, "  SRF STEP %d: s %.6f -> %.6f in %d it, |du| %.3e maxu %.4e e %.5f%s\n",
+                                 stepn, s_prev, s_cur, its, du.norm(), un, e_dbl, arc ? "" : " (s-ctrl)");
+                }
+                if (arc) {
+                    if (s_cur < s_prev) { result.srf_limit = true; break; }
+                    // THE PLATEAU. On a perfectly plastic mechanism the path approaches its
+                    // limit F like s = F - a/u, so the rise over the last doubling of the
+                    // displacement equals what is left to rise. When that rise is below the
+                    // resolution the factor is known to the resolution, and the path stops.
+                    // A path can flatten for a while and rise again, so two successive doublings
+                    // must each rise less than the resolution.
+                    const auto rise_over_doubling = [&](double u_end, double s_end) {
+                        for (size_t j = result.srf_path.size(); j-- > 0;)
+                            if (result.srf_path[j][1] <= 0.5 * u_end)
+                                return result.srf_path[j][1] > 0.0
+                                           ? std::make_pair(true, s_end - result.srf_path[j][0])
+                                           : std::make_pair(false, 0.0);
+                        return std::make_pair(false, 0.0);
+                    };
+                    const double u_now = result.srf_path.back()[1];
+                    const auto r1 = rise_over_doubling(u_now, s_cur);
+                    double s_half = s_cur;
+                    for (size_t j = result.srf_path.size(); j-- > 0;)
+                        if (result.srf_path[j][1] <= 0.5 * u_now) { s_half = result.srf_path[j][0]; break; }
+                    const auto r2 = rise_over_doubling(0.5 * u_now, s_half);
+                    flat = (r1.first && r2.first && r1.second < options.srf_resolution * s_cur &&
+                            r2.second < options.srf_resolution * s_cur) ? 1 : 0;
+                    if (flat) { result.srf_limit = true; break; }
+                    // The next step aims at 20 iterations: measured on the slope above, 12
+                    // took 117 steps and 37 s for the same factor (to 4e-5) that 20 reached in
+                    // 35 steps and 15 s. A controller that grew the step by half whenever it
+                    // converged in 25 was faster nowhere and moved the factor by 0.3% between
+                    // tolerances.
+                    dl *= std::clamp(std::sqrt(20.0 / std::max(its, 1)), 0.5, 2.0);
+                } else {
+                    s_ctrl_step *= 1.5;
+                }
+                cut = 0;
+            } else {
+                trial = committed;
+                if (arc) dl *= 0.5; else s_ctrl_step *= 0.5;
+                set_srf(s_cur);
+                if (++cut > 12 || (!arc && s_ctrl_step < options.srf_resolution * s_cur)) {
+                    result.srf_limit = true;   // no equilibrium beyond: the limit
+                    break;
+                }
+            }
+        }
+        set_srf(s_cur);
+        lambda = 1.0;                     // the load loop below has nothing to do
+        result.load_factor = 1.0;
+        result.converged = true;
+    }
 
     while (lambda < 1.0 - 1e-12) {
         if (dlam > 1.0 - lambda) dlam = 1.0 - lambda;  // do not overshoot
@@ -462,12 +714,14 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         bool step_converged = false;
         // The best iterate this attempt reached, for the stagnation acceptance below.
         double best_rnorm = std::numeric_limits<double>::infinity();
+        double best_csp = 1.0;   // the stiffness parameter measured AT the best iterate
         Eigen::VectorXd best_du = du_free;
         // How this increment ended, if it did not converge. Set at each exit from the
         // iteration loop so the abandonment is named where it happens rather than
         // guessed afterwards from the iteration count.
         NewtonResult::Abandonment ended = NewtonResult::Abandonment::IterationBudget;
         int stall = 0;  // consecutive iterations that produced no descent
+        bool early_stagnation = false;   // stagnation shown inside the acceptance band
         int creep = 0;  // consecutive iterations whose step was cut to under 1/4
         std::vector<double> progress;   // this attempt's residual norms, iterate by iterate
         stall_floor = 0.0;
@@ -491,6 +745,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             }
             measure_convergence(probe, f_int, residual, rnorm, cf_norm, ref, rtol,
                                 result.convergence);
+            if (rnorm <= best_rnorm) best_csp = result.convergence.csp;
             // The history is kept to the LARGEST window this increment could ever use, and only
             // the tail of it is consulted. Keeping just ls_window entries would make the stall
             // escalation below arrive with no memory at all -- it would be monotone for another
@@ -632,7 +887,13 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             const double phi0 = 0.5 * rnorm * rnorm, slope0 = -rnorm * rnorm;
             double alpha = 1.0;
             bool improved = false;
-            for (int ls = 0; ls < 12; ++ls) {
+            if (elastic_mode) {
+                // The initial-stiffness iteration takes its full step; only a step that throws the
+                // residual far out (a tenfold rise) is treated as a failure.
+                const double rn = (target - assemble(du_free + delta, false, nullptr)).norm();
+                if (std::isfinite(rn) && rn < 10.0 * rnorm) improved = true;
+            }
+            for (int ls = 0; ls < 12 && !improved; ++ls) {
                 const Eigen::VectorXd fi = assemble(du_free + alpha * delta,
                                                     false, nullptr);
                 const double rn = (target - fi).norm();
@@ -663,18 +924,46 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             // collapsing recoverable steps.
             stall = improved ? 0 : stall + 1;
             creep = (improved && alpha >= 0.25) ? 0 : creep + 1;
-            if (improved && alpha >= 0.5) {
+            if (elastic_mode) {
+                // Its residual is not monotone, so it is judged on progress: not down by a
+                // tenth over forty iterates is a stall.
+                creep = 0;
+                if (improved && progress.size() >= 40 &&
+                    rnorm > 0.9 * progress[progress.size() - 40])
+                    stall = 4;
+            } else if (!improved && stall_floor > 0.0) {
+                // The floor is a remedy for CREEP (a direction that descends a hair at a time),
+                // not for no descent at all: with non-associated flow the stiffened tangent's
+                // direction need not descend either, and raising the floor further only kept the
+                // increment failing. Measured on a cohesive slope's K0 equilibrium step on 15-noded
+                // elements (phi = 30, psi = 0): with the floor still climbing the step was abandoned
+                // at 61% of the load, while the exact tangent carried it to the end. A step that
+                // finds no descent hands the next one back to Newton's own direction.
+                stall_floor = 0.0;
+                creep = 0;
+            } else if (improved && alpha >= 0.5) {
                 stall_floor *= 0.5;                 // let go gradually: dropping it at once
                 if (stall_floor < 0.01) stall_floor = 0.0;   // put the creep straight back
             } else if (creep >= 3) {
                 stall_floor = std::min(1.0, stall_floor > 0.0 ? 2.0 * stall_floor : 0.1);
             }
             progress.push_back(rnorm);
-            // A quick-abandon caller learns nothing more from an increment that has not reduced
-            // its out-of-balance force by a tenth in fifteen iterations: it is abandoned there.
-            if (options.quick_abandon && progress.size() > 15 &&
-                progress.back() > 0.9 * progress[progress.size() - 16])
-                stall = std::max(stall, 4);
+            // STAGNATION SHOWN, NOT AWAITED. The acceptance below keeps an increment at its best
+            // iterate once every retry has been spent on it -- which, on a phase whose tolerance
+            // is out of reach, is every increment, each ground through hundreds of iterations
+            // first: measured on an embankment built on clay (Mohr-Coulomb, 15-noded), 3478
+            // iterations for 20 increments, each accepted at about 1e-4 of the load scale in the
+            // end, 396 s. An increment whose best iterate is already inside the acceptance band
+            // and whose residual has not fallen by a tenth over its last thirty iterates is in the
+            // state the retries end in; it is accepted there, on the same terms (counted, K2D-A019).
+            // An iteration that is still converging -- quadratically or not -- never meets it.
+            if (rtol < kStagnationAccept && progress.size() > kStagnationWindow &&
+                best_rnorm <= kStagnationAccept * ref &&
+                rnorm > 0.9 * progress[progress.size() - 1 - kStagnationWindow]) {
+                ended = NewtonResult::Abandonment::NoDescent;
+                early_stagnation = true;
+                break;
+            }
             if (stall >= 4) {
                 ended = NewtonResult::Abandonment::NoDescent;
                 if (debug)
@@ -703,15 +992,20 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         // every retry above still gets its chance first, so a run that converged before this rule
         // existed converges on exactly the same path. See kStagnationAccept for the measurement.
         const bool would_cut_back =
-            !step_converged &&
-            !(ended == NewtonResult::Abandonment::SolveRefused && !vertex_floor_mode) &&
-            (options.quick_abandon || !(has_fd_tangent && !hs_consistent_mode)) &&
-            (options.quick_abandon ||
-             !(ended == NewtonResult::Abandonment::NoDescent && !ls_open));
+            early_stagnation ||
+            (!step_converged &&
+             !(ended == NewtonResult::Abandonment::SolveRefused && !vertex_floor_mode) &&
+             !(has_fd_tangent && !hs_consistent_mode) &&
+             !(ended == NewtonResult::Abandonment::NoDescent && !ls_open) &&
+             !(ended == NewtonResult::Abandonment::NoDescent && !elastic_mode));
         if (would_cut_back && ended != NewtonResult::Abandonment::SolveRefused &&
             rtol < kStagnationAccept && best_rnorm <= kStagnationAccept * ref) {
             du_free = best_du;
             assemble(du_free, false, nullptr);  // the trial states of the iterate being kept
+            // ... and its stiffness parameter: the measurement standing in result.convergence is
+            // the LAST iterate's, which on a stagnated increment can be one thrown far out -- read
+            // as the committed state it reported a mechanism (0.004) where the kept iterate had 0.9.
+            result.convergence.csp = best_csp;
             ++result.stagnation_accepted;
             result.worst_accepted_residual =
                 std::max(result.worst_accepted_residual, best_rnorm / ref);
@@ -723,6 +1017,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
 
         if (step_converged) {
             hs_consistent_mode = false;  // increment closed → back to the cheap continuum path
+            elastic_mode = false;        // and back to Newton
             u_free += du_free;
             u_struct += du_free;
             committed = trial;  // commit the increment
@@ -746,13 +1041,12 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             if (debug)
                 std::fprintf(stderr, "  lambda %.4f: tangent refused; retrying the increment with "
                                      "the vertex floor (dlam untouched)\n", lambda);
-        } else if (has_fd_tangent && !hs_consistent_mode && !options.quick_abandon) {
+        } else if (has_fd_tangent && !hs_consistent_mode) {
             // Hybrid tangent: continuum failed to converge this increment → retry the SAME
             // increment with the consistent (FD) tangent without touching dlam; the
             // remaining increments stay consistent too.
             hs_consistent_mode = true;
-        } else if (ended == NewtonResult::Abandonment::NoDescent && !ls_open &&
-                   !options.quick_abandon) {
+        } else if (ended == NewtonResult::Abandonment::NoDescent && !ls_open) {
             // A STALL IS WHAT THE NON-MONOTONE RULE EXISTS FOR, so the increment is re-entered
             // with the window open before its size is touched -- the same shape as the hybrid
             // tangent above, and for the same reason: when an increment cannot be closed the
@@ -768,12 +1062,21 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 std::fprintf(stderr, "  lambda %.4f: retrying the increment with a line-search "
                                      "window of %d (dlam untouched)", lambda,
                              kStallEscalationWindow);
+        } else if (ended == NewtonResult::Abandonment::NoDescent && !elastic_mode) {
+            elastic_mode = true;
+            newton_convergence = result.convergence;
+            newton_convergence_kept = true;
+            ++result.elastic_retries;
+            if (debug)
+                std::fprintf(stderr, "  lambda %.4f: retrying the increment with the elastic "
+                                     "tangent (dlam untouched)\n", lambda);
         } else {
             // The increment is abandoned: record WHY before the size is halved, so the
             // phase can report the reason it actually stopped for.
             if (ended == NewtonResult::Abandonment::NoDescent) ++result.no_descent;
             else if (ended == NewtonResult::Abandonment::IterationBudget) ++result.budget_exhausted;
             result.last_abandonment = ended;
+            if (elastic_mode && newton_convergence_kept) result.convergence = newton_convergence;
             dlam *= 0.5;  // sub-stepping: shrink the increment and retry
             if (debug)
                 std::fprintf(stderr, "  cutback at lambda %.4f: dlam %.6f (minimum %.6f), "

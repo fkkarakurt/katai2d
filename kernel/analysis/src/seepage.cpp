@@ -143,11 +143,13 @@ template <class E>
 void assemble_gravity_from_head_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                                      const std::vector<double>& gamma_unsat,
                                      const std::vector<double>& gamma_sat,
-                                     const Eigen::VectorXd& head, Eigen::VectorXd& rhs) {
+                                     const Eigen::VectorXd& head, Eigen::VectorXd& rhs,
+                                     const std::vector<char>& active_element) {
     typename E::NodeCoords coords;
     std::array<int, E::kDofCount> element_dofs;
     std::array<double, E::kNodeCount> hnode;
     for (int e = 0; e < mesh.element_count; ++e) {
+        if (!active_element.empty() && !active_element[e]) continue;
         const int mat = mesh.element_material[e];
         const double g_unsat = gamma_unsat[mat], g_sat = gamma_sat[mat];
         if (g_unsat == 0.0 && g_sat == 0.0) continue;
@@ -340,11 +342,14 @@ void assemble_pore_load_from_head(const mesh::Mesh& mesh, const DofMap& dofs,
 void assemble_gravity_from_head(const mesh::Mesh& mesh, const DofMap& dofs,
                                 const std::vector<double>& gamma_unsat,
                                 const std::vector<double>& gamma_sat,
-                                const Eigen::VectorXd& head, Eigen::VectorXd& rhs) {
+                                const Eigen::VectorXd& head, Eigen::VectorXd& rhs,
+                                const std::vector<char>& active_element) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
-        assemble_gravity_from_head_impl<Tri15Element>(mesh, dofs, gamma_unsat, gamma_sat, head, rhs);
+        assemble_gravity_from_head_impl<Tri15Element>(mesh, dofs, gamma_unsat, gamma_sat, head, rhs,
+                                                      active_element);
     else
-        assemble_gravity_from_head_impl<Tri6Element>(mesh, dofs, gamma_unsat, gamma_sat, head, rhs);
+        assemble_gravity_from_head_impl<Tri6Element>(mesh, dofs, gamma_unsat, gamma_sat, head, rhs,
+                                                     active_element);
 }
 
 Eigen::VectorXd compute_nodal_flux(const mesh::Mesh& mesh,

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <vector>
 
@@ -211,24 +212,9 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
             // reported 1.100 where the slope stands to 1.361. So a failure only halves the step,
             // the search moves on from every new equilibrium, and the factor is bracketed only by a
             // step no larger than the resolution failing from the last converged state.
-            double step = options.msf_step;
-            double failed_at = -1.0;            // set only by a step at the resolution failing
-            bool ever_failed = false;
-            for (int guard = 0; guard < 400; ++guard) {
-                double next = srf + step;
-                if (next > options.srf_max) {
-                    if (srf >= options.srf_max) break;
-                    next = options.srf_max;
-                }
-                std::vector<MaterialModel> m = materials;
-                for (auto& mm : m) factor_strength(mm, next);
-                std::vector<MaterialProfile> p = profile;
-                for (auto& pp : p) pp.c_inc /= next;
-                Structures s = base;
-                for (auto& ie : s.interfaces) factor_interface_strength(ie.props, next);
-                for (auto& ie : s.interfaces5) factor_interface_strength(ie.props, next);
-                // The structures continue from where the path has taken them: the parent's datum
-                // plus what the search has moved so far, with their committed plastic state.
+            // The structures continue from where the path has taken them: the parent's datum plus
+            // what the search has moved so far, with their committed plastic state.
+            const auto carry_now = [&]() {
                 StructuralInit carry;
                 if (has_structures) {
                     const NewtonResult& last = res.mechanism;
@@ -247,12 +233,85 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                     carry.plate_plastic = last.plate_plastic;
                     carry.plate5_plastic = last.plate5_plastic;
                 }
-                // A step far from the final bracket that fails is only halved, so it is abandoned
-                // without the stronger retries (NewtonOptions::quick_abandon): measured on a
-                // Hardening Soil embankment, each failed step spent 120 to 213 iterations on them
-                // and a converged one 6 to 24. Steps within two resolutions of the bracket keep
-                // every retry, so the factor the search ends on is not decided by this.
-                step_opt.quick_abandon = next - srf > 2.0 * options.fos_resolution * srf;
+                return carry;
+            };
+            // THE PATH IS FOLLOWED BY ARC LENGTH (NewtonOptions::srf_reduce; the method is in
+            // solve_nonlinear). A search that prescribes the factor at every step asks, near the
+            // limit, for equilibria that exist but lie far along a developing mechanism: measured
+            // on a c-phi slope (6-noded, 1 m), the last 0.5% of the factor carried the displacement
+            // from 9.5 to 78 mm, those steps crawled for hundreds of iterations or were given up,
+            // and what the search reported depended on how tightly its steps were solved -- 1.3903
+            // at 1e-3 and 1.3838 at 1e-4 with steps of 0.01, 1.3874 with the growing steps -- every
+            // one above the converged answer. With the factor an unknown the same slope gives
+            // 1.38680, 1.38665 and 1.38680 at 1e-3, 1e-4 and 1e-5. The whole path is followed so:
+            // prescribing the first part and continuing from the first failed step was measured
+            // too, and with psi < phi the factor then depends on those first coarse steps (1.3820
+            // at 1e-5). The prescribed search below remains for a path that cannot be started.
+            //
+            // ONLY FOR GROUND WITHOUT STRUCTURES. A plate, an anchor, a geogrid or a pile keeps
+            // its own strength while the soil's is reduced, so once the ground has formed a
+            // mechanism the structure takes the load on and the path keeps rising with the
+            // displacement -- there is no plateau to read. Measured on the anchored excavation of
+            // the tutorial set (6-noded, 2 m): the continuation walked to 3.8 m of displacement for
+            // 1.852, where the prescribed search stops at 1.847 in a quarter of the time (86 s
+            // against 319; 15-noded, 460 s against 2880). Reading the factor at the knee of the
+            // path instead -- the minimum of d ln(s - 1) / d ln u, where the ground's mechanism has
+            // formed -- gave 1.599 there, but 1.726 for a block held by an anchor prestressed to
+            // half its capacity, whose factor is 2.0025 once the anchor yields: the knee is where
+            // the ground gives way, not where the whole system does. With structures the
+            // prescribed search, which ends where the ground no longer finds an equilibrium step,
+            // is kept.
+            const auto continue_by_arc = [&](double first_step, NewtonResult& r) {
+                NewtonOptions arc_opt = step_opt;
+                arc_opt.srf_reduce = [](std::vector<MaterialModel>& mm, Structures& ss,
+                                        std::vector<MaterialProfile>& pp, double sf) {
+                    for (auto& x : mm) factor_strength(x, sf);
+                    for (auto& x : pp) x.c_inc /= sf;
+                    for (auto& ie : ss.interfaces) factor_interface_strength(ie.props, sf);
+                    for (auto& ie : ss.interfaces5) factor_interface_strength(ie.props, sf);
+                };
+                arc_opt.srf_start = srf;
+                arc_opt.srf_first_step = first_step;
+                arc_opt.srf_max = options.srf_max;
+                arc_opt.srf_resolution = options.fos_resolution;
+                try {
+                    r = solve_nonlinear(mesh, dofs, materials, no_load, linear_solve, arc_opt,
+                                        states, active_element, base, {}, held, profile,
+                                        carry_now());
+                    // A continuation that stopped without finding the limit (the path could not
+                    // be started from here) leaves the search to the prescribed steps.
+                    return r.srf_limit || r.srf >= options.srf_max;
+                } catch (...) {
+                    return false;
+                }
+            };
+            if (!has_structures) {
+                NewtonResult ra;
+                if (continue_by_arc(options.msf_step, ra)) {
+                    res.fos = std::min(std::max(ra.srf, srf), options.srf_max);
+                    res.bracketed = ra.srf_limit;
+                    ra.displacement += u_total;
+                    res.mechanism = std::move(ra);
+                    return res;
+                }
+            }
+            double step = options.msf_step;
+            double failed_at = -1.0;            // set only by a step at the resolution failing
+            bool ever_failed = false;
+            for (int guard = 0; guard < 400; ++guard) {
+                double next = srf + step;
+                if (next > options.srf_max) {
+                    if (srf >= options.srf_max) break;
+                    next = options.srf_max;
+                }
+                std::vector<MaterialModel> m = materials;
+                for (auto& mm : m) factor_strength(mm, next);
+                std::vector<MaterialProfile> p = profile;
+                for (auto& pp : p) pp.c_inc /= next;
+                Structures s = base;
+                for (auto& ie : s.interfaces) factor_interface_strength(ie.props, next);
+                for (auto& ie : s.interfaces5) factor_interface_strength(ie.props, next);
+                const StructuralInit carry = carry_now();
                 NewtonResult r;
                 bool ok = false;
                 try {

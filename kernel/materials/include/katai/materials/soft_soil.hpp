@@ -28,6 +28,37 @@ namespace katai::core::softsoil {
 // is not broken.
 inline constexpr double kPmin = 1.0;
 
+// THE MEAN-STRESS LAW, floored in STIFFNESS only. Above kPmin the kappa* law is exact,
+// p = p0 exp(dv / kappa*); below it the bulk modulus is held at kPmin / kappa* and the mean stress
+// moves linearly, with the slope continuous where the two meet. The floor used to clamp the
+// STRESS as well: a point committed below 1 kPa was handed back at 1 kPa under zero strain, its
+// internal force no longer matched the state it was seeded with, and a K0 phase with the water
+// table at the ground surface (where sigma'_v -> 0) moved the ground by 1.26 mm instead of
+// standing still. dv is compression-positive, as in the predictors below.
+inline double mean_after(double p0, double dv, double kap) {
+    const double Kmin = kPmin / kap;
+    if (p0 >= kPmin) {
+        const double p = p0 * std::exp(dv / kap);
+        if (p >= kPmin) return p;
+        const double dv_to = kap * std::log(kPmin / p0);   // the strain that reaches the floor
+        return kPmin + Kmin * (dv - dv_to);
+    }
+    const double p = p0 + Kmin * dv;
+    if (p <= kPmin) return p;
+    const double dv_to = (kPmin - p0) / Kmin;
+    return kPmin * std::exp((dv - dv_to) / kap);
+}
+// Its inverse: the volumetric strain (compression-positive) that takes p0 to p.
+inline double strain_between(double p0, double p, double kap) {
+    const double Kmin = kPmin / kap;
+    const auto to_floor = [&](double q) {   // strain from q to kPmin along the law
+        return q >= kPmin ? kap * std::log(kPmin / q) : (kPmin - q) / Kmin;
+    };
+    return to_floor(p0) - to_floor(p);
+}
+// The bulk modulus at p: p / kappa*, never below the floor's.
+inline double bulk_at(double p, double kap) { return std::max(p, kPmin) / kap; }
+
 struct Params {
     double lam_star = 0.1;   // modified compression index λ* [-]
     double kap_star = 0.02;  // modified swelling index κ* [-]

@@ -102,9 +102,43 @@ void test_cap_consistent_tangent() {
 
 } // namespace
 
+// THE CAP HARDENING LAW, against its definition: d eps_v^pc / d p_c is proportional to
+// ((p_c + c cot phi)/(p_ref + c cot phi))^-m. Checked on a cohesive soil (c = 5 kPa, phi = 29,
+// m = 0.8) through the modulus ratio between two stresses, the derivative of eps_v(p_c) against
+// 1/H by a central difference, and the inverse; and on a cohesionless one against the unshifted
+// power law it must still be, bit for bit.
+void test_cap_law_cohesion_shift() {
+    HardeningSoilParams p = make_params();
+    p.cohesion = 5.0; p.friction = 29.0 * kPi / 180.0; p.m = 0.8;
+    const double cc = p.cohesion / std::tan(p.friction);
+    const double ratio = p.cap_hardening_modulus(20.0) / p.cap_hardening_modulus(50.0);
+    std::printf("  H(20)/H(50) = %.6f, shifted law %.6f, unshifted %.6f\n", ratio,
+                std::pow((20.0 + cc) / (50.0 + cc), p.m), std::pow(20.0 / 50.0, p.m));
+    check(close(ratio, std::pow((20.0 + cc) / (50.0 + cc), p.m), 1e-12),
+          "the cap modulus follows ((p_c + c cot phi)/(p_ref + c cot phi))^m");
+    for (double pc : {15.0, 60.0, 250.0}) {
+        const double h = 1e-4 * pc;
+        const double dedp = (p.cap_ev_from_pc(pc + h) - p.cap_ev_from_pc(pc - h)) / (2.0 * h);
+        check(close(dedp * p.cap_hardening_modulus(pc), 1.0, 1e-7),
+              "d eps_v^pc / d p_c is the inverse of the modulus");
+        check(close(p.cap_pc_from_ev(p.cap_ev_from_pc(pc)), pc, 1e-12),
+              "p_c(eps_v^pc(p_c)) returns p_c");
+    }
+    HardeningSoilParams q = make_params();   // c = 0
+    for (double pc : {15.0, 60.0, 250.0}) {
+        const double ev_old = q.cap_beta / (1.0 - q.m) * std::pow(pc / q.p_ref, 1.0 - q.m);
+        const double h_old = (q.p_ref / q.cap_beta) * std::pow(pc / q.p_ref, q.m);
+        check(q.cap_ev_from_pc(pc) == ev_old && q.cap_hardening_modulus(pc) == h_old &&
+                  q.cap_pc_from_ev(ev_old) ==
+                      q.p_ref * std::pow((1.0 - q.m) * ev_old / q.cap_beta, 1.0 / (1.0 - q.m)),
+              "without cohesion the law is the unshifted power law, bit for bit");
+    }
+}
+
 int main() {
     test_isotropic_compression();
     test_cap_consistent_tangent();
+    test_cap_law_cohesion_shift();
     if (g_failures == 0) {
         std::printf("OK: HS cap yield surface (isotropic compression + tangent) verified\n");
         return 0;

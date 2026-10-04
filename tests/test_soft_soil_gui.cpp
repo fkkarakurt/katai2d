@@ -185,6 +185,28 @@ void test_pop_memory() {
           "POP response matches the elastic kappa* integral below the surface strip (5%)");
 }
 
+// The K0 seed is an equilibrium state, so a K0 phase on level ground must not move it -- with the
+// water table at the ground surface too, where sigma'_v falls to zero at the top. The mean-stress
+// floor (kPmin) used to clamp the STRESS of points committed below it, so under zero strain they
+// came back at 1 kPa, their internal force no longer matched the seed, and the column moved by
+// 1.26 mm; it now floors the stiffness only.
+void test_k0_identity_with_water_at_surface() {
+    std::printf("-- K0 identity with the water table at the ground surface --\n");
+    for (double wt : {kH, kH - 1.0}) {
+        m::Project pr = ss_column();
+        pr.has_water = true;
+        pr.wx = {-1.0, kW + 1.0};
+        pr.wy = {wt, wt};
+        const auto M = katai::app::mesh_from_project(pr, 0.5, 6);
+        const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
+        const bool ok = res.size() == 1 && res[0].ok;
+        std::printf("   water table %.1f m below the surface: max|u| = %.3e m\n", kH - wt,
+                    ok ? res[0].max_disp : -1.0);
+        check(ok && res[0].max_disp < 1e-9,
+              "the K0 seed stands still (no stress point is moved at zero strain)");
+    }
+}
+
 void test_undrained_refusal() {
     std::printf("-- honest guard: Soft Soil + Undrained (A) is refused, not silently drained --\n");
     m::Project pr = ss_column();
@@ -406,6 +428,8 @@ int main() {
     test_ocr_memory();
     std::printf("\n");
     test_pop_memory();
+    std::printf("\n");
+    test_k0_identity_with_water_at_surface();
     std::printf("\n");
     test_undrained_refusal();
     std::printf("\n");

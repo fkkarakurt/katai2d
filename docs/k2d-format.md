@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **19** · Current `.res` version: **10**
+Current `.k2d` version: **21** · Current `.res` version: **10**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -46,7 +46,15 @@ older build cannot read as anything: the model index is beyond the enum it knows
 falls back to a placeholder and the rock is analysed as something else entirely,
 and **v19** the interface stiffnesses (`structs[i].iface_kn`, `iface_ks`), which an older build
 would ignore and solve every joint at the stiffness it derives from the adjacent soil and the mesh
--- a different compliance at the wall, the most sensitive place in a retaining-wall model.
+-- a different compliance at the wall, the most sensitive place in a retaining-wall model,
+and **v20** the dry excavations (`phases[i].dry`), which an older build would ignore and flood
+every excavated region below the water table -- over a shield tunnel the water in the tunnel
+pushes its crown up and the surface heaves where it settles -- and the pore pressures of a staged
+phase from steady groundwater flow (`phases[i].flowpore`), which an older build would replace by
+the phreatic line,
+and **v21** the region water (`phases[i].pwater`, `pwlevel`), which an older build would ignore
+and give every region the phase's water table -- under a pit, hydrostatic water from the floor
+where the file states the water arriving from outside.
 Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
@@ -345,7 +353,9 @@ with `kind` (0 Point at (x1, y1) in kN; 1 Distributed along (x1, y1)–(x2, y2) 
 #### Prescribed-displacement object (`disps[i]`)
 
 Every mesh node on the line (x1, y1)–(x2, y2) gets the *set* components imposed, ramped
-0 → value over the phase like a load; unset components stay free. A set component with
+0 → value over the phase that activates it, like a load; a following phase in which it stays
+active holds those nodes where they are (as an unchanged load adds nothing), and a phase that
+switches it off releases them. Unset components stay free. A set component with
 value 0 is a rigid support line. Activated per phase through the phase `disp` flags;
 static (Plastic) phases only in this build. The classic use is a displacement-controlled
 rigid footing whose force is read from the reactions.
@@ -410,6 +420,10 @@ with `name` (default `"Well"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
 | `load` | 01[] | — | `[]` | Load activity flags |
 | `disp` | 01[] | — | `[]` | Prescribed-displacement activity flags |
 | `hydro` | 01[] | — | `[]` | Well / drain activity flags |
+| `dry` | 01[] | — | `[]` | Soil regions, by index, whose space holds no free water while they are switched off in this phase (a tunnel kept dry, a pit pumped dry); a MISSING entry counts as not dry. By default an excavated region below the water table holds the water standing in it, which presses on the ground around it. Written only when a region is flagged |
+| `pwater` | int[] | — | `[]` | Region water, by soil-region index: 0 = the phase's water table (also every MISSING entry), 1 = a hydrostatic level of the region's own at `pwlevel[i]` [m], 2 = the pore pressure interpolated linearly with depth, along each vertical, between its values just above and just below the region (taken from whatever region, active or not, lies there, by its own rule; above the ground surface, the water table). Written only when a region uses 1 or 2 |
+| `pwlevel` | number[] | m | `[]` | The level of each region whose `pwater` is 1; read only for those |
+| `flowpore` | bool | — | `false` | Pore pressures from a steady-state groundwater flow on the ground active in this phase instead of the phreatic line: below the water table every boundary of that ground (the model sides and the faces an excavation exposes) is held at the head of the table, above it is a seepage face, the base is closed, and an impermeable wall or interface closes its line. Written only when set |
 | `water_override` | bool | — | `false` | Use this phase's own phreatic line instead of the project's |
 | `wx` | num[] | m | `[]` | Phase phreatic polyline, x (used when `water_override`) |
 | `wy` | num[] | m | `[]` | Phase phreatic polyline, y (used when `water_override`) |

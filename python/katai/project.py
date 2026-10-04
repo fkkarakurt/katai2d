@@ -608,7 +608,7 @@ class _Phases:
     def _add(self, name, ptype, *, activate=(), deactivate=(), duration=None,
              steps=None, tolerance=None, load_steps=None, max_iterations=None,
              apply_fraction=None, ignore_undrained=None, reset_small_strain=None,
-             design=None, water=None):
+             design=None, water=None, dry=(), wet=(), pore_pressure=None, region_water=None):
         ph = _core.Phase()
         ph.name = name
         ph.type = ptype
@@ -636,7 +636,14 @@ class _Phases:
         # prj.water.table() is; writing a one-point wy with an empty wx produced a project the
         # validator refused ("0 x-value(s) but 1 y-value(s)"), which made the documented
         # scalar form unusable.
-        if water is not None:
+        # A phase that names no water keeps the water of the phase before it (build()), as a new
+        # phase in the Studio does and as the conditions of a staged construction carry over;
+        # water="project" returns to the project's own table.
+        if isinstance(water, str):
+            if water != "project":
+                raise ValueError(f'water must be a level, a list of (x, y) points or "project", '
+                                 f'not {water!r}')
+        elif water is not None:
             ph.water_override = True
             if isinstance(water, (int, float)):
                 ph.wx = []                                    # spans, filled at build
@@ -651,6 +658,24 @@ class _Phases:
         if tolerance is not None: ph.tolerance = tolerance
         if load_steps is not None: ph.load_steps = load_steps
         if max_iterations is not None: ph.max_iterations = max_iterations
+        # Dry regions: an excavated region whose space holds no free water from this phase on (a
+        # tunnel kept dry, a pit pumped dry); wet=[...] lets the water back in. By default an
+        # excavated region below the water table holds the water standing in it.
+        self._prj._phase_dry.append((list(dry), list(wet)))
+        # Region water: {region: level} gives a region a hydrostatic level of its own,
+        # {region: "interpolate"} interpolates its pore pressure with depth between the regions
+        # above and below it, {region: "table"} returns it to the water table. It carries over to
+        # later phases like the water itself.
+        self._prj._phase_rwater.append(dict(region_water or {}))
+        self._prj._phase_water_set.append(water is not None)
+        # pore_pressure="flow": this phase's pore pressures from a steady groundwater flow on its
+        # active ground (Phase.pore_from_flow); "phreatic" from the water table. Unset = as the
+        # phase before, like the water itself.
+        if pore_pressure is not None:
+            if pore_pressure not in ("flow", "phreatic"):
+                raise ValueError(f'pore_pressure must be "flow" or "phreatic", not {pore_pressure!r}')
+            ph.pore_from_flow = pore_pressure == "flow"
+        self._prj._phase_pore_set.append(pore_pressure is not None)
         self._prj._phase_toggles.append((ph, list(activate), list(deactivate)))
         return _PhaseBuilder(self._prj, ph)
 
@@ -662,7 +687,33 @@ class _Phases:
         drained for this phase (no new excess pore pressure; what earlier phases
         generated is kept); ``reset_small_strain=True`` clears the HS-small
         strain history first, so the soil meets this phase at G0 instead of the
-        stiffness the earlier phases degraded it to."""
+        stiffness the earlier phases degraded it to.
+
+        An excavated region below the water table holds the water standing in it,
+        and that water presses on the ground around it. ``dry=[region, ...]``
+        keeps the named excavated regions dry from this phase on (a tunnel, a pit
+        pumped dry); ``wet=[...]`` lets the water back in.
+
+        ``region_water={region: level}`` gives a region a hydrostatic water level
+        of its own; ``{region: "interpolate"}`` makes its pore pressure vary
+        linearly with depth between the regions above and below it (the ground
+        between a pit floor pumped dry and the toe of its wall, the way a design
+        analysis states the water there without solving its flow);
+        ``{region: "table"}`` returns it to the water table. Carried over to
+        later phases like the water itself.
+
+        ``water=y`` or ``water=[(x, y), ...]`` sets this phase's water table; a
+        phase that names no water keeps the previous phase's, and
+        ``water="project"`` returns to the project's own table.
+
+        ``pore_pressure="flow"`` takes this phase's pore pressures from a steady
+        groundwater flow on its active ground: below the water table every
+        boundary of that ground (the model's sides, the faces an excavation
+        exposes) is held at the table's head, above it is a seepage face, the
+        base is closed, and a wall drawn with ``barrier="impermeable"`` closes
+        its line -- so water flows under a cut-off wall towards a pit pumped
+        down to its floor. ``"phreatic"`` returns to the water table. Unset =
+        as the phase before."""
         return self._add(name, _core.PhaseType.Plastic, **kw)
 
     def consolidation(self, name, *, duration=None, steps=None, until_degree=None,
@@ -822,6 +873,10 @@ class Project:
         self._initial_exclude = []
         self._initial_numerics = {}
         self._phase_toggles = []
+        self._phase_dry = []
+        self._phase_rwater = []
+        self._phase_water_set = []
+        self._phase_pore_set = []
         self.materials = _Materials(self)
         self.geometry = _Geometry(self)
         self.water = _Water(self)
@@ -937,7 +992,35 @@ class Project:
 
         # Staged phases: inherit the previous phase's effective state.
         phases = []
-        for ph, activate, deactivate in self._phase_toggles:
+        dry_state = [0] * len(self._polygons)
+        rw_mode = [0] * len(self._polygons)
+        rw_level = [0.0] * len(self._polygons)
+        for k, (ph, activate, deactivate) in enumerate(self._phase_toggles):
+            for h in self._phase_dry[k][0]:
+                if not isinstance(h, RegionHandle):
+                    raise ValueError(f"only a soil region can be dry, not {h!r}")
+                dry_state[h.index] = 1
+            for h in self._phase_dry[k][1]:
+                if not isinstance(h, RegionHandle):
+                    raise ValueError(f"only a soil region can be wet, not {h!r}")
+                dry_state[h.index] = 0
+            if 1 in dry_state:
+                ph.poly_dry = list(dry_state)
+            for h, rule in self._phase_rwater[k].items():
+                if not isinstance(h, RegionHandle):
+                    raise ValueError(f"region_water takes soil regions, not {h!r}")
+                if isinstance(rule, str):
+                    if rule not in ("interpolate", "table"):
+                        raise ValueError(f'region_water: a level, "interpolate" or "table", not {rule!r}')
+                    rw_mode[h.index] = 2 if rule == "interpolate" else 0
+                else:
+                    rw_mode[h.index] = 1
+                    rw_level[h.index] = float(rule)
+            # Only a Plastic or Safety phase states region water; a consolidation, flow or dynamic
+            # phase computes its own pore pressures, so the setting waits for the next one.
+            if any(rw_mode) and ph.type in (_core.PhaseType.Plastic, _core.PhaseType.Safety):
+                ph.poly_water = list(rw_mode)
+                ph.poly_water_level = list(rw_level)
             touched_loads = touched_polys = touched_disps = False
             touched_hydros = touched_structs = False
             for h in activate + deactivate:
@@ -980,6 +1063,18 @@ class Project:
             # A phase's horizontal water table spans the model, like the project's own.
             if ph.water_override and not ph.wx:
                 ph.wx = [pr.x_min, pr.x_max]
+            # THE WATER CARRIES OVER. A phase that names no water keeps the previous phase's, the
+            # way a new Studio phase is a copy of the one before it. It used to fall back to the
+            # project's table: a Safety phase after a dewatering step filled the excavation again
+            # -- the search took the difference for a change of this phase and applied it at full
+            # strength, with the water in the pit holding the walls back.
+            if not self._phase_water_set[k] and phases:
+                prev = phases[-1]
+                ph.water_override = prev.water_override
+                ph.wx = list(prev.wx)
+                ph.wy = list(prev.wy)
+            if not self._phase_pore_set[k] and phases:
+                ph.pore_from_flow = phases[-1].pore_from_flow
             phases.append(ph)
         pr.phases = phases
         return pr

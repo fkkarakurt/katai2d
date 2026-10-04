@@ -13,10 +13,10 @@ StepResult ssc_substep(const Params& P, const softsoil::Params& S,
     const double ppfloor = std::max(ccot, softsoil::kPmin);
 
     // --- The same exponentially exact elastic predictor as SS ---------------------------------
-    const double p_c = std::max(sig_c.mean(), softsoil::kPmin);
+    const double p_c = sig_c.mean();
     const double dv = deps.sum();
-    const double p_tr = std::max(p_c * std::exp(dv / P.kap_star), softsoil::kPmin);
-    const double K_tr = p_tr / P.kap_star;
+    const double p_tr = softsoil::mean_after(p_c, dv, P.kap_star);
+    const double K_tr = softsoil::bulk_at(p_tr, P.kap_star);
     const double G = 1.5 * K_tr * (1.0 - 2.0 * P.nu_ur) / (1.0 + P.nu_ur);
     const Eigen::Vector3d de = deps - Eigen::Vector3d::Constant(dv / 3.0);
     const Eigen::Vector3d s_dev_c = sig_c - Eigen::Vector3d::Constant(sig_c.mean());
@@ -59,7 +59,7 @@ StepResult ssc_substep(const Params& P, const softsoil::Params& S,
             const Eigen::Vector3d mdev = m - Eigen::Vector3d::Constant(1.0 / 3.0);
 
             auto state_at = [&](double L, Eigen::Vector3d& sL, double& ppL) {
-                const double pL = std::max(p_tr * std::exp(-L / P.kap_star), softsoil::kPmin);
+                const double pL = softsoil::mean_after(p_tr, -L, P.kap_star);
                 sL = Eigen::Vector3d::Constant(pL) +
                      (sig_tr - Eigen::Vector3d::Constant(sig_tr.mean())) - L * 2.0 * G * mdev;
                 ppL = std::max(out.pp * std::exp(L / (P.lam_star - P.kap_star)), ppfloor);

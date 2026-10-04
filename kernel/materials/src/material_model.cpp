@@ -176,10 +176,10 @@ SsReturnCore ss_return_core(const softsoil::Params& P,
     // deviatoric with G at the trial p — the SAME formula pair as ss_step's predictor
     // (guarantees the inversion below matches to round-off).
     const double mean_c = (cxx + cyy + comm_zz) / 3.0;
-    const double p_c = std::max(-mean_c, softsoil::kPmin);            // compression-positive
+    const double p_c = -mean_c;                                       // compression-positive
     const double dv = -(de4(0) + de4(1) + de4(3));                    // compression-positive Δε_v
-    const double p_tr = std::max(p_c * std::exp(dv / P.kap_star), softsoil::kPmin);
-    const double K_tr = p_tr / P.kap_star;
+    const double p_tr = softsoil::mean_after(p_c, dv, P.kap_star);
+    const double K_tr = softsoil::bulk_at(p_tr, P.kap_star);
     const double G = 1.5 * K_tr * (1.0 - 2.0 * P.nu_ur) / (1.0 + P.nu_ur);
     const double em = (de4(0) + de4(1) + de4(3)) / 3.0;
     const double sxx = -p_tr + (cxx - mean_c) + 2.0 * G * (de4(0) - em);
@@ -212,9 +212,9 @@ SsReturnCore ss_return_core(const softsoil::Params& P,
 
     // Principal Δε = the exact inverse of the elastic law between the two states (the
     // principal mean = the tensor mean, so the p's match the ones above to round-off).
-    const double p_n_p = std::max(sig_n_cp.mean(), softsoil::kPmin);
-    const double p_tr_p = std::max(sig_tr_cp.mean(), softsoil::kPmin);
-    const double dv_p = P.kap_star * std::log(p_tr_p / p_n_p);
+    const double p_n_p = sig_n_cp.mean();
+    const double p_tr_p = sig_tr_cp.mean();
+    const double dv_p = softsoil::strain_between(p_n_p, p_tr_p, P.kap_star);
     const Eigen::Vector3d ddev =
         ((sig_tr_cp - Eigen::Vector3d::Constant(sig_tr_cp.mean())) -
          (sig_n_cp - Eigen::Vector3d::Constant(sig_n_cp.mean()))) / (2.0 * G);

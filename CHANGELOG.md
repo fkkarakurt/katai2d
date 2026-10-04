@@ -6,6 +6,208 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A staged phase can take its pore pressures from a steady groundwater flow
+
+A Plastic or Safety phase can now take its pore pressures from a steady-state groundwater flow on
+the ground active in it, instead of the water line (`flowpore` in the file, `pore_pressure="flow"`
+in Python, a check box on the Studio's Water tab). Below the water line every boundary of that
+ground -- the model's sides and the faces an excavation exposes -- is held at the line's head;
+above it is a seepage face; the base is closed; and a wall or interface made impermeable closes its
+line. Water then flows under a cut-off wall towards a pit pumped down to its floor, and the pore
+pressure in front of the wall is that of the flow rather than of two separate hydrostatic levels.
+This was refused before: a flow result could only drive a single phase, and with a wall it reached
+the ground from one side only, so the difference of water pressure on the wall was missing from
+its forces. The flow is now solved on the deformation mesh itself, each side of a wall on its own
+nodes. Checked three ways: with one water line it is hydrostatic to 4e-13 kPa; with a full cut-off
+down to the closed base each side is hydrostatic at its own line and the wall carries the moment
+of the same two lines under the phreatic path (22.96 against 22.88 kNm/m); with a wall stopping
+half way, the head rises in front of it and falls behind it. A cut-off wall ending on the model's
+boundary no longer leaks through its shared end node.
+
+### A region can have a water level of its own, or interpolated water
+
+A Plastic or Safety phase can now give a soil region a pore pressure of its own (`pwater` /
+`pwlevel` in the file, `region_water=` in Python): a hydrostatic level of the region's own -- the
+pit lowered to its floor while the ground around it keeps the water table -- or a pore pressure
+interpolated linearly with depth between the regions above and below it -- the ground between a
+pit floor pumped dry and the toe of its wall, where the water arriving from outside meets the
+pumped level. That is how a design analysis usually states the water under an excavation without
+solving its flow, and a benchmark specified that way could not be rebuilt before: with the water
+hydrostatic from the floor instead, the passive ground at the toe carried about twice the
+effective stress it is meant to. On the ERTC7 propped-wall benchmark (Schweiger 2006), whose
+reference study states its water exactly this way, the factor of safety was 12% above the
+published curve with the water hydrostatic from the floor; with the interpolated water it lies
+within -2.1% and +1.8% of it for embedments of 2 to 4.5 m (1.337 against 1.34 at 3 m), and the
+wall moment and strut force within 2% from 3 m down. Checked against the closed forms: the interpolated pore pressure
+is linear from the floor to the water table's value below to 1e-4 kPa, a region's own level is
+hydrostatic from it, and a region left on the water table is the water table bit for bit.
+
+### Soil dug out in a phase whose pore pressures come from a flow no longer weighs on the floor
+
+A phase whose pore pressures come from a groundwater flow assembled the self-weight of every
+element, the excavated ones included, so part of the weight of the soil dug out of a pit stayed on
+the shared nodes of its floor: an excavated column heaved 10.01 mm where one-dimensional unloading
+gives 10.70 (and the same phase on the water table 10.68). It now leaves the excavated elements
+out, as the water-table path always did. Every staged phase with flow pore pressures and an
+excavation is affected.
+
+### Hydraulic heave is checked below exposed ground
+
+A phase whose pore pressures come from a groundwater flow now checks the ground below every
+upward-facing exposed surface standing in water -- an excavation floor, flooded or pumped dry -- for
+hydraulic heave. Column by column, at every depth, the submerged weight of the ground above is set
+against the water pressure in excess of hydrostatic: the stress form of the heave limit state,
+which is the critical gradient over the gradient averaged over that depth. The least ratio and
+where it was found are reported (K2D-A024), and a ratio under 1 is a warning (K2D-A025): the
+ground there has no vertical effective stress left and lifts, which a converged deformation
+analysis need not show -- a soil with cohesion can carry the tension over a thin layer. On a
+uniform upward gradient the ratio is gamma'/(gamma_w i) to round-off at every depth, on 6- and
+15-noded elements; in front of a cut-off wall with a pit pumped dry it is found beside the wall at
+the depth of its toe, 4.55 against 4.56 read by hand from the heads on the wall's face. Side
+friction and soil strength are not counted, and no partial factors are applied.
+
+A node on an impermeable wall now takes the water table of its own side. A table drawn with a
+step at the wall gave a node on the wall itself the mean of the two levels: the corner of a pit
+floor pumped to -4 m beside a wall holding -1 m behind it was held at -2.5 m, and the exit gradient
+beside the wall grew without bound as the mesh was refined (a heave ratio of 2.13, 1.08 and under 1
+on elements of 1, 0.5 and 0.25 m; now 4.55, 4.25 and 4.04, converging on the column at the wall).
+On the tutorial's anchored excavation with flow pore pressures both pit corners had been held 3 m
+above the pit's water: its factor of safety on 6-noded elements moves from 1.615 to 1.726, and on
+15-noded elements the Safety phase, which could not be started because the dewatering phase before
+it collapsed at 99% of its load, now runs to 1.555 (published about 1.49). The heave ratio there
+is 6.36, below the pit floor at the depth of the walls' toes.
+
+### A script phase keeps the water of the phase before it
+
+In a Python script, a phase that named no water fell back to the project's water table, where a
+new phase in the Studio is a copy of the one before it, water included. A Safety phase after a
+dewatering step therefore filled the excavation again -- and the search took that for a change
+of its own and applied it at full strength, the water in the pit holding the walls back. On the
+tutorial's anchored excavation (6-noded, 2 m mesh) the factor of safety was 1.847; with the
+dewatered water kept it is 1.597, against the published 1.49. A phase that names no water now
+keeps the previous phase's; `water="project"` returns to the project's own table.
+
+### The factor of safety follows the strength path by arc length: faster, and no longer set by the stopping rule
+
+The strength-reduction search prescribed the factor at every step and solved for the equilibrium
+there. Near the factor of safety that equilibrium exists but lies far along the developing
+mechanism -- on a c-phi slope the last 0.5% of the factor carried the displacement from 9.5 to
+78 mm -- and a step asked for it either crawled for hundreds of iterations or was given up. Those
+steps were most of the run time, and what the search reported depended on how tightly its steps
+were solved: 1.3903 at a tolerated residual of 1e-3 and 1.3838 at 1e-4 with small steps, 1.3874
+with the steps it used -- every one of them above the converged answer, the unsafe side.
+
+The factor is now an unknown of the solve. Each step prescribes the length of the displacement
+increment (an arc-length constraint) and solves for the displacement and the factor together, so
+the steps stay small and well posed up to the limit, and the factor of safety is read where the
+path stops rising: at its peak, or where it has risen less than the resolution over each of two
+successive doublings of the displacement. On the same slope the factor is 1.38680, 1.38665 and
+1.38680 at 1e-3, 1e-4 and 1e-5, in 19 s instead of 48; on 15-noded elements 1.3658 in 101 s
+where the old search took 418 s for 1.3731 (1.3624 at 1e-5). The tutorial embankment's drained
+factor is 1.8305 (published about 1.8) in 171 s instead of 264. A path that cannot be started
+falls back to the prescribed search.
+
+The continuation is used for ground without structures. A plate, anchor, geogrid or pile keeps
+its own strength while the soil's is reduced, so once the ground has formed a mechanism the
+structure takes the load on and the path keeps rising with the displacement -- there is no
+plateau to read: on the tutorial's anchored excavation it walked to 3.8 m of displacement for a
+factor of 1.852 where the prescribed search stops at 1.847 in a quarter of the time. With
+structures the prescribed search is kept. A factorization is now also reused when the same matrix is
+solved again, which the arc-length step does for its second right-hand side.
+
+### Hardening Soil's cap hardens with the cohesion shift of the model's own law
+
+The cap of the Hardening Soil model hardens with the pre-consolidation stress shifted by
+c cot(phi), like the model's other stress-dependent laws:
+d eps_v^pc / d p_c is proportional to ((p_c + c cot phi)/(p_ref + c cot phi))^-m. The shift was
+missing, which made a cohesive soil's cap too soft at low stress -- by 7% at 50 kPa and 26% at
+20 kPa for c = 5 kPa, phi = 29 degrees, m = 0.8. The cap parameters are calibrated on the
+oedometer through the same law, so they follow it; a cohesionless soil is unchanged bit for bit.
+
+### An increment that cannot reach its tolerance is no longer ground for hundreds of iterations
+
+An increment whose Newton iteration stagnates is kept at its best iterate when that is within
+1e-3 of the load scale (K2D-A019) -- but only after every retry had been spent on it, and on a
+phase whose tolerance is out of reach that is every increment: an embankment built on clay
+(Mohr-Coulomb, 15-noded) took 3478 iterations for 20 increments, each accepted at about 1e-4 in
+the end, in 396 s. An increment whose best iterate is already inside that band and whose residual
+has not fallen by a tenth over its last thirty iterates is accepted there, on the same terms and
+counted the same way. The embankment now takes 79 s for a displacement field the same to 0.004%.
+An iteration that is still converging never meets the rule, so every phase that reached its
+tolerance before reaches it now: the Hoek-Brown tunnel, the Prandtl footing and the sliding block
+are unchanged.
+
+### A prescribed displacement is imposed once
+
+A prescribed displacement was imposed again in every phase in which it stayed active: a footing
+pushed 10 mm, followed by a phase that changed nothing, settled to 20 mm. It is now imposed by the
+phase that activates it; a following phase in which it stays active holds its nodes where they
+are, as an unchanged load adds nothing, and a phase that switches it off releases them.
+
+### A node moved and then held stays where it was moved to
+
+A node on a fixed boundary that a prescribed displacement moved (a tunnel contraction reaching
+the symmetry axis, a footing edge on the model side) stays where it was moved to once the
+displacement is switched off, and the boundary holds it. The structures read such a node as if it
+had never moved: a plate through it saw it spring back, and a plate installed afterwards was
+reported against the moved node with nothing taken off for its installation -- a tunnel lining
+installed after the contraction showed +51 800 kN/m in its element at the axis next to -583 kN/m
+in its neighbours. Structures now read the held node at its position, and a plate installed on
+it starts stress-free.
+
+### Excavated regions can be kept dry
+
+An excavated region below the water table holds the water standing in it, and that water presses
+on the ground around it -- right for a pit left to flood, wrong for a tunnel or a pit pumped dry,
+where it pushed the crown up and turned the surface settlement over a shield tunnel into a heave.
+A phase can now name excavated regions as dry (`dry` in the file, `dry=[...]` in Python, `wet=[...]`
+to let the water back in): their faces carry no water. The floor of a pit dug 4 m below the water
+table heaves by (gamma_sat - gamma_w) h H / E_oed with the water left in it and by
+gamma_sat h H / E_oed kept dry, both to the closed form.
+
+### Soft Soil stands still in its own K0 state with the water table at the surface
+
+Soft Soil and Soft Soil Creep hold their bulk modulus at no less than that of 1 kPa of mean
+stress, so that the stiffness p'/kappa* does not vanish at a stress-free point. The floor also
+clamped the STRESS: a point committed below 1 kPa was handed back at 1 kPa under zero strain. With
+the water table at or above the ground surface the effective stress near the top is below that,
+so a K0 phase on level ground, whose seed is an equilibrium, moved the column by 1.26 mm. The floor
+now applies to the stiffness only: above 1 kPa the kappa* law is exact as before, below it the mean
+stress changes linearly with the floored modulus, continuous in value and slope. The column stands
+still to zero, and every Soft Soil and Soft Soil Creep verification is unchanged.
+
+### An initial phase on sloping ground no longer stops part way
+
+The equilibrium step of an initial phase on non-level ground (and any plastic step that starts to
+creep) raised a "stall floor" -- a share of the elastic stiffness in the plastic points' tangent --
+while its Newton steps kept being cut. With non-associated flow the stiffened direction need not
+descend either, and the floor kept climbing until the step was abandoned: a cohesive slope's K0
+phase on 15-noded elements (phi = 30, psi = 0) stopped at 61% of its load with "did not converge",
+and so did the same slope with a Soft Soil layer, on any tolerance. A step that finds no descent
+now hands the next one back to Newton's own direction; both phases complete, and the slope that
+the floor was introduced for still runs in seconds.
+
+An increment whose Newton direction stops descending, every retry spent, is now re-entered once
+with the elastic tangent at its plastic points, full steps and no demand that the residual fall
+at every step -- the initial-stiffness iteration, a contraction that converges where a
+non-associated Newton direction on a non-smooth surface does not descend, but whose residual may
+rise for an iterate on its way. Only increments Newton has already given up on take it. On a sweep
+of initial phases (Mohr-Coulomb and Soft Soil; one and three layers, level and sloping ground, with
+and without water, K0 and gravity loading, 6- and 15-noded elements: 64 models), the failures fell
+from 19 to 4, all of them K0 phases on sloping ground with 15-noded elements. Those four are now
+solved too: a K0 phase on non-level ground whose equilibrium step does not close is solved again by
+gravity loading -- the procedure for non-level ground, which ran every one of them -- and the run
+says so (K2D-A022). All 64 initial phases complete; the Hardening Soil and HS small runs of the same
+sweep had no failures.
+
+### A model with no boundary conditions drawn gets the standard ones
+
+A model with no boundary conditions was refused ("No boundary conditions"). It now gets the
+conditions a soil model is built with unless there is a reason for others -- the base fully fixed,
+the left and right sides fixed horizontally, every other edge free -- and the run says so
+(K2D-A021). The result is the same field, bit for bit, as the same model with those conditions
+drawn.
+
 ### A factor of safety for Hardening Soil and Soft Soil, in minutes and independent of the path
 
 Started from the phase before it, a Safety phase could reduce the strength of a Hardening Soil or
@@ -17,11 +219,6 @@ phi', psi and nu_ur and a stiffness taken from the state the phase starts from (
 embankment of a published tutorial gives 1.821 on 15-noded elements against 1.8 published (and
 1.823 with the same strength modelled in Mohr-Coulomb), with the Safety phase itself in about two
 minutes.
-
-The search itself also stopped spending most of its time on steps it only halves: a reduction
-step far from the final bracket that does not converge is abandoned as soon as it stops making
-progress, without the stronger retries (the consistent tangent, the non-monotone line search)
-that decide nothing there. Steps within two resolutions of the bracket keep every retry.
 
 ### Plates that meet are joined rigidly
 

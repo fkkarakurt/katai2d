@@ -368,6 +368,11 @@ public:
     // and therefore the residual an increment has to drive to tolerance, is exactly the same,
     // so a floor can change how an answer is reached and never what the answer is.
     double vertex_floor = 0.0;
+    // Every plastic stress point hands the tangent its ELASTIC operator instead of its plastic
+    // one: the initial-stiffness iteration the Newton loop falls back on for an increment whose
+    // Newton direction stopped descending (see elastic_mode in the solver). Like the floor it
+    // changes only how an answer is reached: the internal force is untouched.
+    bool elastic_tangent = false;
 
     // Internal-force (and, if build_tangent, consistent-tangent) assembly. Since Δε = B·du_e,
     // f_int is a pure function of du_free (of u_free+du_free for structural elements) given
@@ -404,7 +409,11 @@ public:
         const auto u_at = [&](int gdof) -> double {
             const int eq = dofs.equation(gdof);
             if (eq >= 0) return u_free(eq) + du_free(eq);
-            return has_presc ? ramp.total * (*ramp.presc)(gdof) : 0.0;
+            // A fixed DOF stays where the phase found it (Structures::fixed_datum) and moves by
+            // the share of its prescribed displacement applied so far.
+            const double held = gdof < structures.fixed_datum.size() ? structures.fixed_datum(gdof)
+                                                                     : 0.0;
+            return held + (has_presc ? ramp.total * (*ramp.presc)(gdof) : 0.0);
         };
         // What a structural element reads: the total displacement less the datum of the phase it
         // was installed in (Structures::install_datum), on a free DOF. install < 0 is the zero
@@ -413,8 +422,11 @@ public:
         const auto u_el = [&](int gdof, int install) -> double {
             if (install < 0) return u_at(gdof);
             const int eq = dofs.equation(gdof);
-            return eq >= 0 ? u_at(gdof) - structures.install_datum[(size_t)install](eq)
-                           : u_at(gdof);
+            if (eq >= 0) return u_at(gdof) - structures.install_datum[(size_t)install](eq);
+            const Eigen::VectorXd* fx = (size_t)install < structures.install_fixed.size()
+                                            ? &structures.install_fixed[(size_t)install]
+                                            : nullptr;
+            return u_at(gdof) - (fx && gdof < fx->size() ? (*fx)(gdof) : 0.0);
         };
 
         Eigen::VectorXd f_int = Eigen::VectorXd::Zero(neq);
@@ -495,7 +507,7 @@ public:
                     mp = &mg;
                 }
                 const MaterialModel& matg = *mp;
-                const bool floor_here = build_tangent && vertex_floor > 0.0;
+                const bool floor_here = build_tangent && (vertex_floor > 0.0 || elastic_tangent);
                 if (probe || floor_here) rep = typename Kin::Report{};
                 Kin::integrate(matg, committed[gi], dstrain, trial[gi], dt, tm, dt_day,
                                (probe || floor_here) ? &rep : nullptr, substep_tol);
@@ -511,7 +523,10 @@ public:
                 // otherwise elastic and not one stress point at the apex. So the floor is added
                 // to every plastic point's tangent, not substituted for a zero one. See
                 // vertex_floor.
-                if (floor_here && rep.plastic) dt += vertex_floor * rep.elastic;
+                if (floor_here && rep.plastic) {
+                    if (elastic_tangent) dt = rep.elastic;
+                    else dt += vertex_floor * rep.elastic;
+                }
                 typename Kin::Strain sigma = Kin::stress(trial[gi]);
                 if (probe) {
                     LocalErrorPartial& acc = probe_buf_[e];

@@ -135,7 +135,11 @@ int main() {
     // So what is asserted is the DIRECTION, which is physics and does not decay, and a BOUND on
     // the magnitude, which is the measurement. Both can fail: a looser rule reporting a LOWER
     // factor would break the first, and a return of the old sensitivity would break the second.
-    check(fos[0] >= fos[1] && fos[1] >= fos[kDefault],
+    // Since 2026-10-01 the search follows the path by arc length and the stopping rule no longer
+    // moves the factor at all (1.421306 from 1e-1 to 1e-8); what is left is round-off in the
+    // self-weight solve, so the direction is asserted to within a part in a million.
+    const double ro = 1e-6 * fos[kDefault];
+    check(fos[0] >= fos[1] - ro && fos[1] >= fos[kDefault] - ro,
           "a looser stopping rule never reports a LOWER factor of safety: the error is "
           "one-sided, and the side it takes is the unsafe one");
     const double inflate = (fos[0] - fos[kDefault]) / fos[kDefault];
@@ -148,7 +152,7 @@ int main() {
     // steps compounded: +1.7% at 1e-2 and +26% at 1e-1. The steps are therefore held to the
     // search's own 1e-3 whatever the phase asks for (the looser rule still governs the
     // self-weight solve), and 1e-2 and 1e-1 now report the default's factor exactly.
-    check(inflate >= 0.0 && inflate < 0.05,
+    check(inflate >= -1e-6 && inflate < 0.05,
           "and a hundredfold relaxation of the stopping rule moves it by less than 5%, "
           "where it used to move it by more than 30%");
 

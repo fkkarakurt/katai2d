@@ -123,6 +123,24 @@ set_tests_properties(test_python_phase_inheritance PROPERTIES
 # reported as collapsing at a singular tangent, and a footing out of iterations after a first
 # iterate that strained one row of elements by the whole increment. Checked against Rankine
 # and against the same footing at three times the load steps.
+# Pore pressures of a staged phase from a steady groundwater flow: hydrostatic identity, a full
+# cut-off (each side at its own table, the wall's moment that of the phreatic path), flow under
+# the toe of a partial one.
+add_test(NAME test_python_flow_pore
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/flow_pore.py)
+set_tests_properties(test_python_flow_pore PROPERTIES
+  LABELS "python;api"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
+# Region water: a region's pore pressure from a level of its own or interpolated between the regions
+# above and below it, against closed forms; the dug soil's weight leaving the floor on the
+# head-field path as on the phreatic one.
+add_test(NAME test_python_region_water
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/region_water.py)
+set_tests_properties(test_python_region_water PROPERTIES
+  LABELS "python;api"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
 add_test(NAME test_python_solver_robustness
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/solver_robustness.py)
 set_tests_properties(test_python_solver_robustness PROPERTIES

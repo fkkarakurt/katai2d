@@ -193,6 +193,11 @@ struct PhaseIO {
     // Null (or a parent that is itself Dynamic) = no static state to add; the phase then reports the
     // dynamic action alone and says so.
     const SolveResult* prev = nullptr;
+    // The configuration of the phase whose state this one continues (the initial phase, or the
+    // last phase that committed one -- a Safety, transient-flow or dynamic phase does not). Read
+    // for what was already imposed there: a prescribed displacement active in both holds its nodes
+    // where the parent left them instead of being imposed a second time. Null = no parent.
+    const model::Phase* parent_config = nullptr;
 };
 
 // The construction seam between the project schema and the constitutive

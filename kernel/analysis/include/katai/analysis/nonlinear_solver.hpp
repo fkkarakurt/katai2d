@@ -13,6 +13,7 @@
 // This keeps katai_core independent of MKL/PARDISO (modularity). For an LE material
 // a single step reproduces the linear solution to round-off in ~2 iterations.
 
+#include <array>
 #include <functional>
 #include <vector>
 
@@ -28,6 +29,8 @@
 #include <katai/mesh/mesh.hpp>
 
 namespace katai::core {
+
+struct Structures;
 
 // Given K (CSR, equation_count×equation_count) and r, returns δ.
 using LinearSolve =
@@ -56,6 +59,9 @@ inline constexpr double kVertexFloor = 1.0e-3;
 // reachable, and a tolerance of 1e-2 moved it 0.6% on the one where it is not. Never silent: every
 // acceptance is counted and the phase says so (K2D-A019).
 inline constexpr double kStagnationAccept = 1.0e-3;
+// The iterates over which the residual must have fallen by a tenth for an increment inside that
+// band to count as still converging (the solver's "stagnation shown, not awaited").
+inline constexpr size_t kStagnationWindow = 30;
 
 struct NewtonOptions {
     int load_steps = 1;       // (initial) number of steps the external load is split into
@@ -135,13 +141,17 @@ struct NewtonOptions {
     // not the load -- gains nothing from a smaller increment of a load that is already applied,
     // so it passes 1 and fails at its first cut, after every retry has had its chance.
     double min_step_fraction = 0.125;
-    // An increment that fails is ABANDONED without the two stronger retries (the consistent
-    // tangent of the finite-difference models, the non-monotone line-search window). For a caller
-    // to whom a failure only means "try a smaller step" -- a strength-reduction step far from the
-    // final bracket -- those retries decide nothing and cost most of the search: measured on a
-    // Hardening Soil embankment, each failed reduction step spent 120 to 213 iterations and one
-    // to five minutes, a converged one 6 to 24 iterations. Off everywhere else.
-    bool quick_abandon = false;
+    // STRENGTH CONTINUATION (strength_reduction.cpp). Set, the solve does not apply a load: it
+    // follows the equilibrium path of the strength factor s from srf_start, s being an UNKNOWN
+    // solved together with the displacement under an arc-length constraint on the displacement
+    // increment. `srf_reduce` writes the strength of factor s into the copies it is handed
+    // (materials, structures, profiles). See solve_nonlinear_impl for the method.
+    std::function<void(std::vector<MaterialModel>&, Structures&, std::vector<MaterialProfile>&,
+                       double)> srf_reduce;
+    double srf_start = 1.0;
+    double srf_first_step = 0.1;
+    double srf_max = 3.0;
+    double srf_resolution = 1.0e-3;
 };
 
 // Plate (structural wall/beam) embedded in soil — 3-node Timoshenko beam (see
@@ -297,6 +307,20 @@ struct Structures {
     // datum and reads u itself, bit for bit: the state of every element in a chain whose structure
     // set never changed. Filled by the phase chain (structural_carry.hpp); empty = no cohorts.
     std::vector<Eigen::VectorXd> install_datum;
+    // THE DATUM OF A FIXED DOF. The equation-space datums above say nothing about a DOF with no
+    // equation, and reading such a DOF as zero is right only while its total displacement is
+    // zero. It is not when the DOF was moved before it was held: a prescribed displacement on a
+    // node that also lies on a fixed boundary moves it, and when the prescribed displacement is
+    // switched off the boundary holds the node WHERE IT IS. A structure through that node then
+    // saw it spring back to zero, and a structure installed later was reported against the moved
+    // node with no datum taken off it -- measured: a tunnel lining installed after a contraction
+    // that had moved its crown node 0.41 mm along the symmetry axis reported +51 800 kN/m in the
+    // element at the axis and -583 kN/m in its neighbours. Both vectors are FULL global-DOF
+    // vectors and are read on fixed DOFs only: `fixed_datum` is the total displacement the phase
+    // starts from, and install_fixed[k] the one cohort k was installed at (same indexing as
+    // install_datum). Empty = zero, which is every chain whose fixed DOFs never moved.
+    Eigen::VectorXd fixed_datum;
+    std::vector<Eigen::VectorXd> install_fixed;
 };
 
 // PARENT STRUCTURAL STATE (Track 1a; first in nonlinear dynamics, now in the static chain
@@ -406,6 +430,15 @@ struct NewtonResult {
     // was cut back: at most one per solve, because the floor then stays on. Non-zero means the
     // tangent went singular somewhere and the phase went on with the floor.
     int vertex_floor_retries = 0;
+    // Increments re-entered with the elastic tangent after their Newton direction stopped
+    // descending (the initial-stiffness fallback, elastic_mode in the solver).
+    int elastic_retries = 0;
+    // Strength continuation (NewtonOptions::srf_reduce): the largest strength factor the path
+    // reached in equilibrium, whether the path reached its limit there, and the path itself
+    // (factor, largest displacement) step by step.
+    double srf = 0.0;
+    bool srf_limit = false;
+    std::vector<std::array<double, 2>> srf_path;
     // Increments kept at a stagnated iterate (kStagnationAccept), and the largest relative
     // out-of-balance force any of them was kept at. Zero on a run that met its tolerance
     // everywhere; otherwise the answer carries that much unbalanced force and the phase says so.

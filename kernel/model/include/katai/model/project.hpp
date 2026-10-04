@@ -569,6 +569,45 @@ struct Phase {
     bool active_load(size_t i) const { return i >= load_active.size() || load_active[i]; }
     bool active_disp(size_t i) const { return i >= disp_active.size() || disp_active[i]; }
     bool active_hydro(size_t i) const { return i >= hydro_active.size() || hydro_active[i]; }
+    // DRY REGIONS: a soil region switched off in this phase whose space holds no free water -- a
+    // tunnel kept dry, a pit pumped dry. By default an excavated region below the water table
+    // holds the water that stands in it, and that water presses on the ground around it; a region
+    // flagged here does not. A MISSING entry counts as not dry, so every file written before the
+    // field existed reads as it did. It means nothing for an active region.
+    std::vector<char> poly_dry;
+    bool dry_poly(size_t i) const { return i < poly_dry.size() && poly_dry[i]; }
+    // REGION WATER: the pore pressure of one soil region in this phase, where the water table does
+    // not describe it. kRegionWaterTable (the default, and every missing entry) takes the phase's
+    // water table; kRegionWaterLevel puts a hydrostatic level of the region's own at
+    // poly_water_level[i] -- the pit lowered to its floor while the ground around it keeps the
+    // table; kRegionWaterInterpolate makes the pore pressure vary linearly with depth between the
+    // values just above and just below the region along each vertical -- the ground between a pit
+    // floor pumped dry and the toe of its wall, where the water arriving from outside meets the
+    // pumped level. That last is the classic way a design analysis states the water under an
+    // excavation without solving its flow; a benchmark specified that way (ERTC7) cannot be
+    // reproduced without it: hydrostatic water from the floor instead left the passive ground
+    // with twice the effective stress at the toe.
+    static constexpr int kRegionWaterTable = 0, kRegionWaterLevel = 1, kRegionWaterInterpolate = 2;
+    std::vector<int> poly_water;
+    std::vector<double> poly_water_level;
+    int water_mode(size_t i) const { return i < poly_water.size() ? poly_water[i] : 0; }
+    double water_level(size_t i) const {
+        return i < poly_water_level.size() ? poly_water_level[i] : 0.0;
+    }
+    bool any_region_water() const {
+        for (int m : poly_water)
+            if (m != kRegionWaterTable) return true;
+        return false;
+    }
+    // PORE PRESSURES FROM A STEADY-STATE GROUNDWATER FLOW CALCULATION instead of the phreatic
+    // line. The flow is solved on the ground active in this phase: below the water table (this
+    // phase's, else the project's) every boundary of that ground -- the model's sides and the faces
+    // an excavation exposes -- is held at the head of the table above it, above the table it is a
+    // seepage face, the base is closed, and a wall or interface marked impermeable closes the line
+    // it runs along. So water flows under a cut-off wall towards a pit pumped down to its floor,
+    // and the pore pressures in front of the wall are those of that flow, not of two separate
+    // hydrostatic levels. Off = the phreatic line, as every file written before it.
+    bool pore_from_flow = false;
 };
 
 // A soil region: an explicit polygon (drawn by the user) with a material. Classic, rock-solid:
@@ -647,8 +686,9 @@ struct Borehole {
 };
 
 // A line prescribed displacement: every mesh node on
-// the segment gets the set components IMPOSED (ramped 0 -> value over the phase, like a
-// load), the unset components stay free. A set component with value 0 is a rigid support
+// the segment gets the set components IMPOSED (ramped 0 -> value over the phase that activates
+// it, like a load; a following phase in which it stays active holds the nodes where they are, as
+// an unchanged load adds nothing), the unset components stay free. A set component with value 0 is a rigid support
 // line. Activated per phase exactly like loads (Phase::disp_active); the classic use is a
 // displacement-controlled rigid footing, whose force is then read from the reactions.
 struct PrescribedDisp {

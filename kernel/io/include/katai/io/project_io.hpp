@@ -7,6 +7,7 @@
 //
 // Round-trip equality across every model field is pinned by tests/test_project_io.cpp.
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -144,7 +145,20 @@ namespace katai::model {
 // same drawing with different compliance at the wall, which is the most sensitive place in a
 // retaining-wall model. Written only when set, so every older file is byte-identical below the
 // version line.
-inline constexpr int kProjectFileVersion = 19;
+// v20 (2026-10): DRY EXCAVATIONS (`phases[i].dry`) and PORE PRESSURES FROM STEADY GROUNDWATER
+// FLOW in a staged phase (`phases[i].flowpore`), which an older build would read as the phreatic
+// line -- two hydrostatic levels on either side of a cut-off wall instead of the flow under it. An excavated region below the water table holds
+// the water standing in it, which presses on the ground around it; a region named here holds none
+// -- a tunnel, a pit pumped dry. An older build reads no such key and floods every one of them: over
+// a shield tunnel the water pushed the crown up and the surface settlement came out as a heave.
+// Written only when a region is named, so every older file is byte-identical below the version line.
+// v21 (2026-10): REGION WATER (`phases[i].pwater`, `pwlevel`): a soil region's pore pressure in a
+// phase from a level of its own, or interpolated with depth between the regions above and below it
+// (Phase::poly_water). An older build reads no such key and gives the region the phase's water
+// table -- under a pit, hydrostatic water from the floor where the file states the water arriving
+// from outside, and twice the effective stress at the toe of the wall. Written only when a region
+// uses it, so every older file is byte-identical below the version line.
+inline constexpr int kProjectFileVersion = 21;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -388,6 +402,14 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     warr(o, "load", ph.load_active);
     warr(o, "disp", ph.disp_active);
     warr(o, "hydro", ph.hydro_active);
+    // Written only when a region is flagged dry, so a file that never uses it is unchanged.
+    if (std::find(ph.poly_dry.begin(), ph.poly_dry.end(), 1) != ph.poly_dry.end())
+        warr(o, "dry", ph.poly_dry);
+    if (ph.pore_from_flow) wfield(o, "flowpore", true);
+    if (ph.any_region_water()) {
+        warr(o, "pwater", ph.poly_water);
+        warr(o, "pwlevel", ph.poly_water_level);
+    }
     wfield(o, "water_override", ph.water_override);
     warr(o, "wx", ph.wx); warr(o, "wy", ph.wy);
     // Numerical controls, written only when SET (like the accelerogram above). Zero is "let the
@@ -444,6 +466,10 @@ inline Phase rphase(const Json& j) {
     ph.load_active = j.chars("load");
     ph.disp_active = j.chars("disp");
     ph.hydro_active = j.chars("hydro");
+    ph.poly_dry = j.chars("dry");
+    ph.pore_from_flow = j.flag("flowpore", false);
+    ph.poly_water = j.ints("pwater");
+    ph.poly_water_level = j.nums("pwlevel");
     ph.water_override = j.flag("water_override", ph.water_override);
     ph.wx = j.nums("wx"); ph.wy = j.nums("wy");
     ph.tolerance = j.num("tol", ph.tolerance);

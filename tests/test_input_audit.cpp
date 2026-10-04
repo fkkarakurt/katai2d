@@ -3,6 +3,15 @@
 //   (a) OCR raises the automatic K0 (elastic unloading: K0 = K0nc*OCR - nu/(1-nu)*(OCR-1)); it was
 //       silently ignored for MC/LE geostatics before -- pinned against the hand formula;
 //   (b) NC control: OCR = 1 leaves K0 = 1 - sin(phi) untouched;
+//   (b'') a model with no boundary conditions drawn gets the standard ones (base fully fixed, sides
+//       horizontally fixed) -- the same field, bit for bit, as the same model with them drawn;
+//   (b-water) a Safety phase whose water is not that of the phase before it says so (K2D-A023),
+//       and one that keeps it does not;
+//   (b-held) a prescribed displacement that stays active is held where the phase before left it,
+//       not imposed a second time (a footing pushed 10 mm, then a phase that changes nothing);
+//   (b-pit) an excavation below the water table: the water left standing in the pit presses on its
+//       floor (heave (gamma_sat - gamma_w) h H / E_oed), and a pit flagged dry does not
+//       (gamma_sat h H / E_oed) -- both closed forms of a laterally confined elastic column;
 //   (b') a POP raises it too, point by point: sigma'_h = K0nc (sigma'_v + POP) - nu/(1-nu) POP --
 //       the OCR formula at OCR = (sigma'_v + POP)/sigma'_v; it reached only the cap seed before;
 //   (c) Hardening Soil + Undrained (B) is REFUSED (it silently behaved like Undrained (A));
@@ -95,6 +104,147 @@ void test_pop_k0() {
                 k0_fe, k0_ex, 100.0 * (k0_fe - k0_ex) / k0_ex, k0nc);
     check(std::fabs(k0_fe - k0_ex) < 0.02 * k0_ex,
           "POP raises K0 per K0nc (s'v + POP) - nu/(1-nu) POP, at the depth it is read (2%)");
+}
+
+void test_standard_fixities() {
+    std::printf("-- (b'') no boundary conditions drawn: the standard ones apply --\n");
+    m::Project drawn = mc_column(1.0);
+    m::Project none = drawn;
+    for (auto& P : none.polygons) P.edge_bc.clear();
+    const auto M = katai::app::mesh_from_project(drawn, 0.5, 6);
+    const auto rd = katai::app::solve_phases(drawn, M.mesh, InitialPhase::GravityLoading);
+    const auto rn = katai::app::solve_phases(none, M.mesh, InitialPhase::GravityLoading);
+    const bool ok = rd.size() == 1 && rd[0].ok && rn.size() == 1 && rn[0].ok;
+    check(ok, "both columns solve");
+    if (!ok) return;
+    double d = 0.0;
+    for (Eigen::Index i = 0; i < rd[0].disp.size() && i < rn[0].disp.size(); ++i)
+        d = std::fmax(d, std::fabs(rd[0].disp[i] - rn[0].disp[i]));
+    bool noted = false;
+    for (const auto& dg : rn[0].diagnostics) noted |= dg.code == "K2D-A021";
+    std::printf("   largest difference %.3e m, K2D-A021 %s\n", d, noted ? "raised" : "missing");
+    check(rd[0].disp.size() == rn[0].disp.size() && d == 0.0,
+          "the standard conditions are the drawn ones, bit for bit (base full, sides horizontal)");
+    check(noted, "and the run says the standard conditions were applied (K2D-A021)");
+}
+
+void test_safety_water_change_note() {
+    std::printf("-- (b-water) a Safety phase that changes the water says so --\n");
+    const auto build = [](bool keep_water) {
+        m::Project pr;
+        m::Material s;
+        s.name = "Clay"; s.model = m::SoilModel::MohrCoulomb; s.E = 2.0e4; s.nu = 0.3;
+        s.c = 20.0; s.phi = 25.0; s.psi = 0.0; s.gamma_unsat = 18.0; s.gamma_sat = 20.0;
+        pr.materials.push_back(s);
+        m::SoilPolygon P; P.material = 0;
+        P.x = {0, 30, 30, 20, 10, 0}; P.y = {0, 0, 8, 8, 14, 14};
+        pr.polygons.push_back(P);
+        pr.has_water = true;
+        pr.wx = {-1.0, 31.0};
+        pr.wy = {6.0, 6.0};
+        m::Phase dewater; dewater.name = "Dewater"; dewater.type = m::PhaseType::Plastic;
+        dewater.water_override = true;
+        dewater.wx = {-1.0, 31.0};
+        dewater.wy = {2.0, 2.0};
+        m::Phase fos; fos.name = "FoS"; fos.type = m::PhaseType::Safety;
+        if (keep_water) { fos.water_override = true; fos.wx = dewater.wx; fos.wy = dewater.wy; }
+        pr.phases = {dewater, fos};
+        return pr;
+    };
+    const auto has_note = [](const m::Project& pr, bool& solved) {
+        const auto M = katai::app::mesh_from_project(pr, 1.5, 6);
+        const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::GravityLoading);
+        solved = res.size() == 3 && res[2].ok;
+        bool found = false;
+        if (res.size() == 3)
+            for (const auto& d : res[2].diagnostics) found = found || d.code == "K2D-A023";
+        return found;
+    };
+    bool ok_changed = false, ok_kept = false;
+    const bool changed = has_note(build(false), ok_changed);
+    const bool kept = has_note(build(true), ok_kept);
+    check(ok_changed && changed, "a Safety phase that falls back to the project water says so (K2D-A023)");
+    check(ok_kept && !kept, "a Safety phase that keeps the water of the phase before it does not");
+}
+
+void test_prescribed_displacement_held() {
+    std::printf("-- (b-held) a prescribed displacement that stays active is held, not re-imposed --\n");
+    m::Project pr;
+    m::Material s;
+    s.name = "Elastic"; s.model = m::SoilModel::LinearElastic; s.E = 2.0e4; s.nu = 0.3;
+    s.gamma_unsat = 18.0; s.gamma_sat = 20.0;
+    pr.materials.push_back(s);
+    m::SoilPolygon P; P.material = 0;
+    P.x = {0, 10, 10, 0}; P.y = {0, 0, 5, 5};
+    pr.polygons.push_back(P);
+    m::PrescribedDisp D; D.name = "Footing";
+    D.x1 = 0; D.y1 = 5; D.x2 = 2; D.y2 = 5; D.set_uy = true; D.uy = -0.01;
+    pr.disps.push_back(D);
+    pr.initial.disp_active = {0};
+    m::Phase push; push.name = "Push"; push.type = m::PhaseType::Plastic; push.disp_active = {1};
+    m::Phase same = push; same.name = "Unchanged";
+    pr.phases = {push, same};
+    const auto M = katai::app::mesh_from_project(pr, 1.0, 6);
+    const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
+    if (res.size() != 3 || !res[1].ok || !res[2].ok) {
+        check(false, "the push and the unchanged phase solve");
+        return;
+    }
+    int foot = -1;
+    for (int i = 0; i < M.mesh.node_count; ++i)
+        if (std::hypot(M.mesh.x[i], M.mesh.y[i] - 5.0) < 1e-9) foot = i;
+    const double u1 = res[1].disp[2 * foot + 1], u2 = res[2].disp[2 * foot + 1];
+    std::printf("   footing edge: push phase %.6f m, unchanged phase %.3g m, max|u| %.3g m\n", u1, u2,
+                res[2].max_disp);
+    check(std::fabs(u1 + 0.01) < 1e-12, "the push phase imposes the 10 mm");
+    check(std::fabs(u2) < 1e-12 && res[2].max_disp < 1e-9,
+          "a phase that keeps the displacement active and changes nothing moves nothing");
+}
+
+void test_submerged_and_dry_pit() {
+    std::printf("-- (b-pit) a pit dug below the water table: water left in it, or kept dry --\n");
+    constexpr double W = 20.0, H = 6.0, h = 4.0, E = 1.0e4, nu = 0.3, gsat = 20.0, gw = 9.81;
+    const double Eoed = E * (1.0 - nu) / ((1.0 + nu) * (1.0 - 2.0 * nu));
+    const auto build = [&](bool dry) {
+        m::Project pr;
+        m::Material s;
+        s.name = "Elastic"; s.model = m::SoilModel::LinearElastic; s.E = E; s.nu = nu;
+        s.gamma_unsat = gsat; s.gamma_sat = gsat;
+        pr.materials.push_back(s);
+        m::SoilPolygon lower; lower.material = 0;
+        lower.x = {0, W, W, 0}; lower.y = {0, 0, H, H};
+        m::SoilPolygon upper; upper.material = 0;
+        upper.x = {0, W, W, 0}; upper.y = {H, H, H + h, H + h};
+        pr.polygons = {lower, upper};
+        pr.has_water = true;
+        pr.wx = {-1.0, W + 1.0};
+        pr.wy = {H + h, H + h};
+        m::Phase dig;
+        dig.name = "Dig"; dig.type = m::PhaseType::Plastic;
+        dig.poly_active = {1, 0};
+        if (dry) dig.poly_dry = {0, 1};
+        pr.phases = {dig};
+        return pr;
+    };
+    const auto heave = [&](const m::Project& pr) {
+        const auto M = katai::app::mesh_from_project(pr, 0.5, 6);
+        const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
+        if (res.size() != 2 || !res[1].ok) return -1.0;
+        double v = 0.0; int n = 0;
+        for (int i = 0; i < M.mesh.node_count; ++i)
+            if (std::fabs(M.mesh.y[i] - H) < 1e-9) { v += res[1].disp[2 * i + 1]; ++n; }
+        return n ? v / n : -1.0;
+    };
+    const double wet = heave(build(false)), dry = heave(build(true));
+    const double wet_ex = (gsat - gw) * h * H / Eoed, dry_ex = gsat * h * H / Eoed;
+    std::printf("   water in the pit: heave %.6f m (closed form %.6f, %+.3f%%)\n", wet, wet_ex,
+                100.0 * (wet - wet_ex) / wet_ex);
+    std::printf("   pit kept dry:     heave %.6f m (closed form %.6f, %+.3f%%)\n", dry, dry_ex,
+                100.0 * (dry - dry_ex) / dry_ex);
+    check(wet > 0.0 && std::fabs(wet - wet_ex) < 0.01 * wet_ex,
+          "the water standing in the pit presses on its floor ((gamma_sat - gamma_w) h H / E_oed, 1%)");
+    check(dry > 0.0 && std::fabs(dry - dry_ex) < 0.01 * dry_ex,
+          "a pit kept dry carries no water on its floor (gamma_sat h H / E_oed, 1%)");
 }
 
 void test_hs_undrained_b_refusal() {
@@ -511,6 +661,10 @@ int main() {
     std::printf("INPUT AUDIT pins -- silently-ignored inputs now honest (fixed or refused)\n\n");
     test_ocr_k0();
     test_pop_k0();
+    test_standard_fixities();
+    test_safety_water_change_note();
+    test_prescribed_displacement_held();
+    test_submerged_and_dry_pit();
     std::printf("\n");
     test_hs_undrained_b_refusal();
     std::printf("\n");

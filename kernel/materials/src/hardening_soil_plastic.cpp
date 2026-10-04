@@ -415,7 +415,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     // the equilibrium iteration at 1e-3.) Only the stress-free point itself needs guarding, where
     // q/q_a is 0/0: q_a is kept above its value at a thousandth of the floor.
     const double qf_min = 2.0 * (law_cc + 1e-3 * plim * law_s) / (1.0 - law_s);
-    auto stiff_at = [&](const Eigen::Vector3d& s) {
+    auto stiff_compute = [&](const Eigen::Vector3d& s) {
         Stiff k;
         k.s3raw = s.minCoeff();
         k.s3 = std::max(k.s3raw, plim);
@@ -425,6 +425,24 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
         k.qf = 2.0 * (law_cc + k.s3raw * law_s) / (1.0 - law_s);
         k.qa = std::max(k.qf, qf_min) / p.Rf;
         k.De = detail::hs_elastic(k.Eur, nu);
+        return k;
+    };
+    // The same stress is asked for its stiffness several times in a row: one increment() reads the
+    // substep's start three times and its elastic trial twice (the onset test, the shear trial).
+    // Two remembered states, matched by EXACT equality -- the same input gives the same bits, so
+    // nothing the integration computes can change; only the repeated pow() and De are saved. Local
+    // to this call, so each stress point has its own.
+    Eigen::Vector3d memo_s[2];
+    Stiff memo_k[2];
+    int memo_n = 0, memo_next = 0;
+    auto stiff_at = [&](const Eigen::Vector3d& s) -> Stiff {
+        for (int i = 0; i < memo_n; ++i)
+            if (memo_s[i] == s) return memo_k[i];
+        const Stiff k = stiff_compute(s);
+        memo_s[memo_next] = s;
+        memo_k[memo_next] = k;
+        memo_next = 1 - memo_next;
+        if (memo_n < 2) ++memo_n;
         return k;
     };
     const Stiff k_n = stiff_at(sigma_n);   // the committed state, for the elastic default

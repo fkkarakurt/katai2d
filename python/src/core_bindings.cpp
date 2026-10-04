@@ -439,6 +439,21 @@ NB_MODULE(_core, m) {
             [](api::Phase& p, const std::vector<int>& v) {
                 p.disp_active.assign(v.begin(), v.end());
             })
+        .def_rw("pore_from_flow", &api::Phase::pore_from_flow,
+                "pore pressures from a steady-state groundwater flow on this phase's active ground")
+        .def_rw("poly_water", &api::Phase::poly_water,
+                "region water mode per soil region: 0 = the water table, 1 = a level of its own "
+                "(poly_water_level), 2 = interpolated between the regions above and below")
+        .def_rw("poly_water_level", &api::Phase::poly_water_level,
+                "the water level [m] of each region whose poly_water is 1")
+        .def_prop_rw(
+            "poly_dry",
+            [](const api::Phase& p) {
+                return std::vector<int>(p.poly_dry.begin(), p.poly_dry.end());
+            },
+            [](api::Phase& p, const std::vector<int>& v) {
+                p.poly_dry.assign(v.begin(), v.end());
+            })
         .def_prop_rw(
             "hydro_active",
             [](const api::Phase& p) {

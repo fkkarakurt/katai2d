@@ -10,10 +10,10 @@ StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c
     const double M = M_from_K0nc(P);
 
     // --- Exponentially EXACT elastic mean + deviatoric predictor with G at the trial p --------
-    const double p_c = std::max(sig_c.mean(), kPmin);
+    const double p_c = sig_c.mean();
     const double dev_v = deps.sum();
-    const double p_tr = std::max(p_c * std::exp(dev_v / P.kap_star), kPmin);
-    const double K_tr = p_tr / P.kap_star;
+    const double p_tr = mean_after(p_c, dev_v, P.kap_star);
+    const double K_tr = bulk_at(p_tr, P.kap_star);
     const double G = 1.5 * K_tr * (1.0 - 2.0 * P.nu_ur) / (1.0 + P.nu_ur);
     const Eigen::Vector3d de = deps - Eigen::Vector3d::Constant(dev_v / 3.0);
     const Eigen::Vector3d s_dev_c = sig_c - Eigen::Vector3d::Constant(sig_c.mean());
@@ -80,8 +80,8 @@ StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c
     auto exp_return = [&](const Eigen::Vector3d& s0, const Eigen::Vector3d& m, double L) {
         const double mv = m.sum();
         const Eigen::Vector3d mdev = m - Eigen::Vector3d::Constant(mv / 3.0);
-        const double p0 = std::max(s0.mean(), kPmin);
-        const double pL = std::max(p0 * std::exp(-L * mv / P.kap_star), kPmin);
+        const double p0 = s0.mean();
+        const double pL = mean_after(p0, -L * mv, P.kap_star);
         return Eigen::Vector3d(Eigen::Vector3d::Constant(pL) +
                                (s0 - Eigen::Vector3d::Constant(s0.mean())) - L * 2.0 * G * mdev);
     };

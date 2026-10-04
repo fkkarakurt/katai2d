@@ -88,6 +88,10 @@ KEY_TO_ATTR = {
     "load": "load_active",
     "disp": "disp_active",
     "hydro": "hydro_active",
+    "dry": "poly_dry",
+    "flowpore": "pore_from_flow",
+    "pwater": "poly_water",
+    "pwlevel": "poly_water_level",
     "hyd_res": "hydraulic_resistance",
 }
 
@@ -217,10 +221,18 @@ def coverage_project():
     ph.consol_first_step = 0.25
     ph.consol_max_steps = 750
     ph.poly_active = [1]
+    ph.poly_dry = [1]
+    ph.pore_from_flow = True
     ph.struct_active = [1]
     ph.load_active = [1]
     ph.disp_active = [1]
-    pr.phases = [ph]
+    # Region water (v21) is written only when a region uses it, and a phase takes its pore
+    # pressures from a flow OR from region rules, never both -- so a second phase carries it.
+    ph2 = core.Phase()
+    ph2.name = "Region water"
+    ph2.poly_water = [1]
+    ph2.poly_water_level = [-2.0]
+    pr.phases = [ph, ph2]
     return pr
 
 

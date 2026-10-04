@@ -99,6 +99,7 @@ katai_add_test(test_anchor_plastic katai::analysis)    # Anchor elastoplastic F_
 katai_add_test(test_geogrid katai::analysis)           # Geogrid tension-only axial membrane + N_p (P2.4)
 katai_add_test(test_interface katai::analysis)         # Interface (Goodman zero-thickness Coulomb, P2.4)
 katai_add_test(test_seepage katai::analysis)           # Steady-state confined seepage (Darcy/Laplace, P3)
+katai_add_test(test_hydraulic_heave katai::analysis)   # Hydraulic heave below exposed ground: uniform upward gradient, F = gamma'/(gamma_w i) to round-off
 katai_add_test(test_earth_pressure katai::analysis)    # Rankine active/passive lateral earth pressure (P2.4 excavation)
 katai_add_test(test_wall_split katai::analysis)        # Embedded wall mesh node splitting (barrier, P2.4)
 katai_add_test(test_embedded_wall katai::analysis)    # embedded wall cantilever: mesh split + plate extra DOFs + two interfaces

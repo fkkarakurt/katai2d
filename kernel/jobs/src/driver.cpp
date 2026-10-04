@@ -42,6 +42,7 @@
 #include <katai/fem/assembly/dof_map.hpp>
 #include <katai/fem/elements/interface.hpp>           // iface::InterfaceProps, interface_stiffness
 #include <katai/fem/elements/plate.hpp>               // PlateProps + set_plate_mass
+#include <katai/analysis/hydraulic_heave.hpp>       // the heave check after a phase with flow
 #include <katai/fem/elements/point_location.hpp>      // locate_point (is a point load on the mesh?)
 #include <katai/materials/linear_elastic.hpp>
 #include <katai/mesh/boundary_extraction.hpp>      // collect_chain + boundary edges (Stage B5)
@@ -142,11 +143,26 @@ static double element_size_at(const katai::mesh::Mesh& mesh, double x, double y)
 
 // Newton seam: the tangent changes on every iteration, the pattern does not.
 static katai::core::LinearSolve reusing_linear_solve(katai::linsolve::MatrixType type) {
-    return [s = std::shared_ptr<katai::linsolve::DirectSolver>(
-                katai::linsolve::make_direct_solver(type))](
-               const katai::math::CsrMatrix& k, const Eigen::VectorXd& r) {
-        s->factorize(k);
-        return s->solve(r);
+    // A matrix identical to the one factorized last (same pattern, same values) is solved
+    // against its factorization again: a bordered iteration solves two right-hand sides with
+    // one tangent, and refactorizing it for the second would double the solve's cost.
+    struct Cache {
+        std::shared_ptr<katai::linsolve::DirectSolver> solver;
+        katai::math::CsrMatrix last;
+        bool valid = false;
+    };
+    auto c = std::make_shared<Cache>();
+    c->solver = std::shared_ptr<katai::linsolve::DirectSolver>(katai::linsolve::make_direct_solver(type));
+    return [c](const katai::math::CsrMatrix& k, const Eigen::VectorXd& r) {
+        const bool same = c->valid && k.rows == c->last.rows && k.values == c->last.values &&
+                          k.col_indices == c->last.col_indices && k.row_ptr == c->last.row_ptr;
+        if (!same) {
+            c->valid = false;
+            c->solver->factorize(k);
+            c->last = k;
+            c->valid = true;
+        }
+        return c->solver->solve(r);
     };
 }
 
@@ -176,6 +192,305 @@ static double water_table_at(const model::Project& pr, double x, const model::Ph
     return katai::core::phreatic_surface_at(pr.wx, pr.wy, x);
 }
 
+// STEADY GROUNDWATER FLOW ON THE GROUND OF A STAGED PHASE (Phase::pore_from_flow). Solved on the
+// deformation mesh itself, as it is split along walls and interfaces, so the head comes out at the
+// very nodes the pore load is assembled on -- each side of a wall its own -- and nothing has to be
+// mapped between two meshes. The flow domain is the ground active in this phase. A line the water
+// cannot cross is a split the flow keeps (an impermeable wall or interface: its two sides are two
+// sets of nodes); every other split is rejoined, so water crosses a permeable or inactive one as if
+// it were not there. Boundary conditions, from the water table of the phase: every boundary face of
+// the active ground below the table is held at the table's head above it -- the model's sides and
+// the faces an excavation exposes alike -- a face above the table is a seepage face, the base is
+// closed, and so is a face that lies along an impermeable line. `joined` pairs (twin, original)
+// for every split the water crosses; `closed_lines` are the impermeable segments.
+static bool phase_flow_head(const model::Project& pr, const katai::mesh::Mesh& mesh,
+                            const std::vector<char>& act,
+                            const std::vector<std::pair<int, int>>& joined,
+                            const std::vector<std::array<double, 4>>& closed_lines,
+                            const model::Phase* config, Eigen::VectorXd& head, std::string& msg) {
+    const int per = mesh.nodes_per_element;
+    const auto on = [&](int e) { return act.empty() || act[e]; };
+    // Every split the water crosses is undone for the flow: a twin node stands for its original.
+    std::vector<int> canon(mesh.node_count);
+    for (int n = 0; n < mesh.node_count; ++n) canon[n] = n;
+    for (const auto& [twin, orig] : joined)
+        if (twin >= 0 && twin < mesh.node_count && orig >= 0 && orig < mesh.node_count) canon[twin] = orig;
+    for (int n = 0; n < mesh.node_count; ++n) {   // a chain of joins resolves to its root
+        int r = canon[n], guard = 0;
+        while (canon[r] != r && guard++ < 64) r = canon[r];
+        canon[n] = r;
+    }
+    katai::mesh::Mesh fm;
+    fm.x = mesh.x; fm.y = mesh.y;
+    fm.nodes_per_element = per;
+    fm.node_count = mesh.node_count;
+    std::vector<char> used(mesh.node_count, 0);
+    for (int e = 0; e < mesh.element_count; ++e) {
+        if (!on(e)) continue;
+        for (int i = 0; i < per; ++i) {
+            const int c = canon[mesh.connectivity[(size_t)e * per + i]];
+            fm.connectivity.push_back(c);
+            used[c] = 1;
+        }
+        fm.element_material.push_back(mesh.element_material[e]);
+    }
+    fm.element_count = (int)fm.element_material.size();
+    if (fm.element_count == 0) { msg = "No ground is active in this phase to carry a groundwater flow."; return false; }
+    // An impermeable line ENDING ON THE MODEL'S BOUNDARY -- a cut-off wall down to the base -- keeps
+    // its end node shared (the wall hangs from it), and through that one node the two sides would
+    // still exchange water. Measured on a full cut-off between two water levels: 4% of the head
+    // difference leaked through it. For the flow the node is split there, the elements on one side
+    // of the line taking a copy; a line ending inside the ground keeps its end shared, which is the
+    // water going round the end of a screen.
+    std::vector<char> on_boundary(mesh.node_count, 0);
+    for (int n : mesh.boundary_nodes) on_boundary[n] = 1;
+    std::vector<int> copy_of;   // flow-mesh copies appended past node_count: their original node
+    for (const auto& L : closed_lines) {
+        const double ex = L[2] - L[0], ey = L[3] - L[1], len = std::hypot(ex, ey);
+        if (len < 1e-12) continue;
+        for (int end = 0; end < 2; ++end) {
+            const double px = end ? L[2] : L[0], py = end ? L[3] : L[1];
+            int nd = -1;
+            for (int n = 0; n < mesh.node_count && nd < 0; ++n)
+                if (used[n] && on_boundary[n] &&
+                    std::hypot(mesh.x[n] - px, mesh.y[n] - py) < 1e-6 * (1.0 + len))
+                    nd = n;
+            if (nd < 0) continue;
+            const int dup = fm.node_count++;
+            fm.x.push_back(mesh.x[nd]);
+            fm.y.push_back(mesh.y[nd]);
+            used.push_back(0);   // used only if an element is moved onto it (an end already split is not)
+            copy_of.push_back(nd);
+            for (int e = 0; e < fm.element_count; ++e) {
+                bool has = false;
+                double cx = 0.0, cy = 0.0;
+                for (int i = 0; i < 3; ++i) {
+                    const int c = fm.connectivity[(size_t)e * per + i];
+                    cx += fm.x[c] / 3.0; cy += fm.y[c] / 3.0;
+                }
+                for (int i = 0; i < per; ++i) has = has || fm.connectivity[(size_t)e * per + i] == nd;
+                if (!has || ex * (cy - L[1]) - ey * (cx - L[0]) >= 0.0) continue;   // the other side
+                for (int i = 0; i < per; ++i)
+                    if (fm.connectivity[(size_t)e * per + i] == nd) {
+                        fm.connectivity[(size_t)e * per + i] = dup;
+                        used[dup] = 1;
+                    }
+            }
+        }
+    }
+
+    // Permeability and retention per material, under the rules of the groundwater-flow calculation.
+    std::vector<katai::core::Permeability> perm(pr.materials.size(), {1.0, 1.0});
+    std::vector<katai::core::WaterRetention> ret(pr.materials.size());
+    std::vector<char> mat_used(pr.materials.size(), 0);
+    for (int m : fm.element_material) if (m >= 0 && m < (int)mat_used.size()) mat_used[m] = 1;
+    for (size_t m = 0; m < pr.materials.size(); ++m) {
+        const auto& mm = pr.materials[m];
+        perm[m] = {mm.kx, mm.ky};
+        ret[m] = {mm.gw_ga, mm.gw_gn, mm.gw_gl, mm.gw_Sres, 1.0};
+        if (mm.drainage == model::Drainage::NonPorous || mm.drainage == model::Drainage::UndrainedC) {
+            perm[m] = {1e-8, 1e-8};
+            // silent-drop-ok: nothing is dropped -- a non-porous or undrained (C) material takes
+            // part in the flow as an impermeable region, exactly as in the groundwater-flow
+            // calculation; only its (unread) permeability check is skipped.
+            continue;
+        }
+        if (mat_used[m] && (mm.kx <= 0.0 || mm.ky <= 0.0)) {
+            msg = "Material \"" + mm.name + "\" has no permeability, and this phase takes its pore "
+                  "pressures from a groundwater flow -- set kx and ky (> 0) on its Groundwater tab.";
+            return false;
+        }
+    }
+
+    // Boundary faces of the active ground (matched by coordinates, so the two faces of a split are
+    // one interior edge while both sides are active).
+    double ymin = 1e300;
+    for (int n = 0; n < mesh.node_count; ++n) ymin = std::min(ymin, mesh.y[n]);
+    const double tol = 1e-6 * (1.0 + std::fabs(ymin));
+    const auto on_closed_line = [&](double x, double y) {
+        for (const auto& L : closed_lines) {
+            const double ex = L[2] - L[0], ey = L[3] - L[1], l2 = ex * ex + ey * ey;
+            if (l2 < 1e-18) continue;
+            const double t = std::clamp(((x - L[0]) * ex + (y - L[1]) * ey) / l2, 0.0, 1.0);
+            if (std::hypot(x - (L[0] + t * ex), y - (L[1] + t * ey)) < 1e-6 * (1.0 + std::sqrt(l2)))
+                return true;
+        }
+        return false;
+    };
+    std::vector<char> is_fixed(fm.node_count, 0), is_seep(fm.node_count, 0);
+    std::vector<double> fixed_head(fm.node_count, 0.0);
+    for (const auto& ed : katai::mesh::extract_exposed_edges(mesh, act)) {
+        bool base = true, closed = true;
+        for (int i = 0; i < ed.npe; ++i) {
+            const int n = ed.node[i];
+            base = base && std::fabs(mesh.y[n] - ymin) <= tol;
+            closed = closed && on_closed_line(mesh.x[n], mesh.y[n]);
+        }
+        if (base || closed) continue;
+        const int ea = ed.node[0], eb = ed.node[ed.npe - 1];
+        const double xmid = 0.5 * (mesh.x[ea] + mesh.x[eb]);
+        for (int i = 0; i < ed.npe; ++i) {
+            const int c = canon[ed.node[i]];
+            // A node on an impermeable line has water on one side of it only, and a table drawn
+            // with a step at the wall gives that side's level just beside it, not at it: read at
+            // the wall itself, a pit floor pumped down to -4 m beside a wall holding -1 m behind
+            // it took -2.5 m at its corner node, the mean of the two -- 1.5 m of head that is on
+            // neither side, and the exit gradient beside the wall grew without bound as the mesh
+            // was refined. Such a node reads the table a quarter of the edge along, on its side.
+            const double xq = on_closed_line(mesh.x[c], mesh.y[c])
+                                  ? mesh.x[c] + 0.25 * (xmid - mesh.x[c])
+                                  : mesh.x[c];
+            const double wl = water_table_at(pr, xq, config);
+            if (mesh.y[c] < wl) { is_fixed[c] = 1; fixed_head[c] = wl; }
+            else if (!is_fixed[c]) is_seep[c] = 1;
+        }
+    }
+    for (size_t k = 0; k < copy_of.size(); ++k) {   // a split end node keeps its boundary condition
+        const int dup = mesh.node_count + (int)k, orig = copy_of[k];
+        is_fixed[dup] = is_fixed[orig]; fixed_head[dup] = fixed_head[orig]; is_seep[dup] = is_seep[orig];
+    }
+    std::vector<int> fx, seep;
+    std::vector<double> fv;
+    for (int n = 0; n < fm.node_count; ++n) {
+        if (!used[n]) { fx.push_back(n); fv.push_back(fm.y[n]); continue; }   // outside the flow
+        if (is_fixed[n]) { fx.push_back(n); fv.push_back(fixed_head[n]); }
+        else if (is_seep[n]) seep.push_back(n);
+    }
+    bool any_head = false;
+    for (int n = 0; n < fm.node_count; ++n) any_head = any_head || (used[n] && is_fixed[n]);
+    if (!any_head) {
+        msg = "No boundary of the ground active in this phase lies below its water table, so a "
+              "groundwater flow has no head to start from. Give the phase a water table, or take "
+              "its pore pressures from the phreatic line.";
+        return false;
+    }
+
+    const katai::core::SeepageLinearSolve lin = [](const katai::math::CsrMatrix& A,
+                                                   const Eigen::VectorXd& b) {
+        auto s = katai::linsolve::make_direct_solver(
+            katai::linsolve::MatrixType::RealSymmetricPositiveDefinite);
+        s->factorize(A);
+        return s->solve(b);
+    };
+    double area_sum = 0.0;
+    for (int e = 0; e < fm.element_count; ++e) {
+        const int a = fm.node_of(e, 0), b = fm.node_of(e, 1), c = fm.node_of(e, 2);
+        area_sum += 0.5 * std::fabs((fm.x[b] - fm.x[a]) * (fm.y[c] - fm.y[a]) -
+                                    (fm.x[c] - fm.x[a]) * (fm.y[b] - fm.y[a]));
+    }
+    katai::core::UnconfinedOptions opt;
+    opt.transition = 0.5 * std::sqrt(2.0 * area_sum / std::max(1, fm.element_count));
+    opt.retention = &ret;
+    opt.relax = seep.empty() ? 0.15 : 0.05;
+    opt.max_iter = 1200;
+    opt.tol = 1e-5;
+    const auto res = katai::core::solve_unconfined_seepage_face(fm, fx, fv, seep, perm, lin, opt);
+    if (!res.converged) {
+        msg = "The groundwater flow of this phase did not converge (residual " +
+              std::to_string(res.residual) + ").";
+        return false;
+    }
+    head.resize(mesh.node_count);
+    for (int n = 0; n < mesh.node_count; ++n) head[n] = res.head[canon[n]];
+    return true;
+}
+
+// REGION WATER (Phase::poly_water): the head field of a phase whose regions state their own pore
+// pressure. Each region's rule gives the pore pressure at a point of it: the phase's water table,
+// a hydrostatic level of the region's own, or -- interpolated -- the straight line along the
+// vertical between the pore pressure just above the region and just below it, each read from
+// whatever region lies there by ITS rule (an interpolated neighbour, or no region at all above the
+// ground, reads the water table). The result is handed on as a nodal head, h = y + u/gamma_w, so
+// the phase is assembled exactly like one whose head came from a flow: saturation, pore load, the
+// free water on an exposed face and the reported pore pressure all read the same field. A node
+// shared by elements of regions with different rules takes the mean of what each active element's
+// region gives it (a jump between two levels is spread over one element, as a stepped water table
+// is); where the rules agree -- an interpolated region meeting the regions it interpolates between
+// -- nothing is spread.
+static void region_water_head(const model::Project& pr, const katai::mesh::Mesh& mesh,
+                              const std::vector<char>& act, const model::Phase& ph,
+                              double gamma_w, Eigen::VectorXd& head) {
+    using model::Phase;
+    // SIGNED: above the water the pressure is negative, so the head stays below the point and the
+    // ground there keeps its unsaturated weight (the head-field gravity reads psi = h - y >= 0 as
+    // saturated; a head of exactly y would have given dry ground its saturated weight -- a dug
+    // column with no water heaved 9.66 mm where the water-table path gives 13.37). The pore load
+    // and the reported pore pressure cut it off at zero. Floored at 1000 m of suction so a model
+    // with no water at all (a table at -infinity) still averages to a finite head.
+    const auto signed_u = [&](double level, double y) {
+        return gamma_w * std::fmax(level - y, -1000.0);
+    };
+    const auto table_u = [&](double x, double y) { return signed_u(water_table_at(pr, x, &ph), y); };
+    const auto region_at = [&](double x, double y) {
+        int owner = -1;
+        for (size_t i = 0; i < pr.polygons.size(); ++i)
+            if (point_in_polygon(x, y, pr.polygons[i])) owner = (int)i;   // last wins, as the mesh
+        return owner;
+    };
+    // The pore pressure a region's own rule gives, never interpolating (the neighbour of an
+    // interpolated region is read by its rule; an interpolated neighbour falls back to the table).
+    const auto rule_u = [&](int r, double x, double y) {
+        if (r < 0) return table_u(x, y);
+        if (!ph.active_poly((size_t)r) && ph.dry_poly((size_t)r)) return 0.0;
+        if (ph.water_mode((size_t)r) == Phase::kRegionWaterLevel)
+            return signed_u(ph.water_level((size_t)r), y);
+        return table_u(x, y);
+    };
+    // Where the vertical through x enters and leaves region r around y: the polygon's crossings.
+    const auto span = [&](int r, double x, double y, double& lo, double& hi) {
+        const auto& P = pr.polygons[(size_t)r];
+        std::vector<double> ys;
+        for (size_t a = 0, b = P.x.size() - 1; a < P.x.size(); b = a++) {
+            const double xa = P.x[a], xb = P.x[b];
+            if ((xa > x) == (xb > x)) continue;               // half-open: no double counting
+            ys.push_back(P.y[a] + (P.y[b] - P.y[a]) * (x - xa) / (xb - xa));
+        }
+        std::sort(ys.begin(), ys.end());
+        for (size_t k = 0; k + 1 < ys.size(); k += 2)
+            if (y >= ys[k] - 1e-9 && y <= ys[k + 1] + 1e-9) {
+                lo = ys[k];
+                hi = ys[k + 1];
+                return true;
+            }
+        return false;
+    };
+    const auto region_u = [&](int r, double x, double y) {
+        if (ph.water_mode((size_t)r) != Phase::kRegionWaterInterpolate) return rule_u(r, x, y);
+        double lo = 0.0, hi = 0.0;
+        if (!span(r, x, y, lo, hi) || hi - lo < 1e-9) return table_u(x, y);
+        const double eps = 1e-6 * (1.0 + hi - lo);
+        const double u_top = rule_u(region_at(x, hi + eps), x, hi + eps);
+        const double u_bot = rule_u(region_at(x, lo - eps), x, lo - eps);
+        // Above the top the point lies outside r, so the region there is read; with nothing above
+        // (the ground surface) region_at gives -1 and the table answers.
+        return u_bot + (u_top - u_bot) * (y - lo) / (hi - lo);
+    };
+    const int per = mesh.nodes_per_element;
+    Eigen::VectorXd sum = Eigen::VectorXd::Zero(mesh.node_count);
+    std::vector<int> cnt(mesh.node_count, 0);
+    for (int e = 0; e < mesh.element_count; ++e) {
+        if (!act.empty() && !act[e]) continue;
+        const int n0 = mesh.node_of(e, 0), n1 = mesh.node_of(e, 1), n2 = mesh.node_of(e, 2);
+        const double cx = (mesh.x[n0] + mesh.x[n1] + mesh.x[n2]) / 3.0;
+        const double cy = (mesh.y[n0] + mesh.y[n1] + mesh.y[n2]) / 3.0;
+        const int r = region_at(cx, cy);
+        for (int k = 0; k < per; ++k) {
+            const int n = mesh.node_of(e, k);
+            // Read a hair inside the element, so a node on the region's own boundary is placed in
+            // it rather than on the edge the crossings are counted from.
+            const double px = mesh.x[n] + 1e-6 * (cx - mesh.x[n]);
+            const double py = mesh.y[n] + 1e-6 * (cy - mesh.y[n]);
+            sum[n] += r < 0 ? table_u(px, py) : region_u(r, px, py);
+            ++cnt[n];
+        }
+    }
+    head.resize(mesh.node_count);
+    for (int n = 0; n < mesh.node_count; ++n) {
+        const double u = cnt[n] > 0 ? sum[n] / cnt[n] : table_u(mesh.x[n], mesh.y[n]);
+        head[n] = mesh.y[n] + u / gamma_w;
+    }
+}
+
 // Displacement BC seam (Stage B3): the schema's polygons walked once into the engine's
 // neutral edge list. Free edges stay in the list on purpose: they always contributed
 // to the nearest-edge tie tolerance.
@@ -191,9 +506,53 @@ static katai::core::EdgeFixity to_edge_fixity(model::BCType bc) {
     return E::Free;
 }
 
-static std::vector<katai::core::BcEdge> bc_edges_from(const model::Project& pr) {
+// THE STANDARD BOUNDARY CONDITIONS, where the model states none: the base of the model is fully
+// fixed and its two sides are fixed horizontally, every other edge is free -- the conditions a
+// soil model is built with unless there is a reason for others. Until 2026-10-01 a model with no
+// conditions drawn was refused ("No boundary conditions"), which every new model met first.
+// `standard` reports that they were applied, so the run can say so.
+static std::vector<katai::core::BcEdge> bc_edges_from(const model::Project& pr,
+                                                      bool* standard = nullptr) {
+    bool any_drawn = false;
+    for (const auto& P : pr.polygons)
+        for (int b : P.edge_bc)
+            if (b != (int)model::BCType::Free) any_drawn = true;
+    double bx0 = 1e300, bx1 = -1e300, by0 = 1e300;
+    for (const auto& P : pr.polygons)
+        for (size_t k = 0; k < P.x.size(); ++k) {
+            bx0 = std::min(bx0, P.x[k]); bx1 = std::max(bx1, P.x[k]); by0 = std::min(by0, P.y[k]);
+        }
+    const double tol = 1e-6 * std::max(1.0, bx1 - bx0);
+    if (standard) *standard = !any_drawn && !pr.polygons.empty();
     std::vector<katai::core::BcEdge> edges;
     for (const auto& P : pr.polygons) {
+        if (!any_drawn) {
+            // silent-drop-ok: a region with fewer than three vertices is an ERROR at its field path
+            // in the input contract, so it cannot reach a run; the guard is arithmetic self-defence.
+            const int n = (int)P.x.size(); if (n < 3) continue;
+            double cx = 0, cy = 0; for (int k = 0; k < n; ++k) { cx += P.x[k]; cy += P.y[k]; } cx /= n; cy /= n;
+            for (int i = 0; i < n; ++i) {
+                const double ax = P.x[i], ay = P.y[i], bx = P.x[(i + 1) % n], by = P.y[(i + 1) % n];
+                const double ex = bx - ax, ey = by - ay, l2 = ex * ex + ey * ey; if (l2 < 1e-18) continue;
+                katai::core::EdgeFixity fx = katai::core::EdgeFixity::Free;
+                if (std::fabs(ay - by0) <= tol && std::fabs(by - by0) <= tol)
+                    fx = katai::core::EdgeFixity::FullyFixed;
+                else if ((std::fabs(ax - bx0) <= tol && std::fabs(bx - bx0) <= tol) ||
+                         (std::fabs(ax - bx1) <= tol && std::fabs(bx - bx1) <= tol))
+                    fx = katai::core::EdgeFixity::HorizontallyFixed;
+                // Free edges are listed too: a boundary node takes the condition of the NEAREST
+                // listed edge, so leaving the free ones out handed the ground surface's nodes the
+                // fixity of the nearest side or base.
+                double nx = ey, ny = -ex;
+                const double mx = 0.5 * (ax + bx), my = 0.5 * (ay + by);
+                if (nx * (mx - cx) + ny * (my - cy) < 0) { nx = -nx; ny = -ny; }
+                const double nl = std::hypot(nx, ny);
+                edges.push_back({ax, ay, bx, by, nx / nl, ny / nl, fx});
+            }
+            // silent-drop-ok: nothing is skipped -- every edge of this region was listed above with
+            // its standard condition; the drawn-condition branch below is for regions that state theirs.
+            continue;
+        }
         // silent-drop-ok: an EMPTY edge_bc means the region states no boundary conditions, which
         // is legal input (validate.hpp check_edges returns early on an empty array); any other
         // mismatch, and a region with fewer than three vertices, is an ERROR at its field path,
@@ -1671,11 +2030,19 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // every static phase and the rigid-base dynamic default keep the user's fixities bit-for-bit.
     const bool compliant_base =
         phase == InitialPhase::Dynamic && io.config && io.config->seismic_compliant_base;
-    katai::core::apply_boundary_conditions(bc_edges_from(pr), mesh, dofs, compliant_base,
+    bool standard_fixities = false;
+    const auto bc_edges = bc_edges_from(pr, &standard_fixities);
+    if (standard_fixities)
+        note(R, "K2D-A021", "",
+             "No boundary conditions are drawn, so the standard ones apply: the base of the model "
+             "is fully fixed and its left and right sides are fixed horizontally. Draw conditions "
+             "on the edges to use others.");
+    katai::core::apply_boundary_conditions(bc_edges, mesh, dofs, compliant_base,
                                            bc_released.empty() ? nullptr : &bc_released);
     // Line prescribed displacements (schema v2): every mesh node ON an active line gets the
     // set components FIXED here and their target values ramped 0 -> u by the static solver
-    // (nonzero Dirichlet). Static family only: the validator refuses other phase types at
+    // (nonzero Dirichlet) in the phase that activates the line; a later phase in which it stays
+    // active holds the nodes where they are. Static family only: the validator refuses other phase types at
     // the input contract, and the guard below keeps a direct driver call equally honest.
     const auto disp_on = [&io](size_t i) { return !io.config || io.config->active_disp(i); };
     struct PrescEntry { int node, comp; double value; };
@@ -1697,6 +2064,12 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // silent-drop-ok: a zero-length prescribed-displacement line is an ERROR at
             // disps[i].x2 in the input contract, so it cannot reach a run.
             if (l2 < 1e-18) continue;
+            // A displacement already imposed by the phase this one continues is HELD, not imposed
+            // again: its nodes stay where the parent left them, as an unchanged load adds nothing.
+            // It used to be re-imposed in full -- measured: a footing pushed 10 mm, followed by a
+            // phase that changed nothing, settled to 20 mm.
+            const bool held = io.chained && io.parent_config && io.parent_config->active_disp(di);
+            const double ux = held ? 0.0 : D.ux, uy = held ? 0.0 : D.uy;
             int fixed_nodes = 0;
             for (int n = 0; n < mesh.node_count; ++n) {
                 const double t = std::clamp(
@@ -1706,11 +2079,11 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 if (d > 1e-6) continue;
                 if (D.set_ux) {
                     dofs.fix_node_component(n, 0);
-                    presc_entries.push_back({n, 0, D.ux});   // overlapping lines: last wins
+                    presc_entries.push_back({n, 0, ux});   // overlapping lines: last wins
                 }
                 if (D.set_uy) {
                     dofs.fix_node_component(n, 1);
-                    presc_entries.push_back({n, 1, D.uy});
+                    presc_entries.push_back({n, 1, uy});
                 }
                 ++fixed_nodes;
             }
@@ -1947,10 +2320,98 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         }
     }
 
+    // A staged phase that takes its pore pressures from a steady groundwater flow (its own setting,
+    // or a Safety phase continuing a phase that did) solves that flow here, on this mesh.
+    Eigen::VectorXd phase_head;
+    const bool same_water_as_parent =
+        io.config && io.parent_config &&
+        io.config->water_override == io.parent_config->water_override &&
+        (!io.config->water_override ||
+         (io.config->wx == io.parent_config->wx && io.config->wy == io.parent_config->wy));
+    const bool phase_flow =
+        io.config && !flow_head &&
+        (io.config->pore_from_flow ||
+         (io.config->type == model::PhaseType::Safety && io.parent_config &&
+          io.parent_config->pore_from_flow && same_water_as_parent));
+    if (phase_flow) {
+        if (axi) { R.message = "Pore pressures from a groundwater flow are not available in axisymmetric mode yet."; return R; }
+        if (io.config->type != model::PhaseType::Plastic && io.config->type != model::PhaseType::Safety) {
+            R.message = "Pore pressures from a steady groundwater flow are available in Plastic and "
+                        "Safety phases; a consolidation, transient-flow or dynamic phase computes its "
+                        "own pore pressures.";
+            return R;
+        }
+        if (!pr.has_water && !io.config->water_override) {
+            R.message = "This phase takes its pore pressures from a groundwater flow but has no water "
+                        "table to hold its boundaries at. Give it one (or the project one).";
+            return R;
+        }
+        std::vector<std::pair<int, int>> joined;
+        std::vector<std::array<double, 4>> closed_lines;
+        for (const auto& w : walls) {
+            const bool closed = w.active && w.flow_barrier == 1;
+            if (w.flow_barrier == 2 && w.active) {
+                R.message = "Wall \"" + w.name + "\" is semi-permeable, which the groundwater flow of a "
+                            "staged phase does not take yet: make it permeable or impermeable.";
+                return R;
+            }
+            if (closed) {
+                const auto& s = pr.structs[w.si];
+                closed_lines.push_back({s.x1, s.y1, s.x2, s.y2});
+            } else {
+                for (const auto& sp : w.seam) joined.push_back({sp.left, sp.right});
+            }
+        }
+        for (const auto& sp : soil_ifaces) {
+            const bool closed = sp.active && sp.flow_barrier == 1;
+            if (sp.flow_barrier == 2 && sp.active) {
+                R.message = "Interface \"" + sp.name + "\" is semi-permeable, which the groundwater flow "
+                            "of a staged phase does not take yet: make it permeable or impermeable.";
+                return R;
+            }
+            if (closed) {
+                const auto& s = pr.structs[sp.si];
+                closed_lines.push_back({s.x1, s.y1, s.x2, s.y2});
+            } else {
+                for (const auto& sg : sp.seam) joined.push_back({sg.dup, sg.orig});
+            }
+        }
+        // An impermeable line the mesh was not split along cannot stop water -- refused, not ignored.
+        for (const auto& s : pr.structs)
+            if (s.flow_barrier == 1 && s.kind == model::StructKind::Plate && !(s.iface_pos || s.iface_neg)) {
+                R.message = "Plate \"" + s.name + "\" is marked impermeable to water but has no "
+                            "interfaces, so the ground is not split along it and water would cross it. "
+                            "Give it interfaces for a groundwater flow to see it.";
+                return R;
+            }
+        std::string fmsg;
+        if (!phase_flow_head(pr, mesh, act, joined, closed_lines, io.config, phase_head, fmsg)) {
+            R.message = fmsg;
+            return R;
+        }
+    }
+    // A phase whose regions state their own water (Phase::poly_water) is handed on as a head field
+    // too, built from those rules -- the same path a flow takes, so every consumer reads one field.
+    const bool region_water = !phase_flow && !flow_head && io.config && io.config->any_region_water();
+    if (region_water) {
+        if (axi) {
+            R.message = "Region water levels are not available in axisymmetric mode yet.";
+            return R;
+        }
+        if (io.config->type != model::PhaseType::Plastic && io.config->type != model::PhaseType::Safety) {
+            R.message = "Region water levels are available in Plastic and Safety phases; a "
+                        "consolidation, transient-flow or dynamic phase computes its own pore pressures.";
+            return R;
+        }
+        region_water_head(pr, mesh, act, *io.config, kGammaWater, phase_head);
+    }
+    const bool phase_heads = phase_flow || region_water;
+    const Eigen::VectorXd* flow_head_used = phase_heads ? &phase_head : flow_head;
+
     // Groundwater-flow coupling validity: the head field must match the solved mesh (embedded
     // walls SPLIT the mesh -- the flow result was computed on the unsplit one, so reject honestly).
-    const bool flow = flow_head != nullptr;
-    if (flow) {
+    const bool flow = flow_head_used != nullptr;
+    if (flow && !phase_heads) {
         if (axi) { R.message = "Groundwater-flow coupling is not available in axisymmetric mode yet."; return R; }
         if (io.config) { R.message = "Groundwater-flow coupling inside staged phases is not supported yet "
                                      "(use the water level, or single-phase flow coupling)."; return R; }
@@ -1984,8 +2445,10 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // value per node: the pore load is therefore applied from one side of the wall, so the
         // differential water pressure on it is missing from the structural forces. Said out loud
         // -- it is the load a cut-off wall is designed for.
+        // (Not for the flow of a staged phase: it is solved on this mesh, each side of a wall on
+        // its own nodes, so the difference IS in the pore load.)
         for (const auto& st : pr.structs)
-            if (st.flow_barrier != 0 && (st.kind == model::StructKind::Plate ||
+            if (!phase_heads && st.flow_barrier != 0 && (st.kind == model::StructKind::Plate ||
                                          st.kind == model::StructKind::Interface)) {
                 warn(R, "K2D-A011", st.name,
                      "The flow field driving this phase was computed with \"" + st.name +
@@ -1999,8 +2462,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         // generated by a groundwater flow calculation): total-stress gravity with gamma_sat where
         // psi = h - y >= 0, and the pore load interpolated from the SAME nodal head -> recovered
         // stress is EFFECTIVE.
-        katai::core::assemble_gravity_from_head(mesh, dofs, gamma, gamma_sat, *flow_head, f);
-        katai::core::assemble_pore_load_from_head(mesh, dofs, *flow_head, kGammaWater, f, pore_mask);
+        katai::core::assemble_gravity_from_head(mesh, dofs, gamma, gamma_sat, *flow_head_used, f, act);
+        katai::core::assemble_pore_load_from_head(mesh, dofs, *flow_head_used, kGammaWater, f, pore_mask);
     } else if (water) {
         // Total-stress equilibrium: saturated weight below the phreatic surface, moist above.
         const auto wt = [&pr, &io](double x) { return water_table_at(pr, x, io.config); };
@@ -2041,10 +2504,34 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // ground continues and the reaction already carries whatever acts there.
     if (water || flow) {
         const auto pore_at_node = [&](int n) {
-            if (flow) return kGammaWater * std::fmax(0.0, (*flow_head)(n) - mesh.y[n]);
+            if (flow) return kGammaWater * std::fmax(0.0, (*flow_head_used)(n) - mesh.y[n]);
             return kGammaWater * std::fmax(0.0, water_table_at(pr, mesh.x[n], io.config) - mesh.y[n]);
         };
+        // Regions excavated in this phase and kept DRY (Phase::poly_dry): the face they leave
+        // holds no free water. A face is theirs when the point just outside it lies in one.
+        std::vector<size_t> dry_regions;
+        if (io.config)
+            for (size_t i = 0; i < pr.polygons.size(); ++i)
+                if (!io.config->active_poly(i) && io.config->dry_poly(i)) dry_regions.push_back(i);
+        const auto in_polygon = [&pr](size_t i, double px, double py) {
+            const auto& P = pr.polygons[i];
+            bool in = false;
+            for (size_t a = 0, b = P.x.size() - 1; a < P.x.size(); b = a++)
+                if (((P.y[a] > py) != (P.y[b] > py)) &&
+                    px < (P.x[b] - P.x[a]) * (py - P.y[a]) / (P.y[b] - P.y[a]) + P.x[a])
+                    in = !in;
+            return in;
+        };
         for (const auto& ed : katai::mesh::extract_exposed_edges(mesh, act)) {
+            if (!dry_regions.empty()) {
+                const int a = ed.node[0], b = ed.node[ed.npe - 1];
+                const double len = std::hypot(mesh.x[b] - mesh.x[a], mesh.y[b] - mesh.y[a]);
+                const double qx = 0.5 * (mesh.x[a] + mesh.x[b]) + 1e-3 * len * ed.nx;
+                const double qy = 0.5 * (mesh.y[a] + mesh.y[b]) + 1e-3 * len * ed.ny;
+                bool dry_face = false;
+                for (size_t i : dry_regions) dry_face = dry_face || in_polygon(i, qx, qy);
+                if (dry_face) continue;
+            }
             const int comp = std::fabs(ed.nx) >= std::fabs(ed.ny) ? 0 : 1;
             const bool held = dofs.equation(dofs.global_dof(ed.node[0], comp)) < 0 &&
                               dofs.equation(dofs.global_dof(ed.node[ed.npe - 1], comp)) < 0;
@@ -2497,6 +2984,28 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             const bool safety_from_parent =
                 io.chained && !init.empty() && io.prev && io.prev->ok && !axi &&
                 (!any_struct_carry || (carry_plan.carried && carry_plan.installed == 0));
+            // The search starts from the parent's state and carries this phase's own changes at
+            // full strength first -- the WATER included. A Safety phase whose water differs from
+            // the phase before it is therefore a dewatering (or a flooding) followed by the search,
+            // which a phase that merely forgot the parent's water was never meant to be: measured on
+            // an anchored excavation, falling back to the project's table filled the pit again and
+            // the walls, held back by that water, gave 1.85 where the dewatered pit gives 1.60.
+            if (safety_from_parent && io.parent_config) {
+                const model::Phase& pc = *io.parent_config;
+                const model::Phase& sc = *io.config;
+                const bool same_water = pc.water_override == sc.water_override &&
+                                        (!sc.water_override || (pc.wx == sc.wx && pc.wy == sc.wy)) &&
+                                        pc.any_region_water() == sc.any_region_water() &&
+                                        (!sc.any_region_water() ||
+                                         (pc.poly_water == sc.poly_water &&
+                                          pc.poly_water_level == sc.poly_water_level));
+                if (!same_water)
+                    note(R, "K2D-A023", sc.name,
+                         "The water of this Safety phase is not that of the phase before it, so the "
+                         "change of water is applied first, at full strength, and the factor of "
+                         "safety is that of the ground with this phase's water. If the phase before "
+                         "it was meant to carry on, give this phase the same water.");
+            }
             // THE STRUCTURES TAKE PART IN THE SEARCH (since 2026-09). Until then the search
             // was handed none of them, and an active geogrid, anchor, plate carrying 150 kN/m/m or
             // embedded beam returned the factor of safety of the same mesh with the element
@@ -3189,10 +3698,36 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     R.pore.assign(mesh.node_count, 0.0);
     if (flow)
         for (int n = 0; n < mesh.node_count; ++n)
-            R.pore[n] = kGammaWater * std::fmax(0.0, (*flow_head)[n] - mesh.y[n]);
+            R.pore[n] = kGammaWater * std::fmax(0.0, (*flow_head_used)[n] - mesh.y[n]);
     else if (water)
         for (int n = 0; n < mesh.node_count; ++n)
             R.pore[n] = kGammaWater * std::fmax(0.0, water_table_at(pr, mesh.x[n], io.config) - mesh.y[n]);
+    // HYDRAULIC HEAVE. Water flowing up through the ground below an exposed surface lifts it once
+    // the head it loses there outweighs the submerged soil above, whatever the deformation
+    // analysis made of it (katai/analysis/hydraulic_heave.hpp). Read from the head field this
+    // phase was solved with, column by column below every wet upward-facing surface.
+    if (flow && !axi) {
+        const auto hv = katai::core::hydraulic_heave(mesh, act, gamma, gamma_sat, *flow_head_used,
+                                                     kGammaWater);
+        if (hv.found) {
+            const std::string where = " in the column below (" + dnum(hv.x) + ", " +
+                                      dnum(hv.y_top) + "), " + dnum(hv.depth) + " m down";
+            if (hv.factor < 1.0)
+                warn(R, "K2D-A025", "",
+                     "Hydraulic heave: the water flowing up below the exposed ground carries more "
+                     "than the soil above it weighs -- the total vertical stress falls below the "
+                     "pore pressure" + where + " (submerged weight over excess water pressure " +
+                         dnum(hv.factor) + " < 1). The ground there lifts; the deformation result "
+                         "does not show this failure. Lengthen the seepage path (a deeper wall), "
+                         "lower the head outside, or load the excavation floor.");
+            else
+                note(R, "K2D-A024", "",
+                     "Hydraulic heave check: the least ratio of the submerged weight of the ground "
+                     "to the water pressure in excess of hydrostatic, below the exposed surface, is " +
+                         dnum(hv.factor) + where + " (1 = heave; it is the critical gradient over "
+                         "the gradient averaged over that depth). Partial factors are not applied.");
+        }
+    }
     R.active = act;             // phase element activity (empty = all active)
     R.mesh = std::move(mesh);   // the (possibly split) mesh the GUI must render
     if (static_failed) return R;   // viewable, not ok: R.message is the non-convergence account
@@ -3281,8 +3816,35 @@ std::vector<SolveResult> solve_phases(const model::Project& pr,
     if (on_phase) on_phase(0, total, "Initial phase");
     if (stop()) return out;
     out.push_back(solve_gravity_le(pr, mesh_in, init_phase, nullptr, io0));
+    // A K0 PROCEDURE ON NON-LEVEL GROUND THAT CANNOT BE BALANCED. Its stresses are those of level
+    // ground, not in equilibrium under a slope, and the equilibrium step that follows has to
+    // redistribute that imbalance plastically; on a soft or non-associated soil it may not close.
+    // Measured on a sweep of initial phases on sloping ground (Mohr-Coulomb and Soft Soil, psi = 0,
+    // 15-noded elements): K0 stopped at 13-74% of its equilibrium step while gravity loading --
+    // the procedure for non-level ground -- ran every one of them. So a K0 phase that fails there,
+    // and was not refused for a reason of its own, is solved again by gravity loading, and says so.
+    if (!out.back().ok && init_phase == InitialPhase::K0Procedure && out.back().nil_step) {
+        bool refused = false;
+        for (const auto& d : out.back().diagnostics)
+            refused = refused || d.severity == katai::core::DiagnosticSeverity::Refusal;
+        if (!refused) {
+            const std::string k0_message = out.back().message;
+            committed.clear();
+            SolveResult again = solve_gravity_le(pr, mesh_in, InitialPhase::GravityLoading, nullptr, io0);
+            if (again.ok) {
+                note(again, "K2D-A022", "Initial phase",
+                     "The K0 procedure could not bring this non-level ground into equilibrium (" +
+                         k0_message.substr(0, 160) +
+                         "), so the initial stresses were generated by gravity loading, the "
+                         "procedure for non-level ground. They are the stresses the soil's own "
+                         "weight produces in this geometry, not K0 ones.");
+                out.back() = std::move(again);
+            }
+        }
+    }
     if (!out.back().ok) return out;
 
+    const model::Phase* state_config = &pr.initial;   // the phase the committed state is from
     for (size_t pi = 0; pi < pr.phases.size(); ++pi) {
         const auto& ph = pr.phases[pi];
         if (stop()) return out;
@@ -3298,6 +3860,7 @@ std::vector<SolveResult> solve_phases(const model::Project& pr,
         // a state, so it is not a valid base -- the Dynamic branch checks that and falls back to
         // reporting its own action alone.
         io.prev = out.empty() ? nullptr : &out.back();
+        io.parent_config = state_config;
         std::vector<katai::core::GaussState> next;
         io.out_states = &next;
         const auto kind = ph.type == model::PhaseType::Safety        ? InitialPhase::Safety
@@ -3312,8 +3875,10 @@ std::vector<SolveResult> solve_phases(const model::Project& pr,
         // time-history returns RELATIVE displacements, not a new static state); Plastic, Consolidation
         // and FullyCoupled commit it forward (staged chaining).
         if (ph.type != model::PhaseType::Safety && ph.type != model::PhaseType::TransientFlow &&
-            ph.type != model::PhaseType::Dynamic)
+            ph.type != model::PhaseType::Dynamic) {
             committed = std::move(next);
+            state_config = &ph;
+        }
     }
     return out;
 }

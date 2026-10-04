@@ -58,11 +58,16 @@ void assemble_pore_load_from_head(const mesh::Mesh& mesh, const DofMap& dofs,
 // with h interpolated by the SAME shape functions as the pore-load kernel (saturation and
 // pore pressure form a consistent pair — Terzaghi). The flow-solution version of
 // assemble_gravity_phreatic: the phreatic surface is the ψ=0 contour of the flow head
-// field, not a water-table polyline. `dofs` is the mechanical 2-DOF map.
+// field, not a water-table polyline. `dofs` is the mechanical 2-DOF map. `active_element`
+// (empty = all) leaves an excavated element's weight out, as the phreatic version does: without
+// it the weight of the soil dug out of a pit stayed on the pit floor's shared nodes in every phase
+// whose pore pressures came from a head field -- an excavated column heaved 10.01 mm against the
+// 10.70 mm of one-dimensional unloading (the phreatic path: 10.68).
 void assemble_gravity_from_head(const mesh::Mesh& mesh, const DofMap& dofs,
                                 const std::vector<double>& gamma_unsat,
                                 const std::vector<double>& gamma_sat,
-                                const Eigen::VectorXd& head, Eigen::VectorXd& rhs);
+                                const Eigen::VectorXd& head, Eigen::VectorXd& rhs,
+                                const std::vector<char>& active_element = {});
 
 // Consistent nodal flux Q = K·h: each element's He·h_e is scattered to the global nodes.
 // At source-free (free) nodes Q≈0; at prescribed-head (Dirichlet) nodes Q = the boundary

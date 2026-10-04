@@ -56,4 +56,28 @@ check(heave > 5.0, f"the excavation heaves its floor ({heave:.3f} mm)")
 check(res[2].max_disp == 0.0,
       f"a phase that changes nothing moves nothing (max|u| = {1000 * res[2].max_disp:.6f} mm)")
 
+# THE WATER CARRIES OVER TOO. A phase that names no water keeps the water of the phase before it,
+# as a new Studio phase does. It used to fall back to the project's table: a Safety phase after a
+# dewatering step filled the excavation again and applied that as a change of its own.
+w = katai.Project("water", element="tri6", mesh_size=1.0, auto_refine=False)
+ws = w.materials.linear_elastic("Soil", E=5e4, nu=0.3, gamma=18.0, gamma_sat=20.0,
+                                k0_auto=False, k0=0.5)
+w.geometry.polygon([(0, -20), (30, -20), (30, 0), (0, 0)], material=ws, name="Block",
+                   fix=[X, H, F, H])
+w.water.table(-2.0)
+w.initial(procedure="k0")
+w.phases.plastic("Dewater", water=-6.0)
+w.phases.plastic("Nothing changes")
+w.phases.plastic("Back to the project's table", water="project")
+wp = w.build()
+check(wp.phases[1].water_override and list(wp.phases[1].wy) == [-6.0, -6.0],
+      "a phase that names no water keeps the dewatered table")
+check(not wp.phases[2].water_override, 'water="project" returns to the project table')
+wj = katai.Job(wp)
+check(wj.run(), "the dewatering run completes")
+wr = wj.results()
+check(wr[1].max_disp > 1e-4, f"lowering the table moves the ground ({1000 * wr[1].max_disp:.3f} mm)")
+check(wr[2].max_disp == 0.0,
+      f"the phase after it, naming no water, moves nothing (max|u| = {1000 * wr[2].max_disp:.6f} mm)")
+
 sys.exit(1 if failures else 0)

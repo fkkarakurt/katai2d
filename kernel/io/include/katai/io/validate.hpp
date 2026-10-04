@@ -269,6 +269,24 @@ inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::
                       std::to_string(have - want) + " extra flag(s) are ignored");
     };
     check_activity("poly", ph.poly_active.size(), n_poly, "soil-region");
+    check_activity("dry", ph.poly_dry.size(), n_poly, "soil-region");
+    check_activity("pwater", ph.poly_water.size(), n_poly, "soil-region");
+    for (size_t i = 0; i < ph.poly_water.size(); ++i) {
+        const int m = ph.poly_water[i];
+        if (m < 0 || m > 2)
+            r.add(Severity::Error, path("pwater"),
+                  "region " + std::to_string(i) + ": unknown water mode " + std::to_string(m) +
+                      "; this build knows 0 (the water table), 1 (a level of its own) and 2 "
+                      "(interpolated between the regions above and below)");
+        else if (m == 1 && (i >= ph.poly_water_level.size() || !std::isfinite(ph.poly_water_level[i])))
+            r.add(Severity::Error, path("pwlevel"),
+                  "region " + std::to_string(i) + " has a water level of its own but no level is "
+                      "given for it");
+    }
+    if (ph.any_region_water() && ph.pore_from_flow)
+        r.add(Severity::Error, path("pwater"),
+              "a phase takes its pore pressures either from a groundwater flow or from its water "
+              "levels, not both: the flow sets every region's pore pressure itself");
     check_activity("struct", ph.struct_active.size(), n_struct, "structural-element");
     check_activity("load", ph.load_active.size(), n_load, "load");
     check_activity("disp", ph.disp_active.size(), n_disp, "prescribed-displacement");

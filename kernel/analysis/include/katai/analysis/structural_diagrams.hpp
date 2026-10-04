@@ -55,10 +55,14 @@ inline const Eigen::VectorXd& installed_field(const Structures& structures, int 
     if (!disp_is_total || install < 0 || (size_t)install >= structures.install_datum.size())
         return disp;
     const Eigen::VectorXd& datum = structures.install_datum[(size_t)install];
+    const Eigen::VectorXd* fixed = (size_t)install < structures.install_fixed.size()
+                                       ? &structures.install_fixed[(size_t)install]
+                                       : nullptr;
     buf = disp;
     for (int g = 0; g < dofs.total_dofs() && g < (int)buf.size(); ++g) {
         const int eq = dofs.equation(g);
         if (eq >= 0) buf[g] -= datum(eq);
+        else if (fixed && g < fixed->size()) buf[g] -= (*fixed)(g);
     }
     return buf;
 }
