@@ -365,6 +365,7 @@ m::Project build_terzaghi() {
     consol.name = "Consolidation";
     consol.type = m::PhaseType::Consolidation;
     consol.duration = 2.0 * kTzH * kTzH / cv;   // Tv ~ 2: near-complete consolidation
+    consol.consol_load_at_start = true;          // the theory's column is loaded at once
     consol.time_steps = 120;
     consol.load_active = {1};                   // surcharge ON -> applied at t = 0+
     pr.phases.push_back(consol);
@@ -2921,6 +2922,19 @@ void oracle_pile(const m::Project& pr) {
     check(r2.ok && std::fabs(r2.N_head - r.N_head) < 0.01 * cap,
           "load x2 leaves the pile force unchanged: a plateau, not a stiffness");
     check(r2.u_head > 1.2 * r.u_head, "and the head goes on settling, so the run is past the limit");
+
+    // (a2) A SKIN RESISTANCE THAT VARIES ALONG THE PILE. Linear from T at the head to 3T at the
+    // foot, the shaft carries the mean, 2T, over its length: (2 T L + F_max)/Ls.
+    {
+        m::Project lin = build_pile_at(kPlTskin, kPlFbase, kPlLs, 2.0 * kPlLoad, 0, kPlH);
+        lin.embedded[0].Tskin_end = 3.0 * kPlTskin;
+        const PileRead rl = read_pile(lin);
+        const double cap_lin = pile_capacity(2.0 * kPlTskin, kPlL, kPlFbase, kPlLs);
+        std::printf("      skin T -> 3T along the pile: N_head %.4f kN/m, (2 T L + F_max)/Ls = %.4f (%+.2f%%)\n",
+                    rl.N_head, cap_lin, 100.0 * (rl.N_head / cap_lin - 1.0));
+        check(rl.ok && std::fabs(rl.N_head / cap_lin - 1.0) < 0.02,
+              "a skin resistance linear along the pile carries its mean over the length");
+    }
 
     // (b) THE TWO TERMS, SEPARATELY. Skin and base are independent inputs and each must move the
     // capacity by exactly its own share -- one number agreeing could be a coincidence of two

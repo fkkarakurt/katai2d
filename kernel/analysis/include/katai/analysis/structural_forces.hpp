@@ -131,12 +131,16 @@ inline std::vector<ForceStation> plate_force_diagram(
             u(3 * k + 1) = disp[detail::plate_trans_gdof(pe.trans_dof[2 * k + 1], pe.nodes[k], 1, dofs)];
             u(3 * k + 2) = disp[pe.rot_dof[k]];
         }
-        const bool ep_pl = has_ps && pe.props.plastic();
+        const bool ep_pl = has_ps && pe.props.stateful();
         std::array<double, 3> Ng{}, Mg{};
         if (ep_pl)
             plate::gauss_forces_plastic(X, pe.props, u,
                                         plastic_state.data() + ei * plate::kPlasticStateSize, Ng, Mg);
-        const auto Qr = detail::plate_reduced_shear(X, pe.props, u);  // Barlow shear samples
+        auto Qr = detail::plate_reduced_shear(X, pe.props, u);  // Barlow shear samples
+        if (ep_pl)   // less the shear strain the section does not answer for (plate.hpp)
+            for (int k = 0; k < plate::kShearGaussCount; ++k)
+                Qr[(size_t)k] -= pe.props.shear_rigidity() *
+                                 plastic_state[ei * plate::kPlasticStateSize + plate::kShearStateBegin + k];
         for (int q = 0; q < stations_per_elem; ++q) {
             const double xi = -1.0 + 2.0 * q / (stations_per_elem - 1);
             const Eigen::Vector3d N = plate::shape(xi);
@@ -176,12 +180,16 @@ inline std::vector<ForceStation> plate_force_diagram(
             u(3 * k + 1) = disp[detail::plate_trans_gdof(pe.trans_dof[2 * k + 1], pe.nodes[k], 1, dofs)];
             u(3 * k + 2) = disp[pe.rot_dof[k]];
         }
-        const bool ep_pl = has_ps && pe.props.plastic();
+        const bool ep_pl = has_ps && pe.props.stateful();
         std::array<double, 5> Ng{}, Mg{};
         if (ep_pl)
             plate::gauss_forces_plastic5(X, pe.props, u,
                                          plastic_state.data() + ei * plate::kPlasticStateSize5, Ng, Mg);
-        const auto Qr = detail::plate5_reduced_shear(X, pe.props, u);  // Barlow shear samples
+        auto Qr = detail::plate5_reduced_shear(X, pe.props, u);  // Barlow shear samples
+        if (ep_pl)
+            for (int k = 0; k < plate::kShearGaussCount5; ++k)
+                Qr[(size_t)k] -= pe.props.shear_rigidity() *
+                                 plastic_state[ei * plate::kPlasticStateSize5 + plate::kShearStateBegin5 + k];
         for (int q = 0; q < stations_per_elem; ++q) {
             const double xi = -1.0 + 2.0 * q / (stations_per_elem - 1);
             const Eigen::Matrix<double, 5, 1> N = plate::detail::shape5(xi);

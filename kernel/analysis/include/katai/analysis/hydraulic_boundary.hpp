@@ -67,8 +67,8 @@ inline double phreatic_surface_at(const std::vector<double>& wx,
 
 // Drainage-boundary mask for a time-dependent flow phase (consolidation / fully-coupled): a boundary
 // node on a prescribed-head or seepage flow edge drains (excess pore = 0). With NO flow BCs declared
-// (`have_flow_bcs` false) the upward-facing exposed surface of the active ground drains (the
-// ground surface, fill surfaces, excavation floors); everything else is impermeable. Nodes touched only by inactive (excavated)
+// (`have_flow_bcs` false) every exposed face of the active ground drains except those that look
+// down (the base of the model): the ground surface, fill surfaces, excavation floors and the sides. Nodes touched only by inactive (excavated)
 // elements carry no pore DOF -> drained.
 inline std::vector<char> flow_drained_nodes(const std::vector<FlowEdge>& edges, bool have_flow_bcs,
                                             const katai::mesh::Mesh& mesh,
@@ -102,9 +102,17 @@ inline std::vector<char> flow_drained_nodes(const std::vector<FlowEdge>& edges, 
         // ground consolidated as a sealed body; with it placed, only the crest drained and the
         // ground surface beside it stayed sealed. Found rebuilding a staged road embankment from
         // a published tutorial. The sides and the base stay impermeable, as before.
+        //
+        // AND SO DO THE SIDES; ONLY THE BASE IS CLOSED. With nothing declared the boundaries of a
+        // consolidation are open except the bottom of the model: the far sides of a model are
+        // ground that goes on, not a wall. Sealed sides were this program's own default and made
+        // every undeclared model a laterally confined one, which dissipates more slowly than the
+        // same ground with its sides left as they are. A side that IS a barrier -- an axis of
+        // symmetry, a cut-off -- is closed by declaring the boundaries (a head or a seepage face
+        // on the open ones), as before; a face that looks down stays closed.
         (void)yscale;
         for (const auto& ed : katai::mesh::extract_exposed_edges(mesh, act)) {
-            if (!(ed.ny > 1e-3)) continue;
+            if (ed.ny < -1e-3) continue;
             for (int i = 0; i < ed.npe; ++i) drained[ed.node[i]] = 1;
         }
     }

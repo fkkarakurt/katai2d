@@ -48,16 +48,38 @@ inline WallBuild build_embedded_wall(const mesh::Mesh& mesh, std::vector<SeamPai
                                      int toe_node, DofMap& dofs,
                                      const plate::PlateProps& pp,
                                      const iface::InterfaceProps& ip,
-                                     bool iface_right = true, bool iface_left = true) {
+                                     bool iface_right = true, bool iface_left = true,
+                                     int toe_left = -1) {
     std::sort(seam.begin(), seam.end(),
               [](const SeamPair& a, const SeamPair& b) { return a.y < b.y; });
     WallBuild w;
     // Position list: toe (shared, corner) + seam (bottom to top). seam[0]=mid, seam[1]=corner,
     // ... (y_toe on a corner row) → the positions cycle corner,mid,corner,...
     std::vector<int> nr, nl, dx, dy, dphi;  // position → right node, left node, DOFs
-    nr.push_back(toe_node); nl.push_back(toe_node);            // TOE shared
-    dx.push_back(dofs.global_dof(toe_node, 0));               // wall translation = toe mesh DOF (tied)
-    dy.push_back(dofs.global_dof(toe_node, 1));
+    if (toe_left < 0) {
+        // The wall's lower end is welded to the soil node the two sides share. Where both sides
+        // carry an interface that is a simplification -- such a wall's end is a point of its own,
+        // joined to that node by the two interfaces, and a plate has no end bearing -- which
+        // was tried (2026-10) and taken back: it moved a strutted wall's deflection by 0.5% and
+        // left two models without a converged solve. It needs the end-bearing zone that goes
+        // with it before it can stand.
+        nr.push_back(toe_node); nl.push_back(toe_node);            // TOE shared
+        dx.push_back(dofs.global_dof(toe_node, 0));               // wall translation = toe mesh DOF (tied)
+        dy.push_back(dofs.global_dof(toe_node, 1));
+    } else {
+        // The wall starts where another wall ends: the point is already split, and it is a
+        // position like any other on the seam -- the wall's own translation there, an interface
+        // to each side -- not a toe held by the soil. See the driver (a wall that continues another).
+        nr.push_back(toe_node); nl.push_back(toe_left);
+        if (!iface_right || !iface_left) {
+            const int bn = iface_right ? toe_left : toe_node;
+            dx.push_back(dofs.global_dof(bn, 0));
+            dy.push_back(dofs.global_dof(bn, 1));
+        } else {
+            dx.push_back(dofs.add_extra_dof());
+            dy.push_back(dofs.add_extra_dof());
+        }
+    }
     dphi.push_back(dofs.add_extra_dof());
     for (const auto& s : seam) {
         nr.push_back(s.right); nl.push_back(s.left);
@@ -170,14 +192,28 @@ inline WallBuild5 build_embedded_wall5(const mesh::Mesh& mesh, std::vector<SeamP
                                        int toe_node, DofMap& dofs,
                                        const plate::PlateProps& pp,
                                        const iface::InterfaceProps& ip,
-                                       bool iface_right = true, bool iface_left = true) {
+                                       bool iface_right = true, bool iface_left = true,
+                                       int toe_left = -1) {
     std::sort(seam.begin(), seam.end(),
               [](const SeamPair& a, const SeamPair& b) { return a.y < b.y; });
     WallBuild5 w;
     std::vector<int> nr, nl, dx, dy, dphi;
-    nr.push_back(toe_node); nl.push_back(toe_node);          // TOE shared (bottom to top)
-    dx.push_back(dofs.global_dof(toe_node, 0));
-    dy.push_back(dofs.global_dof(toe_node, 1));
+    if (toe_left < 0) {
+        nr.push_back(toe_node); nl.push_back(toe_node);          // TOE shared (bottom to top)
+        dx.push_back(dofs.global_dof(toe_node, 0));
+        dy.push_back(dofs.global_dof(toe_node, 1));
+    } else {
+        // continues another wall (see build_embedded_wall)
+        nr.push_back(toe_node); nl.push_back(toe_left);
+        if (!iface_right || !iface_left) {
+            const int bn = iface_right ? toe_left : toe_node;
+            dx.push_back(dofs.global_dof(bn, 0));
+            dy.push_back(dofs.global_dof(bn, 1));
+        } else {
+            dx.push_back(dofs.add_extra_dof());
+            dy.push_back(dofs.add_extra_dof());
+        }
+    }
     dphi.push_back(dofs.add_extra_dof());
     for (const auto& s : seam) {
         nr.push_back(s.right); nl.push_back(s.left);

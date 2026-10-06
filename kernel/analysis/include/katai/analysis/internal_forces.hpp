@@ -606,9 +606,16 @@ public:
                     // pore fluid's volumetric contribution. u = -(Kw/n) eps_v.
                     const double kwn = matg.kw_over_n(matg.undrained_poisson);
                     if (!matg.ignore_undrained) {
-                        trial[gi].eps_vol_und = committed[gi].eps_vol_und + mvec.dot(dstrain);
+                        // A soil whose stiffness follows the stress has a pore fluid that does
+                        // too (undrained_stiffness_scale, material_model.hpp): the factor is read at
+                        // the stress the increment starts from and the pressure is accumulated
+                        // as the equivalent strain, so u = kwn * eps_vol_und for every model.
+                        const double kscale = undrained_stiffness_scale(
+                            matg, committed[gi].stress, committed[gi].stress_zz);
+                        trial[gi].eps_vol_und =
+                            committed[gi].eps_vol_und + kscale * mvec.dot(dstrain);
                         sigma += kwn * trial[gi].eps_vol_und * mvec;
-                        if (build_tangent) dt += kwn * mvec * mvec.transpose();
+                        if (build_tangent) dt += (kscale * kwn) * mvec * mvec.transpose();
                     } else if (trial[gi].eps_vol_und != 0.0) {
                         // Ignoring undrained behaviour: no water stiffness and nothing new, but
                         // the pressure generated before this phase stays where it is.
@@ -682,7 +689,7 @@ public:
             plate::Dof fp;
             plate::ElementMatrix Kbuf;
             const plate::ElementMatrix* Kp = nullptr;
-            if (pe.props.plastic()) {
+            if (pe.props.stateful()) {
                 const size_t off = pli * plate::kPlasticStateSize;
                 plate::internal_force_plastic(Xe, pe.props, up, st.plate_c->data() + off,
                                               st.plate_t->data() + off, fp,
@@ -726,7 +733,7 @@ public:
             plate::Dof5 fp;
             plate::ElementMatrix5 Kbuf;
             const plate::ElementMatrix5* Kp = nullptr;
-            if (pe.props.plastic()) {
+            if (pe.props.stateful()) {
                 const size_t off = pli * plate::kPlasticStateSize5;
                 plate::internal_force_plastic5(Xe, pe.props, up, st.plate5_c->data() + off,
                                                st.plate5_t->data() + off, fp,
@@ -846,6 +853,24 @@ public:
         // pairs decouple. At each pair: relative displacement [[u]]=u_struct−u_soil → local
         // (Δu_s,Δu_n) → Coulomb return mapping → 4-DOF block (soil x,y + structure x,y).
         // B(2×4): s-row=[−c,−s,+c,+s], n-row=[+s,−c,−s,+c].
+        // The excess pore pressure of the ground beside a joint: the mean over the stress points
+        // of the soil element on its soil side, read from the COMMITTED state -- the pressure the
+        // increment starts from -- so that the joint's law does not depend on the iterate of an
+        // element it is not part of.
+        const auto joint_pore = [&](int se) -> double {
+            if (se < 0 || se >= mesh.element_count) return 0.0;
+            if (!active_element.empty() && !active_element[(size_t)se]) return 0.0;
+            const MaterialModel& sm = materials[(size_t)mesh.element_material[(size_t)se]];
+            const int ng = E::kGaussCount;
+            double sum = 0.0;
+            for (int g = 0; g < ng; ++g) {
+                const GaussState& gs = committed[(size_t)se * ng + g];
+                sum += gs.pw_carried;
+                if (sm.undrained && gs.eps_vol_und != 0.0)
+                    sum += sm.kw_over_n(sm.undrained_poisson) * gs.eps_vol_und;
+            }
+            return sum / ng;
+        };
         const auto ncpts = iface::nc_points();
         for (size_t ii = 0; ii < structures.interfaces.size(); ++ii) {
             const auto& ie = structures.interfaces[ii];
@@ -875,7 +900,7 @@ public:
                 }
                 const size_t si = ii * iface::kPointCount + q;
                 const auto ret = iface::coulomb_return(ie.props, du_s, du_n, (*st.iface_c)[si],
-                                                       ie.sigma_n0[q]);
+                                                       ie.sigma_n0[q], joint_pore(ie.soil_elem));
                 (*st.iface_t)[si] = ret.slip_p_new;
                 if (probe && probe->prev_iface)
                     measure_traction_point(*probe, (*probe->prev_iface)[si], ret.tau, du_s,
@@ -924,7 +949,7 @@ public:
                 }
                 const size_t si = ii * iface::kPointCount5 + q;
                 const auto ret = iface::coulomb_return(ie.props, du_s, du_n, (*st.iface5_c)[si],
-                                                       ie.sigma_n0[q]);
+                                                       ie.sigma_n0[q], joint_pore(ie.soil_elem));
                 (*st.iface5_t)[si] = ret.slip_p_new;
                 if (probe && probe->prev_iface5)
                     measure_traction_point(*probe, (*probe->prev_iface5)[si], ret.tau, du_s,

@@ -406,6 +406,10 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     if (std::find(ph.poly_dry.begin(), ph.poly_dry.end(), 1) != ph.poly_dry.end())
         warr(o, "dry", ph.poly_dry);
     if (ph.pore_from_flow) wfield(o, "flowpore", true);
+    if (ph.consol_load_at_start) wfield(o, "cloadstart", true);
+    if (ph.any_material_change()) warr(o, "pmat", ph.poly_material);
+    if (ph.any_plate_change()) warr(o, "smat", ph.struct_material);
+    if (ph.any_contraction()) warr(o, "scontr", ph.struct_contraction);
     if (ph.any_region_water()) {
         warr(o, "pwater", ph.poly_water);
         warr(o, "pwlevel", ph.poly_water_level);
@@ -433,6 +437,7 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     if (ph.sum_mstage != 1.0) wfield(o, "mstage", ph.sum_mstage);
     if (ph.ignore_undrained) wfield(o, "ignoreund", true);
     if (ph.reset_small_strain) wfield(o, "resetsmall", true);
+    if (ph.reset_displacements) wfield(o, "resetdisp", true);
     closeobj(o); o += ',';
 }
 inline Phase rphase(const Json& j) {
@@ -468,6 +473,10 @@ inline Phase rphase(const Json& j) {
     ph.hydro_active = j.chars("hydro");
     ph.poly_dry = j.chars("dry");
     ph.pore_from_flow = j.flag("flowpore", false);
+    ph.consol_load_at_start = j.flag("cloadstart", false);
+    ph.poly_material = j.ints("pmat");
+    ph.struct_material = j.ints("smat");
+    ph.struct_contraction = j.nums("scontr");
     ph.poly_water = j.ints("pwater");
     ph.poly_water_level = j.nums("pwlevel");
     ph.water_override = j.flag("water_override", ph.water_override);
@@ -484,6 +493,7 @@ inline Phase rphase(const Json& j) {
     ph.sum_mstage = j.num("mstage", ph.sum_mstage);
     ph.ignore_undrained = j.flag("ignoreund", ph.ignore_undrained);
     ph.reset_small_strain = j.flag("resetsmall", ph.reset_small_strain);
+    ph.reset_displacements = j.flag("resetdisp", false);
     return ph;
 }
 
@@ -546,6 +556,7 @@ inline std::string project_to_json(const Project& p) {
             wfield(o, "sigpsi", m.sig_psi);
         }
         wfield(o, "kx", m.kx); wfield(o, "ky", m.ky);
+        if (m.ck > 0.0) wfield(o, "ck", m.ck);
         wfield(o, "und_mode", (double)m.und_mode);
         wfield(o, "nu_u", m.nu_u); wfield(o, "skempton_B", m.skempton_B);
         wfield(o, "gw_ga", m.gw_ga); wfield(o, "gw_gn", m.gw_gn);
@@ -566,6 +577,7 @@ inline std::string project_to_json(const Project& p) {
         wfield(o, "elastoplastic", m.elastoplastic);
         wfield(o, "EA", m.EA); wfield(o, "EI", m.EI); wfield(o, "w", m.w);
         wfield(o, "nu", m.nu); wfield(o, "Mp", m.Mp); wfield(o, "Np", m.Np);
+        if (m.prevent_punching) wfield(o, "punch", true);
         closeobj(o);
     }
     o += "],";
@@ -602,6 +614,7 @@ inline std::string project_to_json(const Project& p) {
         wfield(o, "E", m.E); wfield(o, "gamma", m.gamma);
         wfield(o, "diameter", m.diameter); wfield(o, "Lspacing", m.Lspacing);
         wfield(o, "Tskin_max", m.Tskin_max); wfield(o, "Fmax_base", m.Fmax_base);
+        if (m.Tskin_end > 0.0) wfield(o, "Tskin_end", m.Tskin_end);
         closeobj(o);
     }
     o += "],";
@@ -665,6 +678,7 @@ inline std::string project_to_json(const Project& p) {
         wfield(o, "iface_material", (double)s.iface_material);
         if (s.iface_kn != 0.0) wfield(o, "iface_kn", s.iface_kn);
         if (s.iface_ks != 0.0) wfield(o, "iface_ks", s.iface_ks);
+        if (s.iface_vt != 0.1) wfield(o, "iface_vt", s.iface_vt);
         wfield(o, "conn", (double)s.conn);
         wfield(o, "flow_barrier", (double)s.flow_barrier);
         wfield(o, "hyd_res", s.hydraulic_resistance);
@@ -826,6 +840,7 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             m.hb_D = j.num("hbD", m.hb_D);
             m.sig_psi = j.num("sigpsi", m.sig_psi);
             m.kx = j.num("kx", m.kx); m.ky = j.num("ky", m.ky);
+            m.ck = j.num("ck", m.ck);
             // Undrained stiffness definition: 0 = nu_u direct, 1 = Skempton-B based. An
             // unrecognised value must not land on 0 in silence -- that is the reading that
             // solves at 0.495 whatever the file says, which is what the v9 bump exists to stop.
@@ -858,6 +873,7 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             m.elastoplastic = j.flag("elastoplastic", m.elastoplastic);
             m.EA = j.num("EA", m.EA); m.EI = j.num("EI", m.EI); m.w = j.num("w", m.w);
             m.nu = j.num("nu", m.nu); m.Mp = j.num("Mp", m.Mp); m.Np = j.num("Np", m.Np);
+            m.prevent_punching = j.flag("punch", m.prevent_punching);
             p.plates.push_back(std::move(m));
         }
     if (const Json* arr = root.find("anchors"); arr && arr->type == Json::Arr)
@@ -887,6 +903,7 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             m.E = j.num("E", m.E); m.gamma = j.num("gamma", m.gamma);
             m.diameter = j.num("diameter", m.diameter); m.Lspacing = j.num("Lspacing", m.Lspacing);
             m.Tskin_max = j.num("Tskin_max", m.Tskin_max); m.Fmax_base = j.num("Fmax_base", m.Fmax_base);
+            m.Tskin_end = j.num("Tskin_end", m.Tskin_end);
             p.embedded.push_back(std::move(m));
         }
 
@@ -934,6 +951,7 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             s.iface_material = (int)j.num("iface_material", -1);
             s.iface_kn = j.num("iface_kn", 0.0);
             s.iface_ks = j.num("iface_ks", 0.0);
+            s.iface_vt = j.num("iface_vt", 0.1);
             // Connection point of an embedded beam. An unknown value must not land on the
             // default quietly: hinged and free are different structures, not different settings.
             const int cnv = (int)j.num("conn", 0);

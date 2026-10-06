@@ -283,6 +283,12 @@ struct HsSubstepPlan {
 // which is this fixture's path indeterminacy, not integration error. 200 is the cheapest setting
 // on that plateau. Saturation is reported (`HsIntegrated::saturated`) so a run that hit it
 // is never mistaken for one that met its tolerance.
+// Re-measured 2026-10 on boundary-value runs, because the ceiling is where the time goes -- run
+// time is nearly proportional to it (a strip on undrained clay 38 / 15 / 8 / 5 s at 200 / 50 / 20
+// / 8, a fill on a soft base 92 / 40 / 22 / 14 s) and those two answers do not move. The
+// oedometer does: at 50 the boundary-value run leaves the constitutive routine by up to 1.09
+// percentage points (KV-NUM-009; 0.001 at 200), because with large load increments the points
+// really need more than 50. The ceiling is an accuracy guard and stays where it is.
 // TEMPORARY measurement seam (scaffold): the environment override, so the ceiling stays swept.
 inline int hs_max_substeps() {
     static const int v = [] {
@@ -391,9 +397,15 @@ inline double hs_initial_gamma_p(const HardeningSoilParams& p,
 //     sigma'_yy,c = OCR sigma'_yy          (or sigma'_yy + POP)
 //     sigma'_xx,c = sigma'_zz,c = K0nc sigma'_yy,c ,   sigma_xy,c = sigma_xy
 // i.e. the state the soil was loaded to along the normally consolidated path before it was
-// unloaded to where it is. pp is the cap through that state. gamma_p is the shear hardening that
-// primary loading to that state leaves behind: the same history, read by the other surface, so
-// an overconsolidated soil is elastic in shear up to the deviator it has already carried.
+// unloaded to where it is. pp is the cap through that state. gamma_p is NOT taken from it: it is
+// the shear hardening that puts the CURRENT stress on the shear surface (see the definition).
+// Between 2026-09 and 2026-10 it was the larger of the two -- the same history read by the other
+// surface -- and the two sources this build is checked against pull opposite ways on that:
+// a staged excavation in clay with a pre-overburden of 5 kPa comes within 2% of its published
+// wall movements with the present-state value and was 3-6% too stiff with the history's, while
+// the published element tests below (KV-CST-019) sit 1-2 points further from their reference
+// with it (they are low in the compression deviator by 5-9% either way). NOT SETTLED: whichever
+// explains the element tests' deficit decides this.
 //
 // What this replaces, measured. pp was the cap through the CURRENT state scaled by OCR -- the
 // in-situ K0, not K0nc -- and a POP was turned into that ratio for every component; gamma_p was

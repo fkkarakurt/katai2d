@@ -112,6 +112,9 @@ struct StructCarryRecord {
     std::array<size_t, 2> skin{};                  // [begin, end) of its skin points (embedded beam)
     std::array<int, 2> extra_dof{};                // [begin, end) of the extra DOFs it allocated
     int install = -1;                              // its installation cohort (-1 = the zero datum)
+    // The stiffness its plate elements were solved with (0 = it has none): a phase that gives
+    // the plate another section finds here what the carried forces were computed from.
+    double plate_EA = 0.0, plate_EI = 0.0, plate_GA = 0.0;
 };
 
 // Raw converged structural state of a STATIC-family phase, for the phase chain (Track 1a): a
@@ -156,6 +159,11 @@ enum class ConsolidationStop { TimeInterval, MinExcessPore, DegreeOfConsolidatio
 struct SolveResult {
     katai::mesh::Mesh mesh;                     // the mesh actually solved (split for embedded walls)
     Eigen::VectorXd disp;                      // full displacement (2 * node_count)
+    // The displacement since the start of the staged construction: this phase's on top of
+    // the phases it continues (the initial phase generates stresses and counts for nothing; a
+    // phase that resets displacements starts the count again). Filled by the phase sequence;
+    // empty for a single phase solved on its own.
+    Eigen::VectorXd disp_total;
     NodalStressField stress;                   // nodal EFFECTIVE [sxx, syy, sxy] (pore on rhs)
     std::vector<double> pore;                  // nodal pore pressure u >= 0 (hydrostatic), size node_count
     bool ok = false;

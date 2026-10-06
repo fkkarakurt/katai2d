@@ -272,7 +272,7 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                 };
                 arc_opt.srf_start = srf;
                 arc_opt.srf_first_step = first_step;
-                arc_opt.srf_max = options.srf_max;
+                arc_opt.srf_max = std::max(options.srf_max, options.srf_ceiling);
                 arc_opt.srf_resolution = options.fos_resolution;
                 try {
                     r = solve_nonlinear(mesh, dofs, materials, no_load, linear_solve, arc_opt,
@@ -280,7 +280,7 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                                         carry_now());
                     // A continuation that stopped without finding the limit (the path could not
                     // be started from here) leaves the search to the prescribed steps.
-                    return r.srf_limit || r.srf >= options.srf_max;
+                    return r.srf_limit || r.srf >= arc_opt.srf_max;
                 } catch (...) {
                     return false;
                 }
@@ -288,7 +288,7 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
             if (!has_structures) {
                 NewtonResult ra;
                 if (continue_by_arc(options.msf_step, ra)) {
-                    res.fos = std::min(std::max(ra.srf, srf), options.srf_max);
+                    res.fos = std::min(std::max(ra.srf, srf), std::max(options.srf_max, options.srf_ceiling));
                     res.bracketed = ra.srf_limit;
                     ra.displacement += u_total;
                     res.mechanism = std::move(ra);
@@ -300,9 +300,10 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
             bool ever_failed = false;
             for (int guard = 0; guard < 400; ++guard) {
                 double next = srf + step;
-                if (next > options.srf_max) {
-                    if (srf >= options.srf_max) break;
-                    next = options.srf_max;
+                const double top = std::max(options.srf_max, options.srf_ceiling);
+                if (next > top) {
+                    if (srf >= top) break;
+                    next = top;
                 }
                 std::vector<MaterialModel> m = materials;
                 for (auto& mm : m) factor_strength(mm, next);
@@ -337,7 +338,7 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                     }
                     step = std::max(0.5 * (next - srf), 0.5 * options.fos_resolution * srf);
                 }
-                if (srf >= options.srf_max) break;
+                if (srf >= std::max(options.srf_max, options.srf_ceiling)) break;
             }
             res.fos = failed_at > 0.0 ? 0.5 * (srf + failed_at) : srf;
             return res;
@@ -347,10 +348,34 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
         res.bracketed = true;
     }
 
-    for (int i = 0; i < options.bisection_iterations; ++i) {
-        const double mid = 0.5 * (lo + hi);
-        if (try_srf(mid, trial)) { lo = mid; res.mechanism = trial; res.ok = true; }
-        else { hi = mid; res.bracketed = true; }  // a collapse was seen -> the FoS is finite/bracketed
+    const auto bisect = [&]() {
+        for (int i = 0; i < options.bisection_iterations; ++i) {
+            const double mid = 0.5 * (lo + hi);
+            if (try_srf(mid, trial)) { lo = mid; res.mechanism = trial; res.ok = true; }
+            else { hi = mid; res.bracketed = true; }  // a collapse was seen -> the FoS is finite/bracketed
+        }
+    };
+    bisect();
+    // Nothing collapsed anywhere below the upper bracket: [srf_min, srf_max] was a first guess,
+    // not a limit on the answer. Widen it, doubling up to the ceiling, and bisect the interval in
+    // which a trial first collapses. A search that saw a collapse never comes here, so every factor
+    // below srf_max is found exactly as before.
+    if (!res.bracketed && res.ok && hi < options.srf_ceiling) {
+        double stable = hi;
+        for (;;) {
+            const double up = std::min(2.0 * stable, options.srf_ceiling);
+            if (!try_srf(up, trial)) {
+                lo = stable;
+                hi = up;
+                res.bracketed = true;
+                bisect();
+                break;
+            }
+            stable = up;
+            res.mechanism = trial;
+            lo = hi = up;
+            if (up >= options.srf_ceiling) break;
+        }
     }
     res.fos = 0.5 * (lo + hi);
     return res;

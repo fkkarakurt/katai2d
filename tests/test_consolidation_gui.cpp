@@ -74,6 +74,7 @@ void test_terzaghi_gui(m::SoilModel model, const char* label) {
     consol.type = m::PhaseType::Consolidation;
     consol.duration = 2.0 * H * H / cv; consol.time_steps = 120;
     consol.load_active = {1};                      // surcharge ON -> applied at t = 0+
+    consol.consol_load_at_start = true;            // the theory's column is loaded at once
     pr.phases.push_back(consol);
 
     const auto M = katai::app::mesh_from_project(pr, 0.08, 6);

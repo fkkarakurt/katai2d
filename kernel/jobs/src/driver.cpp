@@ -755,13 +755,77 @@ katai::core::MaterialParams to_material_params(const model::Material& m) {
     return p;
 }
 
-SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& mesh_in,
+// THE BENDING STIFFNESS OF A PLATE IN PLANE STRAIN. A plate goes on in the out-of-plane
+// direction and cannot strain that way, so it bends against EI / (1 - nu^2), not the EI of a
+// beam: with the nu = 0.15 of a concrete wall that is 2.3% stiffer. The entered value is the
+// section's own EI; a plate whose Poisson's ratio is 0 (a sheet pile, which is free to strain
+// across its width) keeps it.
+static double plate_bending_stiffness(const model::PlateMaterial& pm) {
+    const double nu = std::clamp(pm.nu, 0.0, 0.49);
+    return pm.EI / (1.0 - nu * nu);
+}
+
+SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::Mesh& mesh_in,
                              InitialPhase phase, const Eigen::VectorXd* flow_head,
                              const PhaseIO& io) {
     SolveResult R;
+    // THE MATERIALS OF THIS PHASE. A phase can say that a region is made of another material
+    // than the one it was drawn with (Phase::poly_material). Everything below reads the region's
+    // material from the project, so the phase is solved on a copy of the project in which the
+    // regions carry the materials they have in THIS phase, and on a mesh whose elements do.
+    model::Project pr_phase;
+    const bool material_change = io.config && io.config->any_material_change();
+    // ... and a plate another section (Phase::struct_material), read the same way.
+    const bool plate_change = io.config && io.config->any_plate_change();
+    if (plate_change) {
+        pr_phase = pr_drawn;
+        for (size_t si = 0; si < pr_phase.structs.size(); ++si) {
+            const int m = io.config->plate_of(si, pr_phase.structs[si].material);
+            if (m == pr_phase.structs[si].material) continue;   // silent-drop-ok: unchanged
+            if (pr_phase.structs[si].kind != model::StructKind::Plate ||
+                m >= (int)pr_phase.plates.size()) {
+                R.message = "Phase \"" + io.config->name + "\" gives structure " +
+                            std::to_string(si + 1) + " plate material " + std::to_string(m + 1) +
+                            ": it is not a plate, or the project has no such plate material.";
+                return R;
+            }
+            pr_phase.structs[si].material = m;
+        }
+    }
+    if (material_change) {
+        if (!plate_change) pr_phase = pr_drawn;
+        for (size_t i = 0; i < pr_phase.polygons.size(); ++i) {
+            const int m = io.config->material_of(i, pr_phase.polygons[i].material);
+            if (m >= (int)pr_phase.materials.size()) {
+                R.message = "Phase \"" + io.config->name + "\" gives soil region " +
+                            std::to_string(i + 1) + " material " + std::to_string(m + 1) +
+                            ", and the project has " + std::to_string(pr_phase.materials.size()) +
+                            " material(s).";
+                return R;
+            }
+            pr_phase.polygons[i].material = m;
+        }
+    }
+    const model::Project& pr = (material_change || plate_change) ? pr_phase : pr_drawn;
     katai::mesh::Mesh mesh = mesh_in;   // working copy (split for embedded walls below)
     if (mesh.element_count == 0) { R.message = "Empty mesh."; return R; }
     if (pr.materials.empty())    { R.message = "No materials."; return R; }
+    // The soil region an element belongs to: the one its centroid lies in, the last drawn
+    // winning -- the rule the mesh's own material assignment and the activation below follow.
+    const auto region_of = [&pr, &mesh](int e) {
+        const int n0 = mesh.node_of(e, 0), n1 = mesh.node_of(e, 1), n2 = mesh.node_of(e, 2);
+        const double cx = (mesh.x[n0] + mesh.x[n1] + mesh.x[n2]) / 3.0;
+        const double cy = (mesh.y[n0] + mesh.y[n1] + mesh.y[n2]) / 3.0;
+        int owner = -1;
+        for (size_t i = 0; i < pr.polygons.size(); ++i)
+            if (point_in_polygon(cx, cy, pr.polygons[i])) owner = (int)i;
+        return owner;
+    };
+    if (material_change)
+        for (int e = 0; e < mesh.element_count; ++e) {
+            const int owner = region_of(e);
+            if (owner >= 0) mesh.element_material[(size_t)e] = pr.polygons[(size_t)owner].material;
+        }
 
     // Material tables indexed by material id. The constitutive model follows the GUI Material.model
     // (the selected model governs), resolved by name in the constitutive catalogue --
@@ -841,6 +905,18 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                      " kPa after its own return, not as one coupled multi-surface solve. Where "
                      "the cut-off and the volumetric cap are active at the same point, the cap "
                      "is not re-checked against the capped stress.");
+        // AN INCREMENT WITH DEPTH THE MODEL DOES NOT READ is said, not dropped. The stiffness
+        // increment belongs to the models whose stiffness is a Young's modulus, the cohesion
+        // increment to those whose cohesion is read at the stress point; entered on another
+        // model the box was ignored and the run was that of a uniform soil.
+        if ((m.E_inc != 0.0 && !entry->profile_E) || (m.c_inc != 0.0 && !entry->profile_c))
+            warn(R, "K2D-M006", m.name,
+                 "Material \"" + m.name + "\" (" + constitutive_name(m.model) + ") has " +
+                     std::string(m.E_inc != 0.0 && !entry->profile_E
+                                     ? "a stiffness increment with depth (E_inc = " + dnum(m.E_inc) + ")"
+                                     : "a cohesion increment with depth (c_inc = " + dnum(m.c_inc) + ")") +
+                     " that this model does not read: it is solved with the reference value at "
+                     "every depth. Split the layer, or use a model that reads the increment.");
         // The model does not take a small-strain stiffness more than 20x its own unload/reload
         // stiffness: the ratio E0/Eur or G0/Gur is limited to 20 in the HS small model, although
         // Alpan suggests the ratio can exceed 10 for very soft clays. The cap is applied in the
@@ -858,20 +934,19 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                          " kPa. The model permits at most 20, so it is solved with G0 = " +
                          dnum(cap) + " kPa. Lower G0, or raise Eur, to model the soil as entered.");
         }
-        // The pore fluid of a Hardening Soil material is sized at the REFERENCE unload/reload
-        // stiffness. That is the model's own elastic pair -- not the unread E box it used to be
-        // read from -- but HS stiffness is stress-dependent, so a soil far from p_ref carries a
-        // Kw/n that a stress-dependent derivation would not give it. Said out loud rather than
-        // left to be discovered from the pore pressures.
+        // The pore fluid of a Hardening Soil material is sized from the model's own elastic pair
+        // (Eur, nu_ur) -- not the unread E box it once was -- and follows it: at every stress
+        // point Kw/n is the same multiple of the skeleton's stress-dependent bulk modulus
+        // (undrained_stiffness_scale). Said, because it is how the excess pore pressure of this
+        // material is generated and nothing else in the output shows it.
         if (models.back().undrained && entry->hardening_family)
             note(R, "K2D-M002", m.name,
                  "The pore-fluid stiffness of \"" + m.name +
                      "\" is derived from the unload/reload pair (Eur_ref = " + dnum(m.Eurref) +
                      " kPa, nu_ur = " + dnum(m.nu_ur) +
-                     "), the Hardening Soil model's own elastic constants, evaluated at the "
-                     "reference pressure. It does not follow the stress-dependent Eur(sigma3) "
-                     "during the run, so far from p_ref the excess pore pressure is that of a "
-                     "reference-stiffness pore fluid.");
+                     "), the Hardening Soil model's own elastic constants, and follows the "
+                     "stress-dependent Eur(sigma3) point by point: the undrained Poisson's ratio "
+                     "is the same at every stress level.");
         // Undrained (C): the results of this material are in a different currency from the rest
         // of the model, and nothing in the output says which is which -- the stress field has one
         // name. Saying it here is the whole reason the diagnostics list exists.
@@ -951,7 +1026,21 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     std::vector<double> k0_by_mat;
     for (size_t mi = 0; mi < pr.materials.size(); ++mi) {
         const auto& m = pr.materials[mi];
-        double k0 = m.k0_auto ? (1.0 - std::sin(m.phi * kPi / 180.0)) : m.k0;
+        // THE AUTOMATIC K0 STARTS FROM THE MODEL'S OWN K0nc. For Mohr-Coulomb that is Jaky's
+        // 1 - sin(phi'). The hardening and soft-soil models carry K0nc as a parameter -- it sets
+        // their cap -- and an entered value is the one the initial stresses must be on too: read
+        // from Jaky whatever was entered, a soil with K0nc = 0.65 started at 0.5 with a cap built
+        // for 0.65, an initial state the model itself calls overconsolidated in shear. A model
+        // with no friction angle to read (linear elastic, Hoek-Brown) takes 0.5.
+        const bool k0nc_model =
+            m.model == model::SoilModel::HardeningSoil || m.model == model::SoilModel::HSsmall ||
+            m.model == model::SoilModel::SoftSoil || m.model == model::SoilModel::SoftSoilCreep;
+        const bool no_phi = m.model == model::SoilModel::LinearElastic ||
+                            m.model == model::SoilModel::HoekBrown;
+        const double k0_base = no_phi ? 0.5
+                               : (k0nc_model && !m.k0nc_auto) ? m.k0nc
+                               : (1.0 - std::sin(m.phi * kPi / 180.0));
+        double k0 = m.k0_auto ? k0_base : m.k0;
         // Overconsolidation raises the automatic K0; the formula and its passive clamp are
         // engine-owned now (Stage B9, initial_stress.hpp: k0_overconsolidated -- audit finding:
         // OCR used to be silently ignored by the MC/LE geostatic field). nu is nu_ur for the
@@ -963,23 +1052,20 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             k0 = katai::core::k0_overconsolidated(k0, m.OCR, adv ? m.nu_ur : m.nu,
                                                   std::sin(m.phi * kPi / 180.0));
         }
-        // JAKY'S FORMULA NEEDS A FRICTION ANGLE. Hoek-Brown has none, so 1 - sin(phi') reads the
-        // schema's unused default and lands on a number by accident. It is not refused: the
-        // value it lands on, K0 = 1.00 at phi' = 0, is the lithostatic state a competent rock
-        // mass is usually assumed to be in, so the default is defensible -- but it must not be
-        // arrived at silently, because the user could equally have meant the 0.3 a jointed,
-        // relaxed mass shows. This is the one place in the run that can say so.
+        // A ROCK MASS ON THE AUTOMATIC K0 GETS 0.5, AND IS TOLD SO. Hoek-Brown has no friction
+        // angle for Jaky's formula, so the automatic value is a convention, not a property of the
+        // rock: a competent mass is often taken as lithostatic (K0 = 1), a jointed or relaxed one
+        // can be far lower. This is the one place in the run that can say so.
         // Said where the K0 is used: the initial K0 procedure. A gravity-loading start never reads it.
         if (m.model == model::SoilModel::HoekBrown && m.k0_auto && !io.chained &&
             phase == InitialPhase::K0Procedure)
             warn(R, "K2D-A017", m.name,
-                 "\"" + m.name + "\" uses the Hoek-Brown model, which has no phi', so the "
-                 "automatic K0 = 1 - sin(phi') falls back on this material's unused friction box "
-                 "and gives K0 = " + dnum(k0) +
-                     ". That is not a measurement of anything. A competent rock mass is often "
-                     "taken as lithostatic (K0 = 1), but a jointed or relaxed one can be far "
-                     "lower -- switch the automatic K0 off and enter the value your site "
-                     "investigation supports.");
+                 "\"" + m.name + "\" uses the Hoek-Brown model, which has no phi' for the "
+                 "automatic K0 to be computed from: K0 = " + dnum(k0) +
+                     " is used, a convention and not a measurement of anything. A competent rock "
+                     "mass is often taken as lithostatic (K0 = 1), but a jointed or relaxed one "
+                     "can be far lower -- switch the automatic K0 off and enter the value your "
+                     "site investigation supports.");
         k0_by_mat.push_back(k0);
     }
     // Staged construction: active objects of THIS phase (null config = everything active).
@@ -992,6 +1078,22 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             if (poly_on(i) && point_in_polygon(x, y, pr.polygons[i])) mat = pr.polygons[i].material;
         return mat;   // last wins
     };
+    // THE SHEAR MODULUS AN INTERFACE IS DERIVED FROM is the soil's own: Young's modulus for the
+    // elastic and Mohr-Coulomb models, and E50 for the hardening models -- slipping is shearing,
+    // and E50 is the stiffness those models shear with. It used to be read from the E and nu
+    // boxes whatever the model, and a hardening material never reads those: every interface
+    // beside one took G = 13000 / 2.6 = 5000 kPa, the boxes' defaults, beside a soft clay with
+    // E50 = 4000 as beside a dense sand with E50 = 40 000.
+    const auto interface_soil_G = [](const model::Material& sm) {
+        if (sm.model == model::SoilModel::HardeningSoil || sm.model == model::SoilModel::HSsmall)
+            return sm.E50ref / (2.0 * (1.0 + sm.nu_ur));
+        return sm.E / (2.0 * (1.0 + sm.nu));
+    };
+    // ... and its VIRTUAL THICKNESS is a tenth of the model's element size, the one entered for
+    // the mesh, not of the elements that happen to lie along the line: refining the mesh at a
+    // wall is not a statement about the stiffness of the contact, and with the local size it
+    // was one -- halving the elements there doubled kn and ks.
+    const double iface_thickness_base = pr.mesh.elem_size;
     const auto eff_unit_weight = [&pr, &io, water, &material_at](double x, double y) {
         const int mat = material_at(x, y);
         if (mat < 0 || mat >= (int)pr.materials.size()) return 0.0;
@@ -1093,7 +1195,25 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // two frames agree when the first point is the toe and are mirrored otherwise.
             w.iface_right = a_is_toe ? s.iface_pos : s.iface_neg;
             w.iface_left = a_is_toe ? s.iface_neg : s.iface_pos;
-            if (std::fabs(dx) <= 1e-6 * len) {                 // VERTICAL: validated x-column split
+            // TWO WALLS ON ONE LINE SHARE ONE SEAM. A lining that takes the place of a shield, a
+            // wall rebuilt in another material: the second plate is drawn on the line of the
+            // first, and only one of them is active at a time. Split again, the line's nodes --
+            // already two at each point -- became four, half of the second wall's seam lay on
+            // twins of the first, and it was reported as "built over half its length". The line
+            // is split once; the wall drawn later stands on the same pairs.
+            const WallSpec* same_line = nullptr;
+            for (const auto& ow : walls) {
+                const auto& os = pr.structs[ow.si];
+                const double tol = 1e-9 * (1.0 + len);
+                const bool same = (std::fabs(os.x1 - s.x1) < tol && std::fabs(os.y1 - s.y1) < tol &&
+                                   std::fabs(os.x2 - s.x2) < tol && std::fabs(os.y2 - s.y2) < tol) ||
+                                  (std::fabs(os.x1 - s.x2) < tol && std::fabs(os.y1 - s.y2) < tol &&
+                                   std::fabs(os.x2 - s.x1) < tol && std::fabs(os.y2 - s.y1) < tol);
+                if (same) { same_line = &ow; break; }
+            }
+            if (same_line) {
+                w.seam = same_line->seam;
+            } else if (std::fabs(dx) <= 1e-6 * len) {                 // VERTICAL: validated x-column split
                 w.seam = katai::core::split_mesh_at_wall(mesh, 0.5 * (s.x1 + s.x2),
                                                          std::min(s.y1, s.y2), std::max(s.y1, s.y2));
             } else {                                           // GENERAL: split along the segment, key by s
@@ -1143,7 +1263,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             // Plate stiffness from the plate material.
             if (s.material >= 0 && s.material < (int)pr.plates.size()) {
                 const auto& pm = pr.plates[s.material];
-                w.pp.EA = pm.EA; w.pp.EI = pm.EI; w.pp.nu = pm.nu;
+                w.pp.EA = pm.EA; w.pp.EI = plate_bending_stiffness(pm); w.pp.nu = pm.nu;
                 set_plate_mass(w.pp, pm.w);       // inertia (Dynamic phases only; ignored by static)
                 if (pm.elastoplastic) {           // M-N hinge caps (<=0 => unlimited, geogrid rule)
                     w.pp.Mp = pm.Mp > 0.0 ? pm.Mp : -1.0;
@@ -1158,9 +1278,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             w.soil_mat = smat;
             const auto& sm = pr.materials[smat >= 0 ? smat : 0];
             const double Rinter = sm.rinter_rigid ? 1.0 : sm.Rinter;
-            const double G = sm.E / (2.0 * (1.0 + sm.nu));
-            const double avg = len / std::max<size_t>(1, w.seam.size() / (order == 15 ? 4 : 2));
-            katai::core::iface::interface_stiffness(Rinter, G, avg, 0.1, w.ip.kn, w.ip.ks);
+            const double G = interface_soil_G(sm);
+            katai::core::iface::interface_stiffness(Rinter, G, iface_thickness_base, s.iface_vt, w.ip.kn, w.ip.ks);
             if (s.iface_kn > 0.0) w.ip.kn = s.iface_kn;   // entered: the joint's own stiffness
             if (s.iface_ks > 0.0) w.ip.ks = s.iface_ks;
             // A JOINT AGAINST ROCK CANNOT BORROW A STRENGTH THE ROCK DOES NOT HAVE. The two
@@ -1288,9 +1407,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             sp.soil_mat = smat;
             const auto& sm = pr.materials[smat >= 0 ? smat : 0];
             const double Rinter = sm.rinter_rigid ? 1.0 : sm.Rinter;
-            const double G = sm.E / (2.0 * (1.0 + sm.nu));
-            const int nedges = std::max<int>(1, ((int)sp.seam.size() - 1) / per_edge);
-            katai::core::iface::interface_stiffness(Rinter, G, len / nedges, 0.1, sp.ip.kn, sp.ip.ks);
+            const double G = interface_soil_G(sm);
+            katai::core::iface::interface_stiffness(Rinter, G, iface_thickness_base, s.iface_vt, sp.ip.kn, sp.ip.ks);
             if (s.iface_kn > 0.0) sp.ip.kn = s.iface_kn;
             if (s.iface_ks > 0.0) sp.ip.ks = s.iface_ks;
             // A JOINT AGAINST ROCK CANNOT BORROW A STRENGTH THE ROCK DOES NOT HAVE. The two
@@ -1466,7 +1584,8 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         }
         katai::core::plate::PlateProps pp;
         if (s.material >= 0 && s.material < (int)pr.plates.size()) {
-            const auto& pm = pr.plates[s.material]; pp.EA = pm.EA; pp.EI = pm.EI; pp.nu = pm.nu;
+            const auto& pm = pr.plates[s.material];
+            pp.EA = pm.EA; pp.EI = plate_bending_stiffness(pm); pp.nu = pm.nu;
             set_plate_mass(pp, pm.w);             // inertia (Dynamic phases only; ignored by static)
             if (pm.elastoplastic) {               // M-N hinge caps (<=0 => unlimited, geogrid rule)
                 pp.Mp = pm.Mp > 0.0 ? pm.Mp : -1.0;
@@ -1718,17 +1837,102 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             wall_ends.push_back({x, y, {dx[k], dy[k], dphi[k]}});
         }
     };
+    // EACH INTERFACE ELEMENT TAKES THE SOIL IT LIES AGAINST. A wall's interfaces were all given
+    // the soil at the wall's midpoint, on one side: a wall through clay into sand slid against
+    // clay over its whole length, on both faces. The element's own side and position decide:
+    // the material of the active soil just off its midpoint on the side it faces. A side with no
+    // soil there (excavated), a rock material (which has no c' or phi' to reduce) and an
+    // interface given a material of its own keep what the wall was given.
+    const auto adjacent_soil_props = [&](const WallSpec& w, const std::vector<int>& node_r,
+                                         const std::vector<int>& node_l, int soil_a, int soil_b,
+                                         int soil_mid, katai::core::iface::InterfaceProps& ip,
+                                         int& strength_mat, int& adjacent_mat) {
+        const auto& st = pr.structs[w.si];
+        bool left = false;
+        for (size_t i = 0; i < node_l.size(); ++i)
+            if (node_l[i] == soil_mid && node_r[i] != soil_mid) { left = true; break; }
+        const double mx = 0.5 * (mesh.x[soil_a] + mesh.x[soil_b]);
+        const double my = 0.5 * (mesh.y[soil_a] + mesh.y[soil_b]);
+        const double sgn = left ? -1.0 : 1.0;
+        const int mat = material_at(mx + sgn * 1e-3 * w.nx, my + sgn * 1e-3 * w.ny);
+        if (mat < 0 || mat >= (int)pr.materials.size()) return;
+        adjacent_mat = mat;   // the initial normal stress is this soil's too (its K0)
+        if (st.iface_material >= 0 || mat == w.soil_mat) return;
+        const auto& sm = pr.materials[(size_t)mat];
+        if (sm.model == model::SoilModel::HoekBrown) return;
+        const double Rinter = sm.rinter_rigid ? 1.0 : sm.Rinter;
+        katai::core::iface::interface_stiffness(Rinter, interface_soil_G(sm), iface_thickness_base,
+                                                st.iface_vt, ip.kn, ip.ks);
+        if (st.iface_kn > 0.0) ip.kn = st.iface_kn;
+        if (st.iface_ks > 0.0) ip.ks = st.iface_ks;
+        const katai::core::MaterialModel& smodel = models[(size_t)mat];
+        ip.c_i = Rinter * smodel.cohesion;
+        ip.phi_i = std::atan(Rinter * std::tan(smodel.friction_angle));
+        ip.sigma_t = smodel.tension_cutoff ? Rinter * smodel.tensile_strength : 0.0;
+        strength_mat = mat;
+    };
     for (const auto& w : walls) {
         // silent-drop-ok: an inactive wall is not dropped -- the phase asked for it to be absent, and
         // its seam is tied so that the ground across the line is continuous, exactly as without it.
         if (!w.active) {
-            for (const auto& sp : w.seam) tie_twins(sp.left, sp.right);
+            // ... unless an active wall stands on the same seam (two walls drawn on one line):
+            // the line is then a wall's, and tying it would weld that wall's two faces together.
+            bool seam_in_use = false;
+            for (const auto& ow : walls)
+                if (&ow != &w && ow.active && !ow.seam.empty() && !w.seam.empty() &&
+                    ow.seam.front().right == w.seam.front().right &&
+                    ow.seam.front().left == w.seam.front().left) { seam_in_use = true; break; }
+            if (!seam_in_use)
+                for (const auto& sp : w.seam) tie_twins(sp.left, sp.right);
+            // silent-drop-ok: the inactive wall is absent because the phase says so (see above).
             continue;
         }
         const StructSnap snap0 = snap();
         int toe = -1;
         for (int n = 0; n < mesh.node_count; ++n)
             if (std::fabs(mesh.x[n] - w.toe_x) < 1e-6 && std::fabs(mesh.y[n] - w.toe_y) < 1e-6) { toe = n; break; }
+        // A WALL THAT CONTINUES ANOTHER HAS NO TOE THERE. The toe is where a wall ends in the
+        // ground: the node is left whole and the wall hangs from it. Where the deeper end of this
+        // wall is the upper end of another active one -- a wall drawn in two pieces, the chords of
+        // a lining -- that point is already split by the other wall, and treating it as a toe
+        // tied this wall, and through the joint the other, to the soil on one side: the wall was
+        // pinned to the ground at every point it had been drawn through. Measured on a cantilever
+        // wall, 8 m, in front of a 4 m excavation: the largest moment 20.5 kNm/m drawn in one
+        // piece, 18.1 in two, 25.1 in four; the head moved 11.8, 9.7, 11.6 mm. The point is a
+        // seam position like any other: the wall's own translation, an interface on each side.
+        int toe_left = -1;
+        if (toe >= 0) {
+            for (const auto& ow : walls) {
+                // silent-drop-ok: nothing is dropped -- the loop looks for another active wall
+                // that already split this wall's lower end; a wall that is not one is passed over.
+                if (&ow == &w || !ow.active) continue;
+                for (const auto& sp : ow.seam) {
+                    if (std::fabs(mesh.x[sp.right] - w.toe_x) > 1e-6 ||
+                        std::fabs(mesh.y[sp.right] - w.toe_y) > 1e-6) continue;
+                    // Which twin is on this wall's right: the one whose elements lie on the side
+                    // its normal points into.
+                    std::array<double, 2> side{0.0, 0.0};
+                    for (int e = 0; e < mesh.element_count; ++e) {
+                        int who = -1;
+                        double cx = 0.0, cy = 0.0;
+                        for (int k = 0; k < mesh.nodes_per_element; ++k) {
+                            const int nd = mesh.node_of(e, k);
+                            if (nd == sp.right) who = 0;
+                            if (nd == sp.left) who = 1;
+                            cx += mesh.x[nd]; cy += mesh.y[nd];
+                        }
+                        if (who < 0) continue;
+                        cx /= mesh.nodes_per_element; cy /= mesh.nodes_per_element;
+                        side[(size_t)who] += (cx - w.toe_x) * w.nx + (cy - w.toe_y) * w.ny;
+                    }
+                    const bool right_is_right = side[0] >= side[1];
+                    toe = right_is_right ? sp.right : sp.left;
+                    toe_left = right_is_right ? sp.left : sp.right;
+                    break;
+                }
+                if (toe_left >= 0) break;
+            }
+        }
         // The toe is the node the plate hangs from, so without it there is no wall at all --
         // not a shorter one, none: no plate, no interfaces, and a run that returns the field of
         // an unsupported excavation. It goes missing when the deeper end is drawn outside the
@@ -1742,44 +1946,58 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                        "nor its interfaces can be built. Draw the wall inside a soil region.");
             return R;
         }
-        const double k0 = (w.soil_mat >= 0 && w.soil_mat < (int)k0_by_mat.size()) ? k0_by_mat[w.soil_mat] : 0.5;
-        const double fac = k0 * w.nx * w.nx + w.ny * w.ny;   // sigma_n / sigma'_v (vertical -> k0)
+        // sigma_n / sigma'_v on the wall's line (vertical -> K0), with the K0 of the soil the
+        // interface element lies against -- like its strength, not the wall's midpoint soil's.
+        const auto wall_k0_factor = [&k0_by_mat](const WallSpec& ws, int mat) {
+            const double k0 = (mat >= 0 && mat < (int)k0_by_mat.size()) ? k0_by_mat[(size_t)mat] : 0.5;
+            return k0 * ws.nx * ws.nx + ws.ny * ws.ny;
+        };
         if (w.order == 15) {
             katai::core::WallBuild5 wb = katai::core::build_embedded_wall5(mesh, w.seam, toe, dofs, w.pp, w.ip,
-                                                                           w.iface_right, w.iface_left);
+                                                                           w.iface_right, w.iface_left, toe_left);
             attach_to_wall(wb.node_r, wb.node_l, wb.dof_x, wb.dof_y);
             join_wall_ends(wb.node_r, wb.dof_x, wb.dof_y, wb.dof_phi);
             const auto ncp = katai::core::iface::nc_points5();
-            for (auto& ie : wb.interfaces)
-                for (int q = 0; q < 5; ++q) {
-                    const int nd = ie.soil_nodes[ncp[q].node];
-                    ie.sigma_n0[q] = fac * eff_sigma_v(mesh.x[nd], mesh.y[nd]);
-                }
             const size_t p0 = structures.plates5.size();
             for (const auto& pe : wb.plates) structures.plates5.push_back(pe);
             const size_t if0 = structures.interfaces5.size();
-            for (const auto& ie : wb.interfaces) structures.interfaces5.push_back(ie);
-            iface5_strength_mat.resize(structures.interfaces5.size(), w.strength_mat);
+            for (auto& ie : wb.interfaces) {
+                int smat_e = w.strength_mat, adj = w.soil_mat;
+                adjacent_soil_props(w, wb.node_r, wb.node_l, ie.soil_nodes[0], ie.soil_nodes[4],
+                                    ie.soil_nodes[2], ie.props, smat_e, adj);
+                const double fac_e = wall_k0_factor(w, adj);
+                for (int q = 0; q < 5; ++q) {
+                    const int nd = ie.soil_nodes[ncp[q].node];
+                    ie.sigma_n0[q] = fac_e * eff_sigma_v(mesh.x[nd], mesh.y[nd]);
+                }
+                structures.interfaces5.push_back(ie);
+                iface5_strength_mat.push_back(smat_e);
+            }
             if (structures.plates5.size() > p0)
                 diag_specs.push_back({5, w.name, p0, structures.plates5.size()});   // tri15 wall N/Q/M
             if (structures.interfaces5.size() > if0)
                 iface_diags.push_back({w.name, 15, if0, structures.interfaces5.size()});
         } else {
             katai::core::WallBuild wb = katai::core::build_embedded_wall(mesh, w.seam, toe, dofs, w.pp, w.ip,
-                                                                         w.iface_right, w.iface_left);
+                                                                         w.iface_right, w.iface_left, toe_left);
             attach_to_wall(wb.node_r, wb.node_l, wb.dof_x, wb.dof_y);
             join_wall_ends(wb.node_r, wb.dof_x, wb.dof_y, wb.dof_phi);
             const auto ncp = katai::core::iface::nc_points();
-            for (auto& ie : wb.interfaces)
-                for (int q = 0; q < 3; ++q) {
-                    const int nd = ie.soil_nodes[ncp[q].node];
-                    ie.sigma_n0[q] = fac * eff_sigma_v(mesh.x[nd], mesh.y[nd]);
-                }
             const size_t p0 = structures.plates.size();
             for (const auto& pe : wb.plates) structures.plates.push_back(pe);
             const size_t if0 = structures.interfaces.size();
-            for (const auto& ie : wb.interfaces) structures.interfaces.push_back(ie);
-            iface_strength_mat.resize(structures.interfaces.size(), w.strength_mat);
+            for (auto& ie : wb.interfaces) {
+                int smat_e = w.strength_mat, adj = w.soil_mat;
+                adjacent_soil_props(w, wb.node_r, wb.node_l, ie.soil_nodes[0], ie.soil_nodes[1],
+                                    ie.soil_nodes[2], ie.props, smat_e, adj);
+                const double fac_e = wall_k0_factor(w, adj);
+                for (int q = 0; q < 3; ++q) {
+                    const int nd = ie.soil_nodes[ncp[q].node];
+                    ie.sigma_n0[q] = fac_e * eff_sigma_v(mesh.x[nd], mesh.y[nd]);
+                }
+                structures.interfaces.push_back(ie);
+                iface_strength_mat.push_back(smat_e);
+            }
             if (structures.plates.size() > p0)
                 diag_specs.push_back({0, w.name, p0, structures.plates.size()});
             if (structures.interfaces.size() > if0)
@@ -1822,6 +2040,23 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 }
         }
         record(sp.si, snap0);
+    }
+    // THE SOIL ELEMENT BESIDE EACH JOINT: the one element that has the joint's soil-side nodes on
+    // an edge. Its excess pore pressure makes the joint's normal stress an effective one.
+    {
+        std::vector<std::vector<int>> of_node((size_t)mesh.node_count);
+        for (int e = 0; e < mesh.element_count; ++e)
+            for (int k = 0; k < mesh.nodes_per_element; ++k)
+                of_node[(size_t)mesh.node_of(e, k)].push_back(e);
+        const auto beside = [&](int na, int nb) {
+            if (na < 0 || nb < 0 || na >= mesh.node_count || nb >= mesh.node_count) return -1;
+            for (int e : of_node[(size_t)na])
+                for (int f : of_node[(size_t)nb])
+                    if (e == f) return e;
+            return -1;
+        };
+        for (auto& ie : structures.interfaces) ie.soil_elem = beside(ie.soil_nodes[0], ie.soil_nodes[1]);
+        for (auto& ie : structures.interfaces5) ie.soil_elem = beside(ie.soil_nodes[0], ie.soil_nodes[1]);
     }
     // Rebind the structures built above (they came first, by position) onto the wall DOFs.
     {
@@ -1983,7 +2218,9 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         set_plate_mass(pp, em.gamma * A / Ls);
         const int smat = material_at(0.5 * (s.x1 + s.x2), 0.5 * (s.y1 + s.y2));
         const auto& sm = pr.materials[smat >= 0 ? smat : 0];
-        const double G = sm.E / (2.0 * (1.0 + sm.nu));
+        // The soil's own shear stiffness, as for an interface (interface_soil_G): for a hardening
+        // soil the E and nu boxes are not its stiffness.
+        const double G = interface_soil_G(sm);
         // Skin/foot spring stiffnesses from the default interface-stiffness factors (Sluis 2012) --
         // engine-owned now (Stage B9, embedded_beam.hpp: default_interface_stiffness).
         double k_axial, k_lateral, D_foot;
@@ -1994,6 +2231,22 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         structures.embedded_beams.push_back(katai::core::ebeam::build_embedded_beam(
             mesh, dofs, bx, by, pp, k_axial, k_lateral, t_max, D_foot, f_max,
             conn_beam_node, conn_mesh_node));
+        // A skin resistance that varies along the beam: linear from Tskin_max at the point the
+        // beam is drawn from to Tskin_end at the point it is drawn to. Each skin point takes
+        // the value at its own place.
+        if (em.Tskin_max > 0.0 && em.Tskin_end > 0.0) {
+            auto& eb = structures.embedded_beams.back();
+            const double ax = s.x1, ay = s.y1, len = std::hypot(s.x2 - s.x1, s.y2 - s.y1);
+            for (auto& sp : eb.skin) {
+                double x = 0.0, y = 0.0;
+                for (int k = 0; k < 3; ++k) {
+                    x += sp.Nb(k) * eb.node_x[(size_t)sp.beam_node[(size_t)k]];
+                    y += sp.Nb(k) * eb.node_y[(size_t)sp.beam_node[(size_t)k]];
+                }
+                const double f = len > 0.0 ? std::clamp(std::hypot(x - ax, y - ay) / len, 0.0, 1.0) : 0.0;
+                sp.t_max = (em.Tskin_max + f * (em.Tskin_end - em.Tskin_max)) / Ls;
+            }
+        }
         // Force-diagram bookkeeping (kind 3 = embedded beam; produces N/Q/M like a plate).
         diag_specs.push_back({3, s.name, structures.embedded_beams.size() - 1,
                               structures.embedded_beams.size()});
@@ -2039,6 +2292,53 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
              "on the edges to use others.");
     katai::core::apply_boundary_conditions(bc_edges, mesh, dofs, compliant_base,
                                            bc_released.empty() ? nullptr : &bc_released);
+    // A STRUCTURE THAT REACHES A SUPPORTED BOUNDARY IS HELD THERE. Where a plate has a node on
+    // the model boundary and the boundary fixes at least one displacement direction at it, the
+    // plate's rotation is fixed at that node: on a symmetry axis that is the symmetry itself, and
+    // at a rigid base it is the base. And a wall that an interface separates from the ground has
+    // displacements of its own there, which take the fixity of the boundary they stand on.
+    // Neither was done. A plate ending on the axis of a half model could rotate freely, so its
+    // bending moment there was zero where symmetry makes it largest; and a lining ring split
+    // from the ground by its interface was not held on the axis at all -- only friction kept it
+    // from drifting sideways. Read before the prescribed displacements below fix anything, so
+    // that only the boundary conditions count.
+    // The ROTATION is fixed under the standard fixities, and on a drawn edge that holds only the
+    // direction normal to itself -- a plane of symmetry, across which nothing can rotate. Any
+    // other drawn edge is the user's support: a fully fixed edge under the end of a beam is how
+    // a pin is drawn, and it stays one.
+    {
+        const auto held = [&](int node, int c) {
+            return node >= 0 && node < mesh.node_count && dofs.marked_fixed(dofs.global_dof(node, c));
+        };
+        const auto on_symmetry_plane = [&](int node) {
+            using E = katai::core::EdgeFixity;
+            const double x = mesh.x[node], y = mesh.y[node];
+            for (const auto& ed : bc_edges) {
+                const bool vertical = std::fabs(ed.nx) > std::fabs(ed.ny);
+                const bool normal_only = ed.fixity == E::NormallyFixed ||
+                                         (ed.fixity == E::HorizontallyFixed && vertical) ||
+                                         (ed.fixity == E::VerticallyFixed && !vertical);
+                if (!normal_only) continue;   // silent-drop-ok: not a plane of symmetry
+                const double dx = ed.bx - ed.ax, dy = ed.by - ed.ay, l2 = dx * dx + dy * dy;
+                if (!(l2 > 0.0)) continue;    // silent-drop-ok: degenerate edge
+                const double t = ((x - ed.ax) * dx + (y - ed.ay) * dy) / l2;
+                const double px = ed.ax + t * dx - x, py = ed.ay + t * dy - y;
+                if (t > -1e-9 && t < 1.0 + 1e-9 && px * px + py * py < 1e-12 * l2) return true;
+            }
+            return false;
+        };
+        const auto hold = [&](const auto& nodes, const auto& rot_dof, const auto& trans_dof) {
+            for (size_t k = 0; k < nodes.size(); ++k) {
+                const bool hx = held(nodes[k], 0), hy = held(nodes[k], 1);
+                if (!hx && !hy) continue;   // silent-drop-ok: not on a supported boundary
+                if (standard_fixities || on_symmetry_plane(nodes[k])) dofs.fix(rot_dof[k]);
+                if (hx && trans_dof[2 * k] >= 0) dofs.fix(trans_dof[2 * k]);
+                if (hy && trans_dof[2 * k + 1] >= 0) dofs.fix(trans_dof[2 * k + 1]);
+            }
+        };
+        for (const auto& pe : structures.plates) hold(pe.nodes, pe.rot_dof, pe.trans_dof);
+        for (const auto& pe : structures.plates5) hold(pe.nodes, pe.rot_dof, pe.trans_dof);
+    }
     // Line prescribed displacements (schema v2): every mesh node ON an active line gets the
     // set components FIXED here and their target values ramped 0 -> u by the static solver
     // (nonzero Dirichlet) in the phase that activates the line; a later phase in which it stays
@@ -2212,12 +2512,81 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
     // carries every other one (build_structural_carry states the three cases). carry_plan.full_datum
     // is the parent's total displacement in THIS phase's DOF numbering -- the datum every consumer
     // below evaluates its structures at.
+    // What each plate is solved with in this phase, for the phase after it to find; and a plate
+    // whose section this phase (or one before it) changed keeps the state that change wrote.
+    for (auto& r : struct_records) {
+        // ... or that has, or had, a line contraction: its shrinkage strain lives in that state.
+        const bool contracted =
+            r.si >= 0 &&
+            ((io.config && io.config->contraction_of((size_t)r.si) != 0.0) ||
+             (io.parent_config && io.parent_config->contraction_of((size_t)r.si) != 0.0));
+        const bool changed = contracted || (plate_change && r.si >= 0 &&
+                                            io.config->plate_of((size_t)r.si, -1) >= 0);
+        for (size_t i = r.plates[0]; i < r.plates[1]; ++i) {
+            r.plate_EA = structures.plates[i].props.EA; r.plate_EI = structures.plates[i].props.EI;
+            r.plate_GA = structures.plates[i].props.shear_rigidity();
+            if (changed) structures.plates[i].props.carries_state = true;
+        }
+        for (size_t i = r.plates5[0]; i < r.plates5[1]; ++i) {
+            r.plate_EA = structures.plates5[i].props.EA; r.plate_EI = structures.plates5[i].props.EI;
+            r.plate_GA = structures.plates5[i].props.shear_rigidity();
+            if (changed) structures.plates5[i].props.carries_state = true;
+        }
+    }
     katai::core::StructuralCarry carry_plan;
     if (any_struct_carry && io.prev && io.prev->ok) {
         const StructCarryState& ps = io.prev->struct_state;
         carry_plan = katai::core::build_structural_carry(ps, struct_records, structures, dofs,
                                                          2 * mesh.node_count, carry_init);
         if (carry_plan.carried) carry_src = &ps;
+        // A kept plate whose stiffness is not the one its forces were computed with keeps them
+        // (rescale_plate_state).
+        if (carry_plan.carried)
+            for (size_t c = 0; c < struct_records.size(); ++c) {
+                const auto& cr = struct_records[c];
+                if (c < carry_plan.record_installed.size() && carry_plan.record_installed[c]) continue;  // silent-drop-ok: installed now, nothing carried
+                for (const auto& p : ps.records) {
+                    if (p.si != cr.si || !(p.plate_EA > 0.0)) continue;   // silent-drop-ok: not this plate
+                    if (p.plate_EA != cr.plate_EA || p.plate_EI != cr.plate_EI ||
+                        p.plate_GA != cr.plate_GA)
+                        katai::core::rescale_plate_state(mesh, dofs, structures,
+                                                         carry_plan.full_datum, cr, p.plate_EA,
+                                                         p.plate_EI, p.plate_GA, carry_init);
+                    break;
+                }
+            }
+        // LINE CONTRACTION. The change in the plate's contraction between the phase before and
+        // this one is a shrinkage strain of half that much, written into the axial state of its
+        // integration points. It changes the plate's internal force at the start of the phase,
+        // and that imbalance is this phase's staged change like any other: it is applied with
+        // the load factor, and the ground decides how much of the shrinkage is realised.
+        if (io.config && (io.config->any_contraction() ||
+                          (io.parent_config && io.parent_config->any_contraction())))
+            for (size_t c = 0; c < struct_records.size(); ++c) {
+                const auto& cr = struct_records[c];
+                if (cr.si < 0) continue;   // silent-drop-ok: not a drawn structure
+                const double dC = io.config->contraction_of((size_t)cr.si) -
+                                  (io.parent_config ? io.parent_config->contraction_of((size_t)cr.si) : 0.0);
+                if (dC == 0.0) continue;   // silent-drop-ok: unchanged
+                const bool kept = carry_plan.carried && c < carry_plan.record_installed.size() &&
+                                  !carry_plan.record_installed[c];
+                if (!kept || (cr.plates[1] == cr.plates[0] && cr.plates5[1] == cr.plates5[0])) {
+                    R.message = "Phase \"" + io.config->name + "\" changes the line contraction of "
+                                "structure " + std::to_string(cr.si + 1) + ", which is not a plate "
+                                "carried from the phase before. A contraction is applied to a plate "
+                                "that is already in place: install it in an earlier phase.";
+                    return R;
+                }
+                const double shrink = -0.5 * dC;
+                for (size_t i = cr.plates[0]; i < cr.plates[1]; ++i)
+                    for (int q = 0; q < katai::core::plate::kBendGaussCount; ++q)
+                        carry_init.plate_plastic[i * (size_t)katai::core::plate::kPlasticStateSize +
+                                                 (size_t)katai::core::plate::kPlasticPerPoint * q] += shrink;
+                for (size_t i = cr.plates5[0]; i < cr.plates5[1]; ++i)
+                    for (int q = 0; q < katai::core::plate::kBendGaussCount5; ++q)
+                        carry_init.plate5_plastic[i * (size_t)katai::core::plate::kPlasticStateSize5 +
+                                                  (size_t)katai::core::plate::kPlasticPerPoint * q] += shrink;
+            }
     }
     // A prestressed anchor installed in this phase is its jack for the phase (AnchorElement::
     // lock_off): it holds its lock-off force and is locked where the wall comes to. Installed =
@@ -2318,6 +2687,23 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                         "axisymmetric mode yet -- keep every soil polygon active.";
             return R;
         }
+        // THE 6-NODED TRIANGLE IN AXISYMMETRY OVERESTIMATES A COLLAPSE LOAD. Plastic flow at
+        // constant volume is a constraint on every stress point, and in axisymmetry the hoop
+        // strain adds one the quadratic triangle has too few degrees of freedom to meet (Sloan
+        // and Randolph 1982, Int. J. Numer. Anal. Methods Geomech. 6, 47-76): the mesh is too
+        // stiff and the load too high -- the unsafe side. Measured on a rigid footing pushed
+        // 50 mm into sand (c = 1, phi = 30, psi = 0, a published 588 kN): 656 / 638 / 615 kN at
+        // 0.4 / 0.25 / 0.15 m, +12 / +8 / +5%, against 619 / 605 for the 15-noded element at
+        // 0.4 / 0.25 m. It converges, but slowly, and a user who picked the element for speed
+        // has to be told which way the answer lies.
+        if (nonlinear_soil && mesh.nodes_per_element == 6)
+            warn(R, "K2D-A027", io.config->name,
+                 "6-noded elements in an axisymmetric model with a soil that can yield: a load "
+                 "at or near collapse is overestimated -- measured on a footing pushed into "
+                 "sand, 12% too high on a 0.4 m mesh and still 5% on 0.15 m, where the 15-noded "
+                 "element was 5% and 3% above the published value at 0.4 and 0.25 m. Use "
+                 "15-noded elements for a bearing capacity or any other limit load in "
+                 "axisymmetry.");
     }
 
     // A staged phase that takes its pore pressures from a steady groundwater flow (its own setting,
@@ -2845,6 +3231,66 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             return R;
         }
         init = *io.init_states;
+        // A REGION WHOSE MATERIAL IS NOT THE ONE IT HAD IN THE PHASE BEFORE. Its stresses are the
+        // ground's and are kept, and so is an excess pore pressure. The state that belongs to
+        // the MODEL -- a cap pressure, a shear hardening, a strain history -- is kept too where
+        // the new material is the same model as the old (a clay made undrained, a stiffness
+        // changed): it is the soil's stress history, and the overconsolidation in it must not be
+        // lost by renaming the material. Where the model itself changes, the old state means
+        // nothing to the new one, which starts from what the stresses say: the cap through the
+        // current state, the shear hardening of the current state, no strain history.
+        {
+            std::vector<char> changed(pr.polygons.size(), 0), reseed(pr.polygons.size(), 0);
+            bool any_changed = false, any_reseed = false;
+            for (size_t i = 0; i < pr.polygons.size(); ++i) {
+                const int drawn = pr_drawn.polygons[i].material;
+                const int before = io.parent_config ? io.parent_config->material_of(i, drawn) : drawn;
+                const int now = pr.polygons[i].material;
+                // silent-drop-ok: a region that keeps its material has nothing to restart.
+                if (now == before) continue;
+                changed[i] = 1; any_changed = true;
+                const bool same_model = before >= 0 && before < (int)pr.materials.size() &&
+                                        pr.materials[(size_t)before].model ==
+                                            pr.materials[(size_t)now].model;
+                if (!same_model) { reseed[i] = 1; any_reseed = true; }
+            }
+            if (any_changed && mesh.element_count > 0) {
+                const size_t ng = init.size() / (size_t)mesh.element_count;
+                std::vector<char> only((size_t)mesh.element_count, 0);
+                for (int e = 0; e < mesh.element_count; ++e) {
+                    const int owner = region_of(e);
+                    only[(size_t)e] = owner >= 0 && reseed[(size_t)owner] ? 1 : 0;
+                }
+                std::vector<katai::core::GaussState> seeded = init;
+                const std::vector<katai::core::Overconsolidation> oc(pr.materials.size());
+                if (any_reseed) katai::core::seed_preconsolidation(mesh, models, oc, only, seeded);
+                for (int e = 0; e < mesh.element_count; ++e) {
+                    // silent-drop-ok: an element whose region keeps its material keeps its state.
+                    if (!only[(size_t)e]) continue;
+                    for (size_t g = 0; g < ng; ++g) {
+                        auto& gs = init[(size_t)e * ng + g];
+                        const auto& sd = seeded[(size_t)e * ng + g];
+                        gs.pp = sd.pp;
+                        gs.gamma_p = sd.gamma_p;
+                        gs.gamma_hist = 0.0;
+                    }
+                }
+                for (size_t i = 0; i < pr.polygons.size(); ++i)
+                    if (changed[i])
+                        note(R, "K2D-A028", pr.polygons[i].name,
+                             "Soil region \"" + pr.polygons[i].name + "\" is \"" +
+                                 pr.materials[(size_t)pr.polygons[i].material].name +
+                                 "\" in this phase. Its stresses and any excess pore pressure "
+                                 "are carried over" +
+                                 std::string(reseed[i]
+                                     ? "; the new model's own state (pre-consolidation pressure, "
+                                       "shear hardening, small-strain history) starts from those "
+                                       "stresses."
+                                     : ", and so is the model's state (pre-consolidation "
+                                       "pressure, shear hardening, small-strain history): the "
+                                       "model is the same."));
+            }
+        }
         // RESET SMALL STRAIN (the `resetsmall` phase option). The
         // inherited state carries the small-strain history with it, which is exactly right when
         // the phases continue one loading path and exactly wrong when they do not -- the
@@ -2905,6 +3351,54 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         }
         katai::core::seed_preconsolidation(mesh, models, oc, act, init);
     }
+    // END BEARING OF A PLATE (PlateMaterial::prevent_punching). The stress points within the
+    // plate's equivalent thickness d = sqrt(12 EI / EA) of its lower end have their plasticity
+    // excluded in this phase. The flag is set afresh in every phase from the plates active in
+    // it, so a zone appears with its plate and goes with it.
+    if (mesh.element_count > 0 && !init.empty()) {
+        const size_t ng = init.size() / (size_t)mesh.element_count;
+        for (auto& gs : init) gs.plasticity_excluded = false;
+        int zones = 0, points = 0;
+        for (size_t si = 0; si < pr.structs.size(); ++si) {
+            const auto& s = pr.structs[si];
+            if (s.kind != model::StructKind::Plate || !struct_on(si)) continue;   // silent-drop-ok: not an active plate
+            if (s.material < 0 || s.material >= (int)pr.plates.size()) continue;  // silent-drop-ok: refused elsewhere
+            const auto& pm = pr.plates[(size_t)s.material];
+            if (!pm.prevent_punching) continue;                                   // silent-drop-ok: option off
+            const double d = pm.d();
+            const bool first_lower = s.y1 <= s.y2;
+            const double fx = first_lower ? s.x1 : s.x2, fy = first_lower ? s.y1 : s.y2;
+            int here = 0;
+            for (int e = 0; e < mesh.element_count; ++e) {
+                double cx = 0.0, cy = 0.0;
+                for (int k = 0; k < 3; ++k) { cx += mesh.x[mesh.node_of(e, k)]; cy += mesh.y[mesh.node_of(e, k)]; }
+                cx /= 3.0; cy /= 3.0;
+                // THE ZONE IS d, NOT THE MESH. An element belongs to it when its centroid is within
+                // d of the foot. It used to take every element touching the foot as well, so
+                // that a coarse mesh still had a zone -- and on a 2 m mesh under a wall with
+                // d = 0.35 m that zone was a block of elastic ground metres across, which no slip
+                // surface could pass through: measured, the factor of safety of an anchored
+                // excavation went from 1.49 to 1.79. A mesh too coarse to have an element within
+                // d has no zone, and the phase says so.
+                if (std::hypot(cx - fx, cy - fy) > d) continue;                   // silent-drop-ok: outside the zone
+                for (size_t g = 0; g < ng; ++g) init[(size_t)e * ng + g].plasticity_excluded = true;
+                ++here;
+            }
+            if (here > 0) { ++zones; points += here; }
+            else
+                warn(R, "K2D-A030", s.name,
+                     "Plate \"" + s.name + "\" has end bearing, and no element lies within its "
+                     "equivalent thickness (" + dnum(d) + " m) of its lower end (" + dnum(fx) + ", " +
+                     dnum(fy) + "): on this mesh the option has no effect. Refine the mesh around "
+                     "the foot of the plate to a size below that thickness.");
+        }
+        if (zones > 0)
+            note(R, "K2D-A029", "",
+                 std::to_string(zones) + " plate(s) have end bearing: soil plasticity is excluded "
+                 "in the " + std::to_string(points) + " element(s) around their lower ends (within "
+                 "the plate's equivalent thickness). This keeps "
+                 "the plate from punching through the ground; it is not the plate's tip resistance.");
+    }
 
     try {
         // Solver: nonsymmetric tangent for nonlinear soil (non-associated MC/HS), interfaces (Coulomb)
@@ -2921,9 +3415,17 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             (has_hardening || has_softsoil)
                 ? 40
                 : (nonlinear_soil ? 20 : ((has_interfaces || has_embedded) ? 5 : 1));
+        // 3e-3 for the hardening family, not 1e-2. At 1e-2 the answer itself moved with the
+        // numerics by more than the answer is trusted to: measured on one retaining wall drawn
+        // in one piece and in two (the same model), the largest moment was 51.56 and 50.12
+        // kNm/m at 1e-2 (2.8% apart), 51.42 and 51.52 at 3e-3 (0.19%), 51.77 and 51.43 at 1e-3
+        // (0.65%); a strutted excavation's first-stage wall movement was 6.01 / 6.19 / 6.26 mm.
+        // The price, measured where it is highest -- an embankment built undrained on soft
+        // clay -- is 160 / 260 / 657 s for the same factor of safety (1.4016 / 1.4012 / 1.4018),
+        // which is why it is 3e-3 and not 1e-3.
         const double tol_default =
             (has_hardening || has_softsoil)
-                ? 1e-2
+                ? 3e-3
                 : (nonlinear_soil ? 1e-6 : ((has_interfaces || has_embedded) ? 1e-8 : 1e-10));
         // Iterations per increment. This is a PATIENCE setting, not an accuracy one: an increment
         // that needs more is not solved differently, it is cut back and retried -- so the number
@@ -3131,6 +3633,31 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                          "with the mesh it was computed on, and confirm it with a refinement "
                          "study.");
                 break;   // one statement per run: the property is the method's, not the material's
+            }
+            // A COHESIVE soil with its tension cut-off on carries no tension in the search, where a
+            // limit-equilibrium slip surface takes the full c' along its whole length, the part of
+            // it in the tension zone near the crest included. The factor of safety is therefore
+            // lower than the limit-equilibrium one by an amount that grows with the depth of that
+            // zone, 2 c' / (gamma sqrt(Ka)) -- measured on cohesive road embankments (c' 18 kPa,
+            // phi' 25 deg, 6 m high, a zone ~2.9 m deep): about 2% of the 5-7% by which the factor
+            // fell below Bishop's, the rest being the non-associated flow rule of K2D-A005. Neither
+            // is an error of the search; both are what the model is, and a user comparing the
+            // factor with a slip-circle program has to be told which way it lies and why.
+            // silent-drop-scope: none -- this loop only looks for such a material, to say so.
+            for (const auto& mm : pr.materials) {
+                if (!mm.tension_cutoff || !(mm.c > 1e-9) || !(mm.phi > 1e-9)) continue;
+                const double s = std::sin(mm.phi * std::acos(-1.0) / 180.0);
+                const double ka = (1.0 - s) / (1.0 + s);
+                const double g = mm.gamma_unsat > 0.0 ? mm.gamma_unsat : 20.0;
+                note(R, "K2D-A026", mm.name,
+                     "Material \"" + mm.name + "\" has cohesion and its tension cut-off on, so the "
+                         "factor of safety counts no tensile strength: in the zone where the soil "
+                         "would be in tension -- about " + dnum(2.0 * mm.c / (g * std::sqrt(ka))) +
+                         " m deep at full strength, 2c'/(gamma sqrt(Ka)) -- it carries none. A "
+                         "slip-circle (limit-equilibrium) method takes c' along the whole surface, "
+                         "so its factor is higher by a few percent; switch the cut-off off to "
+                         "compare like with like.");
+                break;   // one statement per run
             }
             katai::core::SafetyPhase sfin;
             sfin.nonlinear_soil = nonlinear_soil;
@@ -3404,7 +3931,7 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
                 const auto& Mt = pr.materials[mi];
                 katai::core::ConsolidationPhaseMaterial& cm = cin.materials[mi];
                 cm.name = Mt.name;
-                cm.kx = Mt.kx; cm.ky = Mt.ky;
+                cm.kx = Mt.kx; cm.ky = Mt.ky; cm.ck = Mt.ck;
                 cm.porosity = Mt.e_init / (1.0 + Mt.e_init);
                 cm.nonporous = mat_nonporous[mi] != 0;
                 cm.total_stress = Mt.drainage == model::Drainage::UndrainedC;
@@ -3435,8 +3962,31 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             cin.carry_full = static_carry ? &carry_plan.full_datum : nullptr;
             cin.has_semi_permeable_interface = semi_permeable;
             cin.pore_tie = &pore_tie;
+            // A third of the tolerated error of a Plastic phase of the same soils, and never
+            // tighter than the 1e-6 it used to be for every soil. Measured on a Soft Soil column
+            // loaded undrained and consolidated to rest, against the same column loaded drained
+            // (682.93 mm): 1e-2 -> -9.8%, 3e-3 -> -3.1%, 1e-3 -> -2.84%, 1e-4 -> -2.76%,
+            // 1e-6 -> -2.75%, in 9 / 8 / 16 / 132 / 306 s. A time step moves little, so an error
+            // tolerated against the whole force in play is a large part of what the step does;
+            // 1e-3 is where the answer has stopped moving and the cost has not yet started to.
+            cin.newton_tol = std::clamp(tol / 3.0, 1e-6, 1e-3);
+            // A change of permeability is read from the void ratio at the stress points, which
+            // only the elastoplastic path keeps. Entered where every soil is linear elastic it is
+            // not applied -- and that is said.
+            if (!nonlinear_soil)
+                for (const auto& m : pr.materials)
+                    if (m.ck > 0.0) {
+                        warn(R, "K2D-M007", m.name,
+                             "Material \"" + m.name + "\" has a change of permeability (ck = " +
+                                 dnum(m.ck) + ") in a consolidation phase where every soil is "
+                                 "linear elastic: the permeability is kept constant. The change "
+                                 "of permeability is meant for the hardening and compression-"
+                                 "index models, whose void ratio the phase follows.");
+                        break;
+                    }
             if (io.config) {
                 cin.duration_day = io.config->duration; cin.time_steps = io.config->time_steps;
+                cin.load_at_start = io.config->consol_load_at_start;
                 // How the phase ends (`cstop`). With a state criterion the two above
                 // are not read at all -- the phase marches until the state is reached and its
                 // ANSWER is the time that took.
@@ -3448,6 +3998,13 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
             }
             cin.yscale = ymax - ymin;
             const Eigen::VectorXd dF = f - B;   // configuration imbalance (the staged change)
+            // ... of which the part that is the parent's excess pore pressure is a state, not a
+            // load: it goes on at the phase's first instant while the phase's own load is placed
+            // over its duration (the phase strategy splits the two).
+            Eigen::VectorXd inherited_pore = Eigen::VectorXd::Zero(dF.size());
+            katai::core::add_excess_pore_force(mesh, dofs, models, profiles, init, act, axi,
+                                               inherited_pore);
+            if (inherited_pore.squaredNorm() > 0.0) cin.inherited_pore_force = &inherited_pore;
             // Sparse Biot solve factories: the coupled saddle-point system A = [K L; Lᵀ -(ΔtH+S)] is
             // symmetric indefinite (nonsymmetric with a non-associated elastoplastic tangent); the
             // solver factors ONCE (constant dt) and back-substitutes every time step. Built here
@@ -3641,6 +4198,11 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
         stin.line_search_window = io.numeric.line_search_window;
         stin.enforce_local_criteria = io.numeric.enforce_local_criteria;
         stin.substep_tolerance = io.numeric.substep_tolerance;
+        // The hardening soils at their default tolerance keep an increment that stops
+        // descending within 1e-2 (NewtonOptions::stagnation_accept). A tolerance the user set
+        // is the user's: nothing is kept above it.
+        if ((has_hardening || has_softsoil) && !(io.numeric.tolerance > 0.0))
+            stin.stagnation_accept = 1e-2;
         // Stage fraction: a partial stage is a construction step only where there IS a stage, so the
         // fraction is read on chained phases and left at 1 on the initial one (the validator
         // refuses it there rather than letting a scaled gravity look like a partial excavation).
@@ -3843,6 +4405,13 @@ std::vector<SolveResult> solve_phases(const model::Project& pr,
         }
     }
     if (!out.back().ok) return out;
+    // THE TOTAL DISPLACEMENT. Each phase reports what it did; the total is that on top of the
+    // phases it continues. The initial phase generates the stresses the ground starts with and
+    // its displacements count for nothing; a phase that does not commit a state (Safety, a
+    // flow, a dynamic increment) is reported on top of the state it starts from and adds nothing
+    // to the phases after it.
+    Eigen::VectorXd total_before = Eigen::VectorXd::Zero(out.back().disp.size());
+    out.back().disp_total = total_before;
 
     const model::Phase* state_config = &pr.initial;   // the phase the committed state is from
     for (size_t pi = 0; pi < pr.phases.size(); ++pi) {
@@ -3870,6 +4439,9 @@ std::vector<SolveResult> solve_phases(const model::Project& pr,
                         : ph.type == model::PhaseType::Dynamic       ? InitialPhase::Dynamic
                                                                      : InitialPhase::GravityLoading;
         out.push_back(solve_gravity_le(pr, mesh_in, kind, nullptr, io));
+        if (ph.reset_displacements) total_before.setZero();
+        if (out.back().disp.size() == total_before.size())
+            out.back().disp_total = total_before + out.back().disp;
         if (!out.back().ok) return out;
         // Safety, TransientFlow and Dynamic leave the committed effective-stress state unchanged (a
         // time-history returns RELATIVE displacements, not a new static state); Plastic, Consolidation
@@ -3878,6 +4450,8 @@ std::vector<SolveResult> solve_phases(const model::Project& pr,
             ph.type != model::PhaseType::Dynamic) {
             committed = std::move(next);
             state_config = &ph;
+            if (out.back().disp_total.size() == total_before.size())
+                total_before = out.back().disp_total;
         }
     }
     return out;

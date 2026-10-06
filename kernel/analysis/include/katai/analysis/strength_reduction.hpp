@@ -23,6 +23,14 @@ namespace katai::core {
 struct StrengthReductionOptions {
     double srf_min = 0.5;        // assumed stable lower bracket
     double srf_max = 2.5;        // assumed unstable upper bracket
+    // How far the search goes on when nothing has collapsed by srf_max. A factor of safety is a
+    // number, and a slope that stands at 3 has one too: an embankment of cohesive fill 3 m high
+    // stands at 3.2-3.8, which the search used to report only as "at least 3". The incremental
+    // path walks on up to the ceiling; the bisection, finding no collapse in [srf_min, srf_max],
+    // doubles its upper bracket until a trial collapses and bisects that interval. Only a model
+    // that has no mechanism at all -- a confined block, an over-restrained boundary -- reaches the
+    // ceiling, and that is reported as a lower bound, as before.
+    double srf_ceiling = 20.0;
     int bisection_iterations = 12;
     NewtonOptions newton{};      // per-trial nonlinear solve controls
     // INCREMENTAL strength reduction (safety_analysis): the ground is brought to equilibrium

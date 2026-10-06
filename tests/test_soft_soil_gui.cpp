@@ -208,16 +208,27 @@ void test_k0_identity_with_water_at_surface() {
 }
 
 void test_undrained_refusal() {
-    std::printf("-- honest guard: Soft Soil + Undrained (A) is refused, not silently drained --\n");
+    std::printf("-- Soft Soil + Undrained (A): the pore fluid follows the stress-dependent stiffness --\n");
     m::Project pr = ss_column();
     pr.materials[0].drainage = m::Drainage::Undrained;
     add_surcharge_phase(pr, 10.0);
     const auto M = katai::app::mesh_from_project(pr, 0.5, 6);
     const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
-    bool refused = false;
-    for (const auto& r : res)
-        if (!r.ok && r.message.find("Soft Soil") != std::string::npos) refused = true;
-    check(refused, "refused with an explicit Soft Soil + Undrained message");
+    m::Project prd = ss_column();
+    add_surcharge_phase(prd, 10.0);
+    const auto resd = katai::app::solve_phases(prd, M.mesh, InitialPhase::K0Procedure);
+    bool ok = !res.empty() && !resd.empty();
+    for (const auto& r : res) ok = ok && r.ok;
+    for (const auto& r : resd) ok = ok && r.ok;
+    check(ok, "Soft Soil + Undrained (A) runs, and so does the drained column");
+    if (!ok) {
+        for (const auto& r : res) if (!r.ok) std::printf("   (%s)\n", r.message.c_str());
+        return;
+    }
+    std::printf("   settlement under the surcharge: undrained %.3e m, drained %.3e m\n",
+                res.back().max_disp, resd.back().max_disp);
+    check(res.back().max_disp < 0.1 * resd.back().max_disp,
+          "the water takes the load: the undrained column settles a small fraction of the drained");
 }
 
 void test_dynamic_stiffness_smoke() {
@@ -389,16 +400,27 @@ void test_ssc_consolidation_hold() {
 }
 
 void test_ssc_undrained_refusal() {
-    std::printf("-- honest guard: Soft Soil Creep + Undrained (A) refused too --\n");
+    std::printf("-- Soft Soil Creep + Undrained (A) runs too --\n");
     m::Project pr = ssc_column();
     pr.materials[0].drainage = m::Drainage::Undrained;
     add_surcharge_phase(pr, 10.0);
     const auto M = katai::app::mesh_from_project(pr, 0.5, 6);
     const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
-    bool refused = false;
-    for (const auto& r : res)
-        if (!r.ok && r.message.find("Soft Soil") != std::string::npos) refused = true;
-    check(refused, "refused with an explicit Soft Soil (Creep) + Undrained message");
+    m::Project prd = ssc_column();
+    add_surcharge_phase(prd, 10.0);
+    const auto resd = katai::app::solve_phases(prd, M.mesh, InitialPhase::K0Procedure);
+    bool ok = !res.empty() && !resd.empty();
+    for (const auto& r : res) ok = ok && r.ok;
+    for (const auto& r : resd) ok = ok && r.ok;
+    check(ok, "Soft Soil Creep + Undrained (A) runs, and so does the drained column");
+    if (!ok) {
+        for (const auto& r : res) if (!r.ok) std::printf("   (%s)\n", r.message.c_str());
+        return;
+    }
+    std::printf("   settlement under the surcharge: undrained %.3e m, drained %.3e m\n",
+                res.back().max_disp, resd.back().max_disp);
+    check(res.back().max_disp < 0.1 * resd.back().max_disp,
+          "the water takes the load: the undrained column settles a small fraction of the drained");
 }
 
 void test_ssc_dynamic_smoke() {

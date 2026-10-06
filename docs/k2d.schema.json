@@ -112,6 +112,7 @@
         "hbD": { "type": "number", "minimum": 0, "maximum": 1 },
         "sigpsi": { "type": "number", "minimum": 0 },
         "kx": { "type": "number" },
+        "ck": { "type": "number" },
         "ky": { "type": "number" },
         "und_mode": { "type": "integer", "minimum": 0, "maximum": 1 },
         "nu_u": { "type": "number" },
@@ -141,6 +142,7 @@
         "w": { "type": "number" },
         "nu": { "type": "number" },
         "Mp": { "type": "number" },
+        "punch": { "type": "boolean" },
         "Np": { "type": "number" }
       },
       "additionalProperties": true
@@ -180,6 +182,7 @@
         "diameter": { "type": "number" },
         "Lspacing": { "type": "number" },
         "Tskin_max": { "type": "number" },
+        "Tskin_end": { "type": "number" },
         "Fmax_base": { "type": "number" }
       },
       "additionalProperties": true
@@ -233,6 +236,7 @@
         "iface_material": { "type": "integer" },
         "iface_kn": { "type": "number", "minimum": 0 },
         "iface_ks": { "type": "number", "minimum": 0 },
+        "iface_vt": { "type": "number", "exclusiveMinimum": 0 },
         "conn": { "type": "integer", "minimum": 0, "maximum": 1 },
         "flow_barrier": { "type": "integer", "minimum": 0, "maximum": 2 },
         "hyd_res": { "type": "number" },
@@ -307,6 +311,10 @@
         "hydro": { "$ref": "#/$defs/flags01" },
         "dry": { "$ref": "#/$defs/flags01" },
         "flowpore": { "type": "boolean" },
+        "cloadstart": { "type": "boolean" },
+        "pmat": { "type": "array", "items": { "type": "integer", "minimum": -1 } },
+        "smat": { "type": "array", "items": { "type": "integer", "minimum": -1 } },
+        "scontr": { "type": "array", "items": { "type": "number" } },
         "pwater": { "type": "array", "items": { "type": "integer", "enum": [0, 1, 2] } },
         "pwlevel": { "$ref": "#/$defs/numbers" },
         "water_override": { "type": "boolean" },
@@ -315,6 +323,7 @@
         "mstage": { "type": "number" },
         "ignoreund": { "type": "boolean" },
         "resetsmall": { "type": "boolean" },
+        "resetdisp": { "type": "boolean" },
         "tol": { "type": "number" },
         "loadsteps": { "type": "integer" },
         "maxiter": { "type": "integer" },

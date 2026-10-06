@@ -150,6 +150,10 @@ struct Material {
     // Groundwater — permeability (Groundwater tab; used by seepage/consolidation/flow).
     // Default ≈ a fine-medium sand, ~1 m/day ≈ 1.2e-5 m/s (Das, Principles of Geotech. Eng., Table 7.1).
     double kx = 1.0, ky = 1.0;   // [m/day]
+    // Change of permeability with void ratio in a consolidation phase: log10(k / k0) = de / ck,
+    // de the change in void ratio since the initial state (e_init). 0 = the permeability does
+    // not change. Generally of the order of the compression index.
+    double ck = 0.0;
     // Groundwater — unsaturated water-retention (van Genuchten 1980 + Mualem 1976; Groundwater tab
     // "van Genuchten"). Used by transient + fully-coupled flow in the unsaturated zone (suction ψ>0).
     // In the saturated regime (ψ≤0) these do NOT activate (S_e=1, k_rel=1) → saturated behaviour
@@ -187,6 +191,12 @@ struct PlateMaterial {
     double nu = 0.0;      // Poisson's ratio
     double Mp = 0.0;      // plastic moment [kN m/m]  (0 = elastic)
     double Np = 0.0;      // plastic axial force [kN/m] (0 = elastic)
+    // End bearing: a plate has no thickness and so no tip. With this set, soil plasticity is
+    // excluded in the ground within the plate's equivalent thickness d = sqrt(12 EI / EA) of
+    // its lower end, which keeps a loaded wall from punching through the ground under it.
+    // Not the wall's true tip resistance, and not for sheet piles, whose tip is far thinner
+    // than d.
+    bool prevent_punching = false;
     double d() const { return EA > 0.0 ? std::sqrt(12.0 * EI / EA) : 0.0; }  // equivalent thickness
 };
 
@@ -226,6 +236,10 @@ struct EmbeddedBeamMaterial {
     double diameter = 0.40;  // pile diameter (circular) [m]
     double Lspacing = 2.5;   // out-of-plane spacing [m]
     double Tskin_max = 0.0;  // max skin resistance [kN/m] (0 = unlimited)
+    // Skin resistance at the END of the beam (the second point it is drawn to) [kN/m]: the
+    // resistance then varies linearly along the beam from Tskin_max at its first point to
+    // this. 0 = the same along the whole beam.
+    double Tskin_end = 0.0;
     double Fmax_base = 0.0;  // base resistance [kN]
 };
 
@@ -255,6 +269,10 @@ struct StructElement {
     // known -- measured, or given by a design guide or a reference solution -- is entered here,
     // since the derived value follows the mesh and the soil, not the joint.
     double iface_kn = 0.0, iface_ks = 0.0;
+    // Virtual thickness factor of the interfaces: the derived stiffnesses are G_i / t and
+    // E_oed,i / t with t = this factor times the model's element size (mesh.elem_size). The
+    // thicker, the more elastic movement the contact has before it slips; 0.1 by default.
+    double iface_vt = 0.1;
     // CROSS PERMEABILITY in a groundwater calculation (docs/k2d-format.md, `flow_barrier`). A wall
     // or interface is a line the water either crosses freely, cannot cross at all, or crosses
     // against a resistance:
@@ -523,6 +541,12 @@ struct Phase {
     // say "the history up to here is not the history that matters now" -- which turns a systematic
     // difference into a controlled one.
     bool reset_small_strain = false;
+    // Reset displacements to zero: the total displacement reported from this phase on counts
+    // from the START of this phase -- what the phases before it moved is left out. The state is
+    // untouched (stresses, structural forces); it is the read-out that starts again, which is
+    // what "the settlement caused by the excavation" or "by the tunnel" means when the building
+    // stood there before.
+    bool reset_displacements = false;
     // NUMERICAL CONTROLS for this phase. Zero means
     // "let the program choose", which is what every project that never touches them says, so
     // the defaults stay exactly where they are: derived from the material class (Hardening Soil
@@ -599,6 +623,49 @@ struct Phase {
             if (m != kRegionWaterTable) return true;
         return false;
     }
+    // THE MATERIAL OF A REGION IN THIS PHASE, by soil-region index: -1 (and every missing entry)
+    // = the material the region was drawn with. A region can change what it is made of between
+    // phases -- ground that is improved, a fill that sets, a clay that is undrained while it is
+    // loaded and drained in the long term -- and the phase says which material it is in THIS
+    // phase. The stresses the region carries are kept; what is re-read from them is the state
+    // only the new model has (its cap and its shear hardening).
+    std::vector<int> poly_material;
+    int material_of(size_t i, int drawn) const {
+        return i < poly_material.size() && poly_material[i] >= 0 ? poly_material[i] : drawn;
+    }
+    bool any_material_change() const {
+        for (int m : poly_material)
+            if (m >= 0) return true;
+        return false;
+    }
+    // THE SECTION OF A PLATE IN THIS PHASE, by structure index: an index into the project's
+    // plate materials, -1 (and every missing entry) = the one the plate was drawn with. A
+    // lining that replaces a shield, a wall that is thickened: the plate keeps the forces it
+    // carries, and what it does from here on it does with the new stiffness and weight.
+    std::vector<int> struct_material;
+    int plate_of(size_t si, int drawn) const {
+        return si < struct_material.size() && struct_material[si] >= 0 ? struct_material[si] : drawn;
+    }
+    bool any_plate_change() const {
+        for (int m : struct_material)
+            if (m >= 0) return true;
+        return false;
+    }
+    // LINE CONTRACTION of a plate, by structure index: the area loss of the closed line the
+    // plate is part of, as a fraction (0.005 = 0.5%), TOTAL at the end of this phase. The plate
+    // is given the shrinkage strain that goes with it -- half the area loss, since the area of
+    // a closed line goes with the square of its length -- which by itself changes no stress; it
+    // is the ground around the plate that decides how much of it is realised. Missing entries
+    // are 0. A later phase repeats the value to keep it, and 0 takes it back.
+    std::vector<double> struct_contraction;
+    double contraction_of(size_t si) const {
+        return si < struct_contraction.size() ? struct_contraction[si] : 0.0;
+    }
+    bool any_contraction() const {
+        for (double c : struct_contraction)
+            if (c != 0.0) return true;
+        return false;
+    }
     // PORE PRESSURES FROM A STEADY-STATE GROUNDWATER FLOW CALCULATION instead of the phreatic
     // line. The flow is solved on the ground active in this phase: below the water table (this
     // phase's, else the project's) every boundary of that ground -- the model's sides and the faces
@@ -608,6 +675,11 @@ struct Phase {
     // and the pore pressures in front of the wall are those of that flow, not of two separate
     // hydrostatic levels. Off = the phreatic line, as every file written before it.
     bool pore_from_flow = false;
+    // A consolidation phase with a duration places its load over that duration, linearly. On =
+    // the load goes on at the phase's first instant instead, and the whole duration is left for
+    // the pore pressure it generates to dissipate: the column of the one-dimensional theory,
+    // which is loaded at once. Read by a consolidation phase that ends on a time only.
+    bool consol_load_at_start = false;
 };
 
 // A soil region: an explicit polygon (drawn by the user) with a material. Classic, rock-solid:

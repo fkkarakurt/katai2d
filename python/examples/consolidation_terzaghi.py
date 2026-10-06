@@ -47,9 +47,11 @@ prj.geometry.rectangle(0.0, 0.0, 1.0, H, material=clay, name="Column",
 q = prj.loads.line_load((0.0, H), (1.0, H), qy=-Q, name="Surcharge")
 prj.initial(procedure="k0", exclude=[q])
 
-# 5. Consolidate to Tv ~ 2 (practically complete) in 120 equal time steps.
+# 5. Consolidate to Tv ~ 2 (practically complete) in 120 equal time steps. A phase with a
+#    duration places its load over that duration; Terzaghi's column is loaded at once, so the
+#    surcharge goes on at the first instant.
 prj.phases.consolidation("Consolidation", duration=2.0 * H * H / CV, steps=120,
-                         activate=[q])
+                         activate=[q], load_at_start=True)
 
 job = prj.run()
 res = job.results()[-1]

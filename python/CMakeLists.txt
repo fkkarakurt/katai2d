@@ -141,6 +141,66 @@ set_tests_properties(test_python_region_water PROPERTIES
   LABELS "python;api"
   ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
 
+add_test(NAME test_python_permeability_change
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/permeability_change.py)
+set_tests_properties(test_python_permeability_change PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
+add_test(NAME test_python_plate_section_change
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/plate_section_change.py)
+set_tests_properties(test_python_plate_section_change PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
+add_test(NAME test_python_line_contraction
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/line_contraction.py)
+set_tests_properties(test_python_line_contraction PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
+add_test(NAME test_python_plate_on_symmetry_axis
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/plate_on_symmetry_axis.py)
+set_tests_properties(test_python_plate_on_symmetry_axis PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
+add_test(NAME test_python_plate_end_bearing
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/plate_end_bearing.py)
+set_tests_properties(test_python_plate_end_bearing PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
+add_test(NAME test_python_depth_profile
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/depth_profile.py)
+set_tests_properties(test_python_depth_profile PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
+add_test(NAME test_python_undrained_soft_soil
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/undrained_soft_soil.py)
+set_tests_properties(test_python_undrained_soft_soil PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
+add_test(NAME test_python_phase_material
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/phase_material.py)
+set_tests_properties(test_python_phase_material PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
+add_test(NAME test_python_initial_k0
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/initial_k0.py)
+set_tests_properties(test_python_initial_k0 PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
+add_test(NAME test_python_wall_in_pieces
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/wall_in_pieces.py)
+set_tests_properties(test_python_wall_in_pieces PROPERTIES
+  LABELS "python;analysis;structures"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
 add_test(NAME test_python_solver_robustness
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/solver_robustness.py)
 set_tests_properties(test_python_solver_robustness PROPERTIES

@@ -112,6 +112,7 @@ m::Project block(bool with_plate, bool plastic_phase, double Mp = 0.0) {
         ph.name = "Consolidation";
         ph.type = m::PhaseType::Consolidation;
         ph.duration = 4.0 * kH * kH / cv();   // Tv = 4: the excess pore pressure is gone
+        ph.consol_load_at_start = true;       // ... which needs the load on from the start
         ph.time_steps = 120;
     }
     pr.phases.push_back(ph);

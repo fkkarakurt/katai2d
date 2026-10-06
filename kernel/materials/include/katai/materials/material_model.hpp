@@ -43,8 +43,14 @@ struct MaterialProfile {
 // unphysical and breaks the solver (K goes singular/indefinite) — it really happens when
 // a user puts y_ref outside the domain with a large gradient, so it is prevented once,
 // centrally, here.
+//
+// ABOVE THE REFERENCE LEVEL THE VALUE IS THE REFERENCE VALUE. The increment is per unit of
+// DEPTH below y_ref: for any elevation above it the stiffness (or the cohesion) is the reference
+// one, and below it grows with the depth. It used to be extrapolated upwards as well, so a
+// layer whose reference level lay inside it was softer and weaker above that level than the
+// value entered for it -- and, with a large increment, had none at all at its top.
 inline double profile_at(double ref, double inc, double y_ref, double y) {
-    const double v = ref + inc * (y_ref - y);
+    const double v = ref + inc * std::max(0.0, y_ref - y);
     return v > 0.0 ? v : 0.0;
 }
 
@@ -90,6 +96,10 @@ struct GaussState {
     // was. (docs/references/effective-stress-formulation.md)
     double eps_vol_und = 0.0;
     double pw_carried = 0.0;
+    // The point lies in a zone where soil plasticity is excluded -- the ground around the foot of
+    // a plate that is given end bearing. It answers with the elastic part of its model and its
+    // hardening state does not move. Set by the phase that owns the zone, phase by phase.
+    bool plasticity_excluded = false;
 };
 
 // Isotropic elastic constitutive matrix from an (E, nu) PAIR, rather than from the pair a
@@ -247,6 +257,23 @@ struct MaterialModel {
         return 3.0 * (nu_u - v) / ((1.0 - 2.0 * nu_u) * (1.0 + v)) * k_eff;
     }
 
+    // THE PORE FLUID OF A SOIL WHOSE STIFFNESS FOLLOWS THE STRESS. Kw/n is a multiple of the
+    // skeleton's bulk modulus K', and the soft-soil models have no constant one: K' =
+    // (p' + c cot phi)/kappa*. kw_over_n() is then the value at the reference pressure below, and
+    // this is the ratio of the current K' to that -- the factor by which the pore fluid at this
+    // stress point is stiffer or softer than the reference one. 1 for every other model. The
+    // excess pore pressure is accumulated as an EQUIVALENT strain (GaussState::eps_vol_und
+    // advances by this factor times the volumetric strain increment), so that
+    // u = kw_over_n() * eps_vol_und stays the one expression every reader of the state uses.
+    static constexpr double kSoftSoilUndrainedRefPressure = 100.0;   // [kPa]
+    double undrained_stiffness_scale(double p_eff_compression) const {
+        if (type != MaterialType::SoftSoil && type != MaterialType::SoftSoilCreep) return 1.0;
+        const softsoil::Params sp = type == MaterialType::SoftSoil ? ssoil : ssc.ss();
+        const double shift = softsoil::cohesion_shift(sp);
+        return (std::max(p_eff_compression, softsoil::kPmin) + shift) /
+               (kSoftSoilUndrainedRefPressure + shift);
+    }
+
     // K' as the pore-fluid derivation sees it -- the denominator of Skempton's B and the
     // number a GUI or a report needs to show Kw/n as a multiple of the skeleton stiffness.
     double undrained_k_eff() const {
@@ -311,6 +338,28 @@ inline double hs_frozen_Eur(const HardeningSoilParams& pe,
     const double s1c = std::max(std::max(cmean + cR, cmean - cR), comm_zz);  // major tension-pos
     const double s3_stiff = std::max(-s1c, 0.1 * pe.p_ref);                  // comp-pos minor
     return pe.Eur(s3_stiff);
+}
+
+// THE PORE FLUID FOLLOWS THE SKELETON, at every stress point. Kw/n is a multiple of the
+// skeleton's elastic bulk modulus -- that multiple is what makes the undrained Poisson's ratio
+// 0.495 -- and in the hardening and soft-soil models that modulus follows the stress. This is the
+// ratio of the current modulus to the reference one MaterialModel::kw_over_n() is built from:
+// E_ur(sigma3)/E_ur,ref for Hardening Soil, (p' + c cot phi)/(p_ref + c cot phi) for Soft Soil,
+// 1 for a model whose stiffness is a constant.
+//
+// Until 2026-10 a Hardening Soil material kept the reference value everywhere. Under a few
+// metres of soft clay (m = 1) the skeleton is ten to a hundred times softer than at p_ref, so
+// the pore fluid was that much stiffer against it than the model intends: an undrained Poisson's
+// ratio of 0.4999 instead of 0.495. Measured on an embankment built undrained on soft clay, the
+// factor of safety is 1.4020 with the fluid following the skeleton and 1.4019 without; it is
+// the definition that changed, not an answer. (It was also tried as the cure for that phase
+// stalling at a third of its load on a finer mesh. It is not: the stall is still there.)
+inline double undrained_stiffness_scale(const MaterialModel& m, const Eigen::Vector3d& comm_in_plane,
+                                        double comm_zz) {
+    if (m.type == MaterialType::HardeningSoil && m.hs.Eur_ref > 0.0)
+        return hs_frozen_Eur(m.hs, comm_in_plane, comm_zz) / m.hs.Eur_ref;
+    const double p_eff = -(comm_in_plane(0) + comm_in_plane(1) + comm_zz) / 3.0;
+    return m.undrained_stiffness_scale(p_eff);
 }
 
 // HSsmall (G0_ref>0): scale Eur_ref by the small-strain over-stiffness Et/Eur(gamma_hist).

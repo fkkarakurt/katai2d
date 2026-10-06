@@ -279,4 +279,102 @@ inline std::vector<Eigen::VectorXd> install_datum_full(const Structures& structu
     return full;
 }
 
+// A PLATE WHOSE SECTION CHANGES KEEPS ITS FORCES. A plate is evaluated on its total
+// deformation, N = EA (eps - eps_p) and M = EI (kap - kap_p), so giving it another stiffness
+// would multiply the forces it already carries by the ratio of the two -- a lining twice as
+// stiff as the shield it replaces would start with twice the ring force. The part of the
+// deformation the new section does not answer for is therefore moved into the state the
+// element keeps at its integration points: eps_p' = eps - (EA_old / EA_new)(eps - eps_p), and
+// the same for the curvature. N and M are then what they were, to round-off, and every further
+// deformation is taken with the new stiffness. The shear force is kept the same way, through
+// the shear strain offset at the reduced shear points.
+// `full_datum` is the parent's total displacement in this phase's DOF numbering.
+inline void rescale_plate_state(const mesh::Mesh& mesh, const DofMap& dofs,
+                                const Structures& structures, const Eigen::VectorXd& full_datum,
+                                const StructCarryRecord& rec, double EA_old, double EI_old,
+                                double GA_old, StructuralInit& init) {
+    const auto rel = [&](int gdof, int install) -> double {
+        const double u = gdof >= 0 && gdof < full_datum.size() ? full_datum[gdof] : 0.0;
+        if (install < 0) return u;
+        const int eq = dofs.equation(gdof);
+        if (eq >= 0)
+            return (size_t)install < structures.install_datum.size()
+                       ? u - structures.install_datum[(size_t)install](eq) : u;
+        const Eigen::VectorXd* fx = (size_t)install < structures.install_fixed.size()
+                                        ? &structures.install_fixed[(size_t)install] : nullptr;
+        return u - (fx && gdof < fx->size() ? (*fx)(gdof) : 0.0);
+    };
+    const auto moved = [](double strain, double strain_p, double k_old, double k_new) {
+        return k_new > 0.0 ? strain - (k_old / k_new) * (strain - strain_p) : strain_p;
+    };
+    for (size_t i = rec.plates[0]; i < rec.plates[1] && i < structures.plates.size(); ++i) {
+        const PlateElement& pe = structures.plates[i];
+        plate::NodeCoords X;
+        plate::Dof u;
+        for (int k = 0; k < 3; ++k) {
+            X(k, 0) = mesh.x[pe.nodes[k]]; X(k, 1) = mesh.y[pe.nodes[k]];
+            for (int c = 0; c < 2; ++c) {
+                const int g = pe.trans_dof[2 * k + c] >= 0 ? pe.trans_dof[2 * k + c]
+                                                           : dofs.global_dof(pe.nodes[k], c);
+                u(3 * k + c) = rel(g, pe.install);
+            }
+            u(3 * k + 2) = rel(pe.rot_dof[k], pe.install);
+        }
+        const size_t off = i * (size_t)plate::kPlasticStateSize;
+        if (off + (size_t)plate::kPlasticStateSize > init.plate_plastic.size()) continue;  // silent-drop-ok: no state to move
+        for (int q = 0; q < plate::kBendGaussCount; ++q) {
+            const auto e = plate::detail::edge_kin(X, plate::kBendGaussXi[q]);
+            Eigen::Matrix<double, 1, 9> Be, Bk, Bg;
+            plate::detail::b_rows(e, Be, Bk, Bg);
+            double& ep = init.plate_plastic[off + (size_t)plate::kPlasticPerPoint * q];
+            double& kp = init.plate_plastic[off + (size_t)plate::kPlasticPerPoint * q + 1];
+            ep = moved((Be * u)(0), ep, EA_old, pe.props.EA);
+            kp = moved((Bk * u)(0), kp, EI_old, pe.props.EI);
+        }
+        constexpr double g2 = 0.5773502691896257;
+        const std::array<double, 2> xi2{-g2, g2};
+        for (int q = 0; q < plate::kShearGaussCount; ++q) {
+            const auto e = plate::detail::edge_kin(X, xi2[(size_t)q]);
+            Eigen::Matrix<double, 1, 9> Be, Bk, Bg;
+            plate::detail::b_rows(e, Be, Bk, Bg);
+            double& g0 = init.plate_plastic[off + (size_t)plate::kShearStateBegin + q];
+            g0 = moved((Bg * u)(0), g0, GA_old, pe.props.shear_rigidity());
+        }
+    }
+    for (size_t i = rec.plates5[0]; i < rec.plates5[1] && i < structures.plates5.size(); ++i) {
+        const PlateElement5& pe = structures.plates5[i];
+        plate::NodeCoords5 X;
+        plate::Dof5 u;
+        for (int k = 0; k < 5; ++k) {
+            X(k, 0) = mesh.x[pe.nodes[k]]; X(k, 1) = mesh.y[pe.nodes[k]];
+            for (int c = 0; c < 2; ++c) {
+                const int g = pe.trans_dof[2 * k + c] >= 0 ? pe.trans_dof[2 * k + c]
+                                                           : dofs.global_dof(pe.nodes[k], c);
+                u(3 * k + c) = rel(g, pe.install);
+            }
+            u(3 * k + 2) = rel(pe.rot_dof[k], pe.install);
+        }
+        const size_t off = i * (size_t)plate::kPlasticStateSize5;
+        if (off + (size_t)plate::kPlasticStateSize5 > init.plate5_plastic.size()) continue;  // silent-drop-ok: no state to move
+        for (int q = 0; q < plate::kBendGaussCount5; ++q) {
+            const auto e = plate::detail::edge_kin5(X, plate::kBendGaussXi5[q]);
+            Eigen::Matrix<double, 1, 15> Be, Bk, Bg;
+            plate::detail::b_rows5(e, Be, Bk, Bg);
+            double& ep = init.plate5_plastic[off + (size_t)plate::kPlasticPerPoint * q];
+            double& kp = init.plate5_plastic[off + (size_t)plate::kPlasticPerPoint * q + 1];
+            ep = moved((Be * u)(0), ep, EA_old, pe.props.EA);
+            kp = moved((Bk * u)(0), kp, EI_old, pe.props.EI);
+        }
+        constexpr double a4 = 0.3399810435848563, b4 = 0.8611363115940526;
+        const std::array<double, 4> xi4{-b4, -a4, a4, b4};
+        for (int q = 0; q < plate::kShearGaussCount5; ++q) {
+            const auto e = plate::detail::edge_kin5(X, xi4[(size_t)q]);
+            Eigen::Matrix<double, 1, 15> Be, Bk, Bg;
+            plate::detail::b_rows5(e, Be, Bk, Bg);
+            double& g0 = init.plate5_plastic[off + (size_t)plate::kShearStateBegin5 + q];
+            g0 = moved((Bg * u)(0), g0, GA_old, pe.props.shear_rigidity());
+        }
+    }
+}
+
 } // namespace katai::core

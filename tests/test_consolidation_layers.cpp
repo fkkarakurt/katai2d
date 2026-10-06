@@ -108,6 +108,7 @@ m::Project column(bool upper_listed_first, m::PhaseType type, double duration, i
     ph.type = type;
     ph.load_active = {1};                   // on at t = 0+
     ph.duration = duration;
+    ph.consol_load_at_start = true;   // the closed form is for a column loaded at once
     ph.time_steps = steps;
     pr.phases.push_back(ph);
     return pr;

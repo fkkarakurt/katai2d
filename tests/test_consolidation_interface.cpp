@@ -88,6 +88,11 @@ m::Project block(int barrier, double rinter, bool plastic_phase, double tv = 4.0
     m::StructElement e; e.kind = m::StructKind::Interface; e.name = "Joint";
     e.x1 = kXw; e.y1 = kYtoe; e.x2 = kXw; e.y2 = kH; e.material = -1;
     e.flow_barrier = barrier;
+    // The weak joint is weak in STRENGTH, not in stiffness: its stiffness is entered, that of the
+    // full-strength joint (G / t and E_oed,i / t with G = E / 2(1 + nu), t = 0.2 m). Derived from
+    // Rinter it falls with Rinter squared, and a joint that soft carries too little shear to be
+    // asked for more than it has -- the case this block exists to show would not arise.
+    if (rinter < 0.5) { e.iface_ks = 1.0e4; e.iface_kn = 1.1e5; }
     pr.structs.push_back(e);
 
     m::Load L; L.kind = m::LoadKind::Distributed; L.name = "Surcharge";
@@ -103,6 +108,7 @@ m::Project block(int barrier, double rinter, bool plastic_phase, double tv = 4.0
         ph.name = "Consolidation"; ph.type = m::PhaseType::Consolidation;
         ph.duration = tv * kH * kH / cv();
         ph.time_steps = 60;
+        ph.consol_load_at_start = true;   // the long-term limit needs the load on from the start
     }
     pr.phases.push_back(ph);
     return pr;

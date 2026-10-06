@@ -211,7 +211,9 @@ ConsolidationResult solve_consolidation(const mesh::Mesh& mesh, const DofMap& do
                                         const ConsolidationSolveFactory& solve_factory = {},
                                         const std::vector<MaterialProfile>& profile = {},
                                         const math::CsrMatrix* struct_k = nullptr,
-                                        const std::vector<int>* pore_tie = nullptr);
+                                        const std::vector<int>* pore_tie = nullptr,
+                                        bool ramp_load = false,
+                                        const Eigen::VectorXd* instant_load = nullptr);
 
 // Elastoplastic (MC/HS) Biot consolidation -- monolithic coupled Newton (described above).
 // `initial_state`: committed EFFECTIVE Gauss states (K0/previous phase; size elem*ngp; empty =
@@ -229,6 +231,8 @@ ConsolidationPlasticResult solve_consolidation_plastic(
     int max_newton = 40, double newton_tol = 1e-6,
     const std::vector<MaterialProfile>& profile = {},
     const math::CsrMatrix* struct_k = nullptr,
-    const std::vector<int>* pore_tie = nullptr);
+    const std::vector<int>* pore_tie = nullptr,
+    bool ramp_load = false,
+    const Eigen::VectorXd* instant_load = nullptr);
 
 }  // namespace katai::core

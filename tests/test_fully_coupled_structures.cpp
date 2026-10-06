@@ -87,6 +87,7 @@ m::Project block(int kind) {
         ph.type = kind == 0 ? m::PhaseType::Consolidation : m::PhaseType::FullyCoupled;
         ph.duration = 4.0 * kH * kH / cv();
         ph.time_steps = 60;
+        ph.consol_load_at_start = true;   // as the fully coupled phase applies it
     }
     pr.phases.push_back(ph);
     return pr;

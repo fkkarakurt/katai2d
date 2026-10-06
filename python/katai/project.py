@@ -209,15 +209,19 @@ class _Materials:
                          E50ref=E50, Eoedref=Eoed, Eurref=Eur, G0ref=G0,
                          gamma07=gamma07, **kw)
 
-    def soft_soil(self, name, *, lam_star, kap_star, c, phi, psi=0.0, **kw):
-        """Soft Soil. Modified compression/swelling indices lambda*/kappa* [-]."""
+    def soft_soil(self, name, *, lam_star, kap_star, c, phi, psi=0.0, nu_ur=0.15, **kw):
+        """Soft Soil. Modified compression/swelling indices lambda*/kappa* [-];
+        ``nu_ur`` is the unloading/reloading Poisson's ratio (0.15 for this model)."""
         return self._add(name, _core.SoilModel.SoftSoil, c=c, phi=phi, psi=psi,
-                         lam_star=lam_star, kap_star=kap_star, **kw)
+                         lam_star=lam_star, kap_star=kap_star, nu_ur=nu_ur, **kw)
 
-    def soft_soil_creep(self, name, *, lam_star, kap_star, mu_star, c, phi, psi=0.0, **kw):
-        """Soft Soil Creep: Soft Soil + modified creep index mu* [-]."""
+    def soft_soil_creep(self, name, *, lam_star, kap_star, mu_star, c, phi, psi=0.0,
+                        nu_ur=0.15, **kw):
+        """Soft Soil Creep: Soft Soil + modified creep index mu* [-]; ``nu_ur`` as for
+        Soft Soil (0.15)."""
         return self._add(name, _core.SoilModel.SoftSoilCreep, c=c, phi=phi, psi=psi,
-                         lam_star=lam_star, kap_star=kap_star, mu_star=mu_star, **kw)
+                         lam_star=lam_star, kap_star=kap_star, mu_star=mu_star, nu_ur=nu_ur,
+                         **kw)
 
     def hoek_brown(self, name, *, E, nu, sigma_ci, mi, gsi, D=0.0, psi=0.0,
                    sigma_psi=0.0, **kw):
@@ -382,7 +386,7 @@ class _Structures:
 
     def _add(self, kind, a, b, name, material_index, *, barrier=None,
              resistance=0.0, interfaces=None, coarseness=1.0, conn=None,
-             iface_material=None, iface_kn=None, iface_ks=None):
+             iface_material=None, iface_kn=None, iface_ks=None, iface_thickness=None):
         S = _core.StructElement()
         S.kind = kind
         S.name = name
@@ -407,6 +411,10 @@ class _Structures:
             if not isinstance(iface_material, MaterialHandle):
                 raise TypeError("iface_material must be a material from prj.materials")
             S.iface_material = iface_material.index
+        if iface_thickness is not None:
+            if not iface_thickness > 0.0:
+                raise ValueError(f"iface_thickness must be a positive factor (got {iface_thickness})")
+            S.iface_vt = float(iface_thickness)
         for key, v in (("iface_kn", iface_kn), ("iface_ks", iface_ks)):
             if v is None:
                 continue
@@ -422,7 +430,7 @@ class _Structures:
     def plate(self, a, b, *, EA, EI, w=0.0, nu=0.0, Mp=0.0, Np=0.0,
               elastoplastic=None, name="Plate", interfaces=None, barrier=None,
               resistance=0.0, coarseness=1.0, iface_material=None, iface_kn=None,
-              iface_ks=None):
+              iface_ks=None, iface_thickness=None, prevent_punching=False):
         """A wall, lining or slab: EA [kN/m], EI [kN m2/m], self-weight w [kN/m/m].
 
         ``Mp`` / ``Np`` (0 = elastic) make it elastoplastic -- the plastic moment
@@ -432,13 +440,18 @@ class _Structures:
         walking from ``a`` to ``b``, 'negative' the left, and a side without an
         interface is bonded to the wall. The interface takes the strength of the
         soil beside it reduced by that soil's ``Rinter``, or of ``iface_material``
-        (a material from ``prj.materials``); ``iface_kn`` / ``iface_ks`` [kN/m3]
+        (a material from ``prj.materials``); ``iface_thickness`` is their virtual
+        thickness factor (0.1: the derived stiffness is the soil's over a tenth of the
+        model's element size); ``iface_kn`` / ``iface_ks`` [kN/m3]
         set its normal and shear stiffness (default: derived from that soil).
         ``barrier='impermeable'`` makes it a groundwater screen
         ('semi_permeable' needs ``resistance`` = d/k [day])."""
         M = _core.PlateMaterial()
         M.name, M.EA, M.EI, M.w, M.nu = name, EA, EI, w, nu
         M.Mp, M.Np = Mp, Np
+        # End bearing: no soil plasticity within the plate's equivalent thickness of its lower
+        # end, so a loaded wall does not punch through the ground under it (not for sheet piles).
+        M.prevent_punching = bool(prevent_punching)
         # A capacity the engine never reads is worse than no capacity: the plate's caps are
         # only applied when the elastoplastic flag is set, so giving Mp or Np turns it on.
         # Pass elastoplastic=False explicitly to keep a stated capacity DORMANT.
@@ -448,7 +461,8 @@ class _Structures:
             return self._add(_core.StructKind.Plate, a, b, name, len(self._prj._plates) - 1,
                              barrier=barrier, resistance=resistance, interfaces=interfaces,
                              coarseness=coarseness, iface_material=iface_material,
-                             iface_kn=iface_kn, iface_ks=iface_ks)
+                             iface_kn=iface_kn, iface_ks=iface_ks,
+                             iface_thickness=iface_thickness)
         except (TypeError, ValueError):
             self._prj._plates.pop()   # a refused plate leaves no orphan material behind
             raise
@@ -490,12 +504,14 @@ class _Structures:
                          len(self._prj._geogrids) - 1, coarseness=coarseness)
 
     def pile(self, a, b, *, E, diameter, spacing, gamma=24.0, Tskin_max=0.0,
-             Fmax_base=0.0, connection="hinged", name="Pile", coarseness=1.0):
+             Fmax_base=0.0, connection="hinged", name="Pile", coarseness=1.0, Tskin_end=0.0):
         """An embedded beam (pile row): E [kN/m2], ``diameter`` [m], out-of-plane
         ``spacing`` [m], unit weight ``gamma`` [kN/m3].
 
         ``Tskin_max`` [kN/m] and ``Fmax_base`` [kN] are the shaft and base
         capacities -- CAREFUL, 0 means UNLIMITED here, not zero capacity.
+        ``Tskin_end`` [kN/m] makes the shaft capacity vary linearly along the pile,
+        from ``Tskin_max`` at ``a`` to ``Tskin_end`` at ``b`` (0 = the same throughout).
         ``connection`` is how the pile top attaches to the soil: 'hinged' (the
         default) means the top moves with the soil, which is what
         makes the pile loadable at its head at all; 'free' leaves it coupled only
@@ -503,13 +519,18 @@ class _Structures:
         M = _core.EmbeddedBeamMaterial()
         M.name, M.E, M.gamma, M.diameter, M.Lspacing = name, E, gamma, diameter, spacing
         M.Tskin_max, M.Fmax_base = Tskin_max, Fmax_base
+        if Tskin_end and not Tskin_max:
+            raise ValueError("Tskin_end needs Tskin_max: the capacity varies from Tskin_max at the "
+                             "first point to Tskin_end at the second")
+        M.Tskin_end = Tskin_end
         self._prj._embedded.append(M)
         return self._add(_core.StructKind.EmbeddedBeam, a, b, name,
                          len(self._prj._embedded) - 1, conn=connection,
                          coarseness=coarseness)
 
     def interface(self, a, b, *, name="Interface", barrier=None, resistance=0.0,
-                  coarseness=1.0, iface_material=None, iface_kn=None, iface_ks=None):
+                  coarseness=1.0, iface_material=None, iface_kn=None, iface_ks=None,
+                  iface_thickness=None):
         """A bare soil-structure interface line: it takes the strength of the soil
         beside it, reduced by that soil's ``Rinter`` -- or of ``iface_material``.
         ``iface_kn`` / ``iface_ks`` [kN/m3] set its stiffness. Use this for a slip
@@ -517,7 +538,8 @@ class _Structures:
         ``plate(..., interfaces='both')``."""
         return self._add(_core.StructKind.Interface, a, b, name, -1,
                          barrier=barrier, resistance=resistance, coarseness=coarseness,
-                         iface_material=iface_material, iface_kn=iface_kn, iface_ks=iface_ks)
+                         iface_material=iface_material, iface_kn=iface_kn, iface_ks=iface_ks,
+                         iface_thickness=iface_thickness)
 
 
 class _Displacements:
@@ -608,7 +630,8 @@ class _Phases:
     def _add(self, name, ptype, *, activate=(), deactivate=(), duration=None,
              steps=None, tolerance=None, load_steps=None, max_iterations=None,
              apply_fraction=None, ignore_undrained=None, reset_small_strain=None,
-             design=None, water=None, dry=(), wet=(), pore_pressure=None, region_water=None):
+             design=None, water=None, dry=(), wet=(), pore_pressure=None, region_water=None,
+             materials=None, reset_displacements=None, plates=None, contraction=None):
         ph = _core.Phase()
         ph.name = name
         ph.type = ptype
@@ -624,6 +647,8 @@ class _Phases:
         # an overconsolidation behind leaves a strain history too, and that history is an
         # artefact of the modelling, not something the soil would still remember.
         if reset_small_strain is not None: ph.reset_small_strain = reset_small_strain
+        # Reset displacements: `result.displacement_total` counts from the start of this phase.
+        if reset_displacements is not None: ph.reset_displacements = bool(reset_displacements)
         # Design code: the partial factors of EC7 or TBDY 2018 applied to THIS phase, so a
         # characteristic run and its design check live in one file and are read side by side.
         # Unset = characteristic values, which is what an unfactored analysis means.
@@ -667,6 +692,45 @@ class _Phases:
         # above and below it, {region: "table"} returns it to the water table. It carries over to
         # later phases like the water itself.
         self._prj._phase_rwater.append(dict(region_water or {}))
+        # Materials: {region: material} gives a region another material from this phase on --
+        # ground that is improved, a clay that is undrained while it is loaded and drained
+        # afterwards. The region keeps its stresses; the new material's own state starts from
+        # them. It carries over to later phases; give the region's first material to go back.
+        self._prj._phase_materials.append(dict(materials or {}))
+        # Plates: {plate: dict(EA=..., EI=..., w=..., nu=...)} gives a plate another section from
+        # this phase on -- a lining that replaces a shield, a wall that is thickened. The plate
+        # keeps the normal force and the bending moment it carries; what it does from here on
+        # it does with the new stiffness and weight. Properties not given stay as they were.
+        changed = {}
+        for h, props in (plates or {}).items():
+            if not isinstance(h, StructHandle) or                     self._prj._structs[h.index].kind != _core.StructKind.Plate:
+                raise ValueError(f"plates= changes the section of a plate, not {h!r}")
+            unknown = set(props) - {"EA", "EI", "w", "nu"}
+            if unknown:
+                raise TypeError(f"plates= takes EA, EI, w and nu; got {sorted(unknown)}")
+            current = self._prj._structs[h.index].material
+            for earlier in self._prj._phase_plates:
+                current = earlier.get(h.index, current)
+            old = self._prj._plates[current]
+            M = _core.PlateMaterial()
+            M.name = old.name
+            M.EA, M.EI, M.w, M.nu = old.EA, old.EI, old.w, old.nu
+            M.Mp, M.Np, M.elastoplastic = old.Mp, old.Np, old.elastoplastic
+            M.prevent_punching = old.prevent_punching
+            for field, value in props.items():
+                setattr(M, field, float(value))
+            self._prj._plates.append(M)
+            changed[h.index] = len(self._prj._plates) - 1
+        self._prj._phase_plates.append(changed)
+        # Contraction: {plate: 0.005} is a line contraction -- the area loss of the closed line
+        # the plate is part of, as a fraction, TOTAL from this phase on (later phases keep it;
+        # give 0 to take it back). The plate shrinks by half of it as a strain; how much of that
+        # is realised is decided by the ground around it.
+        for h in (contraction or {}):
+            if not isinstance(h, StructHandle) or \
+                    self._prj._structs[h.index].kind != _core.StructKind.Plate:
+                raise ValueError(f"contraction= is given to a plate, not {h!r}")
+        self._prj._phase_contraction.append({h.index: float(v) for h, v in (contraction or {}).items()})
         self._prj._phase_water_set.append(water is not None)
         # pore_pressure="flow": this phase's pore pressures from a steady groundwater flow on its
         # active ground (Phase.pore_from_flow); "phreatic" from the water table. Unset = as the
@@ -694,6 +758,15 @@ class _Phases:
         keeps the named excavated regions dry from this phase on (a tunnel, a pit
         pumped dry); ``wet=[...]`` lets the water back in.
 
+        Every result carries ``displacement`` (what the phase did) and
+        ``displacement_total`` (since the start of the staged construction);
+        ``reset_displacements=True`` starts that total again at this phase -- the
+        settlement an excavation causes to a building that stood there before.
+
+        ``materials={region: material}`` gives a region another material from this
+        phase on (improved ground, a clay undrained while loaded and drained
+        afterwards): its stresses are kept, the new model's own state starts from them.
+
         ``region_water={region: level}`` gives a region a hydrostatic water level
         of its own; ``{region: "interpolate"}`` makes its pore pressure vary
         linearly with depth between the regions above and below it (the ground
@@ -717,7 +790,8 @@ class _Phases:
         return self._add(name, _core.PhaseType.Plastic, **kw)
 
     def consolidation(self, name, *, duration=None, steps=None, until_degree=None,
-                      until_excess_pore=None, first_step=None, max_steps=None, **kw):
+                      until_excess_pore=None, first_step=None, max_steps=None,
+                      load_at_start=False, **kw):
         """Time-dependent Biot consolidation, ended one of two ways.
 
         By TIME -- ``duration`` [day] split into ``steps`` equal steps::
@@ -736,6 +810,11 @@ class _Phases:
         suggests -- on the verified 1-D column the settlement ratio reaches 90% a fifth
         of the time earlier (KV-CON-003), so the two names give two different answers
         to the same question.
+
+        A phase with a ``duration`` places what it activates over that duration,
+        linearly. ``load_at_start=True`` puts it on at the first instant instead and
+        leaves the whole duration for the dissipation -- the column of the
+        one-dimensional theory, which is loaded at once.
 
         ``first_step`` [day] overrides the automatic first time step; ``max_steps``
         caps the march (reaching the cap refuses the phase rather than reporting the
@@ -760,6 +839,7 @@ class _Phases:
         elif until_excess_pore is not None:
             b.phase.consol_stop = _core.ConsolStop.MinExcessPore
             b.phase.consol_min_pore = float(until_excess_pore)
+        if load_at_start: b.phase.consol_load_at_start = True
         if first_step is not None: b.phase.consol_first_step = float(first_step)
         if max_steps is not None: b.phase.consol_max_steps = int(max_steps)
         return b
@@ -875,6 +955,9 @@ class Project:
         self._phase_toggles = []
         self._phase_dry = []
         self._phase_rwater = []
+        self._phase_materials = []
+        self._phase_plates = []
+        self._phase_contraction = []
         self._phase_water_set = []
         self._phase_pore_set = []
         self.materials = _Materials(self)
@@ -994,6 +1077,9 @@ class Project:
         phases = []
         dry_state = [0] * len(self._polygons)
         rw_mode = [0] * len(self._polygons)
+        mat_state = [-1] * len(self._polygons)   # -1 = the material the region was drawn with
+        plate_state = [-1] * len(self._structs)  # -1 = the section the plate was drawn with
+        contr_state = [0.0] * len(self._structs)
         rw_level = [0.0] * len(self._polygons)
         for k, (ph, activate, deactivate) in enumerate(self._phase_toggles):
             for h in self._phase_dry[k][0]:
@@ -1018,6 +1104,23 @@ class Project:
                     rw_level[h.index] = float(rule)
             # Only a Plastic or Safety phase states region water; a consolidation, flow or dynamic
             # phase computes its own pore pressures, so the setting waits for the next one.
+            for h, mat in self._phase_materials[k].items():
+                if not isinstance(h, RegionHandle):
+                    raise ValueError(f"materials= changes the material of a soil region, not {h!r}")
+                if not isinstance(mat, MaterialHandle):
+                    raise TypeError("materials= maps a region to a material from prj.materials")
+                drawn = self._polygons[h.index].material
+                mat_state[h.index] = -1 if mat.index == drawn else mat.index
+            if any(m >= 0 for m in mat_state):
+                ph.poly_material = list(mat_state)
+            for si, m in self._phase_plates[k].items():
+                plate_state[si] = m
+            if any(m >= 0 for m in plate_state):
+                ph.struct_material = list(plate_state)
+            for si, c in self._phase_contraction[k].items():
+                contr_state[si] = c
+            if any(c != 0.0 for c in contr_state):
+                ph.struct_contraction = list(contr_state)
             if any(rw_mode) and ph.type in (_core.PhaseType.Plastic, _core.PhaseType.Safety):
                 ph.poly_water = list(rw_mode)
                 ph.poly_water_level = list(rw_level)

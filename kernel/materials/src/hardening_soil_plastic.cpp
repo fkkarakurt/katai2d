@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <string>
 #include <katai/materials/hardening_soil_plastic.hpp>
 
 #include <array>
@@ -1061,6 +1063,18 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     // a strip footing pushed into sand: the per-substep rule at STOL 1e-5 gave 291.5 kPa, 4% above
     // the 279.8 kPa the same run converges to at 1e-6 (this rule at 1e-5: 280.3) -- faster, and
     // unsafe. The walk has to become second order at its events before this can change.
+    // A FOURTH-ORDER STEP WAS TRIED HERE AND TAKEN OUT (2026-10). The classical four-stage step
+    // with a step-doubling estimate of its own error, n = (STOL dT^5 / e)^(1/4), needs a tenth of
+    // the substeps and ran the boundary-value benches twice as fast with the same answers (a fill
+    // on a soft base 143.7 / 143.8 mm, the settlement under a strip on undrained clay 11.96 /
+    // 11.97 mm). It failed where the second-order pair does not: on the oedometer path from rest
+    // (KV-NUM-009) the deviation from the idealised law, which the power law's self-similarity
+    // makes the same at every stress level, is constant to 1e-4 of a percentage point with the
+    // pair and varied by 0.74 points with the four stages. The stages of one step fall on
+    // different branches wherever the active set changes inside it (the cap and the shear surface
+    // at their corner, the stiffness floor), the order is lost there, and an estimate taken once
+    // at the start of the increment does not see it. A higher order is worth having only together
+    // with a walk that stops at those events.
     double nreal = 1.0;
     if (replaying) {
         // Replay: the subdivision is uniform, so its one step size reproduces it exactly.
@@ -1082,7 +1096,14 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
             // surface layer, the first increment of any seating phase. The floor is p_ref/200:
             // tied to the reference pressure of the stress-dependent stiffness law, so it scales
             // with the material's own stress level rather than with the units.
-            const double dn = std::max(s_end.norm(), pr / 200.0);
+            // The error is measured against the stress, but not against less than p_ref / 20:
+            // at a point that carries next to nothing -- fresh fill, the ground surface -- a
+            // relative tolerance is an absolute one of nothing, and the estimate asked for the
+            // ceiling of substeps to resolve stresses of a thousandth of a kPa. The floor was
+            // p_ref / 200. Measured: a fill on a soft base 141 s -> 97 s with the same answer
+            // (143.7 / 143.6 mm), a strip on clay and an embankment's factor of safety unchanged
+            // in time and answer (11.96 mm; 1.40157 / 1.40161).
+            const double dn = std::max(s_end.norm(), pr / 20.0);
             const double e_step = 0.5 * (f2.dsig - f1.dsig).norm() / dn;
             if (!(e_step > 0.0)) break;             // exact on this step: nothing to subdivide
             const double dT_ok = std::sqrt(tol * dT * dT * dT / e_step);
@@ -1142,8 +1163,15 @@ HsSeed hs_seed_from_history(const HardeningSoilParams& p, double sxx, double syy
     else if (mode == 2) syy_c = syy + std::max(0.0, POP);
     const Eigen::Vector3d now = principal(sxx, syy, sxy, szz);
     const Eigen::Vector3d past = principal(k0nc * syy_c, syy_c, sxy, k0nc * syy_c);
-    return {std::max(hs_initial_pp(p, now), hs_initial_pp(p, past)),
-            std::max(hs_initial_gamma_p(p, now), hs_initial_gamma_p(p, past))};
+    // THE CAP COMES FROM THE HISTORY, THE SHEAR HARDENING FROM THE PRESENT. The pre-consolidation
+    // state is what the cap remembers: pp is the larger of the two. The shear hardening is the
+    // one that puts the CURRENT stress on the shear surface. It used to be the larger of the two
+    // as well, so ground with a little overconsolidation started with a shear surface it had
+    // reached in its past and answered a first excavation elastically in shear. Measured on a
+    // strutted excavation in clay with a pre-overburden of 5 kPa against a published solution
+    // (wall movement after each stage 6.1 / 24.1 / 57.1 mm): 6.01 / 22.61 / 55.50 with the shear
+    // hardening of the past, 6.01 / 23.68 / 57.25 with that of the present.
+    return {std::max(hs_initial_pp(p, now), hs_initial_pp(p, past)), hs_initial_gamma_p(p, now)};
 }
 
 void hs_oedometer_probe(const HardeningSoilParams& p, double& Eoed_pref,

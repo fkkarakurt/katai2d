@@ -68,6 +68,7 @@ KEY_TO_ATTR = {
     "mstage": "sum_mstage",
     "ignoreund": "ignore_undrained",
     "resetsmall": "reset_small_strain",
+    "resetdisp": "reset_displacements",
     "tol": "tolerance",
     "loadsteps": "load_steps",
     "maxiter": "max_iterations",
@@ -90,6 +91,11 @@ KEY_TO_ATTR = {
     "hydro": "hydro_active",
     "dry": "poly_dry",
     "flowpore": "pore_from_flow",
+    "cloadstart": "consol_load_at_start",
+    "pmat": "poly_material",
+    "smat": "struct_material",
+    "punch": "prevent_punching",
+    "scontr": "struct_contraction",
     "pwater": "poly_water",
     "pwlevel": "poly_water_level",
     "hyd_res": "hydraulic_resistance",
@@ -110,6 +116,7 @@ def coverage_project():
 
     soil = core.Material()
     soil.name = "Soil"
+    soil.ck = 0.5   # written only when set
     # A second material carrying the Hoek-Brown model: its five keys are written only by a
     # material that uses it, so without one in the coverage project they would never appear.
     rock = core.Material()
@@ -123,6 +130,7 @@ def coverage_project():
     pr.materials = [soil, rock]
     plate = core.PlateMaterial()
     plate.name = "Wall"
+    plate.prevent_punching = True   # written only when set
     pr.plates = [plate]
     anchor = core.AnchorMaterial()
     anchor.name = "Anchor"
@@ -131,6 +139,7 @@ def coverage_project():
     geogrid.name = "Geogrid"
     pr.geogrids = [geogrid]
     beam = core.EmbeddedBeamMaterial()
+    beam.Tskin_end = 50.0   # written only when set
     beam.name = "Pile"
     pr.embedded = [beam]
 
@@ -153,6 +162,7 @@ def coverage_project():
     wall.iface_pos = True            # a wall with an interface, so the stiffness keys are read
     wall.iface_kn = 1.0e5            # and emitted (written only when set)
     wall.iface_ks = 1.0e4
+    wall.iface_vt = 0.2
     pr.structs = [wall]
 
     strip = core.Load()
@@ -209,6 +219,7 @@ def coverage_project():
     ph.sum_mstage = 0.5
     ph.ignore_undrained = True
     ph.reset_small_strain = True
+    ph.reset_displacements = True
     ph.tolerance = 1e-5
     ph.load_steps = 12
     ph.max_iterations = 40
@@ -223,6 +234,10 @@ def coverage_project():
     ph.poly_active = [1]
     ph.poly_dry = [1]
     ph.pore_from_flow = True
+    ph.consol_load_at_start = True
+    ph.poly_material = [0]
+    ph.struct_material = [0]
+    ph.struct_contraction = [0.005]
     ph.struct_active = [1]
     ph.load_active = [1]
     ph.disp_active = [1]

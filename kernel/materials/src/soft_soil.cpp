@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <katai/materials/soft_soil.hpp>
 
 namespace katai::core::softsoil {
@@ -12,8 +13,8 @@ StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c
     // --- Exponentially EXACT elastic mean + deviatoric predictor with G at the trial p --------
     const double p_c = sig_c.mean();
     const double dev_v = deps.sum();
-    const double p_tr = mean_after(p_c, dev_v, P.kap_star);
-    const double K_tr = bulk_at(p_tr, P.kap_star);
+    const double p_tr = mean_after(p_c, dev_v, P.kap_star, ccot);
+    const double K_tr = bulk_at(p_tr, P.kap_star, ccot);
     const double G = 1.5 * K_tr * (1.0 - 2.0 * P.nu_ur) / (1.0 + P.nu_ur);
     const Eigen::Vector3d de = deps - Eigen::Vector3d::Constant(dev_v / 3.0);
     const Eigen::Vector3d s_dev_c = sig_c - Eigen::Vector3d::Constant(sig_c.mean());
@@ -81,7 +82,7 @@ StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c
         const double mv = m.sum();
         const Eigen::Vector3d mdev = m - Eigen::Vector3d::Constant(mv / 3.0);
         const double p0 = s0.mean();
-        const double pL = mean_after(p0, -L * mv, P.kap_star);
+        const double pL = mean_after(p0, -L * mv, P.kap_star, ccot);
         return Eigen::Vector3d(Eigen::Vector3d::Constant(pL) +
                                (s0 - Eigen::Vector3d::Constant(s0.mean())) - L * 2.0 * G * mdev);
     };
@@ -93,6 +94,9 @@ StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c
         auto eval = [&](double L, Eigen::Vector3d& s, double& ppv) {
             s = exp_return(s0, m, L);
             const double devp = L * m.sum();
+            // The hardening law is the model's as written, in p_p itself:
+            // p_p = p_p0 exp(-eps_v^p / (lam* - kap*)). The ELASTIC law is in the shifted
+            // pressure p' + c cot(phi) (soft_soil.hpp, mean_after); the two are not shifted alike.
             ppv = harden ? std::max(pp0 * std::exp(devp / (P.lam_star - P.kap_star)),
                                     std::max(ccot, kPmin))
                          : pp0;
@@ -200,10 +204,30 @@ StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c
 
 StepResult ss_step(const Params& P, const Eigen::Vector3d& sig_c, double pp_c,
                    const Eigen::Vector3d& deps, int nsub_fixed) {
+    // THE SUBSTEPS HAVE A FIXED SIZE AND THE LAST ONE TAKES WHAT IS LEFT. The increment used to
+    // be cut into nsub EQUAL parts, with nsub an integer of the increment's size -- so an
+    // increment a hair larger than the last one was integrated with one substep more, and the
+    // stress it returned jumped by the difference in integration error. Inside an equilibrium
+    // iteration, where each iterate changes the increment a little, that jump is noise in the
+    // internal force that no iteration can get under: measured on a footing pushed into this
+    // soil, the out-of-balance force stopped at 3-4e-3 of the forces in play, in pairs of
+    // opposite sign on neighbouring nodes all over the mesh, and the phase was abandoned at
+    // 70% of its settlement at a tolerance of 3e-3 (and took 1 300 iterations at 1e-2).
+    // With full substeps of the size the rule allows and a last one for the remainder, the
+    // returned stress is a continuous function of the increment: where the count goes up by
+    // one the new last substep has no length.
+    // A pinned count (the columns of the numerical tangent) keeps the count of the run it
+    // follows and the same rule for the sizes, so the two runs differ by the perturbation only.
+    const double em = deps.sum() / 3.0;
+    const double dev = (deps - Eigen::Vector3d::Constant(em)).cwiseAbs().maxCoeff();
+    const double measure = std::fabs(deps.sum()) + 2.0 * dev;
+    const double h0 = 0.05 * P.kap_star;   // the size ss_nsub allows
     const int nsub = nsub_fixed > 0 ? nsub_fixed : ss_nsub(P, deps);
-    const Eigen::Vector3d dsub = deps / nsub;
+    const double full = nsub > 1 ? std::min(h0 / std::max(measure, 1e-300), 1.0 / (nsub - 1)) : 0.0;
+    const double last = 1.0 - (nsub - 1) * full;
     StepResult out{sig_c, pp_c, false, false, nsub};
     for (int i = 0; i < nsub; ++i) {
+        const Eigen::Vector3d dsub = deps * (i + 1 < nsub ? full : last);
         const StepResult r = ss_substep(P, out.sig, out.pp, dsub);
         out.sig = r.sig;
         out.pp = r.pp;

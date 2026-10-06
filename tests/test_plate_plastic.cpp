@@ -224,7 +224,7 @@ void test_element_elastic_identity() {
     u << 1e-3, -2e-3, 3e-4, -4e-4, 5e-4, -6e-4, 7e-5, 8e-4, -9e-5;
     plate::Dof f;
     plate::ElementMatrix K;
-    std::array<double, 6> sc{}, st{};
+    std::array<double, plate::kPlasticStateSize> sc{}, st{};
     plate::internal_force_plastic(X, p, u, sc.data(), st.data(), f, &K);
     const plate::Dof f_el = plate::stiffness(X, p) * u;
     const plate::ElementMatrix K_el = plate::stiffness(X, p);
@@ -240,7 +240,7 @@ void test_element_elastic_identity() {
     for (int i = 0; i < 15; ++i) u5(i) = std::sin(1.0 + i) * 1e-3;
     plate::Dof5 f5;
     plate::ElementMatrix5 K5;
-    std::array<double, 10> sc5{}, st5{};
+    std::array<double, plate::kPlasticStateSize5> sc5{}, st5{};
     plate::internal_force_plastic5(X5, p, u5, sc5.data(), st5.data(), f5, &K5);
     const plate::Dof5 f5_el = plate::stiffness5(X5, p) * u5;
     const plate::ElementMatrix5 K5_el = plate::stiffness5(X5, p);

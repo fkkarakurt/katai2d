@@ -108,12 +108,18 @@ inline EdgeFrame edge_frame5(const NodeCoords5& X, double xi) {
 // "installation" movement; see docs/references/interface-formulation.md §6).
 // Returns: τ, σ_n, the tangents D_s/D_n, the new plastic slip.
 struct Return { double tau, sigma_n, Ds, Dn, slip_p_new; };
+// `pw` is the excess pore pressure of the ground beside the joint (tension positive, so a
+// pressure is negative and a suction positive). The normal stress the joint transmits is a total
+// one -- beside undrained ground it carries that ground's excess pore pressure with it -- and
+// friction acts on the EFFECTIVE normal stress, sigma_n - pw. With pw left out, a clay unloaded
+// undrained behind a wall, whose pore water goes into suction, had the suction counted as a loss
+// of contact stress and its joint slipped at a strength the ground beside it did not have.
 inline Return coulomb_return(const InterfaceProps& p, double du_s, double du_n, double slip_p_c,
-                             double sigma_n0 = 0.0) {
+                             double sigma_n0 = 0.0, double pw = 0.0) {
     double sigma_n = sigma_n0 + p.kn * du_n, Dn = p.kn;
     if (sigma_n > p.sigma_t) { sigma_n = p.sigma_t; Dn = 0.0; }  // tension cut-off (separation)
     const double tau_tr = p.ks * (du_s - slip_p_c);
-    const double tau_max = std::max(0.0, p.c_i - sigma_n * std::tan(p.phi_i));
+    const double tau_max = std::max(0.0, p.c_i - (sigma_n - pw) * std::tan(p.phi_i));
     if (std::fabs(tau_tr) <= tau_max)
         return {tau_tr, sigma_n, p.ks, Dn, slip_p_c};            // elastic (stick)
     const double tau = std::copysign(tau_max, tau_tr);

@@ -141,6 +141,15 @@ struct NewtonOptions {
     // not the load -- gains nothing from a smaller increment of a load that is already applied,
     // so it passes 1 and fails at its first cut, after every retry has had its chance.
     double min_step_fraction = 0.125;
+    // AN INCREMENT THAT HAS STOPPED DESCENDING ABOVE ITS TOLERANCE IS KEPT WHEN IT IS WITHIN THIS
+    // of the force scale (0 = off; kStagnationAccept still applies to the tight tolerances).
+    // The hardening soils are asked for 3e-3 and get there wherever the iteration can; where it
+    // cannot -- fresh fill at next to no stress leaves the out-of-balance force wandering at
+    // 3-5e-3 of the forces in play -- the increment used to be retried four ways and then halved
+    // again and again (measured: 5 500 iterations and no end on a 2 m lift that takes 840 at a
+    // tolerance of 1e-2). With this set to 1e-2 such an increment is kept as it was before the
+    // tolerance was tightened, counted and reported (K2D-A019) with the residual it was kept at.
+    double stagnation_accept = 0.0;
     // STRENGTH CONTINUATION (strength_reduction.cpp). Set, the solve does not apply a load: it
     // follows the equilibrium path of the strength factor s from srf_start, s being an UNKNOWN
     // solved together with the displacement under an arc-length constraint on the displacement
@@ -259,6 +268,9 @@ struct InterfaceElement {
     // (interface-formulation §6.)
     std::array<double, 3> sigma_n0 = {0.0, 0.0, 0.0};
     int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
+    // The soil element on the soil side of the joint (-1 = not known): its excess pore pressure
+    // is what turns the joint's normal stress into an effective one (iface::coulomb_return).
+    int soil_elem = -1;
     // false = the ground on one side of the joint is not there in this phase (excavated, or not
     // yet placed): the joint then transmits nothing -- no stiffness and no sigma_n0. Its nodes on
     // that side are orphaned and fixed, so a joint left in place would hold the wall against
@@ -285,6 +297,7 @@ struct InterfaceElement5 {
     iface::InterfaceProps props;
     std::array<double, 5> sigma_n0 = {0.0, 0.0, 0.0, 0.0, 0.0};
     int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
+    int soil_elem = -1; // as InterfaceElement::soil_elem
     bool active = true;   // see InterfaceElement::active
 };
 

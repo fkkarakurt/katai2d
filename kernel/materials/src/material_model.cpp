@@ -178,8 +178,9 @@ SsReturnCore ss_return_core(const softsoil::Params& P,
     const double mean_c = (cxx + cyy + comm_zz) / 3.0;
     const double p_c = -mean_c;                                       // compression-positive
     const double dv = -(de4(0) + de4(1) + de4(3));                    // compression-positive Δε_v
-    const double p_tr = softsoil::mean_after(p_c, dv, P.kap_star);
-    const double K_tr = softsoil::bulk_at(p_tr, P.kap_star);
+    const double shift = softsoil::cohesion_shift(P);   // the law is in p' + c cot(phi)
+    const double p_tr = softsoil::mean_after(p_c, dv, P.kap_star, shift);
+    const double K_tr = softsoil::bulk_at(p_tr, P.kap_star, shift);
     const double G = 1.5 * K_tr * (1.0 - 2.0 * P.nu_ur) / (1.0 + P.nu_ur);
     const double em = (de4(0) + de4(1) + de4(3)) / 3.0;
     const double sxx = -p_tr + (cxx - mean_c) + 2.0 * G * (de4(0) - em);
@@ -214,7 +215,7 @@ SsReturnCore ss_return_core(const softsoil::Params& P,
     // principal mean = the tensor mean, so the p's match the ones above to round-off).
     const double p_n_p = sig_n_cp.mean();
     const double p_tr_p = sig_tr_cp.mean();
-    const double dv_p = softsoil::strain_between(p_n_p, p_tr_p, P.kap_star);
+    const double dv_p = softsoil::strain_between(p_n_p, p_tr_p, P.kap_star, shift);
     const Eigen::Vector3d ddev =
         ((sig_tr_cp - Eigen::Vector3d::Constant(sig_tr_cp.mean())) -
          (sig_n_cp - Eigen::Vector3d::Constant(sig_n_cp.mean()))) / (2.0 * G);
@@ -325,6 +326,31 @@ void integrate_point(const MaterialModel& m, const GaussState& committed,
     const PlaneStrainStress previous{committed.stress, committed.stress_zz};
     const PlaneStrainStress predictor =
         elastic_predictor(previous, strain_increment, lame);
+
+    // PLASTICITY EXCLUDED (the elastic zone at the foot of a plate with end bearing): the point
+    // answers with the elastic part of its own model -- for Hardening Soil the unloading
+    // stiffness at its stress, for the others E and nu -- and its hardening state stays where it
+    // is. The compression-index models have no such branch here and are integrated as usual.
+    if (committed.plasticity_excluded && m.type != MaterialType::SoftSoil &&
+        m.type != MaterialType::SoftSoilCreep) {
+        trial = committed;
+        if (m.type == MaterialType::HardeningSoil) {
+            const HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
+            const double Eur = hs_frozen_Eur(pe, committed.stress, committed.stress_zz);
+            const PlaneStrainStress pred =
+                elastic_predictor(previous, strain_increment, lame_from(Eur, pe.nu_ur));
+            trial.stress = pred.in_plane;
+            trial.stress_zz = pred.zz;
+            tangent = elastic_plane_strain_of(Eur, pe.nu_ur);
+            if (report) report->stress_dependent = true;
+        } else {
+            trial.stress = predictor.in_plane;
+            trial.stress_zz = predictor.zz;
+            tangent = m.elastic_plane_strain();
+        }
+        if (report) report->elastic = tangent;
+        return;
+    }
 
     switch (m.type) {
         case MaterialType::LinearElastic: {

@@ -192,8 +192,8 @@ void test_excavation_wall() {
 //
 // The reading is negative, and that is the point of writing it down. With an ELASTIC plate the
 // rotational rows are LINEAR in the plate DOFs, so the linear solve zeroes them exactly and the
-// criterion sits at round-off at EVERY tolerance -- including the loose run whose answer is a
-// fifth wrong. A criterion that reports "fine" next to a wrong answer is not broken; it is
+// criterion sits at round-off at EVERY tolerance -- including the loose run whose answer is
+// several percent wrong. A criterion that reports "fine" next to a wrong answer is not broken; it is
 // answering a different question, and a guard that does not say which question it answers will
 // eventually be read as covering the other one.
 void test_moment_criterion() {
@@ -219,8 +219,10 @@ void test_moment_criterion() {
     const double err = std::fabs(loose.ux.back() - tight.ux.back()) / std::fabs(tight.ux.back());
     std::printf("   the loose run is %.1f%% away from the converged tip deflection, and the "
                 "moment criterion calls it ok\n", 100.0 * err);
-    check(err > 0.05,
-          "the tol=1e-1 run IS materially wrong (>5%), so the criterion's 'ok' above is a "
+    // 3.4% since an increment is solved once before it can be accepted; it was a fifth while a
+    // loose tolerance let increments through without the ground having moved at all.
+    check(err > 0.02,
+          "the tol=1e-1 run IS materially wrong (>2%), so the criterion's 'ok' above is a "
           "statement about the rotational rows and NOT about the answer");
 }
 

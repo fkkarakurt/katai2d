@@ -153,6 +153,8 @@ struct StaticPhase {
     // read inside the Gauss loop rather than by the iteration, so it reaches the solver as an
     // assembly parameter rather than a stopping rule.
     double substep_tolerance = 0.0;
+    // NewtonOptions::stagnation_accept.
+    double stagnation_accept = 0.0;
     // NewtonOptions::enforce_local_criteria: require the LOCAL convergence criteria too.
     // Tri-state: 0 = the engine's default (ON), +1 = force on, -1 = force off.
     int enforce_local_criteria = 0;
@@ -199,6 +201,7 @@ inline bool solve_static_phase(
                                       : Kinematics::PlaneStrain;
     if (in.line_search_window > 0) nopt.line_search_window = in.line_search_window;
     if (in.substep_tolerance > 0.0) nopt.substep_tolerance = in.substep_tolerance;
+    nopt.stagnation_accept = in.stagnation_accept;
     if (in.enforce_local_criteria != 0)
         nopt.enforce_local_criteria = in.enforce_local_criteria > 0;
     // SSC TIME (Stage 3): a staged Plastic phase's Time interval [days] enters the constitutive

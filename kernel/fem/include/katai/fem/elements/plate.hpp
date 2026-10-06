@@ -59,6 +59,11 @@ struct PlateProps {
     double Np = -1.0;
     double shear_rigidity() const { return k * EA / (2.0 * (1.0 + nu)); }  // kGA'
     bool plastic() const { return Mp > 0.0 || Np > 0.0; }
+    // A plate whose section was changed in a phase carries the strains its forces no longer
+    // account for in the same state an elastoplastic section keeps (see rescale_plate_state),
+    // so it is evaluated on the path that reads that state even when it has no capacity.
+    bool carries_state = false;
+    bool stateful() const { return plastic() || carries_state; }
 };
 
 // Plate inertia for a Dynamic (seismic) phase, from the plate material weight w [kN/m/m]
@@ -161,8 +166,17 @@ inline PlateForces forces(const NodeCoords& X, const PlateProps& p, const Dof& u
 inline constexpr int kPlasticPerPoint = 2;                       // [ε_p, κ_p]
 inline constexpr int kBendGaussCount = 3;                        // 3-node: axial+bending Gauss
 inline constexpr int kBendGaussCount5 = 5;                       // 5-node
-inline constexpr int kPlasticStateSize = kBendGaussCount * kPlasticPerPoint;    // 6 doubles/element
-inline constexpr int kPlasticStateSize5 = kBendGaussCount5 * kPlasticPerPoint;  // 10 doubles/element
+// After the axial/bending points the state holds one SHEAR STRAIN OFFSET per reduced shear
+// point: the part of the shear strain the section does not answer for, Q = kGA (gamma - gamma_0).
+// It is zero for every plate except one whose section was changed in a phase, which keeps its
+// shear force through it as it keeps N and M through eps_p and kap_p. Nothing yields in shear,
+// so the offset is only ever carried.
+inline constexpr int kShearGaussCount = 2;                       // 3-node, reduced
+inline constexpr int kShearGaussCount5 = 4;                      // 5-node
+inline constexpr int kShearStateBegin = kBendGaussCount * kPlasticPerPoint;
+inline constexpr int kShearStateBegin5 = kBendGaussCount5 * kPlasticPerPoint;
+inline constexpr int kPlasticStateSize = kShearStateBegin + kShearGaussCount;     // 8 doubles/element
+inline constexpr int kPlasticStateSize5 = kShearStateBegin5 + kShearGaussCount5;  // 14 doubles/element
 // Bending/axial Gauss locations (the SAME literals as in stiffness) — the diagram Lagrange
 // expansion (nodal values extrapolated from the stress points) uses these ξ.
 inline constexpr std::array<double, 3> kBendGaussXi{-0.7745966692414834, 0.0, 0.7745966692414834};
@@ -257,7 +271,8 @@ inline void internal_force_plastic(const NodeCoords& X, const PlateProps& p, con
         Eigen::Matrix<double, 1, 9> Be, Bk, Bg;
         detail::b_rows(e, Be, Bk, Bg);
         const double wds = 1.0 * e.J;   // 2-point weight = 1
-        f.noalias() += wds * kGA * Bg.transpose() * (Bg * u);
+        state_t[kShearStateBegin + q] = state_c[kShearStateBegin + q];
+        f.noalias() += wds * kGA * Bg.transpose() * ((Bg * u)(0) - state_c[kShearStateBegin + q]);
         if (K) K->noalias() += wds * kGA * Bg.transpose() * Bg;
     }
 }
@@ -422,7 +437,8 @@ inline void internal_force_plastic5(const NodeCoords5& X, const PlateProps& p, c
         Eigen::Matrix<double, 1, 15> Be, Bk, Bg;
         detail::b_rows5(e, Be, Bk, Bg);
         const double wds = w4[q] * e.J;
-        f.noalias() += wds * kGA * Bg.transpose() * (Bg * u);
+        state_t[kShearStateBegin5 + q] = state_c[kShearStateBegin5 + q];
+        f.noalias() += wds * kGA * Bg.transpose() * ((Bg * u)(0) - state_c[kShearStateBegin5 + q]);
         if (K) K->noalias() += wds * kGA * Bg.transpose() * Bg;
     }
 }

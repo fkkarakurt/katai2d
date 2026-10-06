@@ -56,6 +56,8 @@ public:
     // Equation index for a free DOF (>=0); -1 for a fixed DOF.
     int equation(int global_dof) const { return equation_[global_dof]; }
     bool is_fixed(int global_dof) const { return equation_[global_dof] < 0; }
+    // Whether fix() has been called on the DOF -- readable BEFORE finalize, which is_fixed is not.
+    bool marked_fixed(int global_dof) const { return fixed_[global_dof] != 0; }
 
 private:
     int dofs_per_node_;

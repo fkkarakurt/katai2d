@@ -52,7 +52,7 @@ q = prj.loads.line_load((0.0, 12.0), (1.0, 12.0), qy=-10.0, name="Surcharge")
 prj.initial(procedure="k0", exclude=[q])
 cv = 0.1 * 1000.0 / GAMMA_W
 prj.phases.consolidation("Consolidation", duration=2.0 * 12.0 * 12.0 / cv,
-                         steps=120, activate=[q])
+                         steps=120, activate=[q], load_at_start=True)
 expect_bytes(prj, "kv-con-002-terzaghi-column.k2d")
 
 # ---------------------------------------------------------------- KV-FND-008 --

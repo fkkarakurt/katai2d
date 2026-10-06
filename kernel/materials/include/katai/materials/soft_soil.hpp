@@ -35,29 +35,41 @@ inline constexpr double kPmin = 1.0;
 // internal force no longer matched the state it was seeded with, and a K0 phase with the water
 // table at the ground surface (where sigma'_v -> 0) moved the ground by 1.26 mm instead of
 // standing still. dv is compression-positive, as in the predictors below.
-inline double mean_after(double p0, double dv, double kap) {
-    const double Kmin = kPmin / kap;
-    if (p0 >= kPmin) {
-        const double p = p0 * std::exp(dv / kap);
-        if (p >= kPmin) return p;
-        const double dv_to = kap * std::log(kPmin / p0);   // the strain that reaches the floor
-        return kPmin + Kmin * (dv - dv_to);
+//
+// THE COHESION SHIFT. The model's logarithmic law is written in p' + c cot(phi), in primary
+// loading and in unloading alike: eps_v^e - eps_v^e0 = -kappa* ln((p' + c cot phi)/(p0 + c cot phi)),
+// so K_ur = (p' + c cot phi)/kappa*. `shift` is that c cot(phi); the law is the one above in the
+// shifted pressure, with the floor at kPmin + shift. Until 2026-10 the shift was left out, which
+// made a soil with cohesion softer in unloading and reloading than the model says -- by the
+// ratio (p' + c cot phi)/p', a quarter at p' = 10 kPa for c = 1 kPa, phi = 22 degrees. With
+// shift = 0 the functions are the old ones exactly.
+inline double mean_after(double p0, double dv, double kap, double shift = 0.0) {
+    const double F = kPmin + shift, q0 = p0 + shift;
+    const double Kmin = F / kap;
+    if (q0 >= F) {
+        const double q = q0 * std::exp(dv / kap);
+        if (q >= F) return q - shift;
+        const double dv_to = kap * std::log(F / q0);   // the strain that reaches the floor
+        return F + Kmin * (dv - dv_to) - shift;
     }
-    const double p = p0 + Kmin * dv;
-    if (p <= kPmin) return p;
-    const double dv_to = (kPmin - p0) / Kmin;
-    return kPmin * std::exp((dv - dv_to) / kap);
+    const double q = q0 + Kmin * dv;
+    if (q <= F) return q - shift;
+    const double dv_to = (F - q0) / Kmin;
+    return F * std::exp((dv - dv_to) / kap) - shift;
 }
 // Its inverse: the volumetric strain (compression-positive) that takes p0 to p.
-inline double strain_between(double p0, double p, double kap) {
-    const double Kmin = kPmin / kap;
-    const auto to_floor = [&](double q) {   // strain from q to kPmin along the law
-        return q >= kPmin ? kap * std::log(kPmin / q) : (kPmin - q) / Kmin;
+inline double strain_between(double p0, double p, double kap, double shift = 0.0) {
+    const double F = kPmin + shift;
+    const double Kmin = F / kap;
+    const auto to_floor = [&](double q) {   // strain from q (shifted) to the floor along the law
+        return q >= F ? kap * std::log(F / q) : (F - q) / Kmin;
     };
-    return to_floor(p0) - to_floor(p);
+    return to_floor(p0 + shift) - to_floor(p + shift);
 }
-// The bulk modulus at p: p / kappa*, never below the floor's.
-inline double bulk_at(double p, double kap) { return std::max(p, kPmin) / kap; }
+// The bulk modulus at p: (p + c cot phi) / kappa*, never below the floor's.
+inline double bulk_at(double p, double kap, double shift = 0.0) {
+    return (std::max(p, kPmin) + shift) / kap;
+}
 
 struct Params {
     double lam_star = 0.1;   // modified compression index λ* [-]
@@ -68,6 +80,11 @@ struct Params {
     double psi = 0.0;        // dilatancy [rad] (SS default 0)
     double K0nc = 0.5;       // normal-consolidation lateral pressure coefficient (→ M)
 };
+
+// c cot(phi), the shift of the model's stress-dependent laws (0 where phi = 0).
+inline double cohesion_shift(const Params& P) {
+    return P.phi > 1e-12 ? P.c * std::cos(P.phi) / std::sin(P.phi) : 0.0;
+}
 
 // M(K0NC) — Brinkgreve (1994), the closed form written out below. Behaviour pin: oedometer
 // primary loading must produce σ'_h/σ'_v → K0NC (test_soft_soil (e) measures this DIRECTLY;

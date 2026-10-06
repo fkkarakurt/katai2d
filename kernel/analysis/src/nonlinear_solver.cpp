@@ -721,6 +721,8 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         // guessed afterwards from the iteration count.
         NewtonResult::Abandonment ended = NewtonResult::Abandonment::IterationBudget;
         int stall = 0;  // consecutive iterations that produced no descent
+        int local_wait = 0;   // consecutive iterates in balance whose stress points are not settled
+        bool early_cut = false;   // given up early, to be made smaller rather than retried
         bool early_stagnation = false;   // stagnation shown inside the acceptance band
         int creep = 0;  // consecutive iterations whose step was cut to under 1/4
         std::vector<double> progress;   // this attempt's residual norms, iterate by iterate
@@ -770,7 +772,42 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             }
             const bool global_ok =
                 csp_gate ? result.convergence.force_ok() : (rnorm <= rtol * ref);
-            if (global_ok && (!enforce_local || result.convergence.enforced_ok()) &&
+            // AN INCREMENT IS SOLVED BEFORE IT IS ACCEPTED. At its first iterate the displacement
+            // increment is zero and the out-of-balance force is the load just added. Where that
+            // load is small against the scale the tolerance is a fraction of -- one fortieth of
+            // an excavation stage against the weight of the whole model, with the 1e-2 tolerance
+            // of the hardening models -- the first iterate already "converged", and the increment
+            // was committed without the ground having moved: the load stayed in the residual
+            // until enough of it had gathered to exceed the tolerance, and up to that much of the
+            // stage was never applied at the end. The displacement of such a phase came out too
+            // small, by more the smaller its load was against the model's weight. Only a first
+            // iterate that is in balance to rounding -- a phase that changes nothing -- is kept.
+            const bool solved_once = iter > 0 || rnorm <= 1e-10 * ref;
+            // IN BALANCE, BUT THE STRESS POINTS HAVE NOT SETTLED. The local criteria read how far
+            // the stress of a plastic point moved between two iterates, and a Newton step on a
+            // ground that has softened to a few percent of its elastic stiffness is a large one:
+            // the out-of-balance force is inside the tolerance and stays there, while the points
+            // keep moving from one branch of their yield surface to another and the count of
+            // unsettled ones never falls. Measured on an embankment built undrained on soft clay
+            // (Hardening Soil): 0.84-0.95% out of balance against 1% tolerated, 96-100 points
+            // unsettled against 58 allowed, for forty iterations, then cut back to nothing and
+            // reported as stopped at a third of the load. What settles the points is small steps:
+            // from here the increment is iterated with the elastic stiffness, whose corrections
+            // are as small as the force still out of balance is.
+            if (global_ok && solved_once && enforce_local && !elastic_mode && !presc_active &&
+                !result.convergence.enforced_ok()) {
+                if (++local_wait >= 3) {
+                    elastic_mode = true;
+                    if (debug)
+                        std::fprintf(stderr, "  lambda %.4f iter %d: in balance but the stress "
+                                             "points are not settled; continuing with the "
+                                             "elastic stiffness\n", target_lambda, iter);
+                }
+            } else {
+                local_wait = 0;
+            }
+            if (global_ok && solved_once &&
+                (!enforce_local || result.convergence.enforced_ok()) &&
                 !(predicted && iter == 0)) {
                 // This iterate is the one about to be committed, so its integration is the one
                 // the answer is walked along: record the guard here and nowhere else. Trial
@@ -948,6 +985,30 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 stall_floor = std::min(1.0, stall_floor > 0.0 ? 2.0 * stall_floor : 0.1);
             }
             progress.push_back(rnorm);
+            // AN INCREMENT THAT IS TOO LARGE IS MADE SMALLER BEFORE IT IS RETRIED. The retries
+            // below -- the consistent tangent, the open line search, the elastic stiffness --
+            // each start the same increment again from its beginning, and only when all of them
+            // have failed is it halved. Where the increment is simply too large a step for the
+            // state of the ground, that order spends the work first and finds the remedy last:
+            // measured on an embankment built undrained on soft clay (Hardening Soil, 6-noded,
+            // 1 m), the increment in which the fill's core reaches its unconfined strength took
+            // 162 iterations, then 264 with the line search open, then a third pass, before it
+            // was halved -- and the half took 27. For the models solved to a tolerance of 1e-3
+            // or looser (the hardening family, whose iteration is the expensive one), an
+            // increment still open after kEarlyCutIterations and not yet near the smallest size
+            // is halved at once; the retries are kept for the increment that cannot be made
+            // smaller. A load held constant (strength reduction) and an imposed displacement
+            // are left as they were.
+            constexpr int kEarlyCutIterations = 40;
+            if (rtol >= 1.0e-3 && !srf_mode && !presc_active && dlam > 2.0 * min_dlam &&
+                iter + 1 >= kEarlyCutIterations) {
+                ended = NewtonResult::Abandonment::IterationBudget;
+                early_cut = true;
+                if (debug)
+                    std::fprintf(stderr, "  lambda %.4f iter %d: still open; the increment is "
+                                         "halved before it is retried\n", target_lambda, iter);
+                break;
+            }
             // STAGNATION SHOWN, NOT AWAITED. The acceptance below keeps an increment at its best
             // iterate once every retry has been spent on it -- which, on a phase whose tolerance
             // is out of reach, is every increment, each ground through hundreds of iterations
@@ -970,6 +1031,37 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                     std::fprintf(stderr, "  lambda %.4f iter %d  ABANDONED: four consecutive "
                                          "iterations without descent%s\n", target_lambda, iter,
                                  ls_open ? " (with the non-monotone window already open)" : "");
+                // WHERE the out-of-balance force that would not fall sits (debug only): the ten
+                // largest entries with their node, and the share of the whole they carry. A stall
+                // that lives in a handful of nodes is a local defect -- a stress point returning
+                // a state its neighbours cannot balance -- and one spread over the mesh is not.
+                if (debug) {
+                    std::vector<int> eq_gdof(static_cast<size_t>(residual.size()), -1);
+                    for (int g = 0; g < dofs.total_dofs(); ++g)
+                        if (dofs.equation(g) >= 0) eq_gdof[(size_t)dofs.equation(g)] = g;
+                    std::vector<int> order(static_cast<size_t>(residual.size()));
+                    for (size_t k = 0; k < order.size(); ++k) order[k] = (int)k;
+                    const size_t top = std::min<size_t>(10, order.size());
+                    std::partial_sort(order.begin(), order.begin() + (long)top, order.end(),
+                                      [&residual](int a, int b) {
+                                          return std::fabs(residual(a)) > std::fabs(residual(b));
+                                      });
+                    double share = 0.0;
+                    for (size_t k = 0; k < top; ++k) share += residual(order[k]) * residual(order[k]);
+                    std::fprintf(stderr, "    the ten largest residual entries carry %.1f%% of "
+                                         "its square:\n", 100.0 * share / residual.squaredNorm());
+                    for (size_t k = 0; k < top; ++k) {
+                        const int g = eq_gdof[(size_t)order[k]];
+                        const int node = g >= 0 && g < 2 * mesh.node_count ? g / 2 : -1;
+                        if (node >= 0)
+                            std::fprintf(stderr, "      r=%+.4e  node %d (%.3f, %.3f) %s\n",
+                                         residual(order[k]), node, mesh.x[node], mesh.y[node],
+                                         g % 2 == 0 ? "x" : "y");
+                        else
+                            std::fprintf(stderr, "      r=%+.4e  structural dof %d\n",
+                                         residual(order[k]), g);
+                    }
+                }
                 break;
             }
             du_free += alpha * delta;
@@ -988,6 +1080,23 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             progress.back() > 0.9 * progress[progress.size() - 31])
             ended = NewtonResult::Abandonment::NoDescent;
 
+        // An increment that stopped descending within options.stagnation_accept of the force
+        // scale is kept before anything is retried (see the option).
+        if (!step_converged && options.stagnation_accept > rtol &&
+            ended == NewtonResult::Abandonment::NoDescent &&
+            best_rnorm <= options.stagnation_accept * ref) {
+            du_free = best_du;
+            assemble(du_free, false, nullptr);  // the trial states of the iterate being kept
+            result.convergence.csp = best_csp;
+            ++result.stagnation_accepted;
+            result.worst_accepted_residual =
+                std::max(result.worst_accepted_residual, best_rnorm / ref);
+            step_converged = true;
+            if (debug)
+                std::fprintf(stderr, "  lambda %.4f: stopped descending at %.3e of the reference; kept\n",
+                             target_lambda, best_rnorm / ref);
+        }
+
         // STAGNATION ACCEPTANCE. Only an increment that is about to be CUT BACK is looked at --
         // every retry above still gets its chance first, so a run that converged before this rule
         // existed converges on exactly the same path. See kStagnationAccept for the measurement.
@@ -997,7 +1106,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
              !(ended == NewtonResult::Abandonment::SolveRefused && !vertex_floor_mode) &&
              !(has_fd_tangent && !hs_consistent_mode) &&
              !(ended == NewtonResult::Abandonment::NoDescent && !ls_open) &&
-             !(ended == NewtonResult::Abandonment::NoDescent && !elastic_mode));
+             !(ended == NewtonResult::Abandonment::NoDescent && !elastic_mode && !presc_active));
         if (would_cut_back && ended != NewtonResult::Abandonment::SolveRefused &&
             rtol < kStagnationAccept && best_rnorm <= kStagnationAccept * ref) {
             du_free = best_du;
@@ -1032,6 +1141,14 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             lambda = target_lambda;
             result.load_factor = lambda;
             dlam = std::min(init_dlam, dlam * 1.5);  // allow recovery
+        } else if (early_cut) {
+            // Halved without a retry and without counting as an abandonment: the increment was
+            // not shown to be unsolvable, only too large (see kEarlyCutIterations).
+            elastic_mode = false;
+            dlam *= 0.5;
+            if (debug)
+                std::fprintf(stderr, "  early cut at lambda %.4f: dlam %.6f (minimum %.6f)\n",
+                             lambda, dlam, min_dlam);
         } else if (ended == NewtonResult::Abandonment::SolveRefused && !vertex_floor_mode) {
             // A refused solve is first asked whether it was a vertex and not a mechanism: the SAME
             // increment is retried with the floor on and dlam untouched, and the phase keeps the
@@ -1062,7 +1179,15 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 std::fprintf(stderr, "  lambda %.4f: retrying the increment with a line-search "
                                      "window of %d (dlam untouched)", lambda,
                              kStallEscalationWindow);
-        } else if (ended == NewtonResult::Abandonment::NoDescent && !elastic_mode) {
+        } else if (ended == NewtonResult::Abandonment::NoDescent && !elastic_mode && !presc_active) {
+            // NOT FOR A PRESCRIBED DISPLACEMENT. The elastic-stiffness iteration was brought in for
+            // load-driven phases (initial phases on sloping ground, where Newton's direction stops
+            // descending) and was measured there. Under an imposed displacement it is the wrong
+            // remedy: the increment that Newton cannot close is closed by making it smaller, and the
+            // slowly converging elastic iteration put in front of the cut-back sent the phase down a
+            // different path -- an axisymmetric footing pushed into sand (15-noded, 0.25 m, c = 1,
+            // phi = 30, psi = 0) stopped at 13% of its settlement where without it, as before the
+            // retry existed, it reaches the full settlement at 604.5 kN.
             elastic_mode = true;
             newton_convergence = result.convergence;
             newton_convergence_kept = true;

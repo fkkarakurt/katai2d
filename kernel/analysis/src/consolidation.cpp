@@ -5,6 +5,9 @@
 #include <katai/analysis/consolidation.hpp>
 #include <katai/analysis/nonlinear_solver.hpp>   // kStagnationAccept
 
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <limits>
 
@@ -26,7 +29,8 @@ ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dof
                                        const Eigen::VectorXd* load_increment,
                                        const ConsolidationSolveFactory& solve_factory,
                                        const math::CsrMatrix* struct_k,
-                                       const std::vector<int>* pore_tie) {
+                                       const std::vector<int>* pore_tie, bool ramp_load,
+    const Eigen::VectorXd* instant_load) {
     constexpr int N = E::kNodeCount;
     constexpr int ND = 2 * N;
     const int ndisp = dofs.equation_count();
@@ -166,7 +170,14 @@ ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dof
         // FIRST step, i.e. at t=0+ of the consolidation phase. With the storage
         // matrix S≈0 (near-incompressible pore fluid) the t=0+ response is the UNDRAINED one — the
         // load generates an excess pore pressure that the subsequent (Δf=0) steps then dissipate.
-        if (step == 0 && load_increment) rhs.head(ndisp) = *load_increment;
+        // ... or, `ramp_load`, in equal parts over the steps: the load of a phase that has a
+        // duration is put on DURING that time, linearly, and what the phase ends with is then
+        // the pore pressure the loading generated less what drained while it was being placed.
+        if (load_increment && ramp_load) rhs.head(ndisp) = *load_increment / (double)nsteps;
+        else if (step == 0 && load_increment) rhs.head(ndisp) = *load_increment;
+        // What the phase INHERITS is not placed over time: the pore pressure the phase before it
+        // left is a state, re-generated in this phase's own pore field at its first instant.
+        if (step == 0 && instant_load) rhs.head(ndisp) += *instant_load;
         if (npore > 0) rhs.tail(npore) += dt * (Hcsr * p);   // continuity right-hand side dt.H.p_n
         Eigen::VectorXd d;
         try { d = solve_step(rhs); }
@@ -189,7 +200,8 @@ ConsolidationPlasticResult consolidation_plastic_impl(
     const std::vector<double>& initial_pore,
     double dt, int nsteps, const std::vector<char>& active, const Eigen::VectorXd* load_increment,
     const ConsolidationSolveFactory& solve_factory, int max_newton, double newton_tol,
-    const math::CsrMatrix* struct_k, const std::vector<int>* pore_tie) {
+    const math::CsrMatrix* struct_k, const std::vector<int>* pore_tie, bool ramp_load,
+    const Eigen::VectorXd* instant_load) {
     constexpr int N = E::kNodeCount;
     constexpr int ND = 2 * N;
     const int ndisp = dofs.equation_count();
@@ -210,6 +222,23 @@ ConsolidationPlasticResult consolidation_plastic_impl(
     // Assemble the coupled system A = [K_T L; Lᵀ −(ΔtH+S)] (full symmetric for the disp/pore couple;
     // K_T itself is NONsymmetric for non-associated plasticity) + internal force f_int(trial), given the
     // current increment dv. trial Gauss states are written. Returns the sparse A + Hcsr (for the RHS).
+    // A FRACTION OF THE ELASTIC OPERATOR ADDED TO THE TANGENT OF EVERY PLASTIC POINT, off until
+    // a linear solve is refused or returns something that is not a number. A point returned to
+    // a vertex hands back a tangent of zero and its neighbours a rank-deficient one; a node
+    // surrounded by them makes the matrix singular with no mechanism formed. The static solver
+    // has retried such an increment with this floor since it met the case (kVertexFloor); a
+    // consolidation step did not, and on a finer mesh of an embankment over soft clay the
+    // second iterate of the first time step came back as NaN at every step length. Only the
+    // tangent changes: the internal force, and so the balance a step is driven to, is the same.
+    double tangent_floor = 0.0;
+    // THE ELASTIC STIFFNESS, for a step whose tangent has stopped giving a direction of descent.
+    // Every plastic point hands the matrix its elastic operator instead of its plastic one: the
+    // initial-stiffness iteration, slow and sure, that a Plastic phase falls back on in the same
+    // situation. Measured on an embankment over soft clay on a 1.2 m mesh: the balance of a time
+    // step sat at 3.4e-3 of its scale while the line search ended at 1e-4 of the step, iteration
+    // after iteration, on each half of the step down to a sixty-fourth, and the phase stopped
+    // there. As with the floor, only the matrix changes.
+    bool elastic_matrix = false;
     auto assemble = [&](const Eigen::VectorXd& dv, math::SparseMatrixBuilder& Ab,
                         math::SparseMatrixBuilder& Hb, math::SparseMatrixBuilder& Lb,
                         Eigen::VectorXd& f_int, TangentMode mode, double dt) {
@@ -256,13 +285,39 @@ ConsolidationPlasticResult consolidation_plastic_impl(
                 }
                 // dt: this consolidation time step [day] -- SoftSoilCreep sees the creep +
                 // dissipation interaction through it; the other models do not read the parameter.
-                integrate_point(*mp, committed[(size_t)e * ngp + g], deps, tr, Dt, mode, dt);
+                PointReport rep;
+                integrate_point(*mp, committed[(size_t)e * ngp + g], deps, tr, Dt, mode, dt,
+                                (tangent_floor > 0.0 || elastic_matrix) ? &rep : nullptr);
+                if (elastic_matrix && rep.plastic) Dt = rep.elastic;
+                else if (tangent_floor > 0.0 && rep.plastic) Dt += tangent_floor * rep.elastic;
+                // The volumetric strain is accumulated here as in every other phase: the void
+                // ratio is read from it (the dilatancy cut-off, the change of permeability), and
+                // a consolidation phase used to leave it where the phase before had left it.
+                tr.eps_vol = committed[(size_t)e * ngp + g].eps_vol + deps(0) + deps(1);
+                // CHANGE OF PERMEABILITY: log10(k / k0) = de / ck, de the change in void ratio
+                // since the initial state. It is read from the COMMITTED state -- the void ratio
+                // at the start of the time step -- so the flow block stays linear within the
+                // step and the iteration is what it was.
+                double kfac = 1.0;
+                if (pm.ck > 0.0) {
+                    const double de =
+                        (1.0 + mat.e_init) * std::expm1(committed[(size_t)e * ngp + g].eps_vol);
+                    kfac = std::pow(10.0, de / pm.ck);
+                }
+                if (std::getenv("KATAI_NL_DEBUG") && (!Dt.allFinite() || !tr.stress.allFinite())) {
+                    const GaussState& c0 = committed[(size_t)e * ngp + g];
+                    std::fprintf(stderr, "    NONFINITE el %d gp %d mat %d type %d  Dt finite %d  stress finite %d  "
+                                 "committed s=(%.4g %.4g %.4g) zz=%.4g pp=%.4g  deps=(%.3e %.3e %.3e)\n",
+                                 e, g, e_mat, (int)mat.type, (int)Dt.allFinite(), (int)tr.stress.allFinite(),
+                                 c0.stress(0), c0.stress(1), c0.stress(2), c0.stress_zz, c0.pp,
+                                 deps(0), deps(1), deps(2));
+                }
                 fe.noalias() += w * sd.B.transpose() * tr.stress;
                 Ke.noalias() += w * sd.B.transpose() * Dt * sd.B;
                 Eigen::Matrix<double, 2, N> G;
                 for (int i = 0; i < N; ++i) { G(0, i) = sd.B(0, 2 * i); G(1, i) = sd.B(1, 2 * i + 1); }
                 Le.noalias() += w * sd.B.transpose() * (mvec * Nsh.transpose());
-                He.noalias() += w * (G.row(0).transpose() * (pm.kx / gamma_w) * G.row(0)
+                He.noalias() += w * kfac * (G.row(0).transpose() * (pm.kx / gamma_w) * G.row(0)
                                    + G.row(1).transpose() * (pm.ky / gamma_w) * G.row(1));
                 Se.noalias() += w * (1.0 / kw_over_n.at(e_mat)) * (Nsh * Nsh.transpose());
             }
@@ -338,6 +393,16 @@ ConsolidationPlasticResult consolidation_plastic_impl(
     //    so any full step satisfies it).
     //  * STAGNATION ACCEPTANCE at kStagnationAccept of the force scale (K2D-A019), counted.
     // Writes the converged increment to (dv, dpv) and leaves the trial states at it.
+    const bool debug = std::getenv("KATAI_NL_DEBUG") != nullptr;
+    // THE FORCE A STEP LEAVES OUT OF BALANCE IS CARRIED INTO THE NEXT ONE. A time step is solved
+    // as an increment from the state it starts in, and it is accepted with up to the tolerated
+    // error still out of balance. Dropped there, that remainder is lost for good -- and a phase
+    // of some hundreds of steps loses it some hundreds of times. With the tolerance at 1e-6 the
+    // sum was nothing; at the 1e-2 of a hardening soil it was measured as half the settlement of
+    // a column consolidated to rest (337 mm against the 683 mm of the same column loaded
+    // drained). Carried, each step's remainder is the next step's load and the error of the
+    // phase is that of its last step.
+    Eigen::VectorXd oob = Eigen::VectorXd::Zero(ndisp), oob_next = Eigen::VectorXd::Zero(ndisp);
     const auto one_step = [&](double h, const Eigen::VectorXd& df_step, Eigen::VectorXd& dv,
                               Eigen::VectorXd& dpv, bool& stagnant) -> bool {
         stagnant = false;
@@ -362,7 +427,7 @@ ConsolidationPlasticResult consolidation_plastic_impl(
             // Newton RHS = -R: equilibrium R_u = (f_int - Bbase) + L dp - df; continuity from the
             // assembled bottom block (A x).tail = Lt dv - S* dp (S* = h H + S).
             ev.r = Eigen::VectorXd::Zero(NT);
-            ev.r.head(ndisp) = df_step - (f_int - Bbase);
+            ev.r.head(ndisp) = df_step + oob - (f_int - Bbase);
             double pore_force = 0.0;
             if (npore > 0) {
                 const math::CsrMatrix Hc = Hb.build();
@@ -384,7 +449,7 @@ ConsolidationPlasticResult consolidation_plastic_impl(
                 pore_force = (Lc * (p + dpv_)).norm();
             }
             ev.ru = ev.r.head(ndisp).norm();
-            ev.ref_u = df_step.norm() + Bbase.norm() + pore_force;
+            ev.ref_u = (df_step + oob).norm() + Bbase.norm() + pore_force;
             return ev;
         };
         const auto converged = [&](const Eval& ev) {
@@ -399,6 +464,12 @@ ConsolidationPlasticResult consolidation_plastic_impl(
             const double sp = std::max({a.ref_p, b.ref_p, 1e-300});
             const double ma = a.ru / su + (npore > 0 ? a.rp / sp : 0.0);
             const double mb = b.ru / su + (npore > 0 ? b.rp / sp : 0.0);
+            // A balance that is not a number is worse than any that is. Written the other way
+            // round -- "not worse unless it compares greater" -- a trial step that overflowed
+            // the stress integration passed as an improvement, because nothing compares
+            // greater than a NaN: measured on an embankment over soft clay on a 1.2 m mesh,
+            // the second iterate of the first time step was NaN and every one after it.
+            if (!std::isfinite(ma)) return true;
             return ma >= mb;
         };
         const auto rp_ok = [&](const Eval& ev) {
@@ -408,7 +479,31 @@ ConsolidationPlasticResult consolidation_plastic_impl(
         Eigen::VectorXd best_dv = dv, best_dpv = dpv;
         bool best_rp_ok = rp_ok(cur);
         double best_ru = best_rp_ok ? cur.ru : std::numeric_limits<double>::infinity();
-        for (int it = 0; it < max_newton && !converged(cur); ++it) {
+        // AN ITERATION THAT HAS STOPPED MOVING IS STOPPED. Where the tangent no longer gives a
+        // direction of descent the line search ends at its shortest length and the balance
+        // stays where it is; the rest of the budget -- forty iterations of fourteen assemblies,
+        // then the same again on each half of the step down to a sixty-fourth -- bought
+        // nothing (measured: 2 000 iterations on one time step, the balance at 1.035e-3 of its
+        // scale throughout). Six such iterations in a row end it; what is then done with the
+        // iterate is decided below, as for one that ran out of budget.
+        int stalled = 0;
+        tangent_floor = 0.0;
+        elastic_matrix = false;
+        int budget = max_newton;
+        for (int it = 0; it < budget && !converged(cur); ++it) {
+            if (stalled >= 6) {
+                // Stalled on the tangent: once more with the elastic stiffness, which is given
+                // the iterations a linearly converging method needs. Stalled on that too, the
+                // iterate is judged as it stands.
+                if (elastic_matrix) break;
+                elastic_matrix = true;
+                stalled = 0;
+                budget = it + 4 * max_newton;
+                if (debug)
+                    std::fprintf(stderr, "    cons h=%.4g it %d: stalled; continuing with the "
+                                         "elastic stiffness\n", h, it);
+                cur = evaluate(dv, dpv);
+            }
             if (!solve_factory) return false;
             // A refused linear solve ends THIS time step, exactly as a non-converged Newton
             // does -- the tangent is singular at this iterate, which on this path means the soil
@@ -417,24 +512,99 @@ ConsolidationPlasticResult consolidation_plastic_impl(
             // propagates, because turning one of those into "did not converge" would publish a
             // modelling answer for a bug.
             Eigen::VectorXd d;
+            bool refused = false;
             try {
                 const auto solve = solve_factory(cur.A);
                 d = solve(cur.r);
-            } catch (const math::SingularSystem&) { break; }
+            } catch (const math::SingularSystem&) { refused = true; }
+            if (refused || !d.allFinite()) {
+                // Once, with the floor on the tangent of the plastic points; then it is the
+                // step that cannot be taken.
+                if (tangent_floor > 0.0) break;
+                tangent_floor = kVertexFloor;
+                if (debug)
+                    std::fprintf(stderr, "    cons h=%.4g it %d: the solve was refused; retried "
+                                         "with the tangent floor\n", h, it);
+                cur = evaluate(dv, dpv);
+                continue;
+            }
             double alpha = 1.0;
             Eigen::VectorXd dv_n, dpv_n;
             Eval next;
-            for (int ls = 0; ls < 6; ++ls) {
+            // The step lengths tried are remembered, and when none of them improves the balance
+            // the LEAST BAD is taken, not the last. The last one is the shortest, and on a
+            // hardening soil -- whose tangent is not consistent with its integration -- the
+            // shortest step is not the mildest: measured on an embankment over soft clay, a
+            // search that ran out at 1/64 took the balance from 9e-2 of its scale to 3e+3, and
+            // the rest of the iteration budget went on coming back from there.
+            double best_alpha = 1.0, best_measure = std::numeric_limits<double>::infinity();
+            bool improved = false;
+            // The search goes down to 2^-13 of the step. A soil whose stiffness is exponential in
+            // the volumetric strain (the compression-index models) turns a trial strain a few
+            // times its compression index into a stress many orders too large, so a step from a
+            // soft tangent can be worse than the iterate at 1/64 and still an improvement at
+            // 1/1000; stopping at 1/64 took such steps as they were (measured: the balance of a
+            // dissipation step went from 0.16 of its scale to 1e+3, then to 1e+17).
+            constexpr int kLineSearchHalvings = 14;
+            for (int ls = 0; ls < kLineSearchHalvings; ++ls) {
                 dv_n = dv + alpha * d.head(ndisp);
                 dpv_n = dpv;
                 if (npore > 0) dpv_n += alpha * d.tail(npore);
                 next = evaluate(dv_n, dpv_n);
-                if (!worse(next, cur) || converged(next)) break;
+                if (!worse(next, cur) || converged(next)) { improved = true; break; }
+                const double m = next.ru / std::max(next.ref_u, 1e-300) +
+                                 (npore > 0 ? next.rp / std::max(next.ref_p, 1e-300) : 0.0);
+                if (m < best_measure) { best_measure = m; best_alpha = alpha; }
                 alpha *= 0.5;
             }
+            // WITH THE ELASTIC STIFFNESS A FULL STEP IS A SHORT ONE. The elastic operator is
+            // stiffer than the ground it stands in for, so its step falls short of the balance by
+            // the ratio of the two, every time: measured, the balance fell by 0.3% an iteration.
+            // The step is therefore lengthened -- doubled while the balance keeps improving, up
+            // to sixteen times -- which is the line search run the other way.
+            if (improved && elastic_matrix && alpha == 1.0 && !converged(next)) {
+                Eval longer;
+                Eigen::VectorXd dv_l, dpv_l;
+                double a = 2.0;
+                for (; a <= 16.0; a *= 2.0) {
+                    dv_l = dv + a * d.head(ndisp);
+                    dpv_l = dpv;
+                    if (npore > 0) dpv_l += a * d.tail(npore);
+                    longer = evaluate(dv_l, dpv_l);
+                    if (worse(longer, next)) break;
+                    next = longer;
+                    dv_n = dv_l;
+                    dpv_n = dpv_l;
+                    alpha = a;
+                    if (converged(next)) break;
+                }
+                // The last evaluation set the trial states; if it was a rejected length, put
+                // them back at the one kept.
+                if (a <= 16.0 && alpha != a && !converged(next)) next = evaluate(dv_n, dpv_n);
+            }
+            if (!improved && best_alpha != alpha * 2.0) {   // the last one tried was not the best
+                alpha = best_alpha;
+                dv_n = dv + alpha * d.head(ndisp);
+                dpv_n = dpv;
+                if (npore > 0) dpv_n += alpha * d.tail(npore);
+                next = evaluate(dv_n, dpv_n);
+            } else if (!improved) {
+                alpha *= 2.0;   // the length actually taken, for the trace
+            }
+            // No step length gave a finite balance: this time step cannot be taken from here,
+            // and is cut in two like any other that does not close.
+            if (!std::isfinite(next.ru) || !std::isfinite(next.rp)) {
+                (void)evaluate(dv, dpv);   // leave the trial states at the last finite iterate
+                return false;
+            }
+            stalled = (next.ru > 0.98 * cur.ru && alpha < 1e-2) ? stalled + 1 : 0;
             dv = std::move(dv_n);
             dpv = std::move(dpv_n);
             cur = std::move(next);
+            if (debug)
+                std::fprintf(stderr, "    cons h=%.4g it %d  ru/ref=%.3e  rp/ref=%.3e  alpha=%.4g\n", h,
+                             it, cur.ru / std::max(cur.ref_u, 1e-300),
+                             npore > 0 ? cur.rp / std::max(cur.ref_p, 1e-300) : 0.0, alpha);
             if (rp_ok(cur) && cur.ru < best_ru) {
                 best_ru = cur.ru;
                 best_dv = dv;
@@ -442,11 +612,19 @@ ConsolidationPlasticResult consolidation_plastic_impl(
                 best_rp_ok = true;
             }
         }
-        if (converged(cur)) return true;
-        if (!best_rp_ok || !(best_ru <= kStagnationAccept * cur.ref_u)) return false;
+        elastic_matrix = false;
+        tangent_floor = 0.0;
+        if (converged(cur)) { oob_next = cur.r.head(ndisp); return true; }
+        // A stalled iterate is kept when it is within kStagnationAccept of the force scale, or --
+        // for the soils solved to 1e-3 -- within three times their tolerance. Measured on a Soft
+        // Soil column consolidated to rest, 3e-3 is 0.4% from the answer at 1e-6 and 1e-2 is 7%.
+        // Counted and reported either way (K2D-A019), and what is left out of balance is
+        // carried into the next step.
+        const double stall_accept = std::max(kStagnationAccept, 3.0 * newton_tol);
+        if (!best_rp_ok || !(best_ru <= stall_accept * cur.ref_u)) return false;
         dv = best_dv;
         dpv = best_dpv;
-        (void)evaluate(dv, dpv);   // the trial states of the iterate being kept
+        oob_next = evaluate(dv, dpv).r.head(ndisp);   // the trial states of the iterate being kept
         stagnant = true;
         return true;
     };
@@ -466,6 +644,7 @@ ConsolidationPlasticResult consolidation_plastic_impl(
             v += dv;
             if (npore > 0) p += dpv;
             committed = trial;
+            oob = oob_next;
             if (stagnant) {
                 ++R.stagnation_accepted;
             }
@@ -473,14 +652,26 @@ ConsolidationPlasticResult consolidation_plastic_impl(
             return true;
         }
         trial = committed;
+        if (debug)
+            std::fprintf(stderr, "  cons t0=%.5g h=%.4g depth %d: step not closed%s\n", t0, h, depth,
+                         depth >= 6 ? " -- GIVEN UP" : ", cut in two");
         if (depth >= 6) return false;
         depth_used = std::max(depth_used, depth + 1);
         const Eigen::VectorXd half = 0.5 * df_step;
         return advance(t0, 0.5 * h, half, depth + 1) && advance(t0 + 0.5 * h, 0.5 * h, half, depth + 1);
     };
     const Eigen::VectorXd no_load = Eigen::VectorXd::Zero(ndisp);
+    Eigen::VectorXd part;   // the load of one step when it is placed over the whole duration
+    if (load_increment && ramp_load) part = *load_increment / (double)nsteps;
+    Eigen::VectorXd first;   // the first step also carries what the phase inherits, at once
+    if (instant_load) {
+        first = *instant_load;
+        if (load_increment) first += ramp_load ? part : *load_increment;
+    }
     for (int step = 0; step < nsteps && R.converged; ++step) {
-        const Eigen::VectorXd& df = (step == 0 && load_increment) ? *load_increment : no_load;
+        const Eigen::VectorXd& df = (step == 0 && instant_load) ? first
+                                    : (load_increment && ramp_load) ? part
+                                    : (step == 0 && load_increment) ? *load_increment : no_load;
         if (!advance(step * dt, dt, df, 0)) R.converged = false;
     }
     R.steps_cut = depth_used;
@@ -501,16 +692,17 @@ ConsolidationResult solve_consolidation(const mesh::Mesh& mesh, const DofMap& do
                                                const ConsolidationSolveFactory& solve_factory,
                                                const std::vector<MaterialProfile>& profile,
                                                const math::CsrMatrix* struct_k,
-                                               const std::vector<int>* pore_tie) {
+                                               const std::vector<int>* pore_tie, bool ramp_load,
+    const Eigen::VectorXd* instant_load) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::consolidation_impl<Tri15Element>(mesh, dofs, materials, profile, perm, gamma_w,
                                                         kw_over_n, drained_node, initial_pore, dt, nsteps,
                                                         active, load_increment, solve_factory, struct_k,
-                                                        pore_tie);
+                                                        pore_tie, ramp_load, instant_load);
     return detail::consolidation_impl<Tri6Element>(mesh, dofs, materials, profile, perm, gamma_w,
                                                    kw_over_n, drained_node, initial_pore, dt, nsteps,
                                                    active, load_increment, solve_factory, struct_k,
-                                                   pore_tie);
+                                                   pore_tie, ramp_load, instant_load);
 }
 
 ConsolidationPlasticResult solve_consolidation_plastic(
@@ -521,16 +713,17 @@ ConsolidationPlasticResult solve_consolidation_plastic(
     const Eigen::VectorXd* load_increment, const ConsolidationSolveFactory& solve_factory,
     int max_newton, double newton_tol,
     const std::vector<MaterialProfile>& profile, const math::CsrMatrix* struct_k,
-    const std::vector<int>* pore_tie) {
+    const std::vector<int>* pore_tie, bool ramp_load,
+    const Eigen::VectorXd* instant_load) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::consolidation_plastic_impl<Tri15Element>(
             mesh, dofs, materials, profile, perm, gamma_w, kw_over_n, drained_node, initial_state,
             initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol,
-            struct_k, pore_tie);
+            struct_k, pore_tie, ramp_load, instant_load);
     return detail::consolidation_plastic_impl<Tri6Element>(
         mesh, dofs, materials, profile, perm, gamma_w, kw_over_n, drained_node, initial_state,
         initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol,
-        struct_k, pore_tie);
+        struct_k, pore_tie, ramp_load, instant_load);
 }
 
 }  // namespace katai::core

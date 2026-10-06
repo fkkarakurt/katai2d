@@ -234,15 +234,17 @@ void test_refusals() {
           "HS + Undrained (C): refused, and its advice names only Undrained (A)");
     p.drainage = DrainageClass::UndrainedA;
 
-    // SS/SSC refuse both undrained classes with the audited message.
-    const std::string ss_msg =
-        "Soft Soil (Creep) with Undrained (A/B) drainage is not supported yet: the "
-        "pore-fluid stiffness plumbing derives Kw/n from a constant E, and Soft Soil's "
-        "stiffness is stress-dependent (K = p'/kappa*) -- it would silently behave "
-        "drained. Use Drained (or model the short term with a Consolidation phase).";
-    check(find_model("SoftSoil")->validate(p) == ss_msg, "SS + Undrained (A) refusal text");
+    // SS/SSC: Undrained (A) is the model's undrained analysis (the pore fluid follows the
+    // stress-dependent bulk modulus); Undrained (B) is refused -- it sets phi = 0, and the model
+    // is written with the friction angle.
+    check(find_model("SoftSoil")->validate(p).empty(), "SS + Undrained (A) is accepted");
+    check(find_model("SoftSoilCreep")->validate(p).empty(), "SSC + Undrained (A) is accepted");
     p.drainage = DrainageClass::UndrainedB;
-    check(find_model("SoftSoilCreep")->validate(p) == ss_msg, "SSC + Undrained (B) refusal");
+    const std::string ss_b = find_model("SoftSoilCreep")->validate(p);
+    check(ss_b.find("Undrained (B) is not a supported combination") != std::string::npos &&
+              ss_b.find("Use Undrained (A)") != std::string::npos,
+          "SSC + Undrained (B): refused, and its advice names Undrained (A)");
+    check(!find_model("SoftSoil")->validate(p).empty(), "SS + Undrained (B) is refused too");
     p.drainage = DrainageClass::Drained;
     check(find_model("SoftSoil")->validate(p).empty(), "SS drained accepted");
     check(find_model("SoftSoilCreep")->validate(p).empty(), "SSC drained accepted");

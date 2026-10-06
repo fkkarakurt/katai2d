@@ -378,6 +378,9 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
     for (const auto& mm : materials) if (mm.type == MaterialType::HardeningSoil) any_hs = true;
     const TangentMode tmode = any_hs ? TangentMode::kContinuum : TangentMode::kConsistent;
 
+    // The force a step leaves out of balance is carried into the next one, as in the consolidation
+    // twin (see consolidation.cpp): dropped, it is lost once per time step.
+    Eigen::VectorXd oob = Eigen::VectorXd::Zero(ndisp), oob_next = Eigen::VectorXd::Zero(ndisp);
     for (int step = 0; step < nsteps && R.converged; ++step) {
         // Base internal force of the committed (start-of-step) effective state (coefficients
         // evaluated at the committed pore).
@@ -399,7 +402,7 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
             if (struct_k) f_int.noalias() += (*struct_k) * dv;
             const math::CsrMatrix A = Ab.build();
             Eigen::VectorXd r = Eigen::VectorXd::Zero(NT);
-            r.head(ndisp) = df - (f_int - Bbase);
+            r.head(ndisp) = df + oob - (f_int - Bbase);
             if (npore > 0) {
                 const math::CsrMatrix Hc = Hb.build();
                 const math::CsrMatrix Lc = Lb.build();
@@ -408,10 +411,10 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
                 const Eigen::VectorXd Ax = A * x;
                 r.tail(npore) = dt * (Hc * p) - Ax.tail(npore);                 // ΔtH_kr·p_n − (L_χᵀΔv − S*Δp)
                 const double ref = std::max({df.norm(), (dt * (Hc * p)).norm(), 1e-30});
-                if (r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0)) { step_ok = true; break; }
+                if (r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0)) { step_ok = true; oob_next = r.head(ndisp); break; }
             } else {
                 const double ref = std::max(df.norm(), 1e-30);
-                if (r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0)) { step_ok = true; break; }
+                if (r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0)) { step_ok = true; oob_next = r.head(ndisp); break; }
             }
             if (!solve_factory) { step_ok = false; break; }
             // A refused solve ends THIS time step, not the process (see consolidation.cpp).
@@ -426,6 +429,7 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
         R.max_newton_iters = std::max(R.max_newton_iters, it);
         if (!step_ok) { R.converged = false; break; }
         v += dv; if (npore > 0) p += dpv; committed = trial;
+        oob = oob_next;
         record((step + 1) * dt);
     }
     R.committed = committed;

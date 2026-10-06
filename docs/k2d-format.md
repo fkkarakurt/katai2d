@@ -199,6 +199,7 @@ flagged places differs from the in-memory default of a freshly created object.
 | `sigpsi` | num | kPa | `0` | Hoek-Brown: the confining stress at which dilatancy has died out: the mobilised dilatancy angle falls linearly from `psi` at σ′₃ = 0 to zero at a confinement of `sigpsi` (0 = no decay). The dilatancy angle itself is the shared `psi`, its value at σ′₃ = 0. Written only by a Hoek-Brown material |
 | `kx` | num | m/day | `1` | Horizontal permeability |
 | `ky` | num | m/day | `1` | Vertical permeability |
+| `ck` | num | — | `0` | Change of permeability with void ratio in a consolidation phase: log₁₀(k/k₀) = Δe/`ck`, Δe the change in void ratio since the initial state (`e_init`). `0` = constant permeability; written only when set. Of the order of the compression index |
 | `und_mode` | int | — | `0` | How the pore fluid's stiffness is defined for Undrained (A)/(B): 0 = `nu_u` entered, 1 = Skempton's `skempton_B` |
 | `nu_u` | num | — | `0.495` | Equivalent undrained Poisson ratio (read when `und_mode` = 0); must satisfy ν' < ν_u < 0.5 |
 | `skempton_B` | num | — | `0` | Skempton's B (read when `und_mode` = 1); must lie in (0, 1) |
@@ -224,6 +225,7 @@ flagged places differs from the in-memory default of a freshly created object.
 | `w` | num | kN/m/m | `0` | Plate weight |
 | `Mp` | num | kN·m/m | `0` | Plastic moment capacity (0 = elastic) |
 | `Np` | num | kN/m | `0` | Plastic axial capacity (0 = elastic) |
+| `punch` | bool | — | `false` | End bearing: soil plasticity is excluded within the plate's equivalent thickness d = √(12 EI/EA) of its lower end, so a loaded wall does not punch through the ground under it. Not for sheet piles. Written only when set |
 
 with `name` (default `"Plate"`), `color` and `nu` (default `0`) as in the soil material table.
 
@@ -255,6 +257,7 @@ and the capacities.
 | `gamma` | num | kN/m³ | `24` | Beam unit weight |
 | `diameter` | num | m | `0.40` | Pile diameter (circular) |
 | `Tskin_max` | num | kN/m | `0` | Skin resistance cap (0 = unlimited) |
+| `Tskin_end` | num | kN/m | `0` | Skin resistance cap at the end of the beam (its second point): the cap then varies linearly along the beam from `Tskin_max` at its first point to this. `0` = the same along the whole beam; written only when set |
 | `Fmax_base` | num | kN | `0` | Base resistance (0 = unlimited) |
 
 with `name` (default `"Embedded beam"`), `color`, `E` (default `3e7` kN/m²) and `Lspacing`
@@ -327,6 +330,7 @@ A gap wider than the tolerance is real geometry and stays empty.
 | `iface_material` | int | — | `-1` | Soil material override for the interfaces (−1 = adjacent soil) |
 | `iface_kn` | num | kN/m³ | `0` | Interface normal stiffness (stress per unit relative normal movement). `0` = derived from the adjacent soil: E_oed,i / t_v with G_i = R_inter² G, ν_i = 0.45 and a virtual thickness t_v of 0.1 × the element length. Written only when set |
 | `iface_ks` | num | kN/m³ | `0` | Interface shear stiffness; `0` = derived, G_i / t_v. Written only when set |
+| `iface_vt` | num | — | `0.1` | Virtual thickness factor of the interfaces: the derived stiffnesses divide by t_v = this factor × the model element size (`mesh.size`). Written only when it is not 0.1 |
 | `conn` | int | — | `0` | **Embedded beam only** — how the connection point (the pile top: the end with the highest y, or for an exactly horizontal pile the lowest x) is attached. `0` hinged: the beam's top translations *are* the soil's there — the same displacement, with the rotation left free — the setting for a pile top that no other structure shares, and what makes a pile loadable at its head. `1` free: coupled to the soil through the skin springs only, which is the setting for a grout body, so a ground anchor does not shed axial force at the connection. The mesher carries the connection point as a node either way, so switching this changes the physics and not the mesh |
 | `flow_barrier` | int | — | `0` | Cross permeability in a groundwater calculation: 0 fully permeable (no effect on flow), 1 impermeable (the two sides get separate pore-pressure DOFs), 2 semi-permeable (a hydraulic resistance `hyd_res` across the line). Plates and interfaces only |
 | `hyd_res` | num | day | `0` | Hydraulic resistance d/k of a semi-permeable barrier: the head difference divided by the discharge per unit area of wall |
@@ -424,12 +428,17 @@ with `name` (default `"Well"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
 | `pwater` | int[] | — | `[]` | Region water, by soil-region index: 0 = the phase's water table (also every MISSING entry), 1 = a hydrostatic level of the region's own at `pwlevel[i]` [m], 2 = the pore pressure interpolated linearly with depth, along each vertical, between its values just above and just below the region (taken from whatever region, active or not, lies there, by its own rule; above the ground surface, the water table). Written only when a region uses 1 or 2 |
 | `pwlevel` | number[] | m | `[]` | The level of each region whose `pwater` is 1; read only for those |
 | `flowpore` | bool | — | `false` | Pore pressures from a steady-state groundwater flow on the ground active in this phase instead of the phreatic line: below the water table every boundary of that ground (the model sides and the faces an excavation exposes) is held at the head of the table, above it is a seepage face, the base is closed, and an impermeable wall or interface closes its line. Written only when set |
+| `cloadstart` | bool | — | `false` | Consolidation ending on a time: put the phase's load on at its first instant instead of placing it linearly over the duration (the default). The pore pressure the phase inherits is taken up at the first instant either way |
+| `pmat` | int[] | — | `[]` | The material of each soil region in this phase, by region index: −1 (also every MISSING entry) = the material the region was drawn with, otherwise an index into `materials`. The stresses are kept; a hardening model's cap and shear hardening are re-read from them where the material changed. Written only when a region's material is changed |
+| `smat` | int[] | — | `[]` | The section of each plate in this phase, by structure index: an index into the plate materials, `-1` = the one it was drawn with. The plate keeps the normal force and the bending moment it carries; from this phase on it deforms with the new stiffness and weighs the new weight. Written only when a plate is changed |
+| `scontr` | num[] | — | `[]` | Line contraction of each plate, by structure index: the area loss of the closed line it is part of, as a fraction (0.005 = 0.5 %), total at the end of this phase. The plate takes half of it as a shrinkage strain, applied with the phase's staged change. A later phase repeats the value to keep it; `0` takes it back. Written only when a plate has one |
 | `water_override` | bool | — | `false` | Use this phase's own phreatic line instead of the project's |
 | `wx` | num[] | m | `[]` | Phase phreatic polyline, x (used when `water_override`) |
 | `wy` | num[] | m | `[]` | Phase phreatic polyline, y (used when `water_override`) |
 | `mstage` | num | — | `1` | Fraction of this phase's staged change to apply. Staged (non-initial) phases only. Written only when below 1 |
 | `ignoreund` | bool | — | `false` | Solve Undrained (A)/(B) materials as drained in this phase: the water adds no stiffness and no new excess pore pressure is generated, while the excess pore pressure generated in earlier phases is kept as it is; strength parameters unchanged. Written only when true |
 | `resetsmall` | bool | — | `false` | Clear the Hardening Soil small-strain history at the start of this phase, so the soil meets the phase at G0 instead of the stiffness earlier phases degraded it to. Stress, shear hardening `gamma_p` and the preconsolidation pressure are carried over untouched — the option resets the *history*, not the state. Staged (non-initial) phases only; raises `K2D-M005` saying how many stress points it cleared, or that no small-strain material was present to clear. Written only when true |
+| `resetdisp` | bool | — | `false` | Reset displacements to zero: the total displacement reported from this phase on counts from the start of this phase. The state (stresses, structural forces) is not touched |
 | `tol` | num | — | *by material class* | Tolerated relative force residual. Written only when set |
 | `loadsteps` | int | — | *by material class* | Load increments for this phase. Not a cap on automatic steps: KATAI splits the load into a fixed number of increments (with adaptive cut-back), it does not step automatically to a cap. Written only when set |
 | `maxiter` | int | — | *by phase strategy* | Newton iterations per increment. Written only when set |

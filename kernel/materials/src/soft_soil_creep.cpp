@@ -15,8 +15,8 @@ StepResult ssc_substep(const Params& P, const softsoil::Params& S,
     // --- The same exponentially exact elastic predictor as SS ---------------------------------
     const double p_c = sig_c.mean();
     const double dv = deps.sum();
-    const double p_tr = softsoil::mean_after(p_c, dv, P.kap_star);
-    const double K_tr = softsoil::bulk_at(p_tr, P.kap_star);
+    const double p_tr = softsoil::mean_after(p_c, dv, P.kap_star, ccot);
+    const double K_tr = softsoil::bulk_at(p_tr, P.kap_star, ccot);
     const double G = 1.5 * K_tr * (1.0 - 2.0 * P.nu_ur) / (1.0 + P.nu_ur);
     const Eigen::Vector3d de = deps - Eigen::Vector3d::Constant(dv / 3.0);
     const Eigen::Vector3d s_dev_c = sig_c - Eigen::Vector3d::Constant(sig_c.mean());
@@ -59,7 +59,7 @@ StepResult ssc_substep(const Params& P, const softsoil::Params& S,
             const Eigen::Vector3d mdev = m - Eigen::Vector3d::Constant(1.0 / 3.0);
 
             auto state_at = [&](double L, Eigen::Vector3d& sL, double& ppL) {
-                const double pL = softsoil::mean_after(p_tr, -L, P.kap_star);
+                const double pL = softsoil::mean_after(p_tr, -L, P.kap_star, ccot);
                 sL = Eigen::Vector3d::Constant(pL) +
                      (sig_tr - Eigen::Vector3d::Constant(sig_tr.mean())) - L * 2.0 * G * mdev;
                 ppL = std::max(out.pp * std::exp(L / (P.lam_star - P.kap_star)), ppfloor);
@@ -137,11 +137,28 @@ StepResult ssc_step(const Params& P, const Eigen::Vector3d& sig_c, double pp_c,
                     const Eigen::Vector3d& deps, double dt, int nsub_fixed) {
     const softsoil::Params S = P.ss();
     const int nsub = nsub_fixed > 0 ? nsub_fixed : ssc_nsub(P, S, sig_c, pp_c, deps, dt);
-    const Eigen::Vector3d dsub = deps / nsub;
-    const double dtsub = dt / nsub;
+    // Full substeps of the size the rule allows and a last one for the remainder, as in the
+    // Soft Soil step (soft_soil.cpp, ss_step): the returned stress is then continuous in the
+    // increment where the count changes, instead of jumping by the integration error. The size
+    // is read from the same two measures ssc_nsub counts with -- the strain and the creep of
+    // the step -- and strain and time are cut alike. At the ceiling of substeps the rule no
+    // longer holds the size, and the parts are equal as before.
+    double full = nsub > 0 ? 1.0 / nsub : 1.0, last = full;
+    if (nsub > 1 && nsub < 500) {
+        const double beta = (P.lam_star - P.kap_star) / P.mu_star;
+        const double pe = std::max(p_eq(S, sig_c), 1e-12);
+        const double ratio = pe / std::max(pp_c, softsoil::kPmin);
+        const double Lexp = dt * (P.mu_star / P.tau_day) * std::pow(std::min(ratio, 10.0), beta);
+        const double em = deps.sum() / 3.0;
+        const double dev = (deps - Eigen::Vector3d::Constant(em)).cwiseAbs().maxCoeff();
+        const double measure = std::max(Lexp, std::fabs(deps.sum()) + 2.0 * dev);
+        full = std::min(0.05 * P.kap_star / std::max(measure, 1e-300), 1.0 / (nsub - 1));
+        last = 1.0 - (nsub - 1) * full;
+    }
     StepResult out{sig_c, std::max(pp_c, softsoil::kPmin), 0.0, false, nsub};
     for (int i = 0; i < nsub; ++i) {
-        const StepResult r = ssc_substep(P, S, out.sig, out.pp, dsub, dtsub);
+        const double part = i + 1 < nsub ? full : last;
+        const StepResult r = ssc_substep(P, S, out.sig, out.pp, deps * part, dt * part);
         out.sig = r.sig;
         out.pp = r.pp;
         out.devc += r.devc;

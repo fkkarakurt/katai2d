@@ -42,6 +42,7 @@ namespace katai::core {
 struct ConsolidationPhaseMaterial {
     std::string name;              // diagnostic label for honest refusals
     double kx = 1.0, ky = 1.0;     // permeability [m/day]
+    double ck = 0.0;               // change of permeability, log10(k/k0) = de/ck; 0 = constant
     double porosity = 0.3;         // n = e / (1 + e)
     bool nonporous = false;        // refused: a non-porous region would silently behave water-filled
     // Oedometer modulus E_oed [kPa] of the material, resolved at the caller's seam (how a schema
@@ -63,6 +64,18 @@ struct ConsolidationPhase {
     std::vector<FlowEdge> flow_edges;                   // B4 vocabulary, Closed edges included
     bool have_flow_bcs = false;                         // unfiltered declaration scan (B4 rule)
     std::vector<char> active;                           // element activity; empty = everything active
+    // The force of the excess pore pressure the phase STARTS with (equation space; null = none).
+    // It is part of the imbalance dF -- that is how the pressure is re-generated in this phase's
+    // own pore field -- but it is a state the phase inherits, not a load it places: when the
+    // phase's load is put on over its duration, this part still goes on at the first instant.
+    const Eigen::VectorXd* inherited_pore_force = nullptr;
+    bool load_at_start = false;   // the phase's load at its first instant, not over its duration
+    // THE TOLERATED ERROR OF THE EQUILIBRIUM ITERATION, set by the caller from the soils in the
+    // phase. It was fixed at 1e-6 here whatever the soil: a hardening soil, whose iteration
+    // converges linearly and which every other phase solves to 1e-2, was held to a balance ten
+    // thousand times tighter in a consolidation phase, spent its iteration budget there, was
+    // cut in two again and again, and ran for hours.
+    double newton_tol = 1e-6;
     // Nodes of the DRAINS active in this phase. In a consolidation phase a drain sets the excess
     // pore pressure to zero and its specified head is not used (docs/k2d-format.md, `hydros`) --
     // which is exactly what this solver's drained-node mask means, so a drain enters here rather
@@ -199,7 +212,7 @@ inline bool solve_consolidation_phase(
     for (int e = 0; e < mesh.element_count; ++e)
         if (in.active.empty() || in.active[e]) used[mesh.element_material[e]] = 1;
     for (size_t mi = 0; mi < nmat; ++mi) {
-        cperm[mi] = {in.materials[mi].kx, in.materials[mi].ky};
+        cperm[mi] = {in.materials[mi].kx, in.materials[mi].ky, in.materials[mi].ck};
         if (used[mi] && (cperm[mi].kx <= 0.0 || cperm[mi].ky <= 0.0)) {
             R.message = "Material '" + in.materials[mi].name + "' has no permeability -- set "
                         "kx, ky (> 0) on its Groundwater tab before a consolidation phase.";
@@ -270,9 +283,13 @@ inline bool solve_consolidation_phase(
     };
     std::vector<double> p_state(mesh.node_count, 0.0);   // excess pore at the chunk start (0 at t=0)
     std::vector<GaussState> state = init;                // committed effective Gauss state
-    auto run_chunk = [&](double step_dt, int n, bool with_load) {
+    Eigen::VectorXd placed;   // the phase's own load: the imbalance less what it inherits
+    if (in.inherited_pore_force) placed = dF - *in.inherited_pore_force;
+    auto run_chunk = [&](double step_dt, int n, bool with_load, bool ramp = false) {
         Chunk c;
-        const Eigen::VectorXd* load = with_load ? &dF : nullptr;
+        const bool split = ramp && with_load && in.inherited_pore_force;
+        const Eigen::VectorXd* load = !with_load ? nullptr : (split ? &placed : &dF);
+        const Eigen::VectorXd* instant = split ? in.inherited_pore_force : nullptr;
         if (nonlinear_soil) {
             // Elastoplastic skeleton: effective stress from the constitutive return mapping; each
             // time step is a monolithic coupled Newton. K_T is nonsymmetric for non-associated
@@ -280,8 +297,8 @@ inline bool solve_consolidation_phase(
             // phase's committed effective stresses (`init`) seed the state; dF drives it.
             ConsolidationPlasticResult r = solve_consolidation_plastic(
                 mesh, dofs, models, cperm, kGammaWater, kw_over_n, drained, state, p_state,
-                step_dt, n, in.active, load, plastic_factory, 40, 1e-6, profiles, struct_k,
-                in.pore_tie);
+                step_dt, n, in.active, load, plastic_factory, 40, in.newton_tol, profiles, struct_k,
+                in.pore_tie, ramp, instant);
             c.ok = r.converged;
             c.stagnant = r.stagnation_accepted;
             c.series = std::move(r.series);
@@ -289,7 +306,8 @@ inline bool solve_consolidation_phase(
         } else {
             c.series = solve_consolidation(mesh, dofs, models, cperm, kGammaWater, kw_over_n,
                                            drained, p_state, step_dt, n, in.active, load,
-                                           le_factory, profiles, struct_k, in.pore_tie);
+                                           le_factory, profiles, struct_k, in.pore_tie, ramp,
+                                           instant);
             c.ok = !c.series.displacement.empty();
         }
         return c;
@@ -348,7 +366,14 @@ inline bool solve_consolidation_phase(
     };
 
     if (in.stop == ConsolidationStop::TimeInterval) {
-        Chunk c = run_chunk(dt, nsteps, true);
+        // THE LOAD OF A PHASE WITH A DURATION IS PLACED OVER THAT DURATION, linearly. Put on in
+        // full at its first instant it generated the whole undrained pore pressure at once, and
+        // the phase ended with what was left of that after all of its time: less pore pressure
+        // than a load that was still being placed at the end leaves behind, and a first step that
+        // had to carry the whole stage -- the step an elastoplastic consolidation failed on.
+        // A phase that ends on a state has no duration to place a load over and keeps the first
+        // step, as before.
+        Chunk c = run_chunk(dt, nsteps, true, !in.load_at_start);
         if (!c.ok) { R.message = kFailedMessage; return false; }
         commit(c);
         R.consol_stop_met = true;   // a time interval always ends: it is a duration, not a target
@@ -565,9 +590,11 @@ inline bool solve_consolidation_phase(
         add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A019", "consolidation",
                        std::to_string(stagnant_steps) +
                            " time step(s) stopped converging before the phase's tolerance and "
-                           "were kept at their best iterate, with an out-of-balance force below "
-                           "1e-3 of the forces in play. The answer carries that much unbalanced "
-                           "force. Re-run with more, smaller time steps to see whether it moves.");
+                           "were kept at their best iterate, with an out-of-balance force below " +
+                           std::string(3.0 * in.newton_tol > kStagnationAccept ? "3e-3" : "1e-3") +
+                           " of the forces in play. What a step leaves out of balance is carried "
+                           "into the next one, so the answer carries that much of the last step. "
+                           "Re-run with more, smaller time steps to see whether it moves.");
     committed_out = std::move(committed);
     return true;
 }

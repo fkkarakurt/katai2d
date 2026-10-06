@@ -23,6 +23,9 @@ namespace katai::core {
 struct Permeability {
     double kx = 1.0;
     double ky = 1.0;
+    // Change of permeability with void ratio, read by an elastoplastic consolidation phase only:
+    // log10(k / k0) = de / ck. 0 = constant.
+    double ck = 0.0;
 };
 
 // Accumulates the global conductivity matrix H = ∫ Gᵀ diag(kx,ky) G dΩ into the builder

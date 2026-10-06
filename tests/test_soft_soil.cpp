@@ -1,7 +1,8 @@
 // SOFT SOIL model -- Stage 1 material-point V&V (locked formulation in
 // docs/references/soft-soil-formulation.md). Oracles are the model's own DEFINING closed forms,
 // none of which share code with the kernel's return mapping:
-//   (a) isotropic VIRGIN loading follows eps_v = lam* ln(p/p0) (the ln-law that defines lam*);
+//   (a) isotropic VIRGIN loading follows kap* ln((p + c cot phi)/(p0 + c cot phi)) +
+//       (lam* - kap*) ln(p/p0), which is lam* ln(p/p0) for c = 0 (the ln-law that defines lam*);
 //   (b) unloading follows the kap* line and does NOT move p_p (memory preserved);
 //   (c) reloading past p_p REJOINS the virgin line (pre-consolidation memory);
 //   (d) on the virgin isotropic line p == p_p identically (the cap top rides the stress);
@@ -75,14 +76,28 @@ void test_isotropic_lnlaw() {
     Eigen::Vector3d sig = Eigen::Vector3d::Constant(p0);
     double pp = p0;   // normally consolidated start (on the cap top)
 
-    // (a) virgin: compress to eps_v = lam* ln(4) -> p should reach 4 p0.
+    // The elastic law is in p' + c cot(phi), eps_v^e = kap* ln((p + cc)/(p0 + cc)); the
+    // hardening law is in p_p itself, eps_v^p = (lam* - kap*) ln(p_p/p_p0). On the isotropic
+    // virgin line p_p = p, so the strain to reach p is the sum of the two -- lam* ln(p/p0)
+    // exactly when c = 0.
+    const double cc = cohesion_shift(P);
+    // (a) virgin: compress by eps_v = lam* ln(4) and compare p with the root of that sum.
     const double ev1 = P.lam_star * std::log(4.0);
     auto r1 = iso_drive(P, sig, pp, ev1, 400);
     const double p1 = r1.sig.mean();
-    std::printf("   virgin: p = %.4f (target %.4f)   rel err %.2e\n", p1, 4 * p0,
-                std::fabs(p1 - 4 * p0) / (4 * p0));
-    check(std::fabs(p1 - 4 * p0) < 1e-6 * 4 * p0,
-          "virgin isotropic loading follows eps_v = lam* ln(p/p0) (exponential-mean return: exact)");
+    double lo = p0, hi = 8.0 * p0;
+    for (int it = 0; it < 200; ++it) {
+        const double mid = 0.5 * (lo + hi);
+        const double ev = P.kap_star * std::log((mid + cc) / (p0 + cc)) +
+                          (P.lam_star - P.kap_star) * std::log(mid / p0);
+        (ev < ev1 ? lo : hi) = mid;
+    }
+    const double p1_target = 0.5 * (lo + hi);
+    std::printf("   virgin: p = %.4f (target %.4f)   rel err %.2e\n", p1, p1_target,
+                std::fabs(p1 - p1_target) / p1_target);
+    check(std::fabs(p1 - p1_target) < 1e-6 * p1_target,
+          "virgin isotropic loading follows the model's line: elastic part in p + c cot(phi), "
+          "hardening in p_p (exponential-mean return: exact)");
     // (d) on the virgin line the cap top rides the stress: p == p_p.
     check(std::fabs(r1.pp - p1) < 0.005 * p1, "on the virgin line p == p_p (the cap top rides)");
 
@@ -91,9 +106,10 @@ void test_isotropic_lnlaw() {
     const double ev2 = -P.kap_star * std::log(2.0);   // elastic: p should halve
     auto r2 = iso_drive(P, r1.sig, r1.pp, ev2, 200);
     const double p2 = r2.sig.mean();
-    std::printf("   unload: p = %.4f (target %.4f)   pp = %.4f (was %.4f)\n", p2, p1 / 2, r2.pp,
+    const double p2_target = 0.5 * (p1 + cc) - cc;   // the shifted pressure halves
+    std::printf("   unload: p = %.4f (target %.4f)   pp = %.4f (was %.4f)\n", p2, p2_target, r2.pp,
                 pp_before);
-    check(std::fabs(p2 - p1 / 2) < 0.002 * p1, "unloading follows the kap* line (exact exponential)");
+    check(std::fabs(p2 - p2_target) < 0.002 * p1, "unloading follows the kap* line (exact exponential)");
     check(r2.pp == pp_before, "unloading does NOT move p_p (memory preserved, bitwise)");
 
     // (c) reload past p_p: total eps_v at p = 8 p0 equals the VIRGIN value (path independence of

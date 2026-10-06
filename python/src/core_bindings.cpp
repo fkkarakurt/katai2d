@@ -180,6 +180,7 @@ NB_MODULE(_core, m) {
                 "dilatancy angle itself is `psi`, its value at sigma'_3 = 0")
         .def_rw("mu_star", &api::Material::mu_star)
         .def_rw("kx", &api::Material::kx, "permeability x [m/day]")
+        .def_rw("ck", &api::Material::ck, "change of permeability: log10(k/k0) = de/ck (0 = constant)")
         .def_rw("ky", &api::Material::ky, "permeability y [m/day]")
         .def_rw("und_mode", &api::Material::und_mode,
                 "undrained stiffness definition: 0 = nu_u entered, 1 = Skempton's B "
@@ -213,6 +214,8 @@ NB_MODULE(_core, m) {
         .def_rw("nu", &api::PlateMaterial::nu)
         .def_rw("elastoplastic", &api::PlateMaterial::elastoplastic)
         .def_rw("Mp", &api::PlateMaterial::Mp)
+        .def_rw("prevent_punching", &api::PlateMaterial::prevent_punching,
+                "end bearing: no soil plasticity within d = sqrt(12 EI/EA) of the plate's lower end")
         .def_rw("Np", &api::PlateMaterial::Np);
     bind_color(plate_cls);
 
@@ -247,6 +250,7 @@ NB_MODULE(_core, m) {
         .def_rw("diameter", &api::EmbeddedBeamMaterial::diameter)
         .def_rw("Lspacing", &api::EmbeddedBeamMaterial::Lspacing)
         .def_rw("Tskin_max", &api::EmbeddedBeamMaterial::Tskin_max)
+        .def_rw("Tskin_end", &api::EmbeddedBeamMaterial::Tskin_end)
         .def_rw("Fmax_base", &api::EmbeddedBeamMaterial::Fmax_base);
     bind_color(embedded_cls);
 
@@ -279,6 +283,8 @@ NB_MODULE(_core, m) {
                 "interface normal stiffness [kN/m3]; 0 = derived from the adjacent soil")
         .def_rw("iface_ks", &api::StructElement::iface_ks,
                 "interface shear stiffness [kN/m3]; 0 = derived from the adjacent soil")
+        .def_rw("iface_vt", &api::StructElement::iface_vt,
+                "virtual thickness factor of the interfaces (x the model element size); 0.1")
         .def_rw("conn", &api::StructElement::conn,
                 "embedded beam only: connection point of the pile top -- 0 hinged (its "
                 "translations are the soil's there; the default), 1 free (coupled through "
@@ -441,6 +447,14 @@ NB_MODULE(_core, m) {
             })
         .def_rw("pore_from_flow", &api::Phase::pore_from_flow,
                 "pore pressures from a steady-state groundwater flow on this phase's active ground")
+        .def_rw("consol_load_at_start", &api::Phase::consol_load_at_start,
+                "consolidation: the load at the first instant instead of over the duration")
+        .def_rw("poly_material", &api::Phase::poly_material,
+                "material index of each soil region in this phase (-1 = as drawn)")
+        .def_rw("struct_material", &api::Phase::struct_material,
+                "plate material index of each structure in this phase (-1 = as drawn)")
+        .def_rw("struct_contraction", &api::Phase::struct_contraction,
+                "line contraction of each plate (area loss as a fraction), total at the end of the phase")
         .def_rw("poly_water", &api::Phase::poly_water,
                 "region water mode per soil region: 0 = the water table, 1 = a level of its own "
                 "(poly_water_level), 2 = interpolated between the regions above and below")
@@ -473,6 +487,8 @@ NB_MODULE(_core, m) {
                 "1 = the whole stage")
         .def_rw("ignore_undrained", &api::Phase::ignore_undrained,
                 "treat Undrained (A)/(B) materials as drained in this phase")
+        .def_rw("reset_displacements", &api::Phase::reset_displacements,
+                "the total displacement reported from this phase on counts from its start")
         .def_rw("reset_small_strain", &api::Phase::reset_small_strain,
                 "clear the HS-small strain history at the start of this phase, so the soil "
                 "meets it at G0; stress, hardening and the "
@@ -775,6 +791,10 @@ NB_MODULE(_core, m) {
                      "individual stress points still carry stresses their own material law would "
                      "not return for the strains they were given, and the force residual cannot "
                      "see that because it is assembled from those stresses")
+        .def_prop_ro("displacement_total", [](const api::SolveResult& r) { return r.disp_total; },
+                     "the displacement since the start of the staged construction (or since the "
+                     "last phase that reset displacements): nodal [ux, uy] (2*node_count), [m]. "
+                     "The initial phase counts for nothing")
         .def_prop_ro("displacement", [](const api::SolveResult& r) { return r.disp; },
                      "what THIS phase did, not the total since the start: nodal [ux, uy] "
                      "(2*node_count), [m], copied to numpy. A plastic or consolidation phase "

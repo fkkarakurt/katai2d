@@ -179,12 +179,33 @@ std::string validate_ss(const MaterialParams& p) {
     // constant E, and Soft Soil has no E input (stiffness is the ln law
     // K = p'/kappa*) -- wiring it through would set Kw/n silently to zero and
     // an "undrained" analysis would behave drained (the silent-wrong class).
-    if (is_undrained(p))
-        return "Soft Soil (Creep) with Undrained (A/B) drainage is not supported yet: the "
-               "pore-fluid stiffness plumbing derives Kw/n from a constant E, and Soft Soil's "
-               "stiffness is stress-dependent (K = p'/kappa*) -- it would silently behave "
-               "drained. Use Drained (or model the short term with a Consolidation phase).";
+    // Undrained (B) enters the undrained strength as c = su with phi = 0, and this model has
+    // no meaning at phi = 0: its cap, its M and its stress-dependent laws are all written with
+    // the friction angle. Undrained (A) -- effective strength, the pore fluid added to the
+    // skeleton -- is the model's undrained analysis.
+    if (p.drainage == DrainageClass::UndrainedB)
+        return "Soft Soil (Creep) with Undrained (B) is not a supported combination: that "
+               "drainage type replaces the strength by c = su with phi = 0, and this model is "
+               "written with the friction angle throughout (its cap and its stress-dependent "
+               "stiffness need it). Use Undrained (A), which keeps the effective strength and "
+               "adds the pore fluid.";
     return {};
+}
+
+// The pore fluid of an undrained soft-soil material. Kw/n is derived from the skeleton's elastic
+// pair, and this model's is (K_ur, nu_ur) with K_ur = (p' + c cot phi)/kappa* -- a law, not a
+// number. The reference pair handed to kw_over_n() is the one at the reference pressure
+// (MaterialModel::kSoftSoilUndrainedRefPressure); the stress point's own stress then scales it
+// (undrained_stiffness_scale), so the water is as much stiffer than the skeleton at 10 kPa as
+// at 200.
+void undrained_soft_soil(MaterialModel& mm, const MaterialParams& p) {
+    if (!mm.undrained) return;
+    const double shift = p.phi_rad > 1e-12 ? p.c * std::cos(p.phi_rad) / std::sin(p.phi_rad) : 0.0;
+    const double k_ref = (MaterialModel::kSoftSoilUndrainedRefPressure + shift) / p.kap_star;
+    mm.undrained_E_ref = 3.0 * k_ref * (1.0 - 2.0 * p.nu_ur);
+    mm.undrained_nu_ref = p.nu_ur;
+    if (p.skempton_mode)
+        mm.undrained_poisson = undrained_poisson_from_skempton(p.skempton_B, p.nu_ur);
 }
 
 MaterialModel build_ss(const MaterialParams& p) {
@@ -201,6 +222,7 @@ MaterialModel build_ss(const MaterialParams& p) {
     s.phi = p.phi_rad;
     s.psi = p.psi_rad;
     s.K0nc = k0nc_of(p);
+    undrained_soft_soil(mm, p);
     return mm;
 }
 
@@ -219,6 +241,7 @@ MaterialModel build_ssc(const MaterialParams& p) {
     s.phi = p.phi_rad;
     s.psi = p.psi_rad;
     s.K0nc = k0nc_of(p);
+    undrained_soft_soil(mm, p);
     return mm;
 }
 

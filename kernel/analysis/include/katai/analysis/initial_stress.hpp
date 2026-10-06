@@ -250,7 +250,18 @@ inline void seed_preconsolidation(const mesh::Mesh& mesh,
                     models[mat].type == MaterialType::SoftSoil
                         ? models[mat].ssoil
                         : models[mat].ssc.ss();
-                gs.pp = softsoil::ss_initial_pp(sp, sig_cp, ocr_eq);
+                // THE PRE-CONSOLIDATION STATE IS ON THE K0nc LINE. The cap is put through the
+                // state the soil was consolidated to -- the vertical stress raised by the OCR or
+                // the POP, with the lateral stresses K0nc times that -- as for the Hardening Soil
+                // seed below. It used to be the measure of the CURRENT state times the OCR; an
+                // overconsolidated state has a higher K0 than K0nc, so its measure is not that of
+                // the state it was unloaded from, and the cap came out about a tenth too large at
+                // OCR = 2. Normally consolidated ground on its K0nc line is unchanged.
+                const double syy_c = oc[mat].mode == 2 ? sig_cp(1) + std::max(0.0, oc[mat].POP)
+                                                       : ocr_eq * sig_cp(1);
+                const Eigen::Vector3d past(sp.K0nc * syy_c, syy_c, sp.K0nc * syy_c);
+                gs.pp = std::max(softsoil::ss_initial_pp(sp, sig_cp, 1.0),
+                                 softsoil::ss_initial_pp(sp, past, 1.0));
                 continue;
             }
             // Seed with the parameter set the FIRST integrate_point will actually use. The whole
