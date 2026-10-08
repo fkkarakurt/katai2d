@@ -2055,8 +2055,20 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                     if (e == f) return e;
             return -1;
         };
-        for (auto& ie : structures.interfaces) ie.soil_elem = beside(ie.soil_nodes[0], ie.soil_nodes[1]);
-        for (auto& ie : structures.interfaces5) ie.soil_elem = beside(ie.soil_nodes[0], ie.soil_nodes[1]);
+        // The other side is ground as well where its DOFs are mesh nodes' (a wall's own DOFs lie
+        // beyond them): the joint between two soil bodies, and the joint drawn on a fixed boundary,
+        // whose soil-side nodes are the boundary's and carry no element at all.
+        const auto mesh_node_of = [&](int gdof) {
+            return gdof >= 0 && gdof < 2 * mesh.node_count ? gdof / 2 : -1;
+        };
+        for (auto& ie : structures.interfaces) {
+            ie.soil_elem = beside(ie.soil_nodes[0], ie.soil_nodes[1]);
+            ie.soil_elem2 = beside(mesh_node_of(ie.struct_dof[0]), mesh_node_of(ie.struct_dof[2]));
+        }
+        for (auto& ie : structures.interfaces5) {
+            ie.soil_elem = beside(ie.soil_nodes[0], ie.soil_nodes[1]);
+            ie.soil_elem2 = beside(mesh_node_of(ie.struct_dof[0]), mesh_node_of(ie.struct_dof[2]));
+        }
     }
     // Rebind the structures built above (they came first, by position) onto the wall DOFs.
     {
@@ -2468,6 +2480,11 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             struct_nodes.push_back(a.node_a);
             if (a.node_b >= 0) struct_nodes.push_back(a.node_b);
         }
+        // A joint drawn on a supported boundary passes everything above it to the support through
+        // its own tractions: its boundary-side nodes carry no soil element, so the soil's
+        // B^T sigma there is nothing at all.
+        for (const auto& ie : structures.interfaces) for (int n : ie.soil_nodes) struct_nodes.push_back(n);
+        for (const auto& ie : structures.interfaces5) for (int n : ie.soil_nodes) struct_nodes.push_back(n);
         bool on_support = false;
         for (int n : struct_nodes) {
             if (n < 0 || n >= mesh.node_count) continue;
@@ -3217,11 +3234,18 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
     // K0 procedure: seed the geostatic stress so undisturbed self-weight gives ~zero displacement.
     // Gravity loading: start from zero stress (self-weight produces settlement). Either way the
     // recovered stress comes from the solver's committed Gauss states below.
-    // Embedded walls always need the geostatic seed (interface sigma_n0 carries the lateral earth
-    // pressure), so seed K0 whenever there are interfaces, regardless of the chosen phase.
-    // Use the K0 procedure (geostatic seed) for the K0 phase and ALWAYS when interfaces are present
-    // (interface sigma_n0 carries the lateral earth pressure). Gravity loading starts from zero stress.
-    const bool use_k0 = !io.chained && ((phase == InitialPhase::K0Procedure) || has_interfaces);
+    // GRAVITY LOADING IS GRAVITY LOADING, WITH A WALL IN IT TOO. The geostatic seed used to be
+    // forced whenever a joint was active in the initial phase -- its sigma_n0 carries the lateral
+    // earth pressure of the K0 procedure -- so a model started by gravity loading with its wall
+    // already in place was run by the K0 procedure instead and said nothing: sigma_h / sigma_v of
+    // 1 - sin(phi) where the elastic ground under its own weight gives nu / (1 - nu), and no
+    // settlement at all. Under gravity loading the ground starts stress-free and so do its
+    // joints: their normal stress is what the weight presses into them.
+    const bool use_k0 = !io.chained && phase == InitialPhase::K0Procedure;
+    if (!io.chained && phase == InitialPhase::GravityLoading) {
+        for (auto& ie : structures.interfaces) ie.sigma_n0.fill(0.0);
+        for (auto& ie : structures.interfaces5) ie.sigma_n0.fill(0.0);
+    }
     std::vector<katai::core::GaussState> init;
     if (io.chained) {
         // Staged phase: start from the previous phase's committed stresses (staged chaining).
@@ -3802,6 +3826,29 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                     sigma_n0 = sn;
                     slip0 = props.ks > 0.0 ? -tau / props.ks : 0.0;
                 };
+                // WHAT THE JOINT TRANSMITS IS THE TOTAL STRESS. The recovered stress is the ground's
+                // effective one, and the joint's law takes the excess pore pressure of the ground
+                // beside it off whatever it transmits to find the stress its friction acts on
+                // (iface::coulomb_return). Seeded with the effective stress alone, a joint
+                // installed in ground that already carries an excess pore pressure had that
+                // pressure taken off twice. The pressure the ground has now is added here, by
+                // the same reading the law makes of it.
+                const std::vector<double> pw_gauss =
+                    katai::core::excess_pore_at_gauss(mesh, dofs, models, profiles, init, act);
+                const int ngp = mesh.element_count > 0 ? (int)(pw_gauss.size() / (size_t)mesh.element_count) : 0;
+                const auto elem_pore = [&](int e, double& out) {
+                    if (e < 0 || e >= mesh.element_count || ngp == 0) return false;
+                    if (!act.empty() && !act[(size_t)e]) return false;
+                    double sum = 0.0;
+                    for (int g = 0; g < ngp; ++g) sum += pw_gauss[(size_t)e * (size_t)ngp + (size_t)g];
+                    out = sum / ngp;
+                    return true;
+                };
+                const auto joint_pore_now = [&](int e1, int e2) {
+                    double a = 0.0, b = 0.0;
+                    const bool ha = elem_pore(e1, a), hb = elem_pore(e2, b);
+                    return ha && hb ? 0.5 * (a + b) : (ha ? a : (hb ? b : 0.0));
+                };
                 const auto ncp = katai::core::iface::nc_points();
                 for (size_t i = 0; i < structures.interfaces.size(); ++i) {
                     if (!new3[i]) continue;
@@ -3817,6 +3864,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                         seed(node_stress(ie.soil_nodes[nd], ie.struct_dof[2 * nd]), fr.c, fr.s, ie.props,
                              ie.sigma_n0[q],
                              carry_init.interface_slip[i * katai::core::iface::kPointCount + q]);
+                        ie.sigma_n0[q] += joint_pore_now(ie.soil_elem, ie.soil_elem2);
                     }
                     ++seeded_interfaces;
                 }
@@ -3835,6 +3883,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                         seed(node_stress(ie.soil_nodes[nd], ie.struct_dof[2 * nd]), fr.c, fr.s, ie.props,
                              ie.sigma_n0[q],
                              carry_init.interface5_slip[i * katai::core::iface::kPointCount5 + q]);
+                        ie.sigma_n0[q] += joint_pore_now(ie.soil_elem, ie.soil_elem2);
                     }
                     ++seeded_interfaces;
                 }

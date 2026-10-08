@@ -649,6 +649,40 @@ NB_MODULE(_core, m) {
             return std::string(b);
         });
 
+    nb::class_<katai::core::InterfaceStation>(m, "InterfaceStation")
+        .def_ro("s", &katai::core::InterfaceStation::s, "arc length along the joint [m]")
+        .def_ro("x", &katai::core::InterfaceStation::x, "[m]")
+        .def_ro("y", &katai::core::InterfaceStation::y, "[m]")
+        .def_ro("tau", &katai::core::InterfaceStation::tau, "shear stress [kN/m2]")
+        .def_ro("sigma_n", &katai::core::InterfaceStation::sigma_n,
+                "normal stress the joint transmits, TENSION POSITIVE [kN/m2]")
+        .def_ro("slip", &katai::core::InterfaceStation::slip, "relative slip [m]")
+        .def_ro("gap", &katai::core::InterfaceStation::gap, "relative opening [m]")
+        .def_ro("slipping", &katai::core::InterfaceStation::slipping,
+                "the Coulomb limit is reached here")
+        .def_ro("utilisation", &katai::core::InterfaceStation::utilisation,
+                "Dynamic phase with the static state superposed: |tau| / tau_max; 0 = not computed")
+        .def("__repr__", [](const katai::core::InterfaceStation& f) {
+            char b[160];
+            std::snprintf(b, sizeof(b), "<InterfaceStation s=%.4g (%.4g, %.4g) tau=%.6g sigma_n=%.6g%s>",
+                          f.s, f.x, f.y, f.tau, f.sigma_n, f.slipping ? " slipping" : "");
+            return std::string(b);
+        });
+    nb::class_<katai::core::InterfaceResult>(m, "InterfaceResult")
+        .def_ro("name", &katai::core::InterfaceResult::name,
+                "the name of the interface line, or of the wall whose interface it is")
+        .def_ro("max_abs_tau", &katai::core::InterfaceResult::max_abs_tau, "[kN/m2]")
+        .def_ro("max_abs_sigma_n", &katai::core::InterfaceResult::max_abs_sigma_n, "[kN/m2]")
+        .def_ro("max_abs_slip", &katai::core::InterfaceResult::max_abs_slip, "[m]")
+        .def_ro("any_slip", &katai::core::InterfaceResult::any_slip,
+                "the Coulomb limit was reached somewhere along the joint")
+        .def_prop_ro("stations",
+                     [](const katai::core::InterfaceResult& f) { return f.stations; },
+                     "list[InterfaceStation] along the joint")
+        .def("__repr__", [](const katai::core::InterfaceResult& f) {
+            return "<InterfaceResult '" + f.name + "' " + std::to_string(f.stations.size()) +
+                   " stations>";
+        });
     nb::class_<katai::core::StructForce>(m, "StructForce")
         .def_ro("name", &katai::core::StructForce::name, "the name the element carries in the file")
         .def_ro("kind", &katai::core::StructForce::kind,
@@ -818,6 +852,10 @@ NB_MODULE(_core, m) {
         .def_prop_ro("struct_forces", [](const api::SolveResult& r) { return r.struct_forces; },
                      "one StructForce per drawn structural line (plate, wall, anchor, geogrid, "
                      "embedded beam); empty when the model has no structures")
+        .def_prop_ro("interface_forces",
+                     [](const api::SolveResult& r) { return r.interface_forces; },
+                     "one InterfaceResult per interface line and per wall with interfaces: shear, "
+                     "normal stress and slip along the joint; empty when the model has none")
         .def_prop_ro("diagnostics", [](const api::SolveResult& r) { return r.diagnostics; },
                      "everything the run did that the file does not literally say: clipped "
                      "geometry, a fallback taken, the refusal that stopped it (list[Diagnostic])")

@@ -6,6 +6,134 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### Gravity loading with a wall in place is gravity loading
+
+A model started by gravity loading was run by the K0 procedure instead whenever a wall with
+interfaces, or a bare interface, was active in the initial phase -- the joints' starting stress
+was the K0 procedure's, and the whole start was switched to match. Nothing said so. The ground
+did not settle, and its lateral stress was K0 sigma_v where elastic ground under its own weight
+has nu / (1 - nu) sigma_v: 0.50 against 0.25 at nu = 0.2. Gravity loading now starts stress-free
+with its joints stress-free as well: 14.56 mm of settlement with the wall against 14.58 without
+it, the lateral stress ratio 0.246 away from the wall. A wall left out of the initial phase and
+installed in the next one, the usual way, was never affected.
+
+A wall installed in ground that carries an excess pore pressure takes over the total stress at
+its line. Its joints were seeded with the effective stress alone, and since friction acts on
+the transmitted stress less that pressure, the pressure came off twice: under a 50 kPa
+undrained surcharge the joint started at 18.7 kPa where the ground pressed on its line with
+67.0 (18.7 effective, 48.3 in the water).
+
+The joints' own results -- shear, normal stress, slip, and whether the Coulomb limit is reached,
+station by station -- are readable from Python (`result.interface_forces`); they were computed
+and shown in the application only.
+
+### With walls and anchors, the factor of safety is the plateau of its path
+
+A Safety phase on ground that carries structures reduced the strength in prescribed steps and
+stopped where the iteration gave a step up. That is not a property of the ground. On a
+dewatered excavation between anchored walls (6-noded, 2 m) it reported 1.555 at 120 mm of
+movement; with the faster solver of this release, which closes steps the old one abandoned,
+1.615 at 700 mm -- the same model, the same start, every accepted step converged. Followed with
+the factor as an unknown (the arc-length search already used for ground without structures)
+the path is one curve with a plateau: 1.53 at 95 mm, 1.585 at 235 mm, 1.62 at 800 mm, level at
+1.630. Both earlier answers were points on the way up. The search with structures now follows
+the path to its plateau as well, in about the time the prescribed steps took; the prescribed
+search remains for a path that cannot be started. Factors of models with structures can rise by
+a few percent with this. The closed forms of a block on a joint continued from a Plastic phase
+-- pushed sideways, held by a prestressed anchor, the anchor removed -- come out at 1.501906,
+2.002542 and 1.501907 against 1.501907, 2.002542 and 1.501907.
+
+### A support beside undrained ground reports the water's share of its force
+
+The reaction at a support, and the force an imposed displacement needs, were taken from the
+effective stress alone. Beside drained ground that is the whole of it. Beside undrained ground
+the excess pore pressure carries most of a load, and none of that was in the number: a strip
+footing pushed 5 cm into undrained clay (s_u = 20 kPa, weightless) reported a footing force of
+22.7 kN/m, where the same clay declared drained reported 98.6 and the closed form is 102.8; the
+base of a confined column loaded undrained with 200 kN/m reported 6.9 of it. Nothing said so.
+The reaction is now taken from the stress the solver balances, effective stress and excess pore
+pressure together: 104.7 kN/m for the footing, 200.0 for the column. Displacements, stresses
+and factors of safety were never affected -- only this reported force.
+
+The pressure itself is reported as well. A Plastic phase on undrained ground generates an
+excess pore pressure and every later phase is built on it, but its result carried the steady
+pressure only; the field of the excess pressure was filled by consolidation phases alone. It
+is now there after any phase whose ground carries one (`excess_pore`, node by node): 48.27 kPa
+in the water and 1.73 in the skeleton under that column's 50.
+
+Still not in a reaction, and now written at the field: the steady pore pressure (under the
+water table a base reads the buoyant weight above it), the share of a load applied at the
+supported node itself, and the end force of a structure or a joint that stands on a support
+(K2D-A004, which now also speaks for a joint drawn on a fixed boundary).
+
+### A joint reads the pore pressure of the ground on either side of it
+
+Friction in a joint acts on the effective normal stress, the transmitted stress less the excess
+pore pressure of the ground beside it. The ground was looked for on one side only -- the side
+the joint's own nodes are on -- so a joint drawn on a fixed boundary, whose own nodes are the
+boundary's, found none and slipped on the total stress. It now reads the ground on whichever
+side has any, and the mean of the two between two soil bodies. A block on a rough base, held
+between rigid sides, loaded with 50 kPa and pushed sideways: 36.6 kN/m of friction with no
+load, 100.2 loaded drained, 38.6 loaded undrained (closed forms 37.4, 102.4, and 37.4 plus the
+little of the load the water does not take); friction on the transmitted stress gave the
+undrained block the drained one's 100. This is the first test of that rule
+(python/tests/undrained_reactions.py).
+
+### Soft Soil returns to the cap it is returned to, and converges in two dimensions
+
+A strip pressed into Soft Soil clay took 963 iterations where the same strip in Mohr-Coulomb
+took 119, and the out-of-balance force would not come under a few thousandths of the forces in
+play. The cause was in the stress update, not in the iteration. Where two principal stresses
+are equal -- every point of a ground at rest, whose two lateral stresses are -- a compression
+increment is returned to the cap's surface or to its edge, and on the edge the pair is brought
+to a common value after the return. The cap was solved with the pair still unequal: its
+deviatoric measure weighs the two differently, so making them equal afterwards moved the stress
+off the cap, 0.11 kPa inside it at a mean stress of 40 kPa. The returned stress jumped by that
+wherever an increment passed from one return to the other, and the numerical tangent, taken
+across such jumps, was not the derivative of the update at any point checked (10% to thirty
+times off). The cap, the Mohr-Coulomb surface and the creep rate of Soft Soil Creep are now read
+at the state that is kept.
+
+The same strip: 170 iterations and 1.9 s against 963 and 26 s; at a tolerance of 1e-5, 234
+against 2786; on 15-noded elements 270 against 2264; on a 0.25 m mesh 252 against 1846. The
+footing force is 65.46 kN/m against 65.30 before (+0.24%), the earlier value being that of
+points left inside the cap. A test scans the update across the switch for both models
+(test_soft_soil, h).
+
+### A footing pushed into sand finishes on a fine mesh, and every increment starts from the last
+
+A rigid circular footing pushed 5 cm into sand (Mohr-Coulomb, phi' = 30, psi = 0, 15-noded
+elements) needed 2572 iterations and four minutes on a 0.25 m mesh and did not finish in fifty
+minutes on a 0.15 m one. Three things in the solver, none of which changes the equilibrium an
+increment has to reach:
+
+- Each load increment is started from the displacement of the one before it, scaled to its size,
+  where that leaves a smaller out-of-balance force than the start it had. The old start read
+  every point lying on its yield surface as elastic, so each increment began in ground eight times
+  stiffer than it was and spent ten of its fifteen iterations finding the plastic zone again.
+- The line search, having found a step that reduces the out-of-balance force, tries up to three
+  longer ones between it and the step it turned down, and keeps the best.
+- An attempt at an increment whose best iterate has not improved by a tenth in thirty iterations
+  is ended there instead of at its budget of two hundred.
+
+The same footing: 925 iterations and 67 s at 0.25 m, 14 minutes at 0.15 m. With associated flow
+(psi = phi') 158 iterations against 395, and a strip footing 189 against 1615, the footing force
+unchanged to every printed digit. Under a load the first of these does the same work: a strutted
+excavation in Hardening Soil 624 iterations against 920, an embankment built undrained on soft
+clay 1539 against 1897 with the factor of safety at 1.4010 against 1.4015.
+
+A phase that imposes a displacement no longer ends short of it. Under a load a phase can stop
+because the ground cannot carry more; a prescribed movement has no such limit. An increment of
+it that can be made no smaller and still does not close is now kept at its best iterate when
+that is within 1% of the load scale, and the phase says how many were and by how much
+(K2D-A019). A strip footing on the same sand, which the faster start had sent down a path that
+stopped at 59% of the settlement, reaches all of it at 173.9 kN/m against 174.4 before; the
+largest force left out of balance in any of these runs was 0.19%.
+
+What is not solved: with psi = 0 the out-of-balance force still settles between 1e-4 and 2e-3 of
+the load scale in some increments, and the footing force then depends on the number of load
+steps by up to 0.9% (595.7 kN in 20 steps, 590.2 in 80, on a 0.2 m mesh).
+
 ### A factor of safety above 3 is computed, not capped
 
 The strength-reduction search stopped at a factor of 3 and reported anything that stood there as

@@ -246,12 +246,24 @@ void test_structural_criteria() {
     check(b.c.iface_points > 0, "the interface's slipping points are counted");
     check(b.c.plastic_points == 0,
           "...and the soil contributes none, so this is the interface criterion alone");
-    check(b.c.force_ok() && !b.c.iface_points_ok(),
-          "the global force criterion is met while the interface criterion is not");
+    // Until each increment was started from the one before it, this run stopped with 9 of its 47
+    // slipping points unsettled (worst 1.6e-6) while the force was in balance, and showed the
+    // two criteria apart by itself. Started from the last increment it stops with every point
+    // settled (worst 1.4e-9), so the criterion is shown to bite on the run's own counts instead:
+    // the same measurement with a fifth of its points unsettled must fail, with none must pass.
+    check(b.c.force_ok(), "the global force criterion is met");
+    {
+        katai::core::NewtonResult::Convergence probe = b.c;
+        probe.iface_inaccurate = probe.iface_points / 5 + 1;
+        check(!probe.iface_points_ok(),
+              "a fifth of the interface points unsettled fails the interface criterion");
+        probe.iface_inaccurate = 0;
+        check(probe.iface_points_ok(), "...and none unsettled passes it");
+    }
     const Run b2 = solve(block, 0.0, true);
     check(b2.ok && b2.c.iface_points_ok(),
           "binding the local criteria settles the interface points");
-    check(b2.iterations > b.iterations, "...and that costs iterations");
+    check(b2.iterations >= b.iterations, "...and never in fewer iterations");
 
     // The pile is the foot case. The foot force error is a ratio over every foot in the model
     // rather than a count, and it is tolerated at five times the tolerated error -- a looser bar

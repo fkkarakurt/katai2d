@@ -248,19 +248,22 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
             // too, and with psi < phi the factor then depends on those first coarse steps (1.3820
             // at 1e-5). The prescribed search below remains for a path that cannot be started.
             //
-            // ONLY FOR GROUND WITHOUT STRUCTURES. A plate, an anchor, a geogrid or a pile keeps
-            // its own strength while the soil's is reduced, so once the ground has formed a
-            // mechanism the structure takes the load on and the path keeps rising with the
-            // displacement -- there is no plateau to read. Measured on the anchored excavation of
-            // the tutorial set (6-noded, 2 m): the continuation walked to 3.8 m of displacement for
-            // 1.852, where the prescribed search stops at 1.847 in a quarter of the time (86 s
-            // against 319; 15-noded, 460 s against 2880). Reading the factor at the knee of the
-            // path instead -- the minimum of d ln(s - 1) / d ln u, where the ground's mechanism has
-            // formed -- gave 1.599 there, but 1.726 for a block held by an anchor prestressed to
-            // half its capacity, whose factor is 2.0025 once the anchor yields: the knee is where
-            // the ground gives way, not where the whole system does. With structures the
-            // prescribed search, which ends where the ground no longer finds an equilibrium step,
-            // is kept.
+            // WITH STRUCTURES TOO. A plate, an anchor, a geogrid or a pile keeps its own strength
+            // while the soil's is reduced, so once the ground has formed a mechanism the structure
+            // takes load on and the path goes on rising with the displacement for a long way --
+            // which is why the continuation was at first kept from such models: on an anchored
+            // excavation (6-noded, 2 m) it walked to 3.8 m for 1.852 where the prescribed search
+            // stopped at 1.847 in a quarter of the time. But the prescribed search stops where the
+            // iteration gives a step up, and that is not a property of the ground: measured on a
+            // dewatered excavation between anchored walls (6-noded, 2 m), 1.555 at 120 mm of
+            // movement with one build of the solver and 1.615 at 700 mm with a better one, each
+            // step properly converged, on a path that the continuation follows to its plateau at
+            // 1.630 -- 1.53 at 95 mm, 1.585 at 235 mm, 1.62 at 800 mm. Both prescribed answers were
+            // points on the way. The plateau is the answer that does not move with the solver, so
+            // it is the one reported; the prescribed search remains for a path that cannot be
+            // started. (Reading the knee of the path instead -- where the ground's mechanism has
+            // formed -- was measured and is wrong for a system: 1.726 for a block held by an anchor
+            // prestressed to half its capacity, whose factor is 2.0025 once the anchor yields.)
             const auto continue_by_arc = [&](double first_step, NewtonResult& r) {
                 NewtonOptions arc_opt = step_opt;
                 arc_opt.srf_reduce = [](std::vector<MaterialModel>& mm, Structures& ss,
@@ -285,7 +288,7 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                     return false;
                 }
             };
-            if (!has_structures) {
+            {
                 NewtonResult ra;
                 if (continue_by_arc(options.msf_step, ra)) {
                     res.fos = std::min(std::max(ra.srf, srf), std::max(options.srf_max, options.srf_ceiling));

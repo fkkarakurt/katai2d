@@ -62,6 +62,9 @@ inline constexpr double kStagnationAccept = 1.0e-3;
 // The iterates over which the residual must have fallen by a tenth for an increment inside that
 // band to count as still converging (the solver's "stagnation shown, not awaited").
 inline constexpr size_t kStagnationWindow = 30;
+// The same for an increment of a PRESCRIBED DISPLACEMENT that can be cut no further: the phase
+// would otherwise end short of a movement the ground can always take (see the solver).
+inline constexpr double kLastResortAccept = 1.0e-2;
 
 struct NewtonOptions {
     int load_steps = 1;       // (initial) number of steps the external load is split into
@@ -271,6 +274,9 @@ struct InterfaceElement {
     // The soil element on the soil side of the joint (-1 = not known): its excess pore pressure
     // is what turns the joint's normal stress into an effective one (iface::coulomb_return).
     int soil_elem = -1;
+    // ... and the one on the other side, where that side is ground too: the second body of a
+    // soil-soil joint, or the only ground there is where the joint lies on a fixed boundary.
+    int soil_elem2 = -1;
     // false = the ground on one side of the joint is not there in this phase (excavated, or not
     // yet placed): the joint then transmits nothing -- no stiffness and no sigma_n0. Its nodes on
     // that side are orphaned and fixed, so a joint left in place would hold the wall against
@@ -298,6 +304,7 @@ struct InterfaceElement5 {
     std::array<double, 5> sigma_n0 = {0.0, 0.0, 0.0, 0.0, 0.0};
     int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
     int soil_elem = -1; // as InterfaceElement::soil_elem
+    int soil_elem2 = -1; // as InterfaceElement::soil_elem2
     bool active = true;   // see InterfaceElement::active
 };
 

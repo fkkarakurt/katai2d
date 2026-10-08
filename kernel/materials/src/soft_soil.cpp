@@ -144,7 +144,31 @@ StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c
             }
             const Eigen::Vector3d m = is_cap ? cap_normal(out.sig, idx, wa) : n_from_w(idx, wa);
             Eigen::Vector3d sL; double ppL;
-            const double dl = scalar_return(out.sig, out.pp, ffun, m, harden, sL, ppL);
+            // THE SURFACE IS MET BY THE STATE THAT IS KEPT. On an edge the tied pair is brought
+            // to a common value after the return, and the multiplier used to be solved with the
+            // surface read at the state BEFORE that: q~ weighs the two members of the pair
+            // differently, so making them equal moved the stress off the surface it had just
+            // been returned to -- measured, 0.11 kPa inside the cap at p' = 40 kPa -- and the
+            // update jumped by that much wherever an increment passed from the surface return
+            // to the edge return. An equilibrium iteration cannot get under such a jump: it was
+            // the out-of-balance force that would not fall in two dimensions, and the reason the
+            // numerical tangent never matched the update it was taken from. The surface is now
+            // read at the equalized state, so the edge return ends on it and the two returns
+            // give one answer where they meet.
+            auto tie = [&](Eigen::Vector3d s) {
+                if (tied01 && tied12) {
+                    s.setConstant(s.mean());
+                } else if (tied01) {
+                    const double ms = 0.5 * (s(idx[0]) + s(idx[1]));
+                    s(idx[0]) = ms; s(idx[1]) = ms;
+                } else if (tied12) {
+                    const double ms = 0.5 * (s(idx[1]) + s(idx[2]));
+                    s(idx[1]) = ms; s(idx[2]) = ms;
+                }
+                return s;
+            };
+            auto f_tied = [&](const Eigen::Vector3d& s, double ppv) { return ffun(tie(s), ppv); };
+            const double dl = scalar_return(out.sig, out.pp, f_tied, m, harden, sL, ppL);
             if (dl <= 0.0) {
                 // We were called with f > tol: dl=0 is NOT "inside the surface", it is a
                 // secant failure (under single-sided flow the σ2/σ3 crossing kink makes

@@ -198,6 +198,11 @@ struct SolveResult {
     // exerts. Layout node*2 + component, like `disp`. SOIL contribution (a structural end
     // force landing on a fixed node is not included in v1). Static-family phases only;
     // empty otherwise. In-memory result (not in the .res file yet).
+    // WHAT IS IN IT: the effective stress and the EXCESS pore pressure of undrained ground (the
+    // stress the solver balances). WHAT IS NOT: the steady pore pressure -- under the water table
+    // a base reads the buoyant weight above it, not the saturated one -- and the load applied
+    // directly at the supported node itself (the share of the ground's weight lumped there: a
+    // base reads 138 of 144 kN/m on a 0.5 m mesh, 141 on 0.25 m).
     Eigen::VectorXd reaction;
     // Staged construction: element activity of this phase (empty = everything active). The GUI
     // dims/hides the excavated region; passive elements are excluded from the stress recovery.
@@ -213,7 +218,9 @@ struct SolveResult {
     std::vector<double> consol_settlement;
     std::vector<double> consol_excess_pore;
     // The EXCESS pore pressure field at the end of a consolidation / fully-coupled phase, node by
-    // node (size node_count; empty for every other family). `pore` above is the hydrostatic
+    // node, and at the end of a static phase whose ground carries any (undrained ground loaded
+    // in a Plastic phase, or a pressure handed on by a consolidation). Tension positive: a
+    // pressure is negative. Size node_count; empty where there is none. `pore` above is the hydrostatic
     // pressure the phase was set up in -- the water table or the flow field -- and it is what the
     // driver writes there for every phase, so without this field the pressure the phase actually
     // COMPUTED existed only as a maximum per time step: the engineer could see that something was

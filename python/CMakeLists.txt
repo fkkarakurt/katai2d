@@ -171,6 +171,18 @@ set_tests_properties(test_python_plate_end_bearing PROPERTIES
   LABELS "python;analysis"
   ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
 
+add_test(NAME test_python_undrained_reactions
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/undrained_reactions.py)
+set_tests_properties(test_python_undrained_reactions PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
+add_test(NAME test_python_joint_installation
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/joint_installation.py)
+set_tests_properties(test_python_joint_installation PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
 add_test(NAME test_python_depth_profile
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/depth_profile.py)
 set_tests_properties(test_python_depth_profile PROPERTIES

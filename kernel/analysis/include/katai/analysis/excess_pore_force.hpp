@@ -37,4 +37,22 @@ void add_excess_pore_force(const mesh::Mesh& mesh, const DofMap& dofs,
                            const std::vector<char>& active_element, bool axisymmetric,
                            Eigen::VectorXd& rhs);
 
+// The same force by GLOBAL degree of freedom (node * 2 + component for the mesh's nodes), the
+// supported ones included: the part of a support reaction that the excess pore pressure carries.
+// `full` must be sized for every degree of freedom it may be asked to write (at least 2 x nodes).
+void add_excess_pore_nodal_force(const mesh::Mesh& mesh, const DofMap& dofs,
+                                 const std::vector<MaterialModel>& materials,
+                                 const std::vector<MaterialProfile>& profile,
+                                 const std::vector<GaussState>& states,
+                                 const std::vector<char>& active_element, bool axisymmetric,
+                                 Eigen::VectorXd& full);
+
+// The excess pore pressure itself at every stress point (states' order; tension positive, so a
+// pressure is negative), zero where the point carries none.
+std::vector<double> excess_pore_at_gauss(const mesh::Mesh& mesh, const DofMap& dofs,
+                                         const std::vector<MaterialModel>& materials,
+                                         const std::vector<MaterialProfile>& profile,
+                                         const std::vector<GaussState>& states,
+                                         const std::vector<char>& active_element);
+
 }  // namespace katai::core

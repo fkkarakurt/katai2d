@@ -21,6 +21,7 @@
 //        steps) reproduces the SAME kernel chain at every Gauss point -- assembler + Newton +
 //        FD-tangent wiring, with the NC start immediately on the cap (plastic from step 1).
 #include <katai/materials/soft_soil.hpp>
+#include <katai/materials/soft_soil_creep.hpp>
 
 #include <katai/analysis/nonlinear_solver.hpp>
 #include <katai/fem/assembly/dof_map.hpp>
@@ -409,8 +410,66 @@ void test_g4_fe_oedometer_bvp() {
 
 }  // namespace
 
+// (h) THE UPDATE IS A CONTINUOUS FUNCTION OF THE STRAIN INCREMENT. From a K0 state the two
+// lateral principal stresses are equal, so a compression increment is returned to the cap's
+// surface or to its edge depending on a hair of the lateral strain -- and the two returns must
+// give one answer where they meet. They did not: the edge return solved the cap with the pair
+// still unequal and made it equal afterwards, which left the stress 0.11 kPa inside the cap, and
+// the returned stress jumped by 8e-3 kPa across the switch (a hundred times the change over one
+// grid step beside it). An equilibrium iteration cannot converge below such a jump.
+// The scan walks one strain component across the switch in steps of 1e-7 and compares the
+// largest change over one step with the typical one: a kink doubles it, a jump multiplies it.
+namespace {
+double largest_over_typical_step(const Params& P, const Eigen::Vector3d& sig, double pp,
+                                 const Eigen::Vector3d& deps, double span,
+                                 const katai::core::softsoilcreep::Params* creep) {
+    const int n = 4000;
+    std::vector<double> steps;
+    Eigen::Vector3d prev = Eigen::Vector3d::Zero();
+    for (int i = 0; i <= n; ++i) {
+        Eigen::Vector3d d = deps;
+        d(0) += -span + 2.0 * span * i / n;
+        const Eigen::Vector3d s =
+            creep ? katai::core::softsoilcreep::ssc_step(*creep, sig, pp, d, 1.0).sig
+                  : ss_step(P, sig, pp, d).sig;
+        if (i > 0) steps.push_back((s - prev).norm());
+        prev = s;
+    }
+    std::vector<double> sorted = steps;
+    std::sort(sorted.begin(), sorted.end());
+    return sorted.back() / std::max(sorted[sorted.size() / 2], 1e-300);
+}
+}  // namespace
+
+void test_update_is_continuous() {
+    Params P;
+    P.lam_star = 0.05; P.kap_star = 0.01; P.nu_ur = 0.15; P.c = 5.0;
+    P.phi = 25.0 * kPi / 180.0; P.psi = 0.0; P.K0nc = 0.6;
+    katai::core::softsoilcreep::Params C;
+    C.lam_star = P.lam_star; C.kap_star = P.kap_star; C.mu_star = 0.002; C.nu_ur = P.nu_ur;
+    C.c = P.c; C.phi = P.phi; C.psi = P.psi; C.K0nc = P.K0nc;
+    // Four states met in a strip pressed into this clay (vertical, lateral, lateral; p_p), each
+    // with the increment it was given there.
+    const double cases[4][7] = {{55.47, 33.28, 33.28, 46.35, 1.102e-3, -1.343e-4, 2.0e-4},
+                                {47.64, 28.58, 28.58, 39.64, 3.924e-4, 2.078e-4, 2.0e-4},
+                                {25.69, 15.41, 15.41, 20.95, 2.284e-4, 2.778e-4, 2.0e-4},
+                                {11.91, 7.15, 7.15, 10.72, 3.549e-3, 2.153e-4, 2.0e-3}};
+    double worst_ss = 0.0, worst_ssc = 0.0;
+    for (const auto& c : cases) {
+        const Eigen::Vector3d sig(c[0], c[1], c[2]), deps(c[4], c[5], 0.0);
+        worst_ss = std::max(worst_ss, largest_over_typical_step(P, sig, c[3], deps, c[6], nullptr));
+        worst_ssc = std::max(worst_ssc, largest_over_typical_step(P, sig, c[3], deps, c[6], &C));
+    }
+    std::printf("   largest / typical change over one grid step: Soft Soil %.2f, Soft Soil Creep %.2f\n",
+                worst_ss, worst_ssc);
+    check(worst_ss < 5.0, "(h) Soft Soil: no jump where the surface return hands over to the edge return");
+    check(worst_ssc < 5.0, "(h) Soft Soil Creep: the same, with a day of creep in the increment");
+}
+
 int main() {
     std::printf("SOFT SOIL -- Stage 1 material-point closed-form V&V\n\n");
+    test_update_is_continuous();
+    std::printf("\n");
     test_isotropic_lnlaw();
     std::printf("\n");
     test_oedometer_k0nc();

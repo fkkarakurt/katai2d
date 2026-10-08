@@ -41,6 +41,7 @@
 
 #include <Eigen/Core>
 
+#include <katai/analysis/excess_pore_force.hpp>     // the pore pressure's share of a reaction
 #include <katai/analysis/nonlinear_solver.hpp>     // solve_nonlinear, Structures, StructuralInit
 #include <katai/analysis/post/stress_recovery.hpp>
 #include <katai/analysis/results.hpp>
@@ -260,8 +261,23 @@ inline bool solve_static_phase(
     // recovery smoothing): what a support -- or an imposed displacement -- must exert. Soil
     // contribution (structural end forces on a fixed node are not included in v1; stated in
     // results.hpp). Free dofs are zeroed so the field reads as "reactions", not "f_int".
+    //
+    // The stress is the one the solver balanced: the effective stress AND the excess pore
+    // pressure the point carries. The Gauss state holds the effective stress alone, and the
+    // reaction used to be taken from it -- so beside undrained ground a support reported only what
+    // the skeleton passed to it. Measured on a strip footing pushed into undrained clay
+    // (s_u = 20 kPa, weightless, 15-noded): a footing force of 22.7 kN/m against the 98.6 of the
+    // same model run drained and the 102.8 of the closed form; under a confined column loaded
+    // undrained, 72.9 kN/m of the 266 the base carries.
     auto fill_reactions = [&](const std::vector<GaussState>& states) {
         Eigen::VectorXd f_int = nodal_internal_force_from_gauss(mesh, states, in.axisymmetric, act);
+        {
+            Eigen::VectorXd pore = Eigen::VectorXd::Zero(std::max<Eigen::Index>(
+                f_int.size(), static_cast<Eigen::Index>(dofs.total_dofs())));
+            add_excess_pore_nodal_force(mesh, dofs, models, profiles, states, act,
+                                        in.axisymmetric, pore);
+            f_int += pore.head(f_int.size());
+        }
         R.reaction = Eigen::VectorXd::Zero(2 * mesh.node_count);
         for (int n = 0; n < mesh.node_count; ++n)
             for (int c = 0; c < 2; ++c)
@@ -311,6 +327,25 @@ inline bool solve_static_phase(
     R.stress = recover_nodal_stresses_from_gauss(mesh, nr.gauss_states, act);
     // Support reactions from the SAME committed states the stress was recovered from.
     fill_reactions(nr.gauss_states);
+    // THE EXCESS PORE PRESSURE OF UNDRAINED GROUND, node by node. A Plastic phase on undrained
+    // ground generates it and every later phase is built on it, yet the result carried it nowhere:
+    // `pore` is the steady pressure the phase was set up in, and this field was filled by the
+    // consolidation phases alone -- a column loaded undrained with 50 kPa showed no trace of the
+    // 48 kPa in its water. It is recovered from the stress points the way the stress is (the same
+    // extrapolation and averaging), and left empty where no point carries any.
+    {
+        const std::vector<double> pw =
+            excess_pore_at_gauss(mesh, dofs, models, profiles, nr.gauss_states, act);
+        bool any = false;
+        for (double v : pw) if (v != 0.0) { any = true; break; }
+        if (any) {
+            std::vector<GaussState> as_stress(nr.gauss_states.size());
+            for (size_t i = 0; i < pw.size(); ++i) as_stress[i].stress(0) = pw[i];
+            const NodalStressField f = recover_nodal_stresses_from_gauss(mesh, as_stress, act);
+            R.excess_pore.assign(mesh.node_count, 0.0);
+            for (int n = 0; n < mesh.node_count; ++n) R.excess_pore[n] = f.stress[(size_t)n](0);
+        }
+    }
 
     // Structural force diagrams (N/Q/M along each structure): from the converged TOTAL solution
     // (disp_total covers the rotation/independent extra DOFs AND the carried parent datum) + the

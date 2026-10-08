@@ -857,9 +857,9 @@ public:
         // of the soil element on its soil side, read from the COMMITTED state -- the pressure the
         // increment starts from -- so that the joint's law does not depend on the iterate of an
         // element it is not part of.
-        const auto joint_pore = [&](int se) -> double {
-            if (se < 0 || se >= mesh.element_count) return 0.0;
-            if (!active_element.empty() && !active_element[(size_t)se]) return 0.0;
+        const auto element_pore = [&](int se, double& out) -> bool {
+            if (se < 0 || se >= mesh.element_count) return false;
+            if (!active_element.empty() && !active_element[(size_t)se]) return false;
             const MaterialModel& sm = materials[(size_t)mesh.element_material[(size_t)se]];
             const int ng = E::kGaussCount;
             double sum = 0.0;
@@ -869,7 +869,14 @@ public:
                 if (sm.undrained && gs.eps_vol_und != 0.0)
                     sum += sm.kw_over_n(sm.undrained_poisson) * gs.eps_vol_und;
             }
-            return sum / ng;
+            out = sum / ng;
+            return true;
+        };
+        // Ground on both sides (a joint between two soil bodies): the mean of the two.
+        const auto joint_pore = [&](int se, int se2) -> double {
+            double a = 0.0, b = 0.0;
+            const bool ha = element_pore(se, a), hb = element_pore(se2, b);
+            return ha && hb ? 0.5 * (a + b) : (ha ? a : (hb ? b : 0.0));
         };
         const auto ncpts = iface::nc_points();
         for (size_t ii = 0; ii < structures.interfaces.size(); ++ii) {
@@ -900,7 +907,7 @@ public:
                 }
                 const size_t si = ii * iface::kPointCount + q;
                 const auto ret = iface::coulomb_return(ie.props, du_s, du_n, (*st.iface_c)[si],
-                                                       ie.sigma_n0[q], joint_pore(ie.soil_elem));
+                                                       ie.sigma_n0[q], joint_pore(ie.soil_elem, ie.soil_elem2));
                 (*st.iface_t)[si] = ret.slip_p_new;
                 if (probe && probe->prev_iface)
                     measure_traction_point(*probe, (*probe->prev_iface)[si], ret.tau, du_s,
@@ -949,7 +956,7 @@ public:
                 }
                 const size_t si = ii * iface::kPointCount5 + q;
                 const auto ret = iface::coulomb_return(ie.props, du_s, du_n, (*st.iface5_c)[si],
-                                                       ie.sigma_n0[q], joint_pore(ie.soil_elem));
+                                                       ie.sigma_n0[q], joint_pore(ie.soil_elem, ie.soil_elem2));
                 (*st.iface5_t)[si] = ret.slip_p_new;
                 if (probe && probe->prev_iface5)
                     measure_traction_point(*probe, (*probe->prev_iface5)[si], ret.tau, du_s,

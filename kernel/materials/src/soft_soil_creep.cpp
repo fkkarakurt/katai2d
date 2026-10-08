@@ -62,6 +62,20 @@ StepResult ssc_substep(const Params& P, const softsoil::Params& S,
                 const double pL = softsoil::mean_after(p_tr, -L, P.kap_star, ccot);
                 sL = Eigen::Vector3d::Constant(pL) +
                      (sig_tr - Eigen::Vector3d::Constant(sig_tr.mean())) - L * 2.0 * G * mdev;
+                // The tied pair takes its common value HERE, so that the creep rate is read at
+                // the state that is kept. q~ weighs the two members of a pair differently:
+                // read before they were made equal, the equivalent pressure was not the kept
+                // state's, and the update jumped where an increment passed from the surface
+                // to the edge (the Soft Soil lesson, soft_soil.cpp).
+                if (tied01 && tied12) {
+                    sL.setConstant(sL.mean());
+                } else if (tied01) {
+                    const double ms = 0.5 * (sL(idx[0]) + sL(idx[1]));
+                    sL(idx[0]) = ms; sL(idx[1]) = ms;
+                } else if (tied12) {
+                    const double ms = 0.5 * (sL(idx[1]) + sL(idx[2]));
+                    sL(idx[1]) = ms; sL(idx[2]) = ms;
+                }
                 ppL = std::max(out.pp * std::exp(L / (P.lam_star - P.kap_star)), ppfloor);
             };
             auto resid = [&](double L, Eigen::Vector3d& sL, double& ppL) {

@@ -638,6 +638,9 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         result.converged = true;
     }
 
+    // The displacement of the last accepted increment and its size (see THE SECANT START).
+    Eigen::VectorXd du_last;
+    double dlam_last = 0.0;
     while (lambda < 1.0 - 1e-12) {
         if (dlam > 1.0 - lambda) dlam = 1.0 - lambda;  // do not overshoot
         const double target_lambda = lambda + dlam;
@@ -699,6 +702,32 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             }
             ++result.timings.n_solve;
         }
+        // THE SECANT START. The increment before this one is the best account there is of how
+        // the ground is moving: under a load that keeps growing the same points go on yielding
+        // and the field keeps its shape. The tangent at the committed state does not know that
+        // -- a point lying on its yield surface with no strain increment yet reads as elastic --
+        // so a start made from it puts the increment into ground far stiffer than it is.
+        // Measured on a rigid footing pushed into sand (axisymmetric, 15-noded, 0.4 m): the
+        // stiffness parameter at the first iterate was 0.73 against 0.09 at the converged one,
+        // and ten of an increment's fifteen iterations went on finding the plastic zone again.
+        // The last increment's displacement, scaled to this one's size, is tried as the start
+        // and kept only where its out-of-balance force is the smallest of the starts on offer.
+        // Under a load it does the same work: a strutted excavation in Hardening Soil took 624
+        // iterations with it against 920, an embankment built undrained 1539 against 1897.
+        if (!srf_mode && dlam_last > 0.0 &&
+            du_last.size() == du_free.size()) {
+            const Eigen::VectorXd du_sec = (dlam / dlam_last) * du_last;
+            const double r_now = (target - assemble(du_free, false, nullptr)).norm();
+            const double r_sec = (target - assemble(du_sec, false, nullptr)).norm();
+            const bool keep = du_sec.allFinite() && std::isfinite(r_sec) && r_sec < r_now;
+            if (keep) {
+                du_free = du_sec;
+                predicted = true;
+            }
+            if (debug)
+                std::fprintf(stderr, "  lambda %.4f: secant start %.4e against %.4e (%s)\n",
+                             target_lambda, r_sec, r_now, keep ? "kept" : "dropped");
+        }
         // A traction has no committed value stored anywhere -- the structural elements are
         // total-displacement formulations, so the state at the start of an increment is
         // whatever the first assembly of that increment computes. It is recorded there.
@@ -726,6 +755,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         bool early_stagnation = false;   // stagnation shown inside the acceptance band
         int creep = 0;  // consecutive iterations whose step was cut to under 1/4
         std::vector<double> progress;   // this attempt's residual norms, iterate by iterate
+        std::vector<double> best_history;   // ... and the best of them so far, iterate by iterate
         stall_floor = 0.0;
         for (int iter = 0; iter < options.max_iterations; ++iter) {
             builder.clear();
@@ -930,15 +960,19 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 const double rn = (target - assemble(du_free + delta, false, nullptr)).norm();
                 if (std::isfinite(rn) && rn < 10.0 * rnorm) improved = true;
             }
+            double alpha_rejected = 0.0;   // the smallest step the search turned down
+            double rn_kept = 0.0;          // the residual at the step it took
             for (int ls = 0; ls < 12 && !improved; ++ls) {
                 const Eigen::VectorXd fi = assemble(du_free + alpha * delta,
                                                     false, nullptr);
                 const double rn = (target - fi).norm();
                 if (rn < (1.0 - 1.0e-4 * alpha) * gate) {
                     improved = true;
+                    rn_kept = rn;
                     break;
                 }
                 if (alpha <= kAlphaFloor) break;
+                alpha_rejected = alpha;
                 const double phia = 0.5 * rn * rn;
                 const double curv = phia - phi0 - slope0 * alpha;
                 double next = curv > 0.0 ? -slope0 * alpha * alpha / (2.0 * curv) : 0.5 * alpha;
@@ -946,6 +980,33 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 alpha = std::max(kAlphaFloor, std::clamp(next, 0.1 * alpha, 0.5 * alpha));
             }
             if (!improved) alpha = 0.5 * kAlphaFloor;
+            // THE STEP IS LENGTHENED AGAIN WHERE THAT PAYS. Backtracking stops at the first step
+            // that passes, and the interpolation that chooses the trials is built for a smooth
+            // residual: across the kink of a yield surface it reads the rejected full step as
+            // strong curvature and falls straight to a tenth of it. Measured on a strip footing
+            // pushed into sand (15-noded, 0.4 m, phi = 30, psi = 0): step after step taken at
+            // exactly 0.1 with the residual falling by exactly a tenth -- linear all the way to
+            // the step taken, the kink somewhere in the nine tenths never looked at -- and the
+            // creep that followed raised the stall floor, which gave the gain back: a cycle of six
+            // iterations that moved the residual by 0.3%. A residual evaluation costs about a
+            // fifteenth of an iteration, so up to three are spent between the step taken and the
+            // one turned down, and the best is kept. A step can only get longer by this, and only
+            // where the residual is smaller there.
+            if (improved && !elastic_mode && alpha_rejected > alpha) {
+                double lo = alpha, hi = alpha_rejected;
+                for (int k = 0; k < 3 && hi > 1.5 * lo; ++k) {
+                    const double mid = std::sqrt(lo * hi);
+                    const double rn =
+                        (target - assemble(du_free + mid * delta, false, nullptr)).norm();
+                    if (std::isfinite(rn) && rn < rn_kept) {
+                        lo = mid;
+                        rn_kept = rn;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                alpha = lo;
+            }
             ++result.total_iterations;
             if (debug)
                 std::fprintf(stderr, "      alpha=%.6f %s |delta|=%.4e |du|=%.4e\n", alpha,
@@ -1023,6 +1084,23 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 rnorm > 0.9 * progress[progress.size() - 1 - kStagnationWindow]) {
                 ended = NewtonResult::Abandonment::NoDescent;
                 early_stagnation = true;
+                break;
+            }
+            // THE SAME OUTSIDE THE BAND. An attempt whose best iterate has not come down by a tenth
+            // in thirty iterations will not close in the hundred and seventy it has left, wherever
+            // it stands: measured on a strip footing pushed into sand (15-noded, 0.4 m, phi = 30,
+            // psi = 0), five attempts in a row ran their whole budget of 200 at 5.5e-3 of the
+            // reference, each one a cycle of six iterations that moved the residual by 0.3%. It is
+            // ended there and handed to the remedies below -- the open window, the smaller
+            // increment -- thirty iterations after it stopped instead of at the budget.
+            best_history.push_back(best_rnorm);
+            if (!elastic_mode && best_history.size() > kStagnationWindow &&
+                best_rnorm > 0.9 * best_history[best_history.size() - 1 - kStagnationWindow]) {
+                ended = NewtonResult::Abandonment::NoDescent;
+                if (debug)
+                    std::fprintf(stderr, "  lambda %.4f iter %d: not down by a tenth in %d "
+                                         "iterations; ended\n", target_lambda, iter,
+                                 (int)kStagnationWindow);
                 break;
             }
             if (stall >= 4) {
@@ -1124,9 +1202,37 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                              target_lambda, best_rnorm / ref);
         }
 
+        // AN IMPOSED DISPLACEMENT ALWAYS HAS AN ANSWER. Under a load a phase can end because the
+        // ground cannot carry it; under a prescribed movement there is no such limit -- the ground
+        // takes the movement and the reaction is whatever it turns out to be. An increment of it
+        // that can be cut no further and still will not close is therefore never a collapse, only
+        // an iteration that has stopped: with non-associated flow the out-of-balance force settles
+        // on the kinks of the yield surfaces and Newton's direction, exact as it is, crosses them
+        // at a hundredth of its length. Measured on a strip footing pushed into sand (15-noded,
+        // 0.4 m, phi = 30, psi = 0): 199 iterations at 5.5e-3 of the reference with the tangent
+        // matching its finite difference to 1e-7, and the phase given up at 59% of the settlement.
+        // Such an increment is kept at its best iterate if that is within kLastResortAccept, and
+        // reported with the force left out of balance (K2D-A019) like every other one that is.
+        if (!step_converged && presc_active && !srf_mode && would_cut_back &&
+            ended != NewtonResult::Abandonment::SolveRefused && 0.5 * dlam < min_dlam &&
+            best_rnorm <= kLastResortAccept * ref) {
+            du_free = best_du;
+            assemble(du_free, false, nullptr);  // the trial states of the iterate being kept
+            result.convergence.csp = best_csp;
+            ++result.stagnation_accepted;
+            result.worst_accepted_residual =
+                std::max(result.worst_accepted_residual, best_rnorm / ref);
+            step_converged = true;
+            if (debug)
+                std::fprintf(stderr, "  lambda %.4f: cannot be cut further; kept at %.3e of the "
+                                     "reference\n", target_lambda, best_rnorm / ref);
+        }
+
         if (step_converged) {
             hs_consistent_mode = false;  // increment closed → back to the cheap continuum path
             elastic_mode = false;        // and back to Newton
+            du_last = du_free;
+            dlam_last = dlam;
             u_free += du_free;
             u_struct += du_free;
             committed = trial;  // commit the increment
@@ -1284,7 +1390,8 @@ void excess_pore_force_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                             const std::vector<MaterialModel>& materials,
                             const std::vector<MaterialProfile>& profile,
                             const std::vector<GaussState>& states,
-                            const std::vector<char>& active_element, Eigen::VectorXd& rhs) {
+                            const std::vector<char>& active_element, Eigen::VectorXd& rhs,
+                            bool every_dof = false, std::vector<double>* at_gauss = nullptr) {
     const auto gauss = E::gauss_points();
     const int n_gp = E::kGaussCount;
     const typename Kin::Strain mvec = Kin::pore_vector();
@@ -1314,10 +1421,18 @@ void excess_pore_force_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 pw = kwn * s.eps_vol_und;
             }
             if (s.pw_carried != 0.0) pw += s.pw_carried;
+            if (at_gauss) {   // the pressure itself, point by point; no force wanted
+                (*at_gauss)[(size_t)e * n_gp + g] = pw;
+                continue;
+            }
             const auto grad = Kin::template gradients<E>(coords, gauss[g].xi, gauss[g].eta);
             const typename Kin::Strain sig = pw * mvec;
             const auto fe = ((gauss[g].weight * grad.weight) * grad.B.transpose() * sig).eval();
             for (int a = 0; a < E::kDofCount; ++a) {
+                if (every_dof) {   // by global DOF, supported ones included (the reactions)
+                    if (edofs[a] >= 0 && edofs[a] < rhs.size()) rhs(edofs[a]) += fe(a);
+                    continue;
+                }
                 const int eq = dofs.equation(edofs[a]);
                 if (eq >= 0) rhs(eq) += fe(a);
             }
@@ -1325,7 +1440,55 @@ void excess_pore_force_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     }
 }
 
+template <class E, class Kin>
+void excess_pore_force_every_dof(const mesh::Mesh& mesh, const DofMap& dofs,
+                                 const std::vector<MaterialModel>& materials,
+                                 const std::vector<MaterialProfile>& profile,
+                                 const std::vector<GaussState>& states,
+                                 const std::vector<char>& active_element, Eigen::VectorXd& full) {
+    excess_pore_force_impl<E, Kin>(mesh, dofs, materials, profile, states, active_element, full, true);
+}
+
 } // namespace
+
+std::vector<double> excess_pore_at_gauss(const mesh::Mesh& mesh, const DofMap& dofs,
+                                         const std::vector<MaterialModel>& materials,
+                                         const std::vector<MaterialProfile>& profile,
+                                         const std::vector<GaussState>& states,
+                                         const std::vector<char>& active_element) {
+    const bool t15 = mesh.nodes_per_element == Tri15Element::kNodeCount;
+    std::vector<double> pw(states.size(), 0.0);
+    if (states.size() != (size_t)mesh.element_count *
+                             (t15 ? Tri15Element::kGaussCount : Tri6Element::kGaussCount))
+        return pw;
+    Eigen::VectorXd unused;
+    // The pressure does not depend on the kinematics (only its force does).
+    if (t15)
+        excess_pore_force_impl<Tri15Element, detail::PlaneStrainKin>(mesh, dofs, materials, profile, states, active_element, unused, false, &pw);
+    else
+        excess_pore_force_impl<Tri6Element, detail::PlaneStrainKin>(mesh, dofs, materials, profile, states, active_element, unused, false, &pw);
+    return pw;
+}
+
+void add_excess_pore_nodal_force(const mesh::Mesh& mesh, const DofMap& dofs,
+                                 const std::vector<MaterialModel>& materials,
+                                 const std::vector<MaterialProfile>& profile,
+                                 const std::vector<GaussState>& states,
+                                 const std::vector<char>& active_element, bool axisymmetric,
+                                 Eigen::VectorXd& full) {
+    const bool t15 = mesh.nodes_per_element == Tri15Element::kNodeCount;
+    if (states.size() != (size_t)mesh.element_count *
+                             (t15 ? Tri15Element::kGaussCount : Tri6Element::kGaussCount))
+        return;
+    if (t15 && axisymmetric)
+        excess_pore_force_every_dof<Tri15Element, detail::AxisymKin>(mesh, dofs, materials, profile, states, active_element, full);
+    else if (t15)
+        excess_pore_force_every_dof<Tri15Element, detail::PlaneStrainKin>(mesh, dofs, materials, profile, states, active_element, full);
+    else if (axisymmetric)
+        excess_pore_force_every_dof<Tri6Element, detail::AxisymKin>(mesh, dofs, materials, profile, states, active_element, full);
+    else
+        excess_pore_force_every_dof<Tri6Element, detail::PlaneStrainKin>(mesh, dofs, materials, profile, states, active_element, full);
+}
 
 void add_excess_pore_force(const mesh::Mesh& mesh, const DofMap& dofs,
                            const std::vector<MaterialModel>& materials,

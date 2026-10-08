@@ -219,11 +219,18 @@ void test_moment_criterion() {
     const double err = std::fabs(loose.ux.back() - tight.ux.back()) / std::fabs(tight.ux.back());
     std::printf("   the loose run is %.1f%% away from the converged tip deflection, and the "
                 "moment criterion calls it ok\n", 100.0 * err);
-    // 3.4% since an increment is solved once before it can be accepted; it was a fifth while a
-    // loose tolerance let increments through without the ground having moved at all.
-    check(err > 0.02,
-          "the tol=1e-1 run IS materially wrong (>2%), so the criterion's 'ok' above is a "
-          "statement about the rotational rows and NOT about the answer");
+    // The loose run used to be wrong in its ANSWER as well -- a fifth off while a loose tolerance
+    // let increments through without the ground having moved, 3.4% once an increment was solved
+    // before it could be accepted -- and that was the demonstration here. Since each increment
+    // starts from the one before it, the loose run lands on the converged deflection (0.003%
+    // away), so the answer no longer shows it. What still does is the force it leaves out of
+    // balance: ten decades above the moment residual that calls the run ok. The limitation is
+    // the same one -- the rotational rows say nothing about the force balance.
+    check(loose.conv.force_error > 1e6 * loose.conv.moment_error &&
+              loose.conv.force_error > 1e3 * tight.conv.force_error,
+          "the tol=1e-1 run leaves a force out of balance that the moment criterion does not see, "
+          "so the criterion's 'ok' above is a statement about the rotational rows and NOT about "
+          "the answer");
 }
 
 } // namespace
