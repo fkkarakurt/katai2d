@@ -218,9 +218,16 @@ void test_restart_identity() {
         std::printf("   %s: displacement %.3e, pore %.3e (relative)%s\n", plastic ? "MC" : "LE",
                     derr, perr, plastic ? "" : "");
         if (plastic) std::printf("   MC: committed effective stress %.3e kPa (absolute)\n", serr);
-        check(derr < 1e-12, plastic ? "MC: restarted displacement = one run"
+        // EQUAL TO THE ROUND-OFF OF THE LINEAR SOLVE, which is not one number: the restart hands
+        // the pore field over as a vector and the sums are taken in another order, and what that
+        // last bit becomes depends on the factorisation. Measured: 1.3e-14 on the pore field with
+        // the direct solver of the default build, 5.6e-12 with the portable one -- so the bound
+        // of 1e-12 this had was one solver's round-off and failed on the other. A restart that
+        // lost anything (the load not yet applied, the out-of-balance force, the state) is off
+        // by percents; 1e-10 separates the two by eight orders.
+        check(derr < 1e-10, plastic ? "MC: restarted displacement = one run"
                                     : "LE: restarted displacement = one run");
-        check(perr < 1e-12, plastic ? "MC: restarted pore field = one run"
+        check(perr < 1e-10, plastic ? "MC: restarted pore field = one run"
                                     : "LE: restarted pore field = one run");
         if (plastic) check(serr < 1e-9, "MC: restarted committed effective stress = one run");
     }

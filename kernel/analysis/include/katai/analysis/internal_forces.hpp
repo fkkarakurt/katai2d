@@ -71,8 +71,9 @@ struct PlaneStrainKin {
     using Report = PointReportT<Tangent>;
     static void integrate(const MaterialModel& m, const GaussState& comm,
                           const Strain& de, GaussState& tr, Tangent& t, TangentMode mode,
-                          double creep_dt, Report* rep = nullptr, double substep_tol = 0.0) {
-        integrate_point(m, comm, de, tr, t, mode, creep_dt, rep, substep_tol);
+                          double creep_dt, Report* rep = nullptr, double substep_tol = 0.0,
+                          const Strain* de_small = nullptr) {
+        integrate_point(m, comm, de, tr, t, mode, creep_dt, rep, substep_tol, de_small);
     }
     static Eigen::Matrix<double, 3, 1> stress(const GaussState& s) { return s.stress; }
     // The stress with the OUT-OF-PLANE component put back: [xx, yy, xy, zz]. Plane strain
@@ -111,8 +112,9 @@ struct AxisymKin {
     using Report = PointReportT<Tangent>;
     static void integrate(const MaterialModel& m, const GaussState& comm,
                           const Strain& de, GaussState& tr, Tangent& t, TangentMode mode,
-                          double creep_dt, Report* rep = nullptr, double substep_tol = 0.0) {
-        integrate_point_axisym(m, comm, de, tr, t, mode, creep_dt, rep, substep_tol);
+                          double creep_dt, Report* rep = nullptr, double substep_tol = 0.0,
+                          const Strain* de_small = nullptr) {
+        integrate_point_axisym(m, comm, de, tr, t, mode, creep_dt, rep, substep_tol, de_small);
     }
     static Eigen::Matrix<double, 4, 1> stress(const GaussState& s) {
         Eigen::Matrix<double, 4, 1> v;
@@ -373,6 +375,10 @@ public:
     // Newton direction stopped descending (see elastic_mode in the solver). Like the floor it
     // changes only how an answer is reached: the internal force is untouched.
     bool elastic_tangent = false;
+    // The displacement increment (free DOFs) the small-strain stiffness of the step is read
+    // from, where the solver has fixed one (see small_freeze there); nullptr reads it from the
+    // increment being assembled, which is the formulation itself.
+    const Eigen::VectorXd* du_small = nullptr;
 
     // Internal-force (and, if build_tangent, consistent-tangent) assembly. Since Δε = B·du_e,
     // f_int is a pure function of du_free (of u_free+du_free for structural elements) given
@@ -477,6 +483,14 @@ public:
                     du_e(a) = ramp.factor * (*ramp.presc)(edofs[a]);
             }
 
+            ElementVector du_e_small = ElementVector::Zero();
+            if (du_small)
+                for (int a = 0; a < E::kDofCount; ++a) {
+                    const int eq = dofs.equation(edofs[a]);
+                    if (eq >= 0) du_e_small(a) = (*du_small)(eq);
+                    else du_e_small(a) = du_e(a);   // a prescribed DOF moves as it is told to
+                }
+
             ElementVector fe = ElementVector::Zero();
             typename E::ElementMatrix ke = E::ElementMatrix::Zero();
             // Hoisted out of the Gauss loop and reset only when it is going to be read: the
@@ -509,8 +523,11 @@ public:
                 const MaterialModel& matg = *mp;
                 const bool floor_here = build_tangent && (vertex_floor > 0.0 || elastic_tangent);
                 if (probe || floor_here) rep = typename Kin::Report{};
+                typename Kin::Strain dstrain_small;
+                if (du_small) dstrain_small = grad.B * du_e_small;
                 Kin::integrate(matg, committed[gi], dstrain, trial[gi], dt, tm, dt_day,
-                               (probe || floor_here) ? &rep : nullptr, substep_tol);
+                               (probe || floor_here) ? &rep : nullptr, substep_tol,
+                               du_small ? &dstrain_small : nullptr);
                 // A point returned to a VERTEX -- the Mohr-Coulomb apex, the tension apex --
                 // hands back a tangent that is exactly zero, which is the correct derivative:
                 // the returned stress there does not depend on the strain at all. With c = 0
@@ -527,6 +544,10 @@ public:
                     if (elastic_tangent) dt = rep.elastic;
                     else dt += vertex_floor * rep.elastic;
                 }
+                // The elastic-operator pass contracts only on an operator at least as stiff as
+                // the response, and a point with small-strain stiffness answers a reversal with
+                // G0 whether it is yielding or not (see PointReportT::stiffest).
+                if (floor_here && elastic_tangent && rep.has_stiffest) dt = rep.stiffest;
                 typename Kin::Strain sigma = Kin::stress(trial[gi]);
                 if (probe) {
                     LocalErrorPartial& acc = probe_buf_[e];

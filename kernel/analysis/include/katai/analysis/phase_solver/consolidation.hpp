@@ -280,6 +280,7 @@ inline bool solve_consolidation_phase(
         std::vector<GaussState> committed;     // elastoplastic path: state at the chunk END only
         bool ok = false;
         int stagnant = 0;                      // time steps kept at a stagnated iterate
+        double worst_kept = 0.0;               // ... and the largest share of the forces left open
     };
     std::vector<double> p_state(mesh.node_count, 0.0);   // excess pore at the chunk start (0 at t=0)
     std::vector<GaussState> state = init;                // committed effective Gauss state
@@ -301,6 +302,7 @@ inline bool solve_consolidation_phase(
                 in.pore_tie, ramp, instant);
             c.ok = r.converged;
             c.stagnant = r.stagnation_accepted;
+            c.worst_kept = r.worst_accepted;
             c.series = std::move(r.series);
             c.committed = std::move(r.committed);
         } else {
@@ -341,8 +343,10 @@ inline bool solve_consolidation_phase(
     // the committed Gauss state exists at its end and nowhere else, so "stop half way through" is
     // spelled as a shorter RE-RUN (identical arithmetic, same state), never as a partial commit.
     int stagnant_steps = 0;
+    double worst_kept = 0.0;
     auto commit = [&](const Chunk& c) {
         stagnant_steps += c.stagnant;
+        worst_kept = std::max(worst_kept, c.worst_kept);
         const int n = (int)c.series.times.size() - 1;
         for (int s = 1; s <= n; ++s) {
             double smax = 0.0;
@@ -586,15 +590,18 @@ inline bool solve_consolidation_phase(
                                   disp_total, R);
     }
 
-    if (stagnant_steps > 0)
+    if (stagnant_steps > 0) {
+        char worst[32];
+        std::snprintf(worst, sizeof(worst), "%.2e", worst_kept);
         add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A019", "consolidation",
                        std::to_string(stagnant_steps) +
                            " time step(s) stopped converging before the phase's tolerance and "
-                           "were kept at their best iterate, with an out-of-balance force below " +
-                           std::string(3.0 * in.newton_tol > kStagnationAccept ? "3e-3" : "1e-3") +
+                           "were kept at their best iterate, with an out-of-balance force of up "
+                           "to " + std::string(worst) +
                            " of the forces in play. What a step leaves out of balance is carried "
                            "into the next one, so the answer carries that much of the last step. "
                            "Re-run with more, smaller time steps to see whether it moves.");
+    }
     committed_out = std::move(committed);
     return true;
 }

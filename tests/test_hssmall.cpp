@@ -98,7 +98,12 @@ void test_hssmall_fe() {
 
     // gamma_hist accumulates -> degradation. Beyond the cut-off the OVERLAY is spent and the
     // unload/reload stiffness is E_ur again, bit for bit.
-    check(katai::core::hs_small_strain_params(hss.hs, 0.05).Eur_ref == hss.hs.Eur_ref,
+    // (The overlay is a multiplier on the ELASTIC stiffness; E_ur,ref itself is never changed,
+    // because it is also a parameter of the yield surface.)
+    check(katai::core::hs_small_strain_params(hss.hs, 0.05).elastic_scale == 1.0 &&
+              katai::core::hs_small_strain_params(hss.hs, 0.05).Eur_ref == hss.hs.Eur_ref &&
+              katai::core::hs_small_strain_params(hss.hs, 0.0).elastic_scale > 2.0 &&
+              katai::core::hs_small_strain_params(hss.hs, 0.0).Eur_ref == hss.hs.Eur_ref,
           "beyond the cut-off the small-strain overlay returns E_ur exactly");
 
     // ...and at the material point the two are then the same material -- ON AN ELASTIC STEP.
@@ -109,7 +114,10 @@ void test_hssmall_fe() {
     // branch -- a
     // claim wider than the thing it measured. Committed gamma_p is put beyond reach so the
     // increment stays inside the yield surface and only the stiffness is being compared.
+    // The history is a tensor now: 5% of confined vertical compression behind the point, as its
+    // deviator (the same direction the probe continues in, so nothing is reset by it).
     GaussState comm_deg = comm; comm_deg.gamma_hist = 0.05; comm_deg.gamma_p = 1.0;
+    comm_deg.hs_hist << 0.05 / 3.0, -0.10 / 3.0, 0.05 / 3.0, 0.0;
     GaussState t_deg, t_hs_el;
     katai::core::hs_forward(hss, comm_deg, de, t_deg);
     katai::core::hs_forward(hs, comm_deg, de, t_hs_el);

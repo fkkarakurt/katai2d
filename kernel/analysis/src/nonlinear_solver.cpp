@@ -256,6 +256,33 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     // only ever entered for an increment Newton has already given up on, so every run Newton
     // closes is untouched; it latches off again when the increment closes.
     bool elastic_mode = false;
+    // THE SMALL-STRAIN STIFFNESS OF AN INCREMENT, READ FROM A FIXED INCREMENT. In Hardening Soil
+    // with small-strain stiffness the stiffness of a step is set by the direction of the step's
+    // own strain increment against the strain history: a point that turns back answers with G0,
+    // one that carries on with what is left of its curve. Read from the iterate, that makes the
+    // internal force a function with slopes of order 1 / |d eps| at every point whose increment
+    // is small beside its history, and with steps where the increment's principal directions
+    // are not unique -- measured on a tunnel lining installed after grouting beside a piled
+    // building (a phase that reverses the ground everywhere): Newton with the exact derivative,
+    // and the elastic-operator pass after it, both wandered at 1 to 2% of the load scale with
+    // corrections of micrometres, the same sixty stress points changing sides, and the phase
+    // was given up at 1% of its load.
+    // An increment that cannot be closed that way is solved with the stiffness read from a fixed
+    // displacement increment -- the best iterate it reached -- which is a smooth problem that
+    // Newton closes; the fixed increment is then replaced by the answer and the increment
+    // solved again from it, kSmallRefresh times, so that the stiffness the answer stands on is
+    // that of an increment one such pass away from itself. The phase keeps the mode, starting
+    // each later increment from the last one's displacement scaled to its size.
+    // A run that closes without it never enters it and is untouched.
+    bool has_small = false;
+    if (!options.srf_reduce)   // a Safety search runs on Mohr-Coulomb copies of the materials
+        for (const auto& mm : materials)
+            if (mm.type == MaterialType::HardeningSoil && mm.hs.G0_ref > 0.0) has_small = true;
+    constexpr int kSmallRefresh = 2;
+    bool small_freeze = false;
+    int small_refresh = 0;          // refresh passes taken on the increment at hand
+    bool small_warm = false;        // the next attempt starts from du_small
+    Eigen::VectorXd du_small;
     // What the convergence family read on the Newton iterate the fallback took over from. The
     // fallback's own iterates are elastic-stiffness iterates, not the state the increment failed
     // in: when it fails too, the run reports the Newton one (its CSP is what names a collapse).
@@ -341,6 +368,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         fasm.substep_tol = options.substep_tolerance;
         fasm.vertex_floor = std::max(vertex_floor_mode ? kVertexFloor : 0.0, stall_floor);
         fasm.elastic_tangent = elastic_mode;
+        fasm.du_small = (small_freeze && du_small.size() == du_free.size()) ? &du_small : nullptr;
         return fasm.assemble(u_struct, du_free, build_tangent, tmode, astate, ramp, builder,
                              &result.timings);
     };
@@ -650,6 +678,16 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         cur_target = target_lambda;
 
         Eigen::VectorXd du_free = Eigen::VectorXd::Zero(neq);
+        // A phase in the fixed small-strain mode reads the stiffness of a new increment from the
+        // last increment's displacement scaled to this one's size, until its own answer replaces
+        // it; an attempt after a refresh starts from the answer it refreshes.
+        if (small_freeze && small_refresh == 0 && !small_warm) {
+            if (dlam_last > 0.0 && du_last.size() == neq) du_small = (dlam / dlam_last) * du_last;
+            else if (du_small.size() != neq) du_small = Eigen::VectorXd::Zero(neq);
+        }
+        const bool warm_start = small_freeze && small_warm && du_small.size() == neq;
+        if (warm_start) du_free = du_small;
+        small_warm = false;
         prev_sc = committed;  // sigma_c,0 = sigma_0, where the iteration's stress walk starts
         std::fill(prev_deps.begin(), prev_deps.end(), 0.0);
         // Set when the predictor below moved the start. Such a start is not accepted as it stands:
@@ -714,7 +752,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         // and kept only where its out-of-balance force is the smallest of the starts on offer.
         // Under a load it does the same work: a strutted excavation in Hardening Soil took 624
         // iterations with it against 920, an embankment built undrained 1539 against 1897.
-        if (!srf_mode && dlam_last > 0.0 &&
+        if (!srf_mode && !warm_start && dlam_last > 0.0 &&
             du_last.size() == du_free.size()) {
             const Eigen::VectorXd du_sec = (dlam / dlam_last) * du_last;
             const double r_now = (target - assemble(du_free, false, nullptr)).norm();
@@ -1228,7 +1266,33 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                                      "reference\n", target_lambda, best_rnorm / ref);
         }
 
+        // The answer of a fixed-stiffness pass becomes the increment the stiffness is read from,
+        // and the increment is solved again from it (see small_freeze).
+        if (step_converged && small_freeze && small_refresh < kSmallRefresh) {
+            const double moved = (du_free - du_small).norm();
+            if (moved > 1.0e-6 * std::max(du_free.norm(), 1.0e-300)) {
+                if (debug)
+                    std::fprintf(stderr, "  lambda %.4f: small-strain stiffness re-read from the "
+                                         "answer (pass %d, moved %.3e of |du|)\n",
+                                 target_lambda, small_refresh + 1,
+                                 moved / std::max(du_free.norm(), 1.0e-300));
+                du_small = du_free;
+                small_warm = true;
+                ++small_refresh;
+                ++result.small_strain_passes;
+                elastic_mode = false;
+                continue;
+            }
+        }
+
         if (step_converged) {
+            if (small_freeze && du_small.size() == du_free.size()) {
+                ++result.small_strain_increments;
+                result.small_strain_gap =
+                    std::max(result.small_strain_gap,
+                             (du_free - du_small).norm() / std::max(du_free.norm(), 1.0e-300));
+            }
+            small_refresh = 0;
             hs_consistent_mode = false;  // increment closed → back to the cheap continuum path
             elastic_mode = false;        // and back to Newton
             du_last = du_free;
@@ -1247,11 +1311,27 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             lambda = target_lambda;
             result.load_factor = lambda;
             dlam = std::min(init_dlam, dlam * 1.5);  // allow recovery
+        } else if (has_small && !small_freeze &&
+                   ended != NewtonResult::Abandonment::SolveRefused) {
+            // The same increment again, with the small-strain stiffness read from the best
+            // iterate this attempt reached (see small_freeze). Before anything is cut: the
+            // increment was not shown to be too large, only not smooth.
+            small_freeze = true;
+            small_refresh = 0;
+            du_small = best_du.allFinite() ? best_du : Eigen::VectorXd::Zero(neq);
+            small_warm = true;
+            elastic_mode = false;
+            ++result.small_strain_freezes;
+            if (debug)
+                std::fprintf(stderr, "  lambda %.4f: retrying the increment with the small-strain "
+                                     "stiffness read from its best iterate (dlam untouched)\n",
+                             lambda);
         } else if (early_cut) {
             // Halved without a retry and without counting as an abandonment: the increment was
             // not shown to be unsolvable, only too large (see kEarlyCutIterations).
             elastic_mode = false;
             dlam *= 0.5;
+            if (small_freeze) { du_small *= 0.5; small_refresh = 0; }
             if (debug)
                 std::fprintf(stderr, "  early cut at lambda %.4f: dlam %.6f (minimum %.6f)\n",
                              lambda, dlam, min_dlam);
@@ -1309,6 +1389,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             result.last_abandonment = ended;
             if (elastic_mode && newton_convergence_kept) result.convergence = newton_convergence;
             dlam *= 0.5;  // sub-stepping: shrink the increment and retry
+            if (small_freeze) { du_small *= 0.5; small_refresh = 0; }
             if (debug)
                 std::fprintf(stderr, "  cutback at lambda %.4f: dlam %.6f (minimum %.6f), "
                                      "%d refused solve(s) so far\n",

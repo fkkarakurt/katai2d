@@ -1,5 +1,6 @@
 #include <katai/math/thread_pool.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <exception>
@@ -32,13 +33,16 @@ public:
     bool try_acquire() { return busy_.try_lock(); }
     void release() { busy_.unlock(); }
 
-    // Split [0,n) into nthreads_ fixed contiguous blocks; block 0 on the caller,
-    // 1..nthreads_-1 on the workers. On return all blocks have finished.
+    // [0,n) is handed out in small contiguous pieces, taken by whichever thread is free: the
+    // caller and the workers each take the next piece until none is left. On return all of
+    // them have finished.
     void run(int n, const std::function<void(int, int)>& fn) {
         {
             std::lock_guard<std::mutex> lk(m_);
             job_fn_ = &fn;
             job_n_ = n;
+            job_piece_ = std::max(1, n / (nthreads_ * 8));
+            job_next_.store(0, std::memory_order_relaxed);
             job_error_ = nullptr;
             pending_ = nthreads_ - 1;
             ++generation_;
@@ -58,15 +62,21 @@ public:
         }
     }
 
-    void run_chunk(int t) {
-        // Fixed contiguous blocking: block boundaries depend only on (n, nthreads_) →
-        // deterministic from call to call.
-        const int n = job_n_;
-        const long long b = (long long)n * t / nthreads_;
-        const long long e = (long long)n * (t + 1) / nthreads_;
-        if (b >= e) return;
+    void run_chunk(int /*t*/) {
+        // PIECES, NOT ONE BLOCK PER THREAD. The range used to be cut into as many contiguous
+        // blocks as there are threads. The work of an index is far from uniform -- the stress
+        // points of freshly placed fill take two hundred substeps where their neighbours take
+        // one -- and such elements are neighbours in the numbering, so they all fell into one
+        // or two blocks: two cores busy of eight, measured on fill placed on soft clay. Which
+        // thread takes which piece now depends on timing; the answer does not, because every
+        // index writes only to its own storage (the rule this pool has always had).
+        const int n = job_n_, piece = job_piece_;
         try {
-            (*job_fn_)((int)b, (int)e);
+            for (;;) {
+                const int b = job_next_.fetch_add(piece, std::memory_order_relaxed);
+                if (b >= n) break;
+                (*job_fn_)(b, std::min(n, b + piece));
+            }
         } catch (...) {
             std::lock_guard<std::mutex> lk(m_);
             if (!job_error_) job_error_ = std::current_exception();
@@ -120,6 +130,8 @@ private:
     int pending_ = 0;
     const std::function<void(int, int)>* job_fn_ = nullptr;
     int job_n_ = 0;
+    int job_piece_ = 1;
+    std::atomic<int> job_next_{0};
     std::exception_ptr job_error_ = nullptr;
 };
 

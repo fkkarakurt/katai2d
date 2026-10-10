@@ -36,6 +36,7 @@ katai_add_test(test_hs_undrained_triaxial katai::materials)  # HS Berlin Sand II
 katai_add_test(test_hs_undrained_clay katai::materials)  # HS undrained NC clay (psi=0), effective MC envelope, Undrained (A) effective-stress analysis
 katai_add_test(test_hs_calibration katai::materials)    # HS cap calibration K0nc+Eoed (von Mises, P2.3d-2b)
 katai_add_test(test_hs_multiaxial katai::materials)     # HS off the compression corner: extension, general states, flow rule d eps_v^p = sin psi_m d gamma_p, reference clays
+katai_add_test(test_hs_closed_forms katai::materials)   # HS against its four closed forms: the drained hyperbola, the cap steepness for m = 1, undrained elastic loading, where the undrained path meets the cap
 katai_add_test(test_plate katai::fem)             # Plate (Mindlin/Timoshenko beam) cantilever validation (P2.4)
 katai_add_test(test_plate5 katai::fem)            # 5-node quartic plate (tri15 edge) validation (P2.4)
 katai_add_test(test_consolidation katai::analysis)     # Biot coupled consolidation -- Terzaghi 1D U-Tv (Phase A.2)
@@ -52,6 +53,7 @@ katai_add_test(test_consolidation_plastic katai::analysis)  # Elastoplastic (MC/
 katai_add_test(test_coupled_flow_plastic katai::analysis katai::mesh)  # Elastoplastic (MC/HS) fully-coupled flow-deformation (W3 follow-up): saturated = consolidation_plastic bit-for-bit + LE unsaturated = W3 + MC unsaturated robustness
 katai_add_test(test_general_interface katai::analysis katai::mesh)  # General interface (arbitrary orientation, soil-soil): rigid = bonded continuum + soft slip (present != absent), tri6+tri15
 katai_add_test(test_hssmall katai::materials)           # HSsmall small-strain stiffness law (Phase A.5)
+katai_add_test(test_hssmall_tangent katai::materials)   # HSsmall: the tangent carries the slope of the step stiffness (central difference at random points, both kinematics), and the stiffness can be read from a fixed increment
 katai_add_test(test_material_axisym_coverage katai::materials) # every registered model is integrated in BOTH modes: outputs poisoned with NaN first, so a switch branch that does not exist cannot pass by handing back the caller's own values
 katai_add_test(test_material_registry katai::materials) # constitutive catalogue: name resolution, build == the driver's former inline construction (field-exact), honest drainage refusals, external registration through the one seam
 katai_add_test(test_design_code katai::analysis)       # EC7 (EN 1997-1) + TBDY 2018 partial factor tables + material factoring (v0.3 B1)

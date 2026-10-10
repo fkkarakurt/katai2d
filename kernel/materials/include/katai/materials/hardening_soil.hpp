@@ -125,6 +125,28 @@ struct HardeningSoilParams {
     double G0_ref = 0.0;     // very-small-strain shear modulus (reference); 0 = no HSsmall
     double gamma07 = 1.0e-4; // threshold shear strain where G_s drops to 0.722·G0 (virgin)
     static constexpr double kHDa = 0.385;  // Hardin-Drnevich (Santos&Correia): G_s=0.722G0 @ γ=γ07
+    // HOW FAST THE YIELD SURFACES HARDEN, as a multiple of the plain Hardening Soil rate (1 for
+    // Hardening Soil itself). While the small-strain stiffness is active the elastic part of a
+    // primary loading step is several times stiffer than E_ur, and with the hardening laws left
+    // as they are the plastic strains take the whole of the response over at once: the model
+    // then shows the plain hyperbola from the first increment and none of its small-strain
+    // stiffness in primary loading. The model's hardening laws are therefore written
+    //     d gamma_p = h_i d lambda_s,   d p_p = h_i h_pp d lambda_c,   h_i = G_m^(1 + E_ur / E_i),
+    // G_m = G / G_ur the stiffness multiplier of the overlay (Benz 2007, Eqs 7.33-7.34). It is 1
+    // once the stiffness has decayed to G_ur, and from there on the model is Hardening Soil.
+    double hardening_scale = 1.0;
+    // The ELASTIC stiffness of this step as a multiple of the unloading-reloading one: the
+    // small-strain multiplier E_t / E_ur (1 for plain Hardening Soil, and for a seed). It scales
+    // the elastic matrix and nothing else. E_ur itself stays what it is in the yield function
+    // f = (2/E_i) q / (1 - q/q_a) - 2q/E_ur - gamma_p, where it is a parameter of the surface:
+    // the formulation makes the ELASTIC stiffness depend on the strain history (Benz 2007,
+    // Eqn 7.32), not the surface. Until 2026-10 the multiplier was applied to E_ur,ref itself,
+    // so it entered the surface too: as the multiplier fell from one increment to the next the
+    // surface moved away from a state that had been on it, every increment of a monotonic
+    // loading began inside its own yield surface with the small-strain stiffness, and the
+    // integration ran to its ceiling of substeps finding the surface again (measured on a strip
+    // load on sand: 13 substeps per integration against 3 for plain Hardening Soil).
+    double elastic_scale = 1.0;
     // Masing's rule (Masing 1926): gamma_0.7,re-loading = 2 gamma_0.7,virgin-loading. The INPUT
     // gamma07 is the virgin-loading threshold; the curve the model's QUASI-ELASTIC stiffness
     // rides on is that backbone scaled by 2. This factor is not switched on at a detected

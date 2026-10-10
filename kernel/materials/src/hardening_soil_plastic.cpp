@@ -3,6 +3,9 @@
 #include <katai/materials/hardening_soil_plastic.hpp>
 
 #include <array>
+#include <mutex>
+#include <utility>
+#include <vector>
 
 namespace katai::core {
 
@@ -426,7 +429,9 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
         k.Ei = 2.0 * (p.E50_ref * g) / (2.0 - p.Rf);
         k.qf = 2.0 * (law_cc + k.s3raw * law_s) / (1.0 - law_s);
         k.qa = std::max(k.qf, qf_min) / p.Rf;
-        k.De = detail::hs_elastic(k.Eur, nu);
+        // The elastic matrix carries the small-strain multiplier; E_ur in the surface does not
+        // (see HardeningSoilParams::elastic_scale).
+        k.De = detail::hs_elastic(k.Eur * p.elastic_scale, nu);
         return k;
     };
     // The same stress is asked for its stiffness several times in a row: one increment() reads the
@@ -663,9 +668,12 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
         // plateau, and a compression takes it into the cone by hardening.
         const bool at_fail = q >= k.qf - 1e-9 * (1.0 + std::fabs(k.qf)) &&
                              q > 1e-12 * (1.0 + s_in.cwiseAbs().maxCoeff());
-        const double H = at_fail ? 0.0 : 1.0;   // d gamma_p per unit multiplier of a plane
+        // d gamma_p per unit multiplier of a plane, and the cap's modulus: both carry the
+        // small-strain factor h_i (1 for plain Hardening Soil).
+        const double hi = p.hardening_scale;
+        const double H = at_fail ? 0.0 : hi;
         const double pmean = mean(s_in);
-        const double Hcap = cap_on ? p.cap_hardening_modulus(pp) : 0.0;
+        const double Hcap = cap_on ? hi * p.cap_hardening_modulus(pp) : 0.0;
         r.at_fail = at_fail;
 
         // Solve the active set for one corner hypothesis; returns false if nothing is active.
@@ -801,7 +809,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
                     N.col(i) = ns[i];
                     M.col(i) = ms[i];
                     if (kind[i] == 0) dgp += H * dl(i);
-                    else dev += dl(i) * 2.0 * pmean;
+                    else dev += hi * dl(i) * 2.0 * pmean;
                 }
                 sol.dsig = De * (de_in - ep);
                 sol.dgp = dgp;
@@ -939,7 +947,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
                 const double spm = spm_of(qd, k);
                 const Plane main = plane(s, o.a, o.c, spm, fail_here, k);
                 Eigen::Vector3d n = main.n;
-                double h = fail_here ? 0.0 : 1.0;
+                double h = fail_here ? 0.0 : p.hardening_scale;
                 if (corner == kCompression) { n += plane(s, o.a, o.b, spm, fail_here, k).n; h *= 2.0; }
                 if (corner == kExtension) { n += plane(s, o.b, o.c, spm, fail_here, k).n; h *= 2.0; }
                 const Eigen::Vector3d Den = k.De * n;
@@ -958,10 +966,10 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
                 const Eigen::Vector3d g = cap_grad(s, o, corner);
                 const Eigen::Vector3d Deg = k.De * g;
                 const double pm = mean(s);
-                const double Hc_ = p.cap_hardening_modulus(ppc);
+                const double Hc_ = p.hardening_scale * p.cap_hardening_modulus(ppc);
                 const double dlam_c = fcp / (g.dot(Deg) + 4.0 * ppc * pm * Hc_);
                 s -= dlam_c * Deg;
-                ev_io += dlam_c * 2.0 * pm;
+                ev_io += p.hardening_scale * dlam_c * 2.0 * pm;
                 corr = true;
             }
             if (!corr) break;
@@ -1006,6 +1014,109 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     Eigen::Vector3d sig = sigma_n;
     double gp = gamma_p_n, ev = ev_n;
     bool any_plastic = false;
+    // ON THE TIP AND NEAR IT. A stress-free point that has never been loaded -- freshly placed
+    // fill -- stands at the tip of its cap: p = p_p = 0, where the cap's gradient is zero. An
+    // explicit step from there reads no cap at all and is elastic; the same step evaluated at its
+    // own end is plastic. The pair disagree by the same proportion at every step size, so the
+    // measured subdivision ran to its ceiling on every call and reported an integration that
+    // had not met its tolerance. Measured on the first time step of an embankment placed on
+    // 15-noded elements: every stress point of the fill at the ceiling of 200 substeps, the
+    // balance held at 9e-3 of its scale for sixty iterations of seven seconds each, the step
+    // halved, and the same again. Three cases are told apart below.
+    // NEAR THE TIP: a point that has left the tip by half a kPa and is asked for an
+    // increment of ten is in the same position: its surfaces grow many times over within the
+    // increment, and equal substeps run to the ceiling. Whenever the elastic trial of the
+    // increment is more than four times the size of the state (the larger of its stress and its
+    // cap pressure), each substep is a tenth of what the state then amounts to -- its own size
+    // counted as distance already covered.
+    Eigen::Vector3d s0 = sigma_n, dstrain_w = dstrain;
+    double gp0 = gamma_p_n, ev0 = ev_n;
+    bool from_tip = false;
+    {
+        const double tiny = 1e-9 * pr;
+        const Eigen::Vector3d ds_tr = k_n.De * dstrain;
+        const double size0 = std::max(pp_n, sigma_n.cwiseAbs().maxCoeff());
+        const double step = ds_tr.cwiseAbs().maxCoeff();
+        // On the tip: no stress and no cap pressure (whatever the shear hardening stands at).
+        const bool on_tip = size0 <= tiny;
+        // PUSHED FROM THE TIP ITSELF, the walk is the uniform one at its full count, with no
+        // measurement of the error to choose it: from the tip every size of step reads the same
+        // error, and what the uniform walk does there is find the self-similar path of primary
+        // loading within its first few substeps, each of which is as large as everything before
+        // it. A walk in small proportional substeps keeps the direction of its first one instead:
+        // tried, it left an oedometer path from rest off that path, and the deviation from the
+        // closed form, which is the same at every stress level on it (-0.07%), spread by 0.74
+        // points (KV-NUM-009).
+        if (cap_on && step > 0.0 && on_tip && mean(ds_tr) > 0.0) from_tip = true;
+        if (cap_on && step > 0.0 && !from_tip && (on_tip || size0 < 0.25 * step)) {
+            // PULLED, IT STAYS ON THE TIP. With p_p = 0 the cap admits the stress-free state and
+            // nothing else, and it hardens only by compaction: an increment whose elastic trial
+            // has a tensile mean stress compacts nothing, so the point stays where it is and
+            // its stress does not depend on the strain. (The walk gave the same answer to five
+            // figures of a kPa, at the ceiling of substeps every time.)
+            if (on_tip && mean(ds_tr) <= 0.0) {
+                HsIntegrated tip;
+                tip.stress = sigma_n;
+                tip.gamma_p = gamma_p_n;
+                tip.pp = pp_n;
+                tip.tangent.setZero();
+                tip.plastic = true;
+                tip.nsub = 0;
+                tip.saturated = 0;
+                if (plan_out) plan_out->clear();
+                return tip;
+            }
+            constexpr double kLead = 1.0e-3;
+            // A fiftieth of the distance covered per substep. At a tenth the walk was within 0.7%
+            // of the stress (measured as a spread of 0.74 points between stress levels on an
+            // oedometer path from rest, KV-NUM-009, where the scheme changes with the level).
+            constexpr double kGrow = 0.02;
+            Eigen::Vector3d s_lead = sigma_n;
+            double gp_l = gamma_p_n, ev_l = ev_n;
+            double done = 0.0;
+            // The state, as distance walked. Never nothing: a substep is a tenth of this plus
+            // what has been walked, and from nothing it would never start.
+            const double covered = std::max(size0 / step, kLead);
+            Eigen::Matrix3d lead_tangent = k_n.De;
+            int walked = 0;
+            bool lead_ok = s_lead.allFinite() && std::isfinite(gp_l) && std::isfinite(ev_l);
+            while (lead_ok && done < 1.0 - 1e-12 && walked < 4000) {
+                const double dT = std::min(kGrow * (covered + done), 1.0 - done);
+                const Eigen::Vector3d de = dT * dstrain;
+                const Inc k1 = increment(s_lead, gp_l, ev_l, de);
+                const Inc k2 = increment(s_lead + k1.dsig, gp_l + k1.dgp, ev_l + k1.dev, de);
+                s_lead += 0.5 * (k1.dsig + k2.dsig);
+                gp_l += 0.5 * (k1.dgp + k2.dgp);
+                ev_l += 0.5 * (k1.dev + k2.dev);
+                if (k1.plastic || k2.plastic) {
+                    any_plastic = true;
+                    lead_tangent = k2.plastic ? k2.tangent : k1.tangent;
+                    if (correct_drift(s_lead, gp_l, ev_l, k1.as || k2.as, k1.ac || k2.ac,
+                                      k1.at_fail || k2.at_fail, k2.plastic ? k2.tie_i : k1.tie_i,
+                                      k2.plastic ? k2.tie_j : k1.tie_j))
+                        lead_tangent.setZero();
+                } else {
+                    lead_tangent = stiff_at(s_lead).De;
+                }
+                done += dT;
+                ++walked;
+                lead_ok = s_lead.allFinite() && std::isfinite(gp_l) && std::isfinite(ev_l);
+            }
+            if (lead_ok && done >= 1.0 - 1e-12) {
+                HsIntegrated led;
+                led.stress = s_lead;
+                led.gamma_p = gp_l;
+                led.pp = p.cap_pc_from_ev(ev_l);
+                led.tangent = lead_tangent;
+                led.plastic = any_plastic;
+                led.nsub = walked;
+                led.saturated = 0;
+                if (plan_out) plan_out->clear();
+                return led;
+            }
+            any_plastic = false;   // the walk failed: the increment is integrated the usual way
+        }
+    }
     // The committed state's elastic matrix, until a plastic substep replaces it with its own
     // continuum tangent (an elastic increment returns this one).
     Eigen::Matrix3d tangent = k_n.De;
@@ -1079,18 +1190,20 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     if (replaying) {
         // Replay: the subdivision is uniform, so its one step size reproduces it exactly.
         nreal = 1.0 / plan_in->dT;
-    } else if (dstrain.squaredNorm() > 0.0) {
+    } else if (from_tip) {
+        nreal = (double)kMaxSubsteps;   // the tip's own rule, not a measurement that ran out
+    } else if (dstrain_w.squaredNorm() > 0.0) {
         for (int pass = 0; pass < 2; ++pass) {
             const double dT = 1.0 / nreal;
-            const Eigen::Vector3d de = dT * dstrain;
-            const Inc f1 = increment(sigma_n, gamma_p_n, ev_n, de);
-            const Inc f2 = increment(sigma_n + f1.dsig, gamma_p_n + f1.dgp, ev_n + f1.dev, de);
+            const Eigen::Vector3d de = dT * dstrain_w;
+            const Inc f1 = increment(s0, gp0, ev0, de);
+            const Inc f2 = increment(s0 + f1.dsig, gp0 + f1.dgp, ev0 + f1.dev, de);
             // No plasticity gate on the estimate. An elastic step is not error-free here: E_ur
             // moves with sigma3, so the elastic response is nonlinear and its own error is what
             // the pair measures. Where the stiffness really is constant the two evaluations
             // agree, the estimate is zero, and the step is taken whole -- a gate would only hide
             // the case where it is not.
-            const Eigen::Vector3d s_end = sigma_n + 0.5 * (f1.dsig + f2.dsig);
+            const Eigen::Vector3d s_end = s0 + 0.5 * (f1.dsig + f2.dsig);
             // The denominator needs a FLOOR. A purely relative measure against ||sigma|| is
             // degenerate where a run starts from (near) zero stress -- a weightless column, a
             // surface layer, the first increment of any seating phase. The floor is p_ref/200:
@@ -1117,7 +1230,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     if (plan_out) { plan_out->clear(); plan_out->dT = dT_full; }
     for (double T = 0.0; T < 1.0 - 1e-12 && taken < kMaxSubsteps + 2; ++taken) {
         const double dT = std::min(dT_full, 1.0 - T);
-        const Eigen::Vector3d de = dT * dstrain;
+        const Eigen::Vector3d de = dT * dstrain_w;
         const Inc k1 = increment(sig, gp, ev, de);
         const Inc k2 = increment(sig + k1.dsig, gp + k1.dgp, ev + k1.dev, de);
         sig += 0.5 * (k1.dsig + k2.dsig);
@@ -1139,7 +1252,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     // Saturation is REPORTED, never absorbed: if the ceiling clipped the subdivision the
     // integration did not meet its tolerance, and the caller is told so rather than handed a
     // number that looks like every other one.
-    const int accepted = taken, clipped = (nreal >= (double)kMaxSubsteps) ? 1 : 0;
+    const int accepted = taken, clipped = (!from_tip && nreal >= (double)kMaxSubsteps) ? 1 : 0;
     HsIntegrated out;
     out.stress = sig;
     out.gamma_p = gp;
@@ -1226,6 +1339,34 @@ void hs_oedometer_probe(const HardeningSoilParams& p, double& Eoed_pref,
 
 void hs_calibrate_cap(HardeningSoilParams& p, double K0_NC) {
     p.K0nc = K0_NC;   // the line the oedometer probe starts on
+    // ONE CALIBRATION PER SOIL, NOT PER PHASE. The two nested bisections below walk an oedometer
+    // path some three thousand times, each walk at the ceiling of substeps, and the material
+    // models are built afresh for every phase of a job: measured on a tunnel analysis of six
+    // phases with two such soils, 37 calibrations of the same two soils took 45% of all the
+    // constitutive substeps of the run (37% on a single strip load). The answer is a function
+    // of the parameters alone, so it is kept. The key is every member the walk can read; the
+    // size check is there so that a member added to the struct is added here as well.
+    static_assert(sizeof(HardeningSoilParams) == 18 * sizeof(double),
+                  "a member was added to HardeningSoilParams: add it to the calibration key");
+    using Key = std::array<double, 16>;
+    const Key key{p.E50_ref, p.Eur_ref, p.Eoed_ref, p.m, p.p_ref, p.cohesion, p.friction,
+                  p.dilatancy, p.dilatancy_cut ? 1.0 : 0.0, p.Rf, p.nu_ur, p.G0_ref, p.gamma07,
+                  p.hardening_scale, p.elastic_scale, K0_NC};
+    static std::mutex cache_mutex;
+    static std::vector<std::pair<Key, std::array<double, 2>>> cache;
+    {
+        const std::lock_guard<std::mutex> lock(cache_mutex);
+        for (const auto& e : cache)
+            if (e.first == key) { p.cap_alpha = e.second[0]; p.cap_beta = e.second[1]; return; }
+    }
+    struct Keep {   // stored on every way out of the search below
+        HardeningSoilParams& p; const Key& key;
+        ~Keep() {
+            const std::lock_guard<std::mutex> lock(cache_mutex);
+            for (const auto& e : cache) if (e.first == key) return;
+            cache.push_back({key, {p.cap_alpha, p.cap_beta}});
+        }
+    } keep{p, key};
     const double Kp = hs_cap_Kp(p, K0_NC);
     // Inner: at a given α find k (β=p_ref/(k·K_p)) for Eoed_ref; return K0.
     auto solve_k_return_K0 = [&](double alpha) {

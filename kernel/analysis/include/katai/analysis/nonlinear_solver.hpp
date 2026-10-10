@@ -453,6 +453,14 @@ struct NewtonResult {
     // Increments re-entered with the elastic tangent after their Newton direction stopped
     // descending (the initial-stiffness fallback, elastic_mode in the solver).
     int elastic_retries = 0;
+    // Increments re-entered with the small-strain stiffness read from a fixed increment (Hardening
+    // Soil with small-strain stiffness), and the passes that re-read it from the answer.
+    int small_strain_freezes = 0;
+    int small_strain_passes = 0;
+    // Increments committed in that mode, and the largest distance left between the increment the
+    // stiffness was read from and the answer, as a share of the answer's displacement increment.
+    int small_strain_increments = 0;
+    double small_strain_gap = 0.0;
     // Strength continuation (NewtonOptions::srf_reduce): the largest strength factor the path
     // reached in equilibrium, whether the path reached its limit there, and the path itself
     // (factor, largest displacement) step by step.

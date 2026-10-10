@@ -334,13 +334,19 @@ void test_nonlinear_elastic_criterion() {
     check(counted,
           "an unloading HSsmall point IS a non-linear elastic point, and its criterion counts it");
     check(ok_everywhere, "and none of them is inaccurate");
-    // Round-off, four decades below the tightest tolerance swept: this is the identity, not a
-    // threshold. If the unloading modulus ever starts iterating, this is what fails first.
+    // This used to be round-off (1.3e-15) BY CONSTRUCTION: the unloading modulus was frozen at
+    // the start of the increment, so the equilibrium and constitutive stresses were built from
+    // one constant operator and the criterion had nothing to measure. The small-strain stiffness
+    // is now the secant of its curve over the increment itself (the model's own definition, and
+    // what makes the 1D unloading heave of this case exact), so the modulus moves with the
+    // iterate and the criterion reads something: small, and inside every tolerance swept.
     std::printf("     worst non-linear elastic error over 1e-2 .. 1e-6: %.2e\n", worst_seen);
-    check(worst_seen < 1e-10,
-          "the non-linear elastic error is identically zero while the elastic modulus is frozen "
-          "per increment -- the equilibrium and constitutive stresses are built from the same "
-          "constant operator");
+    check(worst_seen > 1e-12,
+          "the unloading modulus follows the iterate, so the non-linear elastic criterion now "
+          "measures something");
+    check(worst_seen < 1e-4,
+          "and what it measures is small: the iteration settles the modulus as it settles the "
+          "displacement");
 }
 
 // The moment criterion's REFERENCE, and the floor it needed. Every other criterion in this family

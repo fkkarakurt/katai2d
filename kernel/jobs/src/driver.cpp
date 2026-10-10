@@ -44,6 +44,8 @@
 #include <katai/fem/elements/plate.hpp>               // PlateProps + set_plate_mass
 #include <katai/analysis/hydraulic_heave.hpp>       // the heave check after a phase with flow
 #include <katai/fem/elements/point_location.hpp>      // locate_point (is a point load on the mesh?)
+#include <katai/fem/elements/tri15.hpp>               // stress-point positions (end-bearing zone)
+#include <katai/fem/elements/tri6.hpp>
 #include <katai/materials/linear_elastic.hpp>
 #include <katai/mesh/boundary_extraction.hpp>      // collect_chain + boundary edges (Stage B5)
 #include <katai/linsolve/direct_solver.hpp>
@@ -1088,6 +1090,20 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         if (sm.model == model::SoilModel::HardeningSoil || sm.model == model::SoilModel::HSsmall)
             return sm.E50ref / (2.0 * (1.0 + sm.nu_ur));
         return sm.E / (2.0 * (1.0 + sm.nu));
+    };
+    // The same modulus AT A PLACE: the material standing there, with its stiffness increment
+    // with depth where it has one. A pile row passes through layers, and its springs are tied
+    // to the soil around each of them (see the embedded beams below).
+    const auto soil_G_at = [&pr, &material_at, &interface_soil_G](double x, double y,
+                                                                  double fallback) {
+        const int mat = material_at(x, y);
+        if (mat < 0 || mat >= (int)pr.materials.size()) return fallback;
+        const auto& sm = pr.materials[(size_t)mat];
+        if (sm.model == model::SoilModel::HardeningSoil || sm.model == model::SoilModel::HSsmall ||
+            sm.E_inc == 0.0)
+            return interface_soil_G(sm);
+        const double E = sm.E + sm.E_inc * std::max(0.0, sm.y_ref - y);
+        return E / (2.0 * (1.0 + sm.nu));
     };
     // ... and its VIRTUAL THICKNESS is a tenth of the model's element size, the one entered for
     // the mesh, not of the elements that happen to lie along the line: refining the mesh at a
@@ -2243,6 +2259,46 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         structures.embedded_beams.push_back(katai::core::ebeam::build_embedded_beam(
             mesh, dofs, bx, by, pp, k_axial, k_lateral, t_max, D_foot, f_max,
             conn_beam_node, conn_mesh_node));
+        // THE SPRINGS ARE TIED TO THE SOIL AROUND THEM, POINT BY POINT. The stiffnesses above are
+        // those of the soil at the middle of the beam, and until 2026-10 every skin point and
+        // the foot had them: a pile through soft clay with its foot in sand stood on a foot
+        // spring made of the clay's modulus. Measured on a building on two pile rows beside a
+        // tunnel (clay with E' = 3400 + 400 per metre, feet in a sand with E50 = 25 MPa): the
+        // foot spring was an eighth of the sand's, and the clay springs at depth half of what
+        // the clay there gives. Each skin point takes the modulus of the soil it lies in, and
+        // the foot that of the soil it stands in.
+        {
+            auto& eb = structures.embedded_beams.back();
+            const auto point_xy = [&eb](const katai::core::ebeam::SkinPoint& sp, double& x, double& y) {
+                x = 0.0; y = 0.0;
+                for (int k = 0; k < 3; ++k) {
+                    x += sp.Nb(k) * eb.node_x[(size_t)sp.beam_node[(size_t)k]];
+                    y += sp.Nb(k) * eb.node_y[(size_t)sp.beam_node[(size_t)k]];
+                }
+            };
+            for (auto& sp : eb.skin) {
+                double x = 0.0, y = 0.0;
+                point_xy(sp, x, y);
+                double ka = 0.0, kn = 0.0, kf = 0.0;
+                katai::core::ebeam::default_interface_stiffness(Ls, em.diameter, soil_G_at(x, y, G),
+                                                                pp.EA, pp.EI, ka, kn, kf);
+                const Eigen::Vector2d t = sp.tang, n(-t(1), t(0));
+                sp.k_a = ka; sp.k_n = kn;
+                sp.T = ka * (t * t.transpose()) + kn * (n * n.transpose());
+            }
+            if (eb.foot.D_foot > 0.0 && !eb.node_x.empty()) {
+                // A little way up the beam from the toe, so that a toe drawn on a layer boundary
+                // reads the layer the pile stands in rather than the one below it.
+                const double fx = eb.node_x[0], fy = eb.node_y[0];
+                const double ux = (eb.node_x.back() - fx), uy = (eb.node_y.back() - fy);
+                const double ul = std::hypot(ux, uy);
+                const double e = ul > 0.0 ? 1.0e-6 : 0.0;
+                double ka = 0.0, kn = 0.0, kf = 0.0;
+                katai::core::ebeam::default_interface_stiffness(
+                    Ls, em.diameter, soil_G_at(fx + e * ux, fy + e * uy, G), pp.EA, pp.EI, ka, kn, kf);
+                eb.foot.D_foot = kf;
+            }
+        }
         // A skin resistance that varies along the beam: linear from Tskin_max at the point the
         // beam is drawn from to Tskin_end at the point it is drawn to. Each skin point takes
         // the value at its own place.
@@ -2432,7 +2488,8 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
     // in which that plate carries nothing, without saying so. A plain beam verification is built
     // exactly this way: the soil cluster is deactivated so that only the beams remain, supported
     // at their end points.
-    if (!act.empty()) {
+    {
+        const bool staged = !act.empty();
         std::vector<char> carried(mesh.node_count, 0);
         const auto carry = [&](int n) { if (n >= 0 && n < mesh.node_count) carried[(size_t)n] = 1; };
         // Only where the plate MOVES ON the node's own DOFs. A wall with interfaces stands on DOFs
@@ -2456,12 +2513,52 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             for (int d : p.trans_dof) if (d >= 0 && d < 2 * mesh.node_count) carry(d / 2);
         // A twin tied to a node that an active element still holds is not orphaned either: the two
         // are one unknown. Only when neither side has an active element is the pair fixed.
-        if (!tied_nodes.empty()) {
+        if (staged && !tied_nodes.empty()) {
             const std::vector<char> na = katai::core::active_nodes(mesh, act);
             for (const auto& [a, b] : tied_nodes)
                 if (na[(size_t)a] || na[(size_t)b]) { carry(a); carry(b); }
         }
-        katai::core::fix_inactive_nodes(mesh, act, dofs, carried);
+        if (staged) {
+            katai::core::fix_inactive_nodes(mesh, act, dofs, carried);
+        } else {
+            // WITH NOTHING EXCAVATED THERE CAN STILL BE NODES NOTHING HOLDS. A plate lying on
+            // the ground surface with an interface on each face has no ground on its upper one:
+            // the split leaves nodes there that belong to no element at all. Their joint stayed
+            // in place, and as soon as it opened under load they had no stiffness -- a row of
+            // zeros, which one linear solver passed by perturbing the pivot and the portable
+            // one rightly refused (the run stopped at a tenth of its load). Such a node -- in no
+            // element, moved on by no plate, tied to nothing and carrying no support -- is
+            // fixed, and the joint against it is switched off for the phase, as a joint beside
+            // excavated ground is. A node in no element that a boundary condition holds is a
+            // SUPPORT (a joint drawn on a fixed boundary slides against exactly such nodes) and
+            // is left as it is.
+            const std::vector<char> all((size_t)mesh.element_count, 1);
+            const std::vector<char> in_element = katai::core::active_nodes(mesh, all);
+            std::vector<char> tied((size_t)mesh.node_count, 0);
+            for (const auto& [a, b] : tied_nodes) { tied[(size_t)a] = 1; tied[(size_t)b] = 1; }
+            std::vector<char> loose((size_t)mesh.node_count, 0);
+            bool any_loose = false;
+            for (int n = 0; n < mesh.node_count; ++n) {
+                if (in_element[(size_t)n] || carried[(size_t)n] || tied[(size_t)n]) continue;
+                if (dofs.marked_fixed(dofs.global_dof(n, 0)) || dofs.marked_fixed(dofs.global_dof(n, 1)))
+                    continue;
+                loose[(size_t)n] = 1;
+                any_loose = true;
+            }
+            if (any_loose) {
+                for (auto& ie : structures.interfaces)
+                    for (int k = 0; k < 3; ++k)
+                        if (loose[(size_t)ie.soil_nodes[k]]) ie.active = false;
+                for (auto& ie : structures.interfaces5)
+                    for (int k = 0; k < 5; ++k)
+                        if (loose[(size_t)ie.soil_nodes[k]]) ie.active = false;
+                for (int n = 0; n < mesh.node_count; ++n)
+                    if (loose[(size_t)n]) {
+                        dofs.fix_node_component(n, 0);
+                        dofs.fix_node_component(n, 1);
+                    }
+            }
+        }
     }
     dofs.finalize();
     // Reported support reactions are the SOIL's discrete B^T sigma: a structural element that
@@ -3297,6 +3394,8 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                         gs.pp = sd.pp;
                         gs.gamma_p = sd.gamma_p;
                         gs.gamma_hist = 0.0;
+                        gs.hs_hist.setZero();
+                        gs.hs_g_mono = 0.0;
                     }
                 }
                 for (size_t i = 0; i < pr.polygons.size(); ++i)
@@ -3326,10 +3425,24 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         // the ground and are NOT the strain history: resetting them would delete the
         // overconsolidation the surcharge was applied to create, which is the opposite of what
         // this option is for.
-        if (io.config && io.config->reset_small_strain) {
+        //
+        // RESETTING THE DISPLACEMENTS RESETS IT TOO. A phase that starts the displacement count
+        // again says that what happens from here is a new event read on its own -- the tunnel
+        // under the building that has stood for years -- and the strain the earlier phases left
+        // in the soil is not the history that event meets. The two belong together in the
+        // formulation this model follows, and until 2026-10 only the read-out was reset here:
+        // the sand under a piled building met the tunnel with the stiffness the building's own
+        // weight had degraded it to.
+        const bool reset_by_displacements = io.config && io.config->reset_displacements &&
+                                            !io.config->reset_small_strain;
+        if (io.config && (io.config->reset_small_strain || io.config->reset_displacements)) {
             int cleared = 0;
             for (auto& gs : init)
-                if (gs.gamma_hist != 0.0) { gs.gamma_hist = 0.0; ++cleared; }
+                if (gs.gamma_hist != 0.0 || !gs.hs_hist.isZero(0.0)) {
+                    gs.gamma_hist = 0.0;
+                    gs.hs_hist.setZero();
+                    ++cleared;
+                }
             // Whether any material can even feel it is a different question from whether the
             // flag was honoured, and the user asked a question that deserves an answer either
             // way: a reset that met no small-strain material is a no-op, and saying so is
@@ -3339,7 +3452,15 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                     return m.model == model::SoilModel::HSsmall && m.G0ref > 0.0;
                 });
             const std::string& pname = io.config->name;
-            if (!any_hssmall)
+            if (reset_by_displacements) {
+                if (any_hssmall && cleared > 0)
+                    note(R, "K2D-M005", pname,
+                         "Phase \"" + pname + "\" resets the displacements, and the small-strain "
+                             "history with them: " + std::to_string(cleared) +
+                             " stress points meet it at G0 instead of the stiffness the earlier "
+                             "phases had degraded them to. Stress, shear hardening and the "
+                             "preconsolidation pressure are carried over untouched.");
+            } else if (!any_hssmall)
                 note(R, "K2D-M005", pname,
                      "Phase \"" + pname +
                          "\" asks for the small-strain history to be reset, but no material in "
@@ -3375,16 +3496,31 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         }
         katai::core::seed_preconsolidation(mesh, models, oc, act, init);
     }
-    // END BEARING OF A PLATE (PlateMaterial::prevent_punching). The stress points within the
-    // plate's equivalent thickness d = sqrt(12 EI / EA) of its lower end have their plasticity
-    // excluded in this phase. The flag is set afresh in every phase from the plates active in
-    // it, so a zone appears with its plate and goes with it.
+    // END BEARING OF A PLATE (PlateMaterial::prevent_punching). The stress points of the zone at
+    // the plate's lower end have their plasticity excluded in this phase. The flag is set afresh
+    // in every phase from the plates active in it, so a zone appears with its plate and goes
+    // with it.
     if (mesh.element_count > 0 && !init.empty()) {
         const size_t ng = init.size() / (size_t)mesh.element_count;
         for (auto& gs : init) gs.plasticity_excluded = false;
+        // Natural coordinates of the stress points (vertices at (0,0), (1,0), (0,1)).
+        std::vector<std::array<double, 2>> gp_nat;
+        if (mesh.nodes_per_element == 15)
+            for (const auto& g : katai::core::tri15::gauss_points()) gp_nat.push_back({g.xi, g.eta});
+        else
+            for (const auto& g : katai::core::tri6::gauss_points()) gp_nat.push_back({g.xi, g.eta});
+        // NOT IN A SAFETY PHASE. A factor of safety is found by reducing every strength in the
+        // model, and a zone whose plasticity is excluded has a strength that cannot be reduced:
+        // the search then rests on it. Measured on an anchored excavation (15-noded, 2 m; a
+        // published factor of 1.49): 1.4875 with no stress point in the zones and 1.536 with
+        // four at the feet of the two walls and seven more at the ends of the grout bodies; on
+        // 6-noded elements 1.55 and 1.66. The zones keep a wall from punching through the ground
+        // under working load; they are not part of what holds the excavation up.
+        const bool zones_on = phase != InitialPhase::Safety;
         int zones = 0, points = 0;
         for (size_t si = 0; si < pr.structs.size(); ++si) {
             const auto& s = pr.structs[si];
+            if (!zones_on) break;                                                 // silent-drop-ok: said below (K2D-A029)
             if (s.kind != model::StructKind::Plate || !struct_on(si)) continue;   // silent-drop-ok: not an active plate
             if (s.material < 0 || s.material >= (int)pr.plates.size()) continue;  // silent-drop-ok: refused elsewhere
             const auto& pm = pr.plates[(size_t)s.material];
@@ -3392,35 +3528,112 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             const double d = pm.d();
             const bool first_lower = s.y1 <= s.y2;
             const double fx = first_lower ? s.x1 : s.x2, fy = first_lower ? s.y1 : s.y2;
+            // The plate's axis, pointing out of its lower end: the zone lies beyond the foot.
+            double axx = fx - (first_lower ? s.x2 : s.x1), axy = fy - (first_lower ? s.y2 : s.y1);
+            const double axl = std::hypot(axx, axy);
+            if (axl > 0.0) { axx /= axl; axy /= axl; }
             int here = 0;
+            // THE ZONE IS THE FOOT OF A WALL OF THICKNESS d, NOT THE MESH: the half disc of radius
+            // d / 2, d = sqrt(12 EI / EA), beyond the lower end -- the ground the foot bears on,
+            // the same construction as under the foot of a pile. The ground beside the wall above
+            // its foot is not in it: that is where a wall kicking out shears the soil, and a full
+            // disc there raised the factor of safety of the excavation below from 1.55 to 1.66
+            // through three stress points per wall. Two wider readings were measured on an anchored excavation with d = 0.35 m and
+            // a published factor of safety of 1.49. Every element touching the foot: 1.79 on a
+            // 2 m mesh -- a block of elastic ground metres across that no slip surface could
+            // pass. Every element with its centroid within d of the foot: nothing on that mesh,
+            // but six whole elements on a 1 m mesh, and 1.71 where the same mesh without the
+            // option gave 1.55. Whole elements are the mesh's size, not the wall's; stress
+            // points are not. A mesh with no stress point that close has no zone, and the phase
+            // says so.
             for (int e = 0; e < mesh.element_count; ++e) {
-                double cx = 0.0, cy = 0.0;
-                for (int k = 0; k < 3; ++k) { cx += mesh.x[mesh.node_of(e, k)]; cy += mesh.y[mesh.node_of(e, k)]; }
-                cx /= 3.0; cy /= 3.0;
-                // THE ZONE IS d, NOT THE MESH. An element belongs to it when its centroid is within
-                // d of the foot. It used to take every element touching the foot as well, so
-                // that a coarse mesh still had a zone -- and on a 2 m mesh under a wall with
-                // d = 0.35 m that zone was a block of elastic ground metres across, which no slip
-                // surface could pass through: measured, the factor of safety of an anchored
-                // excavation went from 1.49 to 1.79. A mesh too coarse to have an element within
-                // d has no zone, and the phase says so.
-                if (std::hypot(cx - fx, cy - fy) > d) continue;                   // silent-drop-ok: outside the zone
-                for (size_t g = 0; g < ng; ++g) init[(size_t)e * ng + g].plasticity_excluded = true;
-                ++here;
+                if (ng != gp_nat.size()) break;                                   // silent-drop-ok: no such rule; A030 below
+                const int n0 = mesh.node_of(e, 0), n1 = mesh.node_of(e, 1), n2 = mesh.node_of(e, 2);
+                // silent-drop-ok: an element wholly farther than d / 2 from the foot
+                if (std::min({std::hypot(mesh.x[n0] - fx, mesh.y[n0] - fy),
+                              std::hypot(mesh.x[n1] - fx, mesh.y[n1] - fy),
+                              std::hypot(mesh.x[n2] - fx, mesh.y[n2] - fy)}) >
+                    0.5 * d + std::max({std::hypot(mesh.x[n1] - mesh.x[n0], mesh.y[n1] - mesh.y[n0]),
+                                        std::hypot(mesh.x[n2] - mesh.x[n1], mesh.y[n2] - mesh.y[n1]),
+                                        std::hypot(mesh.x[n0] - mesh.x[n2], mesh.y[n0] - mesh.y[n2])}))
+                    continue;
+                for (size_t g = 0; g < ng; ++g) {
+                    const double xi = gp_nat[g][0], eta = gp_nat[g][1];
+                    const double gx = (1.0 - xi - eta) * mesh.x[n0] + xi * mesh.x[n1] + eta * mesh.x[n2];
+                    const double gy = (1.0 - xi - eta) * mesh.y[n0] + xi * mesh.y[n1] + eta * mesh.y[n2];
+                    // silent-drop-ok: outside the half disc beyond the foot
+                    if (std::hypot(gx - fx, gy - fy) > 0.5 * d ||
+                        (gx - fx) * axx + (gy - fy) * axy < 0.0) continue;
+                    init[(size_t)e * ng + g].plasticity_excluded = true;
+                    ++here;
+                }
             }
             if (here > 0) { ++zones; points += here; }
             else
                 warn(R, "K2D-A030", s.name,
-                     "Plate \"" + s.name + "\" has end bearing, and no element lies within its "
-                     "equivalent thickness (" + dnum(d) + " m) of its lower end (" + dnum(fx) + ", " +
+                     "Plate \"" + s.name + "\" has end bearing, and no stress point lies below its foot within half "
+                     "its equivalent thickness (" + dnum(d) + " m) of its lower end (" + dnum(fx) + ", " +
                      dnum(fy) + "): on this mesh the option has no effect. Refine the mesh around "
                      "the foot of the plate to a size below that thickness.");
         }
+        // THE FOOT OF A PILE has such a zone too, so that the base resistance entered for it can be
+        // reached: the half disc of radius R_eq = D_eq / 2 below the foot, D_eq = sqrt(12 EI / EA).
+        // It is centimetres across; a mesh has a stress point in it only where it is that fine,
+        // and a pile whose zone holds none is not reported one by one as a wall is.
+        int pile_points = 0;
+        for (size_t si = 0; si < pr.structs.size(); ++si) {
+            const auto& s = pr.structs[si];
+            if (!zones_on) break;                                                         // silent-drop-ok: said below (K2D-A029)
+            if (s.kind != model::StructKind::EmbeddedBeam || !struct_on(si)) continue;   // silent-drop-ok: not an active pile
+            if (s.conn != 0) continue;   // silent-drop-ok: a free beam is a grout body or a nail, not a pile standing on its foot
+            if (s.material < 0 || s.material >= (int)pr.embedded.size()) continue;        // silent-drop-ok: refused elsewhere
+            const auto& em = pr.embedded[(size_t)s.material];
+            if (!(em.Fmax_base > 0.0) || !(em.diameter > 0.0)) continue;                  // silent-drop-ok: no base to bear on
+            const double r_eq = 0.5 * std::sqrt(12.0 * (em.diameter * em.diameter / 16.0));
+            double hx = 0.0, hy = 0.0;
+            embedded_connection_point(s, hx, hy);
+            const bool head_first = std::hypot(s.x1 - hx, s.y1 - hy) <= std::hypot(s.x2 - hx, s.y2 - hy);
+            const double fx = head_first ? s.x2 : s.x1, fy = head_first ? s.y2 : s.y1;
+            double ax = fx - (head_first ? s.x1 : s.x2), ay = fy - (head_first ? s.y1 : s.y2);
+            const double al = std::hypot(ax, ay);
+            if (!(al > 0.0) || ng != gp_nat.size()) continue;                             // silent-drop-ok: no axis / no rule
+            ax /= al; ay /= al;
+            for (int e = 0; e < mesh.element_count; ++e) {
+                const int n0 = mesh.node_of(e, 0), n1 = mesh.node_of(e, 1), n2 = mesh.node_of(e, 2);
+                for (size_t g = 0; g < ng; ++g) {
+                    const double xi = gp_nat[g][0], eta = gp_nat[g][1];
+                    const double gx = (1.0 - xi - eta) * mesh.x[n0] + xi * mesh.x[n1] + eta * mesh.x[n2];
+                    const double gy = (1.0 - xi - eta) * mesh.y[n0] + xi * mesh.y[n1] + eta * mesh.y[n2];
+                    // silent-drop-ok: outside the half disc beyond the foot
+                    if (std::hypot(gx - fx, gy - fy) > r_eq || (gx - fx) * ax + (gy - fy) * ay < 0.0) continue;
+                    init[(size_t)e * ng + g].plasticity_excluded = true;
+                    ++pile_points;
+                }
+            }
+        }
+        if (!zones_on) {
+            bool any = false;
+            for (size_t si = 0; si < pr.structs.size() && !any; ++si) {
+                const auto& s = pr.structs[si];
+                any = s.kind == model::StructKind::Plate && struct_on(si) && s.material >= 0 &&
+                      s.material < (int)pr.plates.size() && pr.plates[(size_t)s.material].prevent_punching;
+            }
+            if (any)
+                note(R, "K2D-A029", "",
+                     "The end-bearing zones of the plates are not kept in a Safety phase: a zone "
+                     "whose plasticity is excluded has a strength that cannot be reduced, and the "
+                     "factor of safety would rest on it.");
+        }
+        if (pile_points > 0)
+            note(R, "K2D-A029", "",
+                 "Soil plasticity is excluded at " + std::to_string(pile_points) +
+                 " stress point(s) below the feet of the piles (the half disc of the pile's "
+                 "equivalent radius), so that the base resistance entered for them can be reached.");
         if (zones > 0)
             note(R, "K2D-A029", "",
                  std::to_string(zones) + " plate(s) have end bearing: soil plasticity is excluded "
-                 "in the " + std::to_string(points) + " element(s) around their lower ends (within "
-                 "the plate's equivalent thickness). This keeps "
+                 "at the " + std::to_string(points) + " stress point(s) beyond their lower ends (the half "
+                 "disc of half the plate's equivalent thickness). This keeps "
                  "the plate from punching through the ground; it is not the plate's tip resistance.");
     }
 
@@ -3658,6 +3871,23 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                          "study.");
                 break;   // one statement per run: the property is the method's, not the material's
             }
+            // SIX-NODED ELEMENTS BESIDE A WALL OVERSTATE THE FACTOR. Measured on a dewatered
+            // excavation between anchored diaphragm walls with interfaces (three Hardening Soil
+            // layers; a published plateau of 1.49): 1.630 on a 2 m mesh of 6-noded elements and
+            // 1.551 on a 1 m mesh, against 1.4875 on a 2 m mesh of 15-noded ones -- 9% and 4% on
+            // the unsafe side, closing only slowly with refinement. On slopes and embankments
+            // without structures the two elements agree to a percent (1.401 against a published
+            // 1.39-1.40 on 6-noded elements), so this is said where it was measured: a Safety
+            // phase on 6-noded elements with a wall or an interface in it.
+            if (mesh.nodes_per_element == 6 &&
+                (!structures.plates.empty() || !structures.interfaces.empty()))
+                warn(R, "K2D-A031", "",
+                     "Factor of safety on 6-noded elements with a wall or an interface in the "
+                     "model: beside a wall these elements overstate the factor -- measured on an "
+                     "anchored excavation, 1.63 and 1.55 on 2 m and 1 m meshes where 15-noded "
+                     "elements give 1.49 on the 2 m mesh. Use 15-noded elements for the factor "
+                     "of safety of a retaining structure, or refine well below the wall's "
+                     "embedded length.");
             // A COHESIVE soil with its tension cut-off on carries no tension in the search, where a
             // limit-equilibrium slip surface takes the full c' along its whole length, the part of
             // it in the tension zone near the crest included. The factor of safety is therefore

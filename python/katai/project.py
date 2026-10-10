@@ -762,6 +762,7 @@ class _Phases:
         ``displacement_total`` (since the start of the staged construction);
         ``reset_displacements=True`` starts that total again at this phase -- the
         settlement an excavation causes to a building that stood there before.
+        It also clears the HS-small strain history, as ``reset_small_strain`` does.
 
         ``materials={region: material}`` gives a region another material from this
         phase on (improved ground, a clay undrained while loaded and drained

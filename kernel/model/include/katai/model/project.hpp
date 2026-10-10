@@ -531,21 +531,18 @@ struct Phase {
     // the real soil -- ageing erased long before the analysis begins. Placing and removing the
     // surcharge has already triggered that history; this option clears it.
     //
-    // It carries extra weight in THIS engine. The full small-strain formulation (Benz 2007)
-    // derives gamma_hist from a strain history TENSOR H that is partially or fully reset whenever
-    // a reversal is detected (a Simpson brick criterion). This tree accumulates
-    // a monotone SCALAR instead and detects no reversal, which is declared in
-    // docs/references/hssmall-formulation.md sec. 7: an unloading that FOLLOWS a loading phase
-    // stays on the degraded stiffness rather than recovering G0, so the answer is softer than
-    // the tensor formulation's. Until the tensor exists, this flag is the engineer's only way to
-    // say "the history up to here is not the history that matters now" -- which turns a systematic
-    // difference into a controlled one.
+    // The strain history is a tensor that a reversal resets in the direction it happens in
+    // (Benz 2007), so an unloading that follows a loading recovers its stiffness on its own.
+    // What this flag adds is the engineer's statement that the history up to here -- reversal
+    // or not -- is not the history that matters now.
     bool reset_small_strain = false;
     // Reset displacements to zero: the total displacement reported from this phase on counts
     // from the START of this phase -- what the phases before it moved is left out. The state is
     // untouched (stresses, structural forces); it is the read-out that starts again, which is
     // what "the settlement caused by the excavation" or "by the tunnel" means when the building
-    // stood there before.
+    // stood there before. One part of the state does start again with it: the small-strain
+    // history of Hardening Soil with small-strain stiffness (see reset_small_strain), because the
+    // strain the earlier phases left is not the history a new event meets.
     bool reset_displacements = false;
     // NUMERICAL CONTROLS for this phase. Zero means
     // "let the program choose", which is what every project that never touches them says, so

@@ -157,6 +157,9 @@ struct ConsolidationPlasticResult {
     // deepest halving a time step needed (0 = none; n = a step was carried in pieces of 1/2^n).
     int stagnation_accepted = 0;
     int steps_cut = 0;
+    // The largest out-of-balance force a kept step was kept with, as a share of the forces in
+    // play in that step.
+    double worst_accepted = 0.0;
 };
 
 

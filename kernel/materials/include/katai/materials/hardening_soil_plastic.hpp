@@ -125,7 +125,14 @@ struct HsDilatancy {
     double from_q(double q, double s3v) const {
         const double s1 = q + s3v;
         const double denom = s1 + s3v + 2.0 * c_cot;
-        return (*this)(denom > 1e-12 ? q / denom : 0.0);
+        // The mobilised friction cannot exceed phi: at failure it IS phi, and a stress read
+        // beyond the failure line -- a trial, or a point near the apex where the denominator is
+        // a fraction of a kPa -- is at failure as far as the flow rule is concerned. Unbounded,
+        // the ratio reached 5 at a point in tension beside a strip load, and the contractant
+        // branch of the small-strain rule took the logarithm of a negative number: the stress
+        // came back NaN, the tension cut-off turned it into its own value, and only the tangent
+        // -- and a linear solve that returned NaN -- showed it.
+        return (*this)(denom > 1e-12 ? std::min(q / denom, sin_phi) : 0.0);
     }
 };
 

@@ -257,6 +257,20 @@ inline bool solve_static_phase(
                            "Re-run with a finer or coarser mesh, or more load steps, to see "
                            "whether it moves.");
     }
+    if (nr.small_strain_increments > 0) {
+        char gap[32];
+        std::snprintf(gap, sizeof(gap), "%.1f", 100.0 * nr.small_strain_gap);
+        add_diagnostic(R, DiagnosticSeverity::Note, "K2D-A032", "",
+                       std::to_string(nr.small_strain_increments) +
+                           " increment(s) were solved with the small-strain stiffness read from "
+                           "a fixed strain increment instead of the iterate, because the iteration "
+                           "did not close on the iterate's own: the stiffness of a step depends on "
+                           "the direction of its strain increment, and where the ground reverses "
+                           "that is not a smooth function. The fixed increment was replaced by "
+                           "the answer and the increment solved again; what is left between the "
+                           "two is at most " + std::string(gap) +
+                           "% of an increment's displacement. More load steps make it smaller.");
+    }
     // The support reactions at the fixed dofs, from committed Gauss states (discrete B^T sigma, no
     // recovery smoothing): what a support -- or an imposed displacement -- must exert. Soil
     // contribution (structural end forces on a fixed node are not included in v1; stated in

@@ -30,10 +30,10 @@
 // verify: KV-CST-019
 //   oracle:   published_benchmark
 //   source:   Borgh, R. (2018). Sensitivity analysis of numerical models for diaphragm walls with cross-walls in soft soils. Master's thesis, Department of Architecture and Civil Engineering, Chalmers University of Technology, Gothenburg
-//   locator:  Sec. 3.5.2 Figs 3.18-3.19 (undrained triaxial element tests of the HSsmall clay sets, compression and extension) with the parameter sets of App. D (Clays 4-7: E50, Eoed, Eur, m = 1, nu_ur = 0.15, p_ref = 100, c', phi', psi = 0, gamma_0.7, G0, K0nc, OCR / POP) and the in-situ K0 of Table 3.8; start states and end points read off Fig. 3.18
-//   quantity: mean effective stress p' and deviator q at 3% axial strain after K0 consolidation, in undrained compression and in undrained extension [kPa]
-//   expected: (p', q) compression / extension: Clay4 (80.4, 106.4) / (81.0, 75.0); Clay5 (117.7, 144.7) / (118.6, 104.7); Clay6 (154.7, 190.6) / (156.6, 138.7); Clay7 (252.4, 309.8) / (255.3, 223.0)
-//   band:     10% on each, as asserted below -- measured q -6.6 to -8.7% in compression and -3.2 to -5.8% in extension, p' +0.0 to +3.2% (with the shear hardening seeded from the present stress; -4.9 to -7.7% and -1.9 to -4.7% while it was seeded from the pre-consolidation state); the compression deviator is systematically low and declared as open: the published paths reach the Mohr-Coulomb line by 3% while this model is at 0.89-0.92 of it, which points at the cap calibration (alpha, beta) and the initial gamma_p convention, not at the flow rule this test was written for. Before the multi-surface formulation the extension deviator was 2.0 to 2.6 times the reference with p' doubling
+//   locator:  Sec. 3.5.2 Figs 3.18-3.19 (undrained triaxial element tests of the HSsmall clay sets, compression and extension, run to 10% axial strain in 500 steps) with the parameter sets of App. D (Clays 4-7: E50, Eoed, Eur, m = 1, nu_ur = 0.15, p_ref = 100, c', phi', psi = 0, gamma_0.7, G0, K0nc, OCR / POP) and the in-situ K0 of Table 3.8; both figures are vector drawings, and the deviator at 3% and at 10% is taken from the curve coordinates of Fig. 3.19, the mean effective stress at 10% from the end points of the paths of Fig. 3.18
+//   quantity: deviator q at 3% and at 10% axial strain and mean effective stress p' at 10%, after K0 consolidation, in undrained compression and in undrained extension [kPa]
+//   expected: q at 3% compression / extension: Clay4 106.3 / 74.5; Clay5 142.1 / 101.7; Clay6 186.7 / 133.9; Clay7 301.3 / 216.1 -- (p', q) at 10%: Clay4 (80.4, 107.1) / (81.0, 75.6); Clay5 (117.7, 144.6) / (118.6, 103.5); Clay6 (154.7, 190.2) / (156.6, 136.4); Clay7 (252.4, 309.5) / (255.3, 221.7)
+//   band:     q at 3%: 8% in compression and 5% in extension; q at 10%: 5% and 3%; p' at 10%: 4% and 3%, as asserted below -- measured q at 3% -5.1 to -7.2% in compression and -3.5 to -3.8% in extension, q at 10% -2.9 to -4.1% and -1.6 to -1.8%, p' at 10% -2.6 to -3.0% and -0.1 to -1.6%. THE MODEL IS LOW IN THE DEVIATOR, AND THAT IS OPEN. Until 2026-10-09 this entry compared the model at 3% with numbers that are the END of the published paths: the figure's strain axis stops at 3% and its curves run on to 10%, which the curve coordinates show and a reading off the picture does not. What is known about the difference, from the published curves of all seven clays of the source (the three shallow, more overconsolidated ones are not asserted here): the response over the first 0.2% in extension is reproduced within 1-2%; the deviator at which the compression path turns (the cap is met) is 81 / 150 / 247 kPa in the source for Clays 4 / 6 / 7 against 82.5 / 143 / 237 here; from there on the published curves gain deviator faster than the hyperbolic hardening law with a stiffness that follows the falling sigma'_3 allows for the strain applied, and the shallow clays lose a quarter as much mean stress in shear as this model does. Forty-eight combinations of the four choices the documentation leaves open or states twice (where the shear hardening starts, the source's two values of K0nc -- Table 3.8 gives 1 - sin phi, App. D 0.53 --, the contractant flow below the mobilisation limit, the stiffness the hardening multiplier is read from) were measured against all fourteen curves: the choices made here are the ones the cited formulations state, they are the furthest of the forty-eight from these curves (14.8% rms on the deviator; the nearest 6.7%), and none of the forty-eight reproduces them, so none was adopted. A staged excavation in clay (wall movement 6.1 / 24.1 / 57.1 / 141.5 mm published) reads 6.26 / 23.46 / 56.47 / 151.88 with the shear hardening started from the present state and 6.26 / 22.37 / 54.67 / 146.07 from the pre-consolidation state: it does not decide the first of the four either. Before the multi-surface formulation the extension deviator was 2.0 to 2.6 times the reference with p' doubling
 #include <katai/materials/hardening_soil_plastic.hpp>
 #include <katai/materials/material_model.hpp>
 #include <katai/materials/registry.hpp>
@@ -55,8 +55,9 @@ struct Clay {
     const char* name;
     double E50, Eoed, Eur, c, phi, g07, G0, k0nc, ocr, pop;
     double k0, sv;          // consolidation K0 and sigma_v' of the reference test
-    double pc_ref, qc_ref;  // (p', q) at 3% axial strain in compression (reference curves)
+    double pc_ref, qc_ref;  // (p', q) at 10% axial strain in compression (the end of the reference path)
     double pe_ref, qe_ref;  // and in extension
+    double qc3_ref, qe3_ref;  // q at 3% axial strain, compression and extension (reference curves)
 };
 
 MaterialModel build(const Clay& k) {
@@ -83,16 +84,16 @@ GaussState seed(const MaterialModel& m, double sv, double sh, const Clay& k) {
     return gs;
 }
 
-struct Path { double q3, p3, max_asym, max_p_rise, p0; };
+struct Path { double q3, q10, p10, max_asym, max_p_rise, p0; };
 
-// Undrained (constant volume) axisymmetric triaxial to 3% axial strain: eps_r = eps_theta =
-// -eps_z/2. dir = +1 compression (axial shortening), -1 extension.
+// Undrained (constant volume) axisymmetric triaxial to 10% axial strain, as the reference tests
+// were run: eps_r = eps_theta = -eps_z/2. dir = +1 compression (axial shortening), -1 extension.
 Path undrained(const MaterialModel& m, const Clay& k, int dir) {
     GaussState gs = seed(m, k.sv, k.k0 * k.sv, k);
-    const int n = 3000;
-    const double d = 0.03 / n;
+    const int n = 10000;
+    const double d = 0.10 / n;
     const double p0 = k.sv * (1.0 + 2.0 * k.k0) / 3.0;
-    Path out{0, 0, 0, 0, p0};
+    Path out{0, 0, 0, 0, 0, p0};
     double p_prev = p0;
     for (int i = 1; i <= n; ++i) {
         GaussState tr = gs;
@@ -105,8 +106,9 @@ Path undrained(const MaterialModel& m, const Clay& k, int dir) {
         out.max_asym = std::max(out.max_asym, std::fabs(sr - sth) / p);
         out.max_p_rise = std::max(out.max_p_rise, (p - p_prev) / p0);
         p_prev = p;
-        out.q3 = std::fabs(sz - sr);
-        out.p3 = p;
+        out.q10 = std::fabs(sz - sr);
+        out.p10 = p;
+        if (i == 3000) out.q3 = out.q10;
     }
     return out;
 }
@@ -114,32 +116,37 @@ Path undrained(const MaterialModel& m, const Clay& k, int dir) {
 void test_reference_clays() {
     // Clays 4-7 of a published deep-excavation study in soft clay (HSsmall, m = 1,
     // nu_ur = 0.15), each K0-consolidated at its own in-situ K0 to the sigma_v' of its depth,
-    // then sheared undrained in compression and in extension. The start states and the (p', q)
-    // reached at 3% axial strain are read off the published element-test stress paths of the same
-    // parameter sets (the start points reproduce the in-situ K0 to 0.01, which is how the
-    // consolidation K0 was identified).
+    // then sheared undrained in compression and in extension to 10% axial strain. The start
+    // states are read off the published element-test stress paths of the same parameter sets
+    // (the start points reproduce the in-situ K0 to 0.01, which is how the consolidation K0 was
+    // identified); the deviator at 3% and at 10% is taken from the coordinates of the published
+    // stress-strain curves, the mean effective stress at 10% from the end of the stress paths.
     const Clay clays[] = {
-        {"Clay4", 15400, 8300, 30800, 1, 32.0, 4e-4, 39230, 0.53, 1.00, 32, 0.61, 126.5, 80.4, 106.4, 81.0, 75.0},
-        {"Clay5", 13100, 6600, 26200, 0, 30.5, 6e-4, 40960, 0.53, 1.00, 32, 0.58, 186.3, 117.7, 144.7, 118.6, 104.7},
-        {"Clay6", 13100, 6600, 26200, 0, 30.5, 8e-4, 36060, 0.53, 1.14, 0, 0.57, 248.8, 154.7, 190.6, 156.6, 138.7},
-        {"Clay7", 10500, 5285, 21000, 0, 30.5, 9e-4, 37460, 0.53, 1.14, 0, 0.56, 408.0, 252.4, 309.8, 255.3, 223.0},
+        {"Clay4", 15400, 8300, 30800, 1, 32.0, 4e-4, 39230, 0.53, 1.00, 32, 0.61, 126.5, 80.4, 107.1, 81.0, 75.6, 106.3, 74.5},
+        {"Clay5", 13100, 6600, 26200, 0, 30.5, 6e-4, 40960, 0.53, 1.00, 32, 0.58, 186.3, 117.7, 144.6, 118.6, 103.5, 142.1, 101.7},
+        {"Clay6", 13100, 6600, 26200, 0, 30.5, 8e-4, 36060, 0.53, 1.14, 0, 0.57, 248.8, 154.7, 190.2, 156.6, 136.4, 186.7, 133.9},
+        {"Clay7", 10500, 5285, 21000, 0, 30.5, 9e-4, 37460, 0.53, 1.14, 0, 0.56, 408.0, 252.4, 309.5, 255.3, 221.7, 301.3, 216.1},
     };
     for (const Clay& k : clays) {
         const MaterialModel m = build(k);
         const Path c = undrained(m, k, +1), e = undrained(m, k, -1);
-        std::printf("  %s  p0' %.1f | compression (p', q) = (%.1f, %.1f) ref (%.1f, %.1f) |"
-                    " extension (%.1f, %.1f) ref (%.1f, %.1f) | asym %.1e, p' rise %.1e\n",
-                    k.name, c.p0, c.p3, c.q3, k.pc_ref, k.qc_ref, e.p3, e.q3, k.pe_ref, k.qe_ref,
-                    e.max_asym, e.max_p_rise);
+        std::printf("  %s  p0' %.1f | compression q(3%%) %.1f ref %.1f, (p', q)(10%%) (%.1f, %.1f) ref (%.1f, %.1f) |"
+                    " extension q(3%%) %.1f ref %.1f, (p', q)(10%%) (%.1f, %.1f) ref (%.1f, %.1f) | asym %.1e, p' rise %.1e\n",
+                    k.name, c.p0, c.q3, k.qc3_ref, c.p10, c.q10, k.pc_ref, k.qc_ref, e.q3, k.qe3_ref, e.p10, e.q10,
+                    k.pe_ref, k.qe_ref, e.max_asym, e.max_p_rise);
         char msg[160];
-        std::snprintf(msg, sizeof msg, "%s: undrained compression q within 10%% of the reference", k.name);
-        check(std::fabs(c.q3 / k.qc_ref - 1) < 0.10, msg);
-        std::snprintf(msg, sizeof msg, "%s: undrained compression p' within 10%% of the reference", k.name);
-        check(std::fabs(c.p3 / k.pc_ref - 1) < 0.10, msg);
-        std::snprintf(msg, sizeof msg, "%s: undrained extension q within 10%% of the reference", k.name);
-        check(std::fabs(e.q3 / k.qe_ref - 1) < 0.10, msg);
-        std::snprintf(msg, sizeof msg, "%s: undrained extension p' within 10%% of the reference", k.name);
-        check(std::fabs(e.p3 / k.pe_ref - 1) < 0.10, msg);
+        std::snprintf(msg, sizeof msg, "%s: undrained compression q at 3%% within 8%% of the reference", k.name);
+        check(std::fabs(c.q3 / k.qc3_ref - 1) < 0.08, msg);
+        std::snprintf(msg, sizeof msg, "%s: undrained extension q at 3%% within 5%% of the reference", k.name);
+        check(std::fabs(e.q3 / k.qe3_ref - 1) < 0.05, msg);
+        std::snprintf(msg, sizeof msg, "%s: undrained compression q at 10%% within 5%% of the reference", k.name);
+        check(std::fabs(c.q10 / k.qc_ref - 1) < 0.05, msg);
+        std::snprintf(msg, sizeof msg, "%s: undrained compression p' at 10%% within 4%% of the reference", k.name);
+        check(std::fabs(c.p10 / k.pc_ref - 1) < 0.04, msg);
+        std::snprintf(msg, sizeof msg, "%s: undrained extension q at 10%% within 3%% of the reference", k.name);
+        check(std::fabs(e.q10 / k.qe_ref - 1) < 0.03, msg);
+        std::snprintf(msg, sizeof msg, "%s: undrained extension p' at 10%% within 3%% of the reference", k.name);
+        check(std::fabs(e.p10 / k.pe_ref - 1) < 0.03, msg);
         std::snprintf(msg, sizeof msg, "%s: extension keeps sigma_r = sigma_theta", k.name);
         check(e.max_asym < 1e-6, msg);
         std::snprintf(msg, sizeof msg, "%s: psi = 0 undrained extension never raises p'", k.name);
@@ -148,7 +155,7 @@ void test_reference_clays() {
         // q <= 6 sin(phi) (p' + c cot phi) / (3 + sin phi).
         const double sphi = std::sin(k.phi * kPi / 180), ccot = k.c * std::cos(k.phi * kPi / 180) / sphi;
         std::snprintf(msg, sizeof msg, "%s: extension stays inside the Mohr-Coulomb extension line", k.name);
-        check(e.q3 <= 6 * sphi * (e.p3 + ccot) / (3 + sphi) * (1 + 1e-3), msg);
+        check(e.q10 <= 6 * sphi * (e.p10 + ccot) / (3 + sphi) * (1 + 1e-3), msg);
     }
 }
 

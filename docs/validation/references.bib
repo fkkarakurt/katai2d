@@ -221,6 +221,11 @@
   note  = {cited by KV-NUM-009},
 }
 
+@misc{schanz1999b,
+  title = {Schanz, T., Vermeer, P.A. and Bonnier, P.G. (1999). The hardening soil model: formulation and verification. Beyond 2000 in Computational Geotechnics, Balkema, Rotterdam, 281-296; Benz, T. (2007). Small-strain stiffness of soils and its numerical consequences. Mitteilung 55, Institut fuer Geotechnik, Universitaet Stuttgart, Sec. 7.2},
+  note  = {cited by KV-CST-020},
+}
+
 @misc{skempton1954,
   title = {Skempton, A.W. (1954). The pore-pressure coefficients A and B. Geotechnique 4(4), 143-147, for B; Biot, M.A. (1941). General theory of three-dimensional consolidation. J. Appl. Phys. 12, 155-164, for the Biot coefficient alpha; the undrained relations of isotropic linear elasticity as recorded in docs/references/effective-stress-formulation.md; KATAI 2D input contract (docs/k2d-format.md, und_mode / nu_u / skempton_B)},
   note  = {cited by KV-CST-006},
@@ -336,6 +341,11 @@
   note  = {cited by KV-NUM-001},
 }
 
+@misc{the2007,
+  title = {the central difference of the returned stress with respect to the strain increment, taken with a step of 1e-5 of the increment's norm along a random direction, against the tangent the same call hands back (Hardening Soil with small-strain stiffness after Benz, T. (2007), Small-Strain Stiffness of Soils and its Numerical Consequences, Mitteilung 55, Institut fuer Geotechnik, Universitaet Stuttgart, Sec. 6.1 and App. A: the stiffness of a step depends on the direction of the step's strain increment)},
+  note  = {cited by KV-NUM-014},
+}
+
 @misc{the1943,
   title = {the drained limit of Biot consolidation -- as the excess pore pressure dissipates the coupled problem BECOMES the drained one, so the verified static path (solve_nonlinear; the plate/anchor/geogrid diagrams of test_struct_gui, KV-STR-002/004/005) is the answer the coupled solve must converge to. Terzaghi (1943) supplies the rate, cv = k Eoed / gamma_w, and with it the time factor at which the comparison is fair},
   note  = {cited by KV-STR-006},
@@ -401,7 +411,7 @@
   note  = {cited by KV-STR-008},
 }
 
-@misc{the2007,
+@misc{the2007b,
   title = {the small-strain stiffness degradation law of the Hardening Soil small-strain model (Benz, T. (2007). Small-strain stiffness of soils and its numerical consequences. PhD thesis, Universitat Stuttgart; modified Hardin-Drnevich after Santos & Correia 2001), stated in full: secant G_s/G0 = 1/(1 + a |gamma|/gamma_ref) with a = 0.385, tangent G_t = G0/(1 + a gamma/gamma_ref)^2 cut off below at G_ur = E_ur/(2(1+nu_ur)), and Masing's rule (Masing 1926) gamma_0.7,re-loading = 2 gamma_0.7,virgin-loading, which this build applies as a constant factor throughout loading rather than at a detected reversal; KATAI 2D input contract (docs/k2d-format.md, G0ref / gamma07); the same equations are verified at the material point in test_hssmall},
   note  = {cited by KV-CST-008},
 }

@@ -15,6 +15,14 @@
 #include <cmath>
 #include <cstdio>
 
+// THE START IS THE K0 PROCEDURE, in every model here, with or without an interface. These cases
+// used to ask for gravity loading, and a model with an interface in it was then silently started
+// by the K0 procedure instead while the one without was not: "the interface changes the result"
+// compared a ground that had settled under its own weight with one that had not, and "the wall
+// does not deflect under self-weight" held because the weight had never been applied. Gravity
+// loading is now gravity loading whatever is in the model, so the statements are made on the
+// start they are about -- a geostatic state in balance, the same for the models compared --
+// and what they measure is the surcharge and the interface.
 namespace m = katai::model;
 using katai::app::InitialPhase;
 
@@ -63,36 +71,58 @@ double max_settlement(const Eigen::VectorXd& disp) {
     for (int i = 1; i < disp.size(); i += 2) s = std::fmax(s, std::fabs(disp[i]));
     return s;
 }
-double solve_settlement(const m::Project& pr, int order, bool* ok, bool* finite) {
+// The largest settlement, and the surface settlement 0.6 m either side of the line x = 10 (the
+// unloaded side first): the two points an interface there acts on.
+struct Settle { double max = 0.0, unloaded = 0.0, loaded = 0.0; };
+Settle solve_settlement(const m::Project& pr, int order, bool* ok, bool* finite) {
     const auto M = katai::app::mesh_from_project(pr, 1.0, order);
-    const auto R = katai::app::solve_gravity_le(pr, M.mesh, InitialPhase::GravityLoading);
+    const auto R = katai::app::solve_gravity_le(pr, M.mesh, InitialPhase::K0Procedure);
     *ok = R.ok;
     *finite = true;
     for (int i = 0; i < R.disp.size(); ++i) if (!std::isfinite(R.disp[i])) *finite = false;
-    return R.ok ? max_settlement(R.disp) : 0.0;
+    Settle out;
+    if (!R.ok) return out;
+    out.max = max_settlement(R.disp);
+    const auto at = [&](double px) {
+        int best = 0; double bd = 1e300;
+        for (int n = 0; n < M.mesh.node_count; ++n) {
+            const double dd = std::hypot(M.mesh.x[n] - px, M.mesh.y[n] - 10.0);
+            if (dd < bd) { bd = dd; best = n; }
+        }
+        return -R.disp[2 * best + 1];
+    };
+    out.unloaded = at(9.4);
+    out.loaded = at(10.6);
+    return out;
 }
 
 void run(int order) {
     std::printf("-- element order %d --\n", order);
     bool ok_p, ok_c, ok_i, fin_p, fin_c, fin_i;
-    const double s_plain = solve_settlement(block(0), order, &ok_p, &fin_p);
-    const double s_ctrl  = solve_settlement(block(2), order, &ok_c, &fin_c);   // line embedded, NOT split
-    const double s_iface = solve_settlement(block(1), order, &ok_i, &fin_i);   // line embedded + split + joint
+    const Settle s_plain = solve_settlement(block(0), order, &ok_p, &fin_p);
+    const Settle s_ctrl  = solve_settlement(block(2), order, &ok_c, &fin_c);   // line embedded, NOT split
+    const Settle s_iface = solve_settlement(block(1), order, &ok_i, &fin_i);   // line embedded + split + joint
     check(ok_p && ok_c && ok_i, "all three models solved (plain / line-control / interface)");
     check(fin_p && fin_c && fin_i, "all solutions finite (well-posed, no NaN)");
     if (!(ok_p && ok_c && ok_i)) return;
 
-    const double line_effect = std::fabs(s_ctrl - s_plain) / s_plain;   // bare constraint-line effect
-    const double iface_effect = std::fabs(s_iface - s_ctrl) / s_ctrl;   // interface (split + Coulomb) effect
-    std::printf("   max settlement: plain=%.5e  line-control=%.5e  interface=%.5e\n", s_plain, s_ctrl, s_iface);
-    std::printf("   bare-line effect=%.2f%%   interface effect (vs line-control)=%.1f%%\n",
-                100.0 * line_effect, 100.0 * iface_effect);
-    check(s_plain > 0.0 && s_iface > 0.0, "models settle under the surcharge");
+    const double line_effect = std::fabs(s_ctrl.max - s_plain.max) / s_plain.max;   // bare constraint-line effect
+    std::printf("   max settlement: plain=%.5e  line-control=%.5e  interface=%.5e\n", s_plain.max, s_ctrl.max,
+                s_iface.max);
+    std::printf("   0.6 m from the line, unloaded / loaded side: line-control %.4e / %.4e   interface %.4e / %.4e\n",
+                s_ctrl.unloaded, s_ctrl.loaded, s_iface.unloaded, s_iface.loaded);
+    check(s_plain.max > 0.0 && s_iface.max > 0.0, "models settle under the surcharge");
     check(line_effect < 0.03, "the bare x=10 constraint line barely changes the result (mesh effect small)");
-    // Decisive: relative to the SAME-meshed line-control, the interface (split + Coulomb joint) changes the
-    // result by a wide margin -> the interface is genuinely assembled and active (present != absent). Before
-    // this work a standalone interface was dropped silently, so this would have been ~0%.
-    check(iface_effect > 0.10, "interface (split + joint) markedly changes the result (present != absent)");
+    // Decisive: against the SAME-meshed line-control, the interface (split + Coulomb joint) lets the loaded
+    // half slide past the unloaded one. Read where that shows -- beside the line: bonded, the ground on the
+    // unloaded side is dragged down with the load; with a weak joint it is left behind and the loaded side
+    // goes down further. (The LARGEST settlement of the model is far from the line and moves by 0.4%; this
+    // used to assert 10% on it, which held only while a model with an interface was started by another
+    // procedure than the one it was compared with.) Measured: 39.5 -> 1.9 mm and 74.8 -> 112.9 mm.
+    check(s_iface.unloaded < 0.5 * s_ctrl.unloaded,
+          "interface (split + joint) markedly changes the result: the unloaded side is no longer dragged down");
+    check(s_iface.loaded > 1.2 * s_ctrl.loaded,
+          "interface (split + joint) markedly changes the result: the loaded side settles further");
 }
 
 // A plate "wall" (with +/- interface flags) must now build as an embedded wall on tri6 AND tri15, at ANY
@@ -154,7 +184,7 @@ void run_wall_install(int order) {
     std::printf("-- wall install (self-weight only), order %d --\n", order);
     const auto Pr = wall_install_model();
     const auto M = katai::app::mesh_from_project(Pr, 1.0, order);
-    const auto R = katai::app::solve_gravity_le(Pr, M.mesh, InitialPhase::GravityLoading);
+    const auto R = katai::app::solve_gravity_le(Pr, M.mesh, InitialPhase::K0Procedure);
     check(R.ok, "self-weight wall install solved");
     if (!R.ok) { std::printf("   (%s)\n", R.message.c_str()); return; }
     const double d = max_abs_disp(R.disp);
@@ -167,9 +197,9 @@ void run_wall_install(int order) {
 void run_wall(const char* label, bool vertical, int order) {
     std::printf("-- wall: %s, order %d --\n", label, order);
     const auto Pb = wall_model(vertical, false); const auto Mb = katai::app::mesh_from_project(Pb, 1.0, order);
-    const auto Rb = katai::app::solve_gravity_le(Pb, Mb.mesh, InitialPhase::GravityLoading);
+    const auto Rb = katai::app::solve_gravity_le(Pb, Mb.mesh, InitialPhase::K0Procedure);
     const auto Pw = wall_model(vertical, true);  const auto Mw = katai::app::mesh_from_project(Pw, 1.0, order);
-    const auto Rw = katai::app::solve_gravity_le(Pw, Mw.mesh, InitialPhase::GravityLoading);
+    const auto Rw = katai::app::solve_gravity_le(Pw, Mw.mesh, InitialPhase::K0Procedure);
     check(Rb.ok && Rw.ok, "bonded-plate and interface-wall both solved");
     if (!Rb.ok || !Rw.ok) { std::printf("   (%s / %s)\n", Rb.message.c_str(), Rw.message.c_str()); return; }
     bool fin = true; for (int i = 0; i < Rw.disp.size(); ++i) if (!std::isfinite(Rw.disp[i])) fin = false;
@@ -177,7 +207,16 @@ void run_wall(const char* label, bool vertical, int order) {
     const double db = max_abs_disp(Rb.disp), dw = max_abs_disp(Rw.disp);
     std::printf("   max|disp|: bonded-plate=%.5e  interface-wall=%.5e  (%+.1f%%)\n",
                 db, dw, 100.0 * (dw - db) / db);
-    check(std::fabs(dw - db) > 0.03 * db, "interface flag CHANGES the wall result (embedded wall built)");
+    // What the flag changes is what the WALL carries: bonded, the ground shears with the wall along its
+    // whole length; with joints it can slide, and the bending moment is another one. (The largest
+    // displacement of the model is under the surcharge, away from the wall, and moves by a fraction of a
+    // percent.) Measured: the largest moment changes by 10 to 24%.
+    double mb = 0.0, mw = 0.0;
+    for (const auto& d : Rb.struct_forces) if (d.kind == 0) mb = std::fmax(mb, std::fabs(d.max_M));
+    for (const auto& d : Rw.struct_forces) if (d.kind == 0) mw = std::fmax(mw, std::fabs(d.max_M));
+    std::printf("   max|M| of the wall: bonded-plate=%.3f  interface-wall=%.3f kNm/m  (%+.1f%%)\n", mb, mw,
+                mb > 0.0 ? 100.0 * (mw - mb) / mb : 0.0);
+    check(mb > 0.0 && std::fabs(mw - mb) > 0.05 * mb, "interface flag CHANGES the wall result (embedded wall built)");
     // The wall must also yield an N/Q/M force diagram (structural output), including on tri15.
     bool has_M = false;
     for (const auto& d : Rw.struct_forces)

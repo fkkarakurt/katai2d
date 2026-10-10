@@ -78,9 +78,20 @@ struct GaussState {
     // consolidation pressure pp (compression-positive). Zero / unused for other models.
     double gamma_p = 0.0;
     double pp = 0.0;
-    // HSsmall: accumulated deviatoric shear strain γ_hist (monotone; drives the
-    // small-strain stiffness degradation). Only for HSsmall (G0_ref>0); 0/unused otherwise.
+    // HSsmall: the scalar shear strain gamma_hist the small-strain stiffness is read at, as it
+    // stood at the end of the last increment. Only for HSsmall (G0_ref>0); 0/unused otherwise.
+    // It is derived from the history tensor below (hs_small_strain_step) and kept for output.
     double gamma_hist = 0.0;
+    // HSsmall: the deviatoric strain HISTORY, a symmetric tensor [hxx, hyy, hzz, hxy] (tensor
+    // shear; zz is the out-of-plane or hoop direction). A strain increment that reverses the
+    // history in one of its own principal directions resets it there, which is what gives the
+    // stiffness back on unloading and reloading (Benz 2007, Sec. 6.1 and Appendix A).
+    Eigen::Vector4d hs_hist = Eigen::Vector4d::Zero();
+    // HSsmall: the smallest stiffness multiplier G/G_ur the point has had on the PRIMARY
+    // loading curve (0 = not loaded yet). The hardening laws are scaled with it
+    // (HardeningSoilParams::hardening_scale); once it has come down to 1 the model hardens as
+    // Hardening Soil does.
+    double hs_g_mono = 0.0;
     // THE EXCESS PORE PRESSURE IS A STATE OF THE PHASE CHAIN, not a function of the volume
     // change. Its stress (tension positive, the sign it enters the total stress with) at this
     // point is
@@ -337,7 +348,7 @@ inline double hs_frozen_Eur(const HardeningSoilParams& pe,
     const double cR = std::sqrt(0.25 * (cxx - cyy) * (cxx - cyy) + cxy * cxy);
     const double s1c = std::max(std::max(cmean + cR, cmean - cR), comm_zz);  // major tension-pos
     const double s3_stiff = std::max(-s1c, 0.1 * pe.p_ref);                  // comp-pos minor
-    return pe.Eur(s3_stiff);
+    return pe.Eur(s3_stiff) * pe.elastic_scale;   // the ELASTIC stiffness of the step
 }
 
 // THE PORE FLUID FOLLOWS THE SKELETON, at every stress point. Kw/n is a multiple of the
@@ -377,9 +388,117 @@ inline HardeningSoilParams hs_small_strain_params(const HardeningSoilParams& p,
     if (p.G0_ref > 0.0) {
         const double d = 1.0 + HardeningSoilParams::kHDa * gamma_hist / p.gamma07_reload();
         const double E0_ref = 2.0 * (1.0 + p.nu_ur) * p.G0_ref;
-        pe.Eur_ref = std::max(E0_ref / (d * d), p.Eur_ref);
+        pe.elastic_scale = std::max(E0_ref / (d * d), p.Eur_ref) / p.Eur_ref;
     }
     return pe;
+}
+
+// THE SMALL-STRAIN STEP OF HSsmall: what one strain increment does to the strain history, and
+// the stiffness it is taken with. `exx, eyy, ezz, exy` is the DEVIATORIC strain increment (tensor
+// shear; zz the out-of-plane or hoop direction). Follows Benz (2007), Appendix A, statement by
+// statement:
+//   * the history tensor is rotated into the principal directions of the increment;
+//   * in a direction where the history and the increment have opposite signs the history is
+//     reset (the scaling 1/sqrt(1 + chi) of that row and column, which takes the elongation chi
+//     there to zero and scales the shear components with it);
+//   * the increment is added, and the scalar history strain is gamma = sqrt(3) |H de| / |de|
+//     before (gamma_1) and after (gamma_2) -- in a triaxial test eps_axial - eps_lateral;
+//   * the stiffness of the increment is the SECANT of the Hardin-Drnevich curve between the two,
+//     G = G0 [gamma_2/(1 + gamma_2/F) - gamma_1/(1 + gamma_1/F)] / (gamma_2 - gamma_1) with
+//     F = gamma_0.7 / 0.385 on the primary curve and twice that on the reloading curve (Masing),
+//     never below G_ur (the cut-off at gamma = (sqrt(G0/Gur) - 1) F);
+//   * the elastic stiffness is always the RELOADING one -- primary loading is softer through the
+//     plasticity, not through the elasticity -- and the smallest value the PRIMARY curve has
+//     given is remembered as the multiplier the hardening laws are scaled with.
+// Until this was written the history was one scalar that only ever grew: a point unloaded after
+// loading stayed on the stiffness the loading had degraded it to.
+struct HsSmallStrainStep {
+    HardeningSoilParams pe;       // the parameters this increment is integrated with
+    Eigen::Vector4d hist = Eigen::Vector4d::Zero();
+    double g_mono = 0.0;
+    double gamma_hist = 0.0;
+};
+inline HsSmallStrainStep hs_small_strain_step(const HardeningSoilParams& p, const GaussState& c,
+                                              double exx, double eyy, double ezz, double exy) {
+    HsSmallStrainStep out;
+    out.pe = p;
+    out.hist = c.hs_hist;
+    out.g_mono = c.hs_g_mono;
+    out.gamma_hist = c.gamma_hist;
+    if (!(p.G0_ref > 0.0)) return out;
+    const double gfac = 2.0 * (1.0 + p.nu_ur) * p.G0_ref / p.Eur_ref;   // G0 / G_ur
+    if (!(gfac > 1.0)) return out;
+    constexpr double kOff = 100.0;   // the listing's offset of the diagonal; any value >> strains
+    const double hd = 0.5 * (exx - eyy), rr = std::sqrt(hd * hd + exy * exy);
+    const double d[3] = {0.5 * (exx + eyy) + rr, 0.5 * (exx + eyy) - rr, ezz};
+    const double de2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    const double f_load = p.gamma07 / HardeningSoilParams::kHDa;
+    const auto tangent_ratio = [&](double gam, double f) {
+        const double q = 1.0 + gam / f;
+        return std::max(gfac / (q * q), 1.0);
+    };
+    if (!(de2 > 0.0)) {
+        // No deviatoric increment: nothing moves in the history and the stress does not depend
+        // on the stiffness, so what is set here is only the operator an iteration STARTS with.
+        // With no increment there is no direction, and the two directions answer differently:
+        // carrying on, with the reloading curve's tangent where the history stands; turning
+        // back, with G0. The start is made with G0, the stiffer of the two: an operator that
+        // is too stiff makes a first step that falls short and is corrected by the next, one
+        // that is too soft overshoots by G0 / G_t. It was the tangent at the history, and the
+        // first time step of a consolidation phase that unloads the ground -- where the search
+        // takes its least bad step rather than none -- went from 0.44 of its scale to 1e8.
+        out.pe.elastic_scale = gfac;
+    } else {
+        double cs = 1.0, sn = 0.0;
+        if (rr > 0.0) {
+            const double t = 0.5 * std::atan2(exy, hd);
+            cs = std::cos(t); sn = std::sin(t);
+        }
+        const double hxx = c.hs_hist(0) + kOff, hyy = c.hs_hist(1) + kOff, hzz = c.hs_hist(2) + kOff,
+                     hxy = c.hs_hist(3);
+        double h11 = cs * cs * hxx + sn * sn * hyy + 2.0 * cs * sn * hxy;
+        double h22 = sn * sn * hxx + cs * cs * hyy - 2.0 * cs * sn * hxy;
+        double h12 = cs * sn * (hyy - hxx) + (cs * cs - sn * sn) * hxy;
+        double h33 = hzz;
+        const double chi1[3] = {h11 - kOff, h22 - kOff, h33 - kOff};
+        double xt[3];
+        for (int i = 0; i < 3; ++i)
+            xt[i] = chi1[i] * d[i] < 0.0 ? std::sqrt(kOff / (chi1[i] + kOff)) : 1.0;
+        h11 *= xt[0] * xt[0]; h22 *= xt[1] * xt[1]; h33 *= xt[2] * xt[2]; h12 *= xt[0] * xt[1];
+        const double chi2[3] = {h11 - kOff, h22 - kOff, h33 - kOff};
+        h11 += d[0]; h22 += d[1]; h33 += d[2];
+        const double chi3[3] = {h11 - kOff, h22 - kOff, h33 - kOff};
+        double n1 = 0.0, n2 = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            n1 += d[i] * d[i] * chi2[i] * chi2[i];
+            n2 += d[i] * d[i] * chi3[i] * chi3[i];
+        }
+        const double g1 = std::sqrt(3.0 * n1 / de2), g2 = std::sqrt(3.0 * n2 / de2);
+        const auto secant_ratio = [&](double f) {
+            const double off = (std::sqrt(gfac) - 1.0) * f, span = g2 - g1;
+            const auto area = [&](double g) { return g / (1.0 + g / f); };
+            if (span <= 0.0) return tangent_ratio(g1, f);
+            if (g1 < off && g2 < off) return gfac * (area(g2) - area(g1)) / span;
+            if (g1 < off) return (gfac * (area(off) - area(g1)) + (g2 - off)) / span;
+            return 1.0;
+        };
+        const double g_mono0 = c.hs_g_mono > 0.0 ? c.hs_g_mono : std::min(gfac, 10.0);
+        out.g_mono = g_mono0 > 1.0 ? std::max(1.0, std::min(secant_ratio(f_load), g_mono0)) : 1.0;
+        // No threshold below which the multiplier is simply G0 / G_ur: the secant goes there by
+        // itself as the history empties, and a threshold is a step in the stress (0.2% of the
+        // stiffness at a history of 1e-6, which an iteration then cannot get below).
+        const double act = secant_ratio(2.0 * f_load);
+        out.pe.elastic_scale = std::max(act, 1.0);
+        out.hist(0) = cs * cs * h11 + sn * sn * h22 - 2.0 * cs * sn * h12 - kOff;
+        out.hist(1) = sn * sn * h11 + cs * cs * h22 + 2.0 * cs * sn * h12 - kOff;
+        out.hist(2) = h33 - kOff;
+        out.hist(3) = cs * sn * (h11 - h22) + (cs * cs - sn * sn) * h12;
+        out.gamma_hist = g2;
+    }
+    const double gm = out.g_mono > 0.0 ? out.g_mono : std::min(gfac, 10.0);
+    const double Ei_ref = 2.0 * p.E50_ref / (2.0 - p.Rf);
+    if (gm > 1.0 && Ei_ref > 0.0) out.pe.hardening_scale = std::pow(gm, 1.0 + p.Eur_ref / Ei_ref);
+    return out;
 }
 
 // KINEMATICS-AGNOSTIC Hardening Soil principal return. The in-plane block (xx,yy,xy) is the
@@ -454,7 +573,8 @@ void hs_forward(const MaterialModel& m, const GaussState& committed,
                 const HsSubstepPlan* plan_in = nullptr,
                 bool* plastic_out = nullptr, HsSubstepPlan* plan_out = nullptr,
                 double* Eur_out = nullptr, double substep_tol = 0.0,
-                int* saturated_out = nullptr);
+                int* saturated_out = nullptr,
+                const Eigen::Vector3d* de_small = nullptr);
 
 // FD step (relative): the sqrt(machine-epsilon) scale — the Pérez-Foguet &
 // Rodríguez-Ferran & Huerta (CMAME 2000) recommendation. Signal/cancellation balance:
@@ -463,6 +583,17 @@ void hs_forward(const MaterialModel& m, const GaussState& committed,
 inline double hs_fd_step(double comp) {
     constexpr double kSqrtEps = 1.4901161193847656e-08;  // sqrt(2^-52)
     return kSqrtEps * (1.0 + std::fabs(comp));
+}
+// The same step, kept below a thousandth of the increment it differences. The fixed step is
+// 1.5e-8 whatever the increment, and an increment of that size is differenced with a step as
+// large as itself: the perturbed walk then meets surfaces the increment never does. Measured on
+// Hardening Soil at random stress points: for increments below 1e-7 the tangent was more than
+// 1% off the difference of the stress at one point in five.
+inline double hs_fd_step(double comp, double increment_norm) {
+    // ... and not below 1e-11: the stress difference over a smaller step is rounding (a stress of
+    // 100 kPa carries 1e-14, and E h has to stand well clear of it).
+    const double h = hs_fd_step(comp);
+    return increment_norm > 0.0 ? std::max(std::min(h, 1.0e-3 * increment_norm), 1.0e-11) : h;
 }
 
 // ============================ SOFT SOIL FE wrapper ============================
@@ -625,6 +756,13 @@ struct PointReportT {
     // integration that was cut short.
     bool integration_saturated = false;
     MatT elastic = MatT::Zero();
+    // The STIFFEST response the point can give to any increment from where it stands, where
+    // that is more than `elastic`: a soil with small-strain stiffness answers an increment that
+    // turns against its strain history with G0, whatever stiffness the increment at hand was
+    // taken with. An iteration on a fixed operator contracts only if the operator is at least
+    // as stiff as the response, so the elastic-operator pass assembles this one.
+    bool has_stiffest = false;
+    MatT stiffest = MatT::Zero();
 };
 using PointReport = PointReportT<Eigen::Matrix3d>;    // plane strain [xx, yy, xy]
 using PointReport4 = PointReportT<Eigen::Matrix4d>;   // axisymmetric [r, z, rz, theta]
@@ -633,13 +771,21 @@ using PointReport4 = PointReportT<Eigen::Matrix4d>;   // axisymmetric [r, z, rz,
 // step; strain_increment: the step's total strain increment Delta-eps; trial:
 // updated (output) state; tangent: the 3x3 in-plane operator D_T fed back to the
 // element (meaningless while mode==kNone, do not use it).
+// small_strain_increment: where given, the strain increment the SMALL-STRAIN STIFFNESS of the
+// step is read from (Hardening Soil with small-strain stiffness; every other model ignores it).
+// The stiffness of a step depends on the direction of the step's strain increment, which makes
+// the stress a function with slopes of order 1 / |d eps| and steps where the increment's
+// principal directions are not unique; an iteration that cannot close on it is given the
+// stiffness of a fixed increment close to the answer instead (see small_freeze in the solver).
+// The stress is integrated over strain_increment and the strain history is advanced by it.
 // dt_day: this increment's TIME share [days] — read only by time-dependent constitutive
 // models (SoftSoilCreep); 0 (default) is bit-for-bit the old behaviour for all old callers.
 void integrate_point(const MaterialModel& m, const GaussState& committed,
                      const Eigen::Vector3d& strain_increment,
                      GaussState& trial, Eigen::Matrix3d& tangent,
                      TangentMode mode = TangentMode::kConsistent, double dt_day = 0.0,
-                     PointReport* report = nullptr, double substep_tol = 0.0);
+                     PointReport* report = nullptr, double substep_tol = 0.0,
+                     const Eigen::Vector3d* small_strain_increment = nullptr);
 
 // Axisymmetric material-point integration. Strain/stress order [r, z, rz, theta];
 // the hoop is a real strain (unlike plane strain). The Mohr-Coulomb return mapping
@@ -654,6 +800,7 @@ void integrate_point_axisym(const MaterialModel& m,
                             TangentMode mode = TangentMode::kConsistent,
                             double dt_day = 0.0,
                             PointReport4* report = nullptr,
-                            double substep_tol = 0.0);
+                            double substep_tol = 0.0,
+                            const Eigen::Vector4d* small_strain_increment = nullptr);
 
 } // namespace katai::core

@@ -7,16 +7,17 @@
 // while waiting → zero cost to serial sections; there is also no external
 // runtime/DLL dependency (the project's dependency-free philosophy).
 //
-// Determinism: parallel_for splits [0,n) into FIXED contiguous blocks per call; the
-// caller works too. Do NOT accumulate shared floating point — each block must write only
-// its own output (two-phase assembly: compute parallel, scatter sequential); then the
-// result is bit-for-bit independent of the thread count.
+// Determinism: parallel_for hands [0,n) out in small contiguous pieces to whichever thread is
+// free; the caller works too. Do NOT accumulate shared floating point — each index must write
+// only its own output (two-phase assembly: compute parallel, scatter sequential); then the
+// result is bit-for-bit independent of the thread count and of which thread took which piece.
 
 #include <functional>
 
 namespace katai::math {
 
-// fn(begin, end): processes the contiguous subrange [begin,end). Blocks run concurrently
+// fn(begin, end): processes the contiguous subrange [begin,end); it is called once per piece,
+// so several times per thread. Pieces run concurrently
 // on the pool workers + the calling thread; on return all have finished. If a block
 // throws, the first exception is rethrown to the caller (the other blocks complete).
 // For small n (or when called from inside a pool worker) it runs directly on the caller.
