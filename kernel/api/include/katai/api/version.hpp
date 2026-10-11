@@ -19,11 +19,14 @@
 // the head of a line rather than at the end of one, where the re-measurement they force can be
 // made deliberately (V0.9.0-FOUNDATIONS-AUDIT.md 3.2, 3.3). What the gate does close is in
 // CHANGELOG.md under [0.9.0]. The next line reopens as "-dev" with N-3 as its first item.
+//
+// 0.10.0 is OPEN: what has landed since 0.9.0 is in CHANGELOG.md under [Unreleased], and it
+// changes answers 0.9.0 gave, so a build of this tree must not print 0.9.0 on a report.
 
 namespace katai::api {
 
-inline constexpr const char* kVersion = "0.9.0";
-inline constexpr const char* kVersionDate = "2026-08-31";
+inline constexpr const char* kVersion = "0.10.0-dev";
+inline constexpr const char* kVersionDate = "2026-10-11";
 
 // "KATAI 2D <kVersion>" -- the canonical short identity for titles and report headers.
 inline constexpr const char* kAppName = "KATAI 2D";
