@@ -39,19 +39,33 @@ namespace katai::core {
 // `disp_total` is the phase increment PLUS the parent's displacement datum: structural elements
 // are total-displacement formulated, so a wall installed in an earlier phase carries its force at
 // that datum and reporting the increment alone would understate it by exactly the parent's share.
+// `state` is the structural state the phase started from (the parent's committed plastic state,
+// sized for this phase's structures; null or empty = none): the phase adds a stiffness on top of
+// it, so each element is read as the elastic trial FROM it -- a joint at the stress it was
+// installed with less the slip it has made, a plate, anchor or geogrid less the plastic part of
+// its deformation. Read on the elastic branch alone, a joint at rest against its ground showed a
+// few kPa where it carries tens, and the Coulomb check below measured the shear against a normal
+// stress that was not there (KV-CON-007). `parent_total` is the displacement the phase started
+// from: a joint is read by its own law there and by its stiffness beyond it, because a joint that
+// had opened leaves no state behind its cut-off.
 inline void report_coupled_structures(const Structures& structures,
                                       const std::vector<DiagSpec>* diagrams,
                                       const std::vector<IfaceDiag>* iface_diagrams,
                                       const katai::mesh::Mesh& mesh, const DofMap& dofs,
-                                      const Eigen::VectorXd& disp_total, SolveResult& R) {
+                                      const Eigen::VectorXd& disp_total, SolveResult& R,
+                                      const StructuralInit* state = nullptr,
+                                      const Eigen::VectorXd* parent_total = nullptr) {
+    static const StructuralInit kNone{};
+    const StructuralInit& st0 = state ? *state : kNone;
     if (!diagrams && !iface_diagrams) return;
     int over = 0;
     std::string over_note;
     int slack = 0;
     std::string slack_note;
     for (const auto& sp : (diagrams ? *diagrams : std::vector<DiagSpec>{})) {
-        StructForce d = force_diagram(sp, structures, mesh, dofs, disp_total, {}, {},
-                                      /*elastic=*/true);
+        StructForce d = force_diagram(sp, structures, mesh, dofs, disp_total, st0.anchor_plastic,
+                                      st0.geogrid_plastic, /*elastic=*/true, st0.plate_plastic,
+                                      st0.plate5_plastic, /*disp_is_total=*/true, /*from_state=*/true);
         const auto env = force_envelope(d.stations);
         d.max_N = env.max_abs_N; d.max_Q = env.max_abs_Q; d.max_M = env.max_abs_M;
         // THE COST OF AN ELASTIC BRANCH, MADE VISIBLE. Nothing here capped the force at the
@@ -123,7 +137,9 @@ inline void report_coupled_structures(const Structures& structures,
     if (iface_diagrams)
         for (const auto& is : *iface_diagrams) {
             InterfaceResult ir = force_diagram(is, structures, mesh, dofs, disp_total,
-                                               {}, {}, /*elastic=*/true);
+                                               st0.interface_slip, st0.interface5_slip,
+                                               /*elastic=*/true, /*disp_is_total=*/true,
+                                               /*from_state=*/true, parent_total);
             ir.slip_checked = false;
             const auto& props = (is.order == 15) ? structures.interfaces5[is.begin].props
                                                  : structures.interfaces[is.begin].props;

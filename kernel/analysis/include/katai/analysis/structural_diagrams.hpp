@@ -80,7 +80,7 @@ inline StructForce force_diagram(const DiagSpec& sp, const Structures& structure
                                  const std::vector<double>& geogrid_plastic, bool elastic = false,
                                  const std::vector<double>& plate_plastic = {},
                                  const std::vector<double>& plate5_plastic = {},
-                                 bool disp_is_total = true) {
+                                 bool disp_is_total = true, bool from_state = false) {
     StructForce d; d.name = sp.name;
     // The line's installation cohort, read from its first element (a drawn line is installed whole).
     int install = -1;
@@ -98,19 +98,19 @@ inline StructForce force_diagram(const DiagSpec& sp, const Structures& structure
             structures.plates.begin() + sp.begin, structures.plates.begin() + sp.end);
         std::vector<double> ps_slice;
         constexpr size_t S3 = (size_t)plate::kPlasticStateSize;
-        if (!elastic && plate_plastic.size() >= sp.end * S3)
+        if ((!elastic || from_state) && plate_plastic.size() >= sp.end * S3)
             ps_slice.assign(plate_plastic.begin() + sp.begin * S3,
                             plate_plastic.begin() + sp.end * S3);
-        d.stations = plate_force_diagram(chain, mesh, dofs, field, ps_slice);
+        d.stations = plate_force_diagram(chain, mesh, dofs, field, ps_slice, 5, !elastic);
     } else if (sp.kind == 5) {     // tri15 embedded wall: 5-node plate N/Q/M (plate_force_diagram overload)
         const std::vector<PlateElement5> chain(
             structures.plates5.begin() + sp.begin, structures.plates5.begin() + sp.end);
         std::vector<double> ps_slice;
         constexpr size_t S5 = (size_t)plate::kPlasticStateSize5;
-        if (!elastic && plate5_plastic.size() >= sp.end * S5)
+        if ((!elastic || from_state) && plate5_plastic.size() >= sp.end * S5)
             ps_slice.assign(plate5_plastic.begin() + sp.begin * S5,
                             plate5_plastic.begin() + sp.end * S5);
-        d.stations = plate_force_diagram(chain, mesh, dofs, field, ps_slice);
+        d.stations = plate_force_diagram(chain, mesh, dofs, field, ps_slice, 9, !elastic);
     } else if (sp.kind == 1) {     // anchor: one axial force (mirrors the solver exactly)
         const auto& an = structures.anchors[sp.begin];
         const double Up = sp.begin < anchor_plastic.size() ? anchor_plastic[sp.begin] : 0.0;
@@ -151,7 +151,8 @@ inline InterfaceResult force_diagram(const IfaceDiag& is, const Structures& stru
                                      const Eigen::VectorXd& disp,
                                      const std::vector<double>& slip3,
                                      const std::vector<double>& slip5, bool elastic,
-                                     bool disp_is_total = true) {
+                                     bool disp_is_total = true, bool from_state = false,
+                                     const Eigen::VectorXd* parent_total = nullptr) {
     InterfaceResult ir; ir.name = is.name;
     int install = -1;
     if (is.order == 15 && is.begin < structures.interfaces5.size())
@@ -161,11 +162,16 @@ inline InterfaceResult force_diagram(const IfaceDiag& is, const Structures& stru
     Eigen::VectorXd buf;
     const Eigen::VectorXd& field =
         detail::installed_field(structures, install, dofs, disp, disp_is_total, buf);
+    // The displacement the phase started from, measured from the same installation datum.
+    Eigen::VectorXd pbuf;
+    const Eigen::VectorXd* pfield = nullptr;
+    if (from_state && parent_total && parent_total->size() == disp.size())
+        pfield = &detail::installed_field(structures, install, dofs, *parent_total, true, pbuf);
     ir.stations = (is.order == 15)
         ? interface_force_diagram(structures.interfaces5, is.begin, is.end, mesh,
-                                  dofs, field, slip5, elastic)
+                                  dofs, field, slip5, elastic, from_state, pfield)
         : interface_force_diagram(structures.interfaces, is.begin, is.end, mesh,
-                                  dofs, field, slip3, elastic);
+                                  dofs, field, slip3, elastic, from_state, pfield);
     return ir;
 }
 

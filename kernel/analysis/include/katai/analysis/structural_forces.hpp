@@ -114,7 +114,7 @@ inline constexpr std::array<double, 4> kPlate5ShearXi{
 inline std::vector<ForceStation> plate_force_diagram(
     const std::vector<PlateElement>& plates, const mesh::Mesh& mesh, const DofMap& dofs,
     const Eigen::VectorXd& disp, const std::vector<double>& plastic_state = {},
-    int stations_per_elem = 5) {
+    int stations_per_elem = 5, bool capped = true) {
     std::vector<ForceStation> out;
     if (stations_per_elem < 2) stations_per_elem = 2;
     const bool has_ps = plastic_state.size() == plates.size() * plate::kPlasticStateSize;
@@ -133,9 +133,19 @@ inline std::vector<ForceStation> plate_force_diagram(
         }
         const bool ep_pl = has_ps && pe.props.stateful();
         std::array<double, 3> Ng{}, Mg{};
-        if (ep_pl)
+        if (ep_pl && capped)
             plate::gauss_forces_plastic(X, pe.props, u,
                                         plastic_state.data() + ei * plate::kPlasticStateSize, Ng, Mg);
+        else if (ep_pl)   // elastic from the state: what a stiffness on top of it carries, uncapped
+            for (int q = 0; q < plate::kBendGaussCount; ++q) {
+                const auto e = plate::detail::edge_kin(X, plate::kBendGaussXi[q]);
+                Eigen::Matrix<double, 1, 9> Be, Bk, Bg;
+                plate::detail::b_rows(e, Be, Bk, Bg);
+                const double* st = plastic_state.data() + ei * plate::kPlasticStateSize +
+                                   plate::kPlasticPerPoint * q;
+                Ng[q] = pe.props.EA * ((Be * u)(0) - st[0]);
+                Mg[q] = pe.props.EI * ((Bk * u)(0) - st[1]);
+            }
         auto Qr = detail::plate_reduced_shear(X, pe.props, u);  // Barlow shear samples
         if (ep_pl)   // less the shear strain the section does not answer for (plate.hpp)
             for (int k = 0; k < plate::kShearGaussCount; ++k)
@@ -163,7 +173,7 @@ inline std::vector<ForceStation> plate_force_diagram(
 inline std::vector<ForceStation> plate_force_diagram(
     const std::vector<PlateElement5>& plates, const mesh::Mesh& mesh, const DofMap& dofs,
     const Eigen::VectorXd& disp, const std::vector<double>& plastic_state = {},
-    int stations_per_elem = 9) {
+    int stations_per_elem = 9, bool capped = true) {
     std::vector<ForceStation> out;
     if (stations_per_elem < 2) stations_per_elem = 2;
     const bool has_ps = plastic_state.size() == plates.size() * plate::kPlasticStateSize5;
@@ -182,9 +192,19 @@ inline std::vector<ForceStation> plate_force_diagram(
         }
         const bool ep_pl = has_ps && pe.props.stateful();
         std::array<double, 5> Ng{}, Mg{};
-        if (ep_pl)
+        if (ep_pl && capped)
             plate::gauss_forces_plastic5(X, pe.props, u,
                                          plastic_state.data() + ei * plate::kPlasticStateSize5, Ng, Mg);
+        else if (ep_pl)
+            for (int q = 0; q < plate::kBendGaussCount5; ++q) {
+                const auto e = plate::detail::edge_kin5(X, plate::kBendGaussXi5[q]);
+                Eigen::Matrix<double, 1, 15> Be, Bk, Bg;
+                plate::detail::b_rows5(e, Be, Bk, Bg);
+                const double* st = plastic_state.data() + ei * plate::kPlasticStateSize5 +
+                                   plate::kPlasticPerPoint * q;
+                Ng[q] = pe.props.EA * ((Be * u)(0) - st[0]);
+                Mg[q] = pe.props.EI * ((Bk * u)(0) - st[1]);
+            }
         auto Qr = detail::plate5_reduced_shear(X, pe.props, u);  // Barlow shear samples
         if (ep_pl)
             for (int k = 0; k < plate::kShearGaussCount5; ++k)
@@ -257,8 +277,9 @@ inline AnchorForce anchor_force(const AnchorElement& an, const mesh::Mesh& mesh,
 // stress points) → the diagram is reported at those 2 points. `ep_committed` = this
 // geogrid's 2 committed plastic ε (NewtonResult.geogrid_plastic[2*gi .. 2*gi+1]);
 // elastic/pure tension-only → {0,0}.
-// `elastic=true` → the return mapping is NOT applied (raw N = EA·ε, in compression too):
-// for the LINEAR dynamic envelope — that system solves the geogrid fully-EA elastic
+// `elastic=true` → the return mapping is NOT applied (N = EA·(ε − ε_p), in compression too, from
+// the committed strain it is given -- {0,0} for a dynamic increment): for the LINEAR dynamic
+// envelope and a coupled phase -- those systems solve the geogrid fully-EA elastic
 // ("geogrids stay elastic in compression"); a cut-off/capped report would silently alter
 // the force the solver produced (same D6b rule as `elastic` in anchor_force).
 inline std::vector<ForceStation> geogrid_force_diagram(
@@ -280,7 +301,7 @@ inline std::vector<ForceStation> geogrid_force_diagram(
         const auto kin = geogrid::axial_kin(X, xi);
         const double eps = (kin.Be * u)(0);
         geogrid::AxialReturn ret;
-        if (elastic) ret = {ge.props.EA * eps, ep_committed[q], ge.props.EA};
+        if (elastic) ret = {ge.props.EA * (eps - ep_committed[q]), ep_committed[q], ge.props.EA};
         else         ret = geogrid::axial_return(ge.props, eps, ep_committed[q]);
         // Location: quadratic shape (geogrid node order A=ξ−1, B=ξ+1, middle=ξ0 — same as plate).
         const Eigen::Vector3d Nsh = plate::shape(xi);
@@ -367,7 +388,7 @@ std::vector<InterfaceStation> interface_diagram_impl(
     const std::vector<Iface>& ifaces, std::size_t begin, std::size_t end, const mesh::Mesh& mesh,
     const DofMap& dofs, const Eigen::VectorXd& disp, const std::vector<double>& slip_committed,
     const std::array<iface::NCPoint, NN>& ncp, iface::EdgeFrame (*frame)(const NodeC&, double),
-    bool elastic = false) {
+    bool elastic = false, bool from_state = false, const Eigen::VectorXd* parent = nullptr) {
     std::vector<InterfaceStation> out;
     double s_acc = 0.0, px = 0.0, py = 0.0; bool have_prev = false;
     for (std::size_t ii = begin; ii < end && ii < ifaces.size(); ++ii) {
@@ -395,6 +416,30 @@ std::vector<InterfaceStation> interface_diagram_impl(
             if (!ie.active) {
                 // The ground on one side is not there in this phase: the joint carries nothing.
                 st.tau = 0.0; st.sigma_n = 0.0; st.slipping = false;
+            } else if (elastic && from_state) {
+                // ELASTIC FROM THE STATE THE JOINT IS IN, which is what a phase that solves its
+                // joints as a stiffness ON TOP of that state carries (consolidation, fully
+                // coupled): the joint's law at the displacement the phase started from (`parent`;
+                // capped and cut off -- the force the phase's baseline holds), plus k_s and k_n
+                // times what the joint has moved since, uncapped. Without `parent`: the elastic
+                // trial from the installed stress and the committed slip. A joint that had opened
+                // is where the two differ: the cut-off leaves no state behind, and the trial read
+                // k_n times the whole opening as tension (thousands of kPa where it carries none).
+                if (parent) {
+                    const double up[4] = {(*parent)[dofs.global_dof(ie.soil_nodes[nd], 0)],
+                                          (*parent)[dofs.global_dof(ie.soil_nodes[nd], 1)],
+                                          (*parent)[ie.struct_dof[2 * nd + 0]],
+                                          (*parent)[ie.struct_dof[2 * nd + 1]]};
+                    double ps = 0.0, pn = 0.0;
+                    for (int i = 0; i < 4; ++i) { ps += a[i] * up[i]; pn += b[i] * up[i]; }
+                    const auto ret = iface::coulomb_return(ie.props, ps, pn, slip_c, ie.sigma_n0[q]);
+                    st.tau = ret.tau + ie.props.ks * (du_s - ps);
+                    st.sigma_n = ret.sigma_n + ie.props.kn * (du_n - pn);
+                } else {
+                    st.tau = ie.props.ks * (du_s - slip_c);
+                    st.sigma_n = ie.sigma_n0[q] + ie.props.kn * du_n;
+                }
+                st.slipping = false;
             } else if (elastic) {
                 // ELASTIC report: τ = k_s·Δu_s, σ_n = k_n·Δu_n — NO Coulomb cap, NO tension
                 // cut-off, NO sigma_n0. For the dynamic (seismic) phase: that system solves
@@ -419,23 +464,26 @@ std::vector<InterfaceStation> interface_diagram_impl(
 
 // Stations along a 3-node (tri6) interface chain [begin,end). elastic=true → the Coulomb
 // return is NOT applied (τ=k_s·Δu_s, σ_n=k_n·Δu_n): only for a system that solves the
-// interface ELASTICALLY (dynamic/seismic phase).
+// interface ELASTICALLY (dynamic/seismic phase). With from_state as well, the elastic trial
+// from the joint's own state (σ_n0 and the committed slip) -- a coupled phase's joints.
 inline std::vector<InterfaceStation> interface_force_diagram(
     const std::vector<InterfaceElement>& ifaces, std::size_t begin, std::size_t end,
     const mesh::Mesh& mesh, const DofMap& dofs, const Eigen::VectorXd& disp,
-    const std::vector<double>& slip_committed, bool elastic = false) {
+    const std::vector<double>& slip_committed, bool elastic = false, bool from_state = false,
+    const Eigen::VectorXd* parent = nullptr) {
     return detail::interface_diagram_impl<iface::kNodeCount, InterfaceElement, iface::NodeCoords>(
         ifaces, begin, end, mesh, dofs, disp, slip_committed, iface::nc_points(), &iface::edge_frame,
-        elastic);
+        elastic, from_state, parent);
 }
 // 5-node (tri15) interface chain.
 inline std::vector<InterfaceStation> interface_force_diagram(
     const std::vector<InterfaceElement5>& ifaces, std::size_t begin, std::size_t end,
     const mesh::Mesh& mesh, const DofMap& dofs, const Eigen::VectorXd& disp,
-    const std::vector<double>& slip_committed, bool elastic = false) {
+    const std::vector<double>& slip_committed, bool elastic = false, bool from_state = false,
+    const Eigen::VectorXd* parent = nullptr) {
     return detail::interface_diagram_impl<iface::kNodeCount5, InterfaceElement5, iface::NodeCoords5>(
         ifaces, begin, end, mesh, dofs, disp, slip_committed, iface::nc_points5(), &iface::edge_frame5,
-        elastic);
+        elastic, from_state, parent);
 }
 
 }  // namespace katai::core

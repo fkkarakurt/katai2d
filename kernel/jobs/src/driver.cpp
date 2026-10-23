@@ -2783,6 +2783,25 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                                                   (size_t)katai::core::plate::kPlasticPerPoint * q] += shrink;
             }
     }
+    // WHAT THE NEXT PHASE NEEDS TO FIND THIS PHASE'S STRUCTURES AGAIN, by structure: the records
+    // (with the installation cohort each ended up in), each joint's installed stress, the cohorts'
+    // datums in this phase's numbering, and the count of mesh DOFs that keep their numbers. The
+    // displacement and the plastic state are the phase solver's to write. Every phase that commits
+    // a state publishes it -- a Plastic, a consolidation and a fully coupled one -- and one that
+    // does not (Safety, a flow, a dynamic phase) hands its parent's on: the phase chain reads the
+    // structures from the result just before it, and until 2026-10-23 every phase after a
+    // consolidation, a flow or a dynamic phase rebuilt every structural force from zero against a
+    // ground still in equilibrium with them (KV-CON-007: a wall's moment moved by 28%).
+    const auto publish_struct_records = [&](SolveResult& out) {
+        out.struct_state.records = struct_records;
+        katai::core::gather_sigma_n0(structures.interfaces, out.struct_state.interface_sigma_n0);
+        katai::core::gather_sigma_n0(structures.interfaces5, out.struct_state.interface5_sigma_n0);
+        out.struct_state.install_datum = katai::core::install_datum_full(structures, dofs);
+        out.struct_state.node_dofs = 2 * mesh.node_count;
+    };
+    const auto pass_parent_structures = [&io](SolveResult& out) {
+        if (io.prev && io.prev->ok) out.struct_state = io.prev->struct_state;
+    };
     // A prestressed anchor installed in this phase is its jack for the phase (AnchorElement::
     // lock_off): it holds its lock-off force and is locked where the wall comes to. Installed =
     // not carried from the parent. Static phases only -- a Safety search, a consolidation and a
@@ -4396,6 +4415,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             cin.diagrams = &diag_specs;
             cin.iface_diagrams = &iface_diags;
             cin.carry_full = static_carry ? &carry_plan.full_datum : nullptr;
+            cin.carry_state = static_carry ? &carry_init : nullptr;
             cin.has_semi_permeable_interface = semi_permeable;
             cin.pore_tie = &pore_tie;
             // A third of the tolerated error of a Plastic phase of the same soils, and never
@@ -4456,6 +4476,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                                                         nonlinear_soil, cin, lef, plf, R, committed))
                 return R;
             if (io.out_states) *io.out_states = committed;
+            if (any_struct_carry) publish_struct_records(R);
         } else if (phase == InitialPhase::FullyCoupled) {
             // --- Fully-coupled flow-deformation --------------------------------------------------
             // The strategy lives in the engine (Stage B9: katai/analysis/phase_solver/
@@ -4506,6 +4527,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             fin.diagrams = &diag_specs;
             fin.iface_diagrams = &iface_diags;
             fin.carry_full = static_carry ? &carry_plan.full_datum : nullptr;
+            fin.carry_state = static_carry ? &carry_init : nullptr;
             fin.pore_tie = &pore_tie;
             if (io.config) { fin.duration_day = io.config->duration; fin.time_steps = io.config->time_steps; }
             fin.yscale = ymax - ymin;
@@ -4525,6 +4547,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                                                         nonlinear_soil, fin, lef, plf, R, committed))
                 return R;
             if (io.out_states) *io.out_states = committed;
+            if (any_struct_carry) publish_struct_records(R);
         } else if (phase == InitialPhase::TransientFlow) {
             // --- Transient groundwater flow only -------------------------------------------------
             // The strategy lives in the engine (Stage B9 pilot: katai/analysis/phase_solver/
@@ -4694,6 +4717,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 R.disp = Eigen::VectorXd::Zero(2 * mesh.node_count);
                 R.stress.stress.assign(mesh.node_count, Eigen::Vector3d::Zero());
             }
+            pass_parent_structures(R);
             R.mesh = std::move(mesh);   // flow-only: skip the deformation post-processing tail
             return R;
         } else if (phase == InitialPhase::Dynamic) {
@@ -4754,6 +4778,9 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                                                  carry_src ? &carry_plan.full_datum : nullptr,
                                                  io.prev, io.init_states, din, spdf, nonsymf, R))
                 R.mesh = std::move(mesh);
+            // A dynamic phase leaves the committed state where it was (solve_phases), so the
+            // structures continue from where the phase before it left them too.
+            pass_parent_structures(R);
             return R;
         } else {
         // The strategy lives in the engine (Stage B9: katai/analysis/phase_solver/
@@ -4812,14 +4839,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         } else {
         static_carry_used = static_carry;
         static_carry_missing = io.chained && any_struct_carry && !static_carry;
-        // What the next phase needs to find this phase's structures again by structure: the
-        // records (with the installation cohort each ended up in), the cohorts' datums in this
-        // phase's numbering, and the count of mesh DOFs that keep their numbers.
-        R.struct_state.records = struct_records;
-        katai::core::gather_sigma_n0(structures.interfaces, R.struct_state.interface_sigma_n0);
-        katai::core::gather_sigma_n0(structures.interfaces5, R.struct_state.interface5_sigma_n0);
-        R.struct_state.install_datum = katai::core::install_datum_full(structures, dofs);
-        R.struct_state.node_dofs = 2 * mesh.node_count;
+        publish_struct_records(R);
         }
         }  // end ramp/solve (non-consolidation)
         }  // end normal (non-Safety) solve
@@ -4879,7 +4899,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
     }
     else if (static_carry_missing)
         R.message += " NOTE: the parent phase supplies no structural state (no structure in common "
-                     "with this phase, or a consolidation/restored parent), so structural forces "
+                     "with this phase, or a parent restored from a file), so structural forces "
                      "re-develop from zero this phase.";
     if (!R.consol_time.empty()) {
         const double s_inf = R.consol_settlement.back();

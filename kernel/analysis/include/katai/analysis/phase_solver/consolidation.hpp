@@ -100,6 +100,9 @@ struct ConsolidationPhase {
     const Structures* structures = nullptr;
     const std::vector<DiagSpec>* diagrams = nullptr;
     const Eigen::VectorXd* carry_full = nullptr;
+    // The parent's committed structural state, sized for this phase's structures (null = none):
+    // what the report reads each element from, and what the phase hands on.
+    const StructuralInit* carry_state = nullptr;
     double duration_day = 1.0;                          // <= 0 falls back to 1 day
     int time_steps = 25;                                // clamped to [1, 2000]
     double yscale = 1.0;                                // model height, for the top-drain tolerance
@@ -587,7 +590,20 @@ inline bool solve_consolidation_phase(
         Eigen::VectorXd disp_total = v_total;
         if (in.carry_full && in.carry_full->size() == v_total.size()) disp_total += *in.carry_full;
         report_coupled_structures(*in.structures, in.diagrams, in.iface_diagrams, mesh, dofs,
-                                  disp_total, R);
+                                  disp_total, R, in.carry_state, in.carry_full);
+        // The state the phase hands on: its total displacement, and the plastic state it started
+        // from (a stiffness on top of it adds none). The driver adds what finds each structure.
+        R.struct_state.full_disp = disp_total;
+        if (in.carry_state) {
+            R.struct_state.anchor_plastic = in.carry_state->anchor_plastic;
+            R.struct_state.geogrid_plastic = in.carry_state->geogrid_plastic;
+            R.struct_state.interface_slip = in.carry_state->interface_slip;
+            R.struct_state.interface5_slip = in.carry_state->interface5_slip;
+            R.struct_state.embedded_skin_slip = in.carry_state->embedded_skin_slip;
+            R.struct_state.embedded_foot_slip = in.carry_state->embedded_foot_slip;
+            R.struct_state.plate_plastic = in.carry_state->plate_plastic;
+            R.struct_state.plate5_plastic = in.carry_state->plate5_plastic;
+        }
     }
 
     if (stagnant_steps > 0) {

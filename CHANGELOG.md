@@ -6,6 +6,25 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### Every phase continues the structures, and a coupled phase reports them from their state
+
+The phase chain reads a phase's structural state from the result just before it. A Safety phase
+handed its parent's on; nothing else that is not a Plastic phase did. After a consolidation, a fully
+coupled flow-deformation, a transient flow or a dynamic phase, the next phase rebuilt every
+structural force from zero against a ground still in equilibrium with them, and said so only in a
+note: a drawdown -- a transient flow and the Plastic phase that takes its pore pressures -- moved a
+wall that way, and a phase that changed nothing after a consolidation moved a wall's moment by 28%.
+A consolidation and a fully coupled phase now hand on their total displacement with the plastic
+state they started from (they add a stiffness on top of it, no plasticity), and a transient flow
+and a dynamic phase hand on their parent's, as they leave its committed stresses (KV-CON-007).
+
+The structures of a coupled phase were also reported on the elastic branch alone: a joint without
+the stress it was installed with and without the slip it had made, a plate, anchor or geogrid
+without its plastic deformation. A joint that had slipped showed thousands of kPa of shear where it
+carried a few, and the Coulomb check (K2D-A016) read the shear against a normal stress that was not
+there. Each element is now read as the phase solves it: its own law at the displacement the phase
+started from, plus its stiffness times what it has moved since.
+
 ### A wall's joint keeps the stress it was installed with
 
 A joint's normal stress is the stress it was installed with plus what its own opening and closing
