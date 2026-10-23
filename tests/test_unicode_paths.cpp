@@ -37,17 +37,17 @@ static std::string utf8(const char8_t* s) { return std::string(reinterpret_cast<
 int main() {
     // A folder and a file named with c-cedilla, g-breve, dotless i, capital dotted I, s-cedilla,
     // o-umlaut and u-umlaut.
-    const std::string dir_u8 = utf8(u8"katai_Çağrı_İşler");
-    const std::wstring dir_w = L"katai_Çağrı_İşler";
-    const std::string file_u8 = dir_u8 + "/" + utf8(u8"şev_çözümü.k2d");
-    const std::wstring file_w = dir_w + L"/" + L"şev_çözümü.k2d";
+    const std::string dir_u8 = utf8(u8"katai_Çağrı_İşler");  // katai-lang: allow (test data)
+    const std::wstring dir_w = L"katai_Çağrı_İşler";  // katai-lang: allow (test data)
+    const std::string file_u8 = dir_u8 + "/" + utf8(u8"şev_çözümü.k2d");  // katai-lang: allow (test data)
+    const std::wstring file_w = dir_w + L"/" + L"şev_çözümü.k2d";  // katai-lang: allow (test data)
     std::error_code ec;
     fs::remove_all(fs::path(dir_w), ec);
     fs::create_directory(fs::path(dir_w), ec);
     check(!ec && fs::is_directory(fs::path(dir_w)), "a folder with Turkish letters exists (made through UTF-16)");
 
     m::Project pr;
-    pr.name = utf8(u8"Şev çözümü");
+    pr.name = utf8(u8"Şev çözümü");  // katai-lang: allow (test data)
     m::Material s; s.name = "Clay"; pr.materials.push_back(s);
     m::SoilPolygon P; P.material = 0; P.x = {0, 10, 10, 0}; P.y = {0, 0, 5, 5};
     pr.polygons.push_back(P);
