@@ -6,6 +6,25 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### Pseudo-static acceleration, and the TBDY 2018 verdict on a slope (`.k2d` v23)
+
+A phase states a horizontal and a vertical seismic coefficient (`phases[i].kh`, `kv`), applied as
+body forces kh W toward +x and kv W upward on the total weight W of the active ground -- the pore
+water moving with the soil, its pressure the static one -- and of the plates, walls and piles that
+weigh something: the equivalent static method of a seismic slope or wall check (TBDY 2018 16.13.9:
+kh = 0.2 S_DS, kv = +-0.5 kh). A Safety phase reduces the strength of the state its parent left
+under its parent's coefficients. An axisymmetric model, whose x is a radius, refuses them
+(K2D-S007); the initial phase and phase types other than Plastic do not take them.
+
+A Safety phase under the TBDY 2018 (seismic) design approach states the code's verdict on a slope
+(K2D-A039): its strength-reduction factor is gamma_Rk of 16.13.11, which divides c' and tan(phi'),
+and gamma_Rk >= 1.10 is required outside cases of special risk -- a note when met, a warning when
+not, no verdict from a lower bound below 1.10, and a statement when the phase before applied no
+seismic coefficient. KV-SLP-005: a block on a frictional joint on a horizontal plane (c_i = 0 and
+5 kPa, kv = 0 and +-0.1) and on a 10 deg plane gives the closed-form pseudo-static factor of
+safety to 0.00% on 6- and 15-noded elements, the base reactions stand in the ratio -kh : (1 - kv)
+to 1e-9, and the verdict falls on either side of 1.10 where the closed form puts it.
+
 ### Every phase continues the structures, and a coupled phase reports them from their state
 
 The phase chain reads a phase's structural state from the result just before it. A Safety phase

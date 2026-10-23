@@ -70,6 +70,8 @@ KEY_TO_ATTR = {
     "resetsmall": "reset_small_strain",
     "resetdisp": "reset_displacements",
     "headramp": "head_ramp",
+    "kh": "pseudo_kh",
+    "kv": "pseudo_kv",
     "tol": "tolerance",
     "loadsteps": "load_steps",
     "maxiter": "max_iterations",
@@ -222,6 +224,8 @@ def coverage_project():
     ph.reset_small_strain = True
     ph.reset_displacements = True
     ph.head_ramp = True   # v22: written only when set
+    ph.pseudo_kh = 0.15   # v23: written only when set
+    ph.pseudo_kv = -0.075
     ph.tolerance = 1e-5
     ph.load_steps = 12
     ph.max_iterations = 40

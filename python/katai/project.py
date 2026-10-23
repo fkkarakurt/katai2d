@@ -633,7 +633,7 @@ class _Phases:
              apply_fraction=None, ignore_undrained=None, reset_small_strain=None,
              design=None, water=None, dry=(), wet=(), pore_pressure=None, region_water=None,
              materials=None, reset_displacements=None, plates=None, contraction=None,
-             ramp=None):
+             ramp=None, kh=None, kv=None):
         ph = _core.Phase()
         ph.name = name
         ph.type = ptype
@@ -653,6 +653,11 @@ class _Phases:
         if reset_displacements is not None: ph.reset_displacements = bool(reset_displacements)
         # Transient flow: ramp=True moves the Head edges linearly over the phase (`headramp`).
         if ramp is not None: ph.head_ramp = bool(ramp)
+        # Pseudo-static acceleration (`kh`, `kv`, fractions of g): body forces kh W toward +x and
+        # kv W upward on the total weight. TBDY 2018 16.13.9 for a slope: kh = 0.2 S_DS,
+        # kv = +-0.5 kh. A Safety phase after it reads its parent's.
+        if kh is not None: ph.pseudo_kh = float(kh)
+        if kv is not None: ph.pseudo_kv = float(kv)
         # Design code: the partial factors of EC7 or TBDY 2018 applied to THIS phase, so a
         # characteristic run and its design check live in one file and are read side by side.
         # Unset = characteristic values, which is what an unfactored analysis means.

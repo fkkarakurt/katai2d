@@ -348,7 +348,7 @@ void assemble_structural_mass(const mesh::Mesh& mesh, const DofMap& dofs,
 
 void assemble_structural_weight(const mesh::Mesh& mesh, const DofMap& dofs,
                                        const Structures& structures, double g,
-                                       Eigen::VectorXd& f) {
+                                       Eigen::VectorXd& f, double cx, double cy) {
     // --- Plate (3-node): int N_i ds, 3-point Gauss (more than exact for quadratic N x J).
     {
         constexpr double g3 = 0.7745966692414834;   // sqrt(3/5)
@@ -357,17 +357,20 @@ void assemble_structural_weight(const mesh::Mesh& mesh, const DofMap& dofs,
         for (const auto& pe : structures.plates) {
             if (pe.props.rho_A <= 0.0) continue;
             plate::NodeCoords Xe;
-            std::array<int, 3> eqy;
+            std::array<int, 3> eqx, eqy;
             for (int k = 0; k < 3; ++k) {
                 Xe(k, 0) = mesh.x[pe.nodes[k]];
                 Xe(k, 1) = mesh.y[pe.nodes[k]];
+                eqx[k] = detail::plate_trans_eq(dofs, pe.trans_dof[2 * k + 0], pe.nodes[k], 0);
                 eqy[k] = detail::plate_trans_eq(dofs, pe.trans_dof[2 * k + 1], pe.nodes[k], 1);
             }
             for (int q = 0; q < 3; ++q) {
                 const auto e = plate::detail::edge_kin(Xe, xi3[q]);
                 const double wds = w3[q] * e.J * pe.props.rho_A * g;
-                for (int i = 0; i < 3; ++i)
-                    if (eqy[i] >= 0) f(eqy[i]) -= wds * e.N(i);
+                for (int i = 0; i < 3; ++i) {
+                    if (eqy[i] >= 0) f(eqy[i]) += cy * wds * e.N(i);
+                    if (eqx[i] >= 0 && cx != 0.0) f(eqx[i]) += cx * wds * e.N(i);
+                }
             }
         }
     }
@@ -380,17 +383,20 @@ void assemble_structural_weight(const mesh::Mesh& mesh, const DofMap& dofs,
         for (const auto& pe : structures.plates5) {
             if (pe.props.rho_A <= 0.0) continue;
             plate::NodeCoords5 Xe;
-            std::array<int, 5> eqy;
+            std::array<int, 5> eqx, eqy;
             for (int k = 0; k < 5; ++k) {
                 Xe(k, 0) = mesh.x[pe.nodes[k]];
                 Xe(k, 1) = mesh.y[pe.nodes[k]];
+                eqx[k] = detail::plate_trans_eq(dofs, pe.trans_dof[2 * k + 0], pe.nodes[k], 0);
                 eqy[k] = detail::plate_trans_eq(dofs, pe.trans_dof[2 * k + 1], pe.nodes[k], 1);
             }
             for (int q = 0; q < 5; ++q) {
                 const auto e = plate::detail::edge_kin5(Xe, xi5[q]);
                 const double wds = w5[q] * e.J * pe.props.rho_A * g;
-                for (int i = 0; i < 5; ++i)
-                    if (eqy[i] >= 0) f(eqy[i]) -= wds * e.N(i);
+                for (int i = 0; i < 5; ++i) {
+                    if (eqy[i] >= 0) f(eqy[i]) += cy * wds * e.N(i);
+                    if (eqx[i] >= 0 && cx != 0.0) f(eqx[i]) += cx * wds * e.N(i);
+                }
             }
         }
     }
@@ -403,17 +409,20 @@ void assemble_structural_weight(const mesh::Mesh& mesh, const DofMap& dofs,
             if (eb.props.rho_A <= 0.0) continue;
             for (const auto& el : eb.elements) {
                 plate::NodeCoords Xe;
-                std::array<int, 3> eqy;
+                std::array<int, 3> eqx, eqy;
                 for (int k = 0; k < 3; ++k) {
                     Xe(k, 0) = eb.node_x[el[k]];
                     Xe(k, 1) = eb.node_y[el[k]];
+                    eqx[k] = ebeam::trans_eq(eb, el[k], 0, dofs);
                     eqy[k] = ebeam::trans_eq(eb, el[k], 1, dofs);
                 }
                 for (int q = 0; q < 3; ++q) {
                     const auto e = plate::detail::edge_kin(Xe, xi3[q]);
                     const double wds = w3[q] * e.J * eb.props.rho_A * g;
-                    for (int i = 0; i < 3; ++i)
-                        if (eqy[i] >= 0) f(eqy[i]) -= wds * e.N(i);
+                    for (int i = 0; i < 3; ++i) {
+                        if (eqy[i] >= 0) f(eqy[i]) += cy * wds * e.N(i);
+                        if (eqx[i] >= 0 && cx != 0.0) f(eqx[i]) += cx * wds * e.N(i);
+                    }
                 }
             }
         }

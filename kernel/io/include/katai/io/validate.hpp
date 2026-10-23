@@ -93,6 +93,27 @@ inline void check_phase(ValidationReport& r, const model::Phase& ph, const std::
               "the initial phase establishes the in-situ stress state, so there is no staged "
               "change to apply a fraction of; a partial gravity is not a construction step");
 
+    // Pseudo-static coefficients (`kh`, `kv`), fractions of g. A Plastic phase applies them; a
+    // Safety phase continues its parent's, and its own would be read by nothing.
+    if (ph.pseudo_kh != 0.0 || ph.pseudo_kv != 0.0) {
+        if (!(std::fabs(ph.pseudo_kh) < 1.0) || !(std::fabs(ph.pseudo_kv) < 1.0))
+            r.add(Severity::Error, path(std::fabs(ph.pseudo_kh) < 1.0 ? "kv" : "kh"),
+                  "a seismic coefficient is a fraction of g and must lie in (-1, 1) (got kh = " +
+                      num(ph.pseudo_kh) + ", kv = " + num(ph.pseudo_kv) + ")");
+        if (is_initial)
+            r.add(Severity::Error, path("kh"),
+                  "the initial phase generates the stresses of the ground under its own weight; a "
+                  "pseudo-static acceleration belongs to a Plastic phase after it");
+        else if (ph.type == PhaseType::Safety)
+            r.add(Severity::Warning, path("kh"),
+                  "a Safety phase reduces the strength of the state the phase before it left, under "
+                  "that phase's seismic coefficients; the ones set here are not read");
+        else if (ph.type != PhaseType::Plastic)
+            r.add(Severity::Error, path("kh"),
+                  "a pseudo-static acceleration is applied by a Plastic phase (and continued by a "
+                  "Safety phase after it); this phase type does not read it");
+    }
+
     // Numerical controls (0 = let the program choose). A value that is set must be usable,
     // because the alternative is a run that quietly ignores the numerics the file was written
     // to carry -- which is the whole reason they are in the file.

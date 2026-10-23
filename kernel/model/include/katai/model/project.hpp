@@ -685,6 +685,14 @@ struct Phase {
     // drawdown. Read when the phase starts from the head a groundwater-flow phase before it ended
     // with; from the water table there is no head to move from.
     bool head_ramp = false;
+    // PSEUDO-STATIC ACCELERATION (`kh`, `kv`): the inertia of the ground in the equivalent static
+    // method of a seismic check, as body forces kh W horizontally (toward +x) and kv W vertically
+    // (upward positive: it takes kv W off the weight, as (1 - kv) does in TBDY 2018 Eq. 16.31), W
+    // the total weight of the active ground -- the pore water moves with the soil, its pressure
+    // stays the static one -- and of the structures that weigh something. Fractions of g. Each
+    // Plastic phase states its own (one that states none has none); a Safety phase reduces the
+    // strength of the state its parent left under its parent's coefficients.
+    double pseudo_kh = 0.0, pseudo_kv = 0.0;
 };
 
 // A soil region: an explicit polygon (drawn by the user) with a material. Classic, rock-solid:

@@ -83,10 +83,12 @@ void assemble_structural_mass(const mesh::Mesh& mesh, const DofMap& dofs,
 // Anchor/geogrid/interface are weightless too. The w input contract: for a
 // wall embedded in soil the user enters w with the overlapping soil deducted
 // (w = gamma_plate.d - gamma_soil.d) -- the entered value is applied as given.
+// (cx, cy) is the force per unit weight: (0, -1), the default, is the weight itself; a
+// pseudo-static phase adds (kh, kv) -- the same integral turned to the inertia's direction.
 // Definition in kernel/analysis/src/structural_dynamics.cpp (section 5.2).
 void assemble_structural_weight(const mesh::Mesh& mesh, const DofMap& dofs,
                                        const Structures& structures, double g,
-                                       Eigen::VectorXd& f);
+                                       Eigen::VectorXd& f, double cx = 0.0, double cy = -1.0);
 
 // The influence vector r of HORIZONTAL base motion: the displacement every DOF takes when the
 // base translates by a unit horizontally. In a rigid translation ALL HORIZONTAL TRANSLATION

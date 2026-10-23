@@ -3867,6 +3867,57 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             f += f_sw;
             f_loads += f_sw;
         }
+        // PSEUDO-STATIC ACCELERATION (phases[i].kh / kv): the inertia of the ground in the
+        // equivalent static method of a seismic check -- kh W horizontally (toward +x) and kv W
+        // vertically (upward positive: it takes kv W off the weight, as (1 - kv) does in TBDY
+        // 2018 Eq. 16.31). W is the TOTAL weight, assembled by the same rule as the body force
+        // above (the pore water moves with the soil; its pressure stays the static one, as in that
+        // equation), of the active ground and of the structures that weigh something. The phase's
+        // own coefficients; a Safety phase reduces the strength of the state its parent left,
+        // under its parent's. Like the structural weight it enters f and f_loads, so a chained
+        // phase applies it as its staged change and the phase after it, without it, takes it off
+        // again (KV-SLP-005).
+        {
+            const model::Phase* ps_cfg =
+                (phase == InitialPhase::Safety && io.parent_config) ? io.parent_config : io.config;
+            const double kh = io.chained && ps_cfg ? ps_cfg->pseudo_kh : 0.0;
+            const double kv = io.chained && ps_cfg ? ps_cfg->pseudo_kv : 0.0;
+            if (kh != 0.0 || kv != 0.0) {
+                if (axi) {
+                    refuse(R, "K2D-S007", io.config ? io.config->name : std::string(),
+                           "A pseudo-static acceleration is a body force along fixed directions of "
+                           "the plane, and an axisymmetric model has no such direction: its x is a "
+                           "radius. Model the seismic check in plane strain.");
+                    return R;
+                }
+                // The weight, node by node, on a numbering where every degree of freedom is free
+                // (the phase's own drops the supported ones, and the inertia acts there too).
+                katai::core::DofMap all(mesh.node_count, 2);
+                all.finalize();
+                Eigen::VectorXd w = Eigen::VectorXd::Zero(all.equation_count());
+                if (flow)
+                    katai::core::assemble_gravity_from_head(mesh, all, gamma, gamma_sat,
+                                                            *flow_head_used, w, act);
+                else if (water)
+                    katai::core::assemble_gravity_phreatic(
+                        mesh, all, gamma, gamma_sat,
+                        [&pr, &io](double x) { return water_table_at(pr, x, io.config); }, w, act);
+                else
+                    katai::core::assemble_gravity(mesh, all, gamma, w, act);
+                Eigen::VectorXd f_ps = Eigen::VectorXd::Zero(dofs.equation_count());
+                for (int n = 0; n < mesh.node_count; ++n) {
+                    const double wy = w[all.equation(all.global_dof(n, 1))];   // minus its weight
+                    if (wy == 0.0) continue;
+                    const int ex = dofs.equation(dofs.global_dof(n, 0));
+                    const int ey = dofs.equation(dofs.global_dof(n, 1));
+                    if (ex >= 0) f_ps[ex] -= kh * wy;
+                    if (ey >= 0) f_ps[ey] -= kv * wy;
+                }
+                katai::core::assemble_structural_weight(mesh, dofs, structures, kGravity, f_ps, kh, kv);
+                f += f_ps;
+                f_loads += f_ps;
+            }
+        }
         // SAFETY analysis (phi-c reduction / SRM): the strategy lives in the engine (Stage B9:
         // katai/analysis/phase_solver/safety.hpp). The seam passes the registry-derived model
         // family flags, the phase's active structures and the composition root's solver callback;
@@ -4128,6 +4179,39 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             if (!katai::core::solve_safety_phase(mesh, dofs, models, profiles, f, solver,
                                                  structures, sfin, R))
                 return R;
+            // THE TBDY 2018 VERDICT ON A SLOPE (16.13.11 c): the strength-reduction factor IS the
+            // code's safety number gamma_Rk -- 16.13.3 and 16.13.11 divide c' and tan(phi') by it,
+            // as this search does -- and gamma_Rk >= 1.10 is the acceptable level outside cases of
+            // special risk. The search's lower bound below 1.10 settles nothing either way. The
+            // inertia is the phase before's (16.13.9: kh = 0.2 S_DS, kv = +-0.5 kh), and a run
+            // without it is said to be the static case.
+            if (io.config && io.config->design_approach == model::DesignApproach::TBDY2018_Seismic &&
+                R.fos > 0.0) {
+                const double kh = io.parent_config ? io.parent_config->pseudo_kh : 0.0;
+                const double kv = io.parent_config ? io.parent_config->pseudo_kv : 0.0;
+                const bool meets = R.fos >= 1.10;
+                const std::string g = dnum(R.fos);
+                std::string m =
+                    R.fos_lower_bound && !meets
+                        ? "TBDY 2018 16.13.11(c): the search stopped at a lower bound, gamma_Rk >= " + g +
+                              ", below the required 1.10, so it does not say whether the slope "
+                              "meets it. Raise the search's upper limit or its steps."
+                    : meets ? "TBDY 2018 16.13.11(c): gamma_Rk = " + (R.fos_lower_bound ? ">= " + g : g) +
+                                  " meets the required 1.10 (the acceptable level outside cases of "
+                                  "special risk)."
+                            : "TBDY 2018 16.13.11(c): gamma_Rk = " + g +
+                                  " is below the required 1.10: the slope does not meet the code's "
+                                  "safety level against sliding.";
+                m += kh != 0.0 || kv != 0.0
+                         ? " Seismic coefficients of the phase before: kh = " + dnum(kh) + ", kv = " +
+                               dnum(kv) + " (16.13.9 asks for kh = 0.2 S_DS, times S_T where "
+                               "16.13.10 does, and kv = +-0.5 kh)."
+                         : " The phase before applied no seismic coefficient, so this is the static "
+                           "case: 16.13.9 asks for kh = 0.2 S_DS (times S_T where 16.13.10 does) and "
+                           "kv = +-0.5 kh in a Plastic phase before the Safety phase.";
+                if (meets) note(R, "K2D-A039", io.config->name, m);
+                else warn(R, "K2D-A039", io.config->name, m);
+            }
             // A Safety phase leaves the ground as it found it -- solve_phases does not commit its
             // stresses forward -- and it leaves the structures as it found them too. Without this
             // the phase after it met a parent with no structural state and re-developed every

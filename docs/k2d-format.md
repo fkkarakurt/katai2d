@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **22** · Current `.res` version: **11**
+Current `.k2d` version: **23** · Current `.res` version: **11**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -57,7 +57,10 @@ and give every region the phase's water table -- under a pit, hydrostatic water 
 where the file states the water arriving from outside,
 and **v22** a water level that moves over a transient flow phase (`phases[i].headramp`), which an
 older build would ignore and make the change at the phase's first instant -- an instantaneous
-drawdown where the file states one at a rate.
+drawdown where the file states one at a rate,
+and **v23** a phase's pseudo-static acceleration (`phases[i].kh`, `kv`), which an older build would
+ignore and run the phase as the static case -- a factor of safety above the seismic one the file
+asks for.
 Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
@@ -446,6 +449,8 @@ with `name` (default `"Well"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
 | `ignoreund` | bool | — | `false` | Solve Undrained (A)/(B) materials as drained in this phase: the water adds no stiffness and no new excess pore pressure is generated, while the excess pore pressure generated in earlier phases is kept as it is; strength parameters unchanged. Written only when true |
 | `resetsmall` | bool | — | `false` | Clear the Hardening Soil small-strain history at the start of this phase, so the soil meets the phase at G0 instead of the stiffness earlier phases degraded it to. Stress, shear hardening `gamma_p` and the preconsolidation pressure are carried over untouched — the option resets the *history*, not the state. Staged (non-initial) phases only; raises `K2D-M005` saying how many stress points it cleared, or that no small-strain material was present to clear. Written only when true |
 | `headramp` | bool | — | `false` | Transient flow phases: the Head edges reach this phase's heads linearly over its duration, from the heads the phase starts from (the head the groundwater-flow phase before it ended with) -- a reservoir lowered or raised at a rate. Off: the change is made at the phase's first instant. As in the steady flow, the part of a Head edge that its water stands below is a seepage face, so a slope face exposed by a drawdown drains at zero pressure, and a phase with a water level of its own (`water`, `wx`, `wy`) gives that level to its Head edges as their head. Written only when set |
+| `kh` | num | — | `0` | Pseudo-static acceleration, horizontal: a body force kh W toward +x on the total weight W of the active ground (the pore water moving with it, its pressure the static one) and of the structures that weigh something; a fraction of g in (-1, 1). Plastic phases, each its own (a phase with none has none); a Safety phase reduces the strength of the state its parent left under its parent's coefficients. TBDY 2018 16.13.9 takes kh = 0.2 S_DS (times S_T where 16.13.10 asks for it) for a slope. Not in axisymmetry (`K2D-S007`). Written only when set |
+| `kv` | num | — | `0` | Pseudo-static acceleration, vertical: a body force kv W, upward positive -- it takes kv W off the weight, as (1 - kv) does in TBDY 2018 Eq. 16.31 (16.13.9: kv = ±0.5 kh). Same rules as `kh`. Written only when set |
 | `resetdisp` | bool | — | `false` | Reset displacements to zero: the total displacement reported from this phase on counts from the start of this phase. The state (stresses, structural forces) is not touched |
 | `tol` | num | — | *by material class* | Tolerated relative force residual. Written only when set |
 | `loadsteps` | int | — | *by material class* | Load increments for this phase. Not a cap on automatic steps: KATAI splits the load into a fixed number of increments (with adaptive cut-back), it does not step automatically to a cap. Written only when set |

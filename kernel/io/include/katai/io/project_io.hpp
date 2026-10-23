@@ -165,7 +165,12 @@ namespace katai::model {
 // first instant: an instantaneous drawdown, which is the more severe case for a slope, and not
 // the one the file states. Written only when set, so every older file is byte-identical below the
 // version line.
-inline constexpr int kProjectFileVersion = 22;
+// v23 (2026-10): PSEUDO-STATIC ACCELERATION (`phases[i].kh`, `kv`): a phase's horizontal and
+// vertical seismic coefficients, applied as body forces on the weight of the ground and of the
+// structures. An older build reads no such key and runs the phase without them: the static case,
+// with a factor of safety above the seismic one the file asks for. Written only when set, so every
+// older file is byte-identical below the version line.
+inline constexpr int kProjectFileVersion = 23;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -446,6 +451,8 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     if (ph.reset_small_strain) wfield(o, "resetsmall", true);
     if (ph.reset_displacements) wfield(o, "resetdisp", true);
     if (ph.head_ramp) wfield(o, "headramp", true);
+    if (ph.pseudo_kh != 0.0) wfield(o, "kh", ph.pseudo_kh);
+    if (ph.pseudo_kv != 0.0) wfield(o, "kv", ph.pseudo_kv);
     closeobj(o); o += ',';
 }
 inline Phase rphase(const Json& j) {
@@ -503,6 +510,8 @@ inline Phase rphase(const Json& j) {
     ph.reset_small_strain = j.flag("resetsmall", ph.reset_small_strain);
     ph.reset_displacements = j.flag("resetdisp", false);
     ph.head_ramp = j.flag("headramp", false);
+    ph.pseudo_kh = j.num("kh", 0.0);
+    ph.pseudo_kv = j.num("kv", 0.0);
     return ph;
 }
 

@@ -534,6 +534,31 @@ void scope_refusals() {
         report(res);
         check(all_ok(res, 2) && !said(res, "K2D-S006"), "installed without one: runs");
     }
+    {   // A039: the TBDY 2018 slope verdict -- said under that design approach, not otherwise
+        m::Project pr = block();
+        m::Phase p = phase(m::PhaseType::Plastic, "Shaken"); p.pseudo_kh = 0.05;
+        m::Phase s = phase(m::PhaseType::Safety, "Safety");
+        s.design_approach = m::DesignApproach::TBDY2018_Seismic;
+        pr.phases = {p, s};
+        auto res = run(pr);
+        check(res.size() == 3 && said(res, "K2D-A039"), "a Safety phase under TBDY 2018 (seismic): the verdict is said (K2D-A039)");
+        pr.phases[1].design_approach = m::DesignApproach::None;
+        res = run(pr);
+        report(res);
+        check(res.size() == 3 && res[2].ok && !said(res, "K2D-A039"), "the same without a design approach: no verdict");
+    }
+    {   // S007: a pseudo-static acceleration in an axisymmetric model
+        m::Project pr = block();
+        pr.axisymmetric = true;
+        m::Phase p = phase(m::PhaseType::Plastic, "Shaken"); p.pseudo_kh = 0.1;
+        pr.phases.push_back(p);
+        auto res = run(pr);
+        check(refused_with(res, "K2D-S007"), "a seismic coefficient in axisymmetry: refused (K2D-S007)");
+        pr.axisymmetric = false;
+        res = run(pr);
+        report(res);
+        check(all_ok(res, 2) && !said(res, "K2D-S007"), "the same in plane strain: runs");
+    }
 }
 } // namespace
 

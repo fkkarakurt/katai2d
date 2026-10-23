@@ -489,6 +489,11 @@ NB_MODULE(_core, m) {
                 "treat Undrained (A)/(B) materials as drained in this phase")
         .def_rw("head_ramp", &api::Phase::head_ramp,
                 "transient flow: the Head edges reach this phase's heads linearly over its duration")
+        .def_rw("pseudo_kh", &api::Phase::pseudo_kh,
+                "pseudo-static acceleration, horizontal (`kh`): a body force kh W toward +x, a "
+                "fraction of g")
+        .def_rw("pseudo_kv", &api::Phase::pseudo_kv,
+                "pseudo-static acceleration, vertical (`kv`): a body force kv W, upward positive")
         .def_rw("reset_displacements", &api::Phase::reset_displacements,
                 "the total displacement reported from this phase on counts from its start")
         .def_rw("reset_small_strain", &api::Phase::reset_small_strain,
