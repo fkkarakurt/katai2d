@@ -6,6 +6,18 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A Head edge above its water is a seepage face in the steady flow too
+
+The steady groundwater flow held a Head edge at its head over its whole length, so the part of it
+above the water it stands for drew the ground's water out by suction, through a face open to the
+air. A dam drawn with its tailwater edge up to the crest lost its exit point: the water left at the
+tailwater level (1.00 m) instead of 1.31 m up the face, and the head field differed by up to 1.8 m
+from the same dam drawn with an explicit seepage face. Charny's discharge hid it (+1.7% against
++0.8% now): it holds whatever the face above the tailwater does. The part of a Head edge above its
+water is now a seepage face, as in a transient flow phase and in the steady flow of a staged phase;
+a model whose every Head edge stands above its water is refused with the reason (KV-FLW-010).
+
+
 ### A drawdown in a transient flow phase: seepage faces, wells, drains and a moving water level (`.k2d` v22)
 
 A transient flow phase closed its seepage faces (with a warning), refused wells and drains, started

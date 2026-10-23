@@ -188,8 +188,17 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
     // Match each boundary node to the flow BCs of every polygon edge it lies on (the same
     // coincident-edge union as the deformation BCs). Priority at corners: a prescribed head wins
     // over a seepage face, which wins over closed (a reservoir corner is at reservoir head).
+    //
+    // A Head edge stands for the water outside the ground, so where that water is below a node of
+    // the edge the node is not under it: it is a seepage face, open while water leaves the ground
+    // there and closed otherwise -- the rule of the transient flow and of the steady flow of a
+    // staged phase. Held at the head instead, as the edge was over its whole length until
+    // 2026-10-23, it drew the ground's water out by suction through a face open to the air: a dam
+    // drawn with its tailwater edge up to the crest lost its exit point (1.31 m above the floor
+    // with the face, 1.00 m = the tailwater without it; test_seepage_gui (2b)).
     std::vector<int> fixed_nodes, seepage_nodes;
     std::vector<double> fixed_values;
+    bool any_head_above = false;
     for (int node : mesh.boundary_nodes) {
         const double xn = mesh.x[node], yn = mesh.y[node];
         double best_d = 1e300;
@@ -209,10 +218,14 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
             }
         }
         const double tol = best_d + 1e-9 + 1e-7 * std::fmax(std::fabs(xn), std::fabs(yn));
+        const double ytol = 1e-9 * (1.0 + std::fabs(yn));
         bool has_head = false, has_seep = false; double hval = 0.0, hd = 1e300;
         for (const auto& h : hits) {
             if (h.d > tol) continue;
-            if (h.flow == (int)model::FlowBCType::Head && h.d < hd) { has_head = true; hval = h.head; hd = h.d; }
+            if (h.flow == (int)model::FlowBCType::Head) {
+                if (h.head < yn - ytol) { has_seep = true; any_head_above = true; }   // above its water
+                else if (h.d < hd) { has_head = true; hval = h.head; hd = h.d; }
+            }
             if (h.flow == (int)model::FlowBCType::Seepage) has_seep = true;
         }
         if (has_head)      { fixed_nodes.push_back(node); fixed_values.push_back(hval); }
@@ -259,7 +272,13 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
         if (well_flux[n] != 0.0) { nodal_flux[n] += well_flux[n]; any_flux = true; }
 
     if (fixed_nodes.empty() && !any_drain) {
-        R.message = (any_flux || any_well)
+        R.message = any_head_above
+                        ? "Every prescribed head lies below the edge it is set on, so each Head edge "
+                          "stands above its water: it is a seepage face, and nothing holds water in "
+                          "the ground (with no inflow its steady state is dry; with one, the head "
+                          "has no level to start from). Check the heads are elevations, not depths, "
+                          "or prescribe a head on an edge the water stands over."
+                  : (any_flux || any_well)
                         ? "A prescribed discharge alone does not fix the head: a flow problem with "
                           "only fluxes and wells has no unique solution. Prescribe a head on at "
                           "least one boundary as well."

@@ -164,7 +164,6 @@ UNDECLARED_AT_ADOPTION: frozenset[str] = frozenset({
     "test_results_io.cpp",
     "test_robustness.cpp",
     "test_safety_gui.cpp",
-    "test_seepage_gui.cpp",
     "test_site_response_benchmark.cpp",
     "test_slope.cpp",
     "test_soft_soil.cpp",

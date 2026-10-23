@@ -251,7 +251,8 @@ class _Geometry:
 
         ``fix``: one fixity name per edge (edge i runs from point i to point i+1).
         ``flow``: optional, one per edge -- "closed"/"seepage", ("head", value_m),
-        or ("flux", q_m_per_day) with inflow positive.
+        or ("flux", q_m_per_day) with inflow positive. A head is the elevation of the
+        water outside the ground: the part of its edge above that water is a seepage face.
         """
         poly = _core.SoilPolygon()
         poly.name = name

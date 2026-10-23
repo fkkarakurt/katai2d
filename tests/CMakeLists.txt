@@ -136,7 +136,7 @@ katai_add_test(test_axisym_water katai::jobs katai::mesh katai::analysis katai::
 katai_add_test(test_gui_matrix katai::jobs katai::mesh katai::analysis katai::model)  # Systematic: structures x load x water x model x tri6/tri15 invariants
 katai_add_test(test_safety_gui katai::jobs katai::mesh katai::analysis katai::model)  # Safety (phi-c reduction) GUI path: slope FoS + collapse mechanism
 katai_add_test(test_k0_slope katai::jobs katai::mesh katai::analysis katai::model)    # K0 nil-step equilibrium on a sloping surface (horizontal = exact u0; a real redistribution on the slope)
-katai_add_test(test_seepage_gui katai::jobs katai::mesh katai::analysis katai::model) # Groundwater flow GUI path: exact Darcy + Charny seepage face + Terzaghi coupling
+katai_add_test(test_seepage_gui katai::jobs katai::mesh katai::analysis katai::model) # KV-FLW-010 + groundwater flow GUI path: exact Darcy + Charny seepage face (drawn, and a Head edge above its water) + Terzaghi coupling
 katai_add_test(test_consolidation_gui katai::jobs katai::mesh katai::analysis katai::model) # Consolidation GUI path (PhaseType::Consolidation): 1D Terzaghi U-Tv + final settlement
 katai_add_test(test_consolidation_stop katai::jobs katai::mesh katai::analysis katai::model katai::linsolve) # Consolidation stop criteria (phases[i].cstop, docs/k2d-format.md): restart identity + the PRESSURE-ratio degree of consolidation against Terzaghi
 katai_add_test(test_consolidation_structures katai::jobs katai::mesh katai::analysis katai::model) # Plates/anchors/geogrids INSIDE a consolidation phase: the drained limit is the oracle (KV-STR-006)
