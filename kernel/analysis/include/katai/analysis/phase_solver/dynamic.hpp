@@ -72,6 +72,11 @@ struct DynamicPhase {
     bool free_field = false;                      // Lysmer free-field lateral boundaries (D3b)
     bool compliant_base = false;                  // absorbing base (must match the BC setup's flag)
     bool nonlinear = false;                       // per-step-Newton time integration (opt-in)
+    // The phase's own iteration controls for the nonlinear path: the Newton iterations of a time
+    // step and the relative residual it must reach. 0 = the solver's own (30 iterations, 1e-6).
+    // They were not read until 2026-10-22: a phase that set them was solved with the defaults.
+    int max_iterations = 0;
+    double tolerance = 0.0;
     // -- code-spectrum overlays
     double tbdy_ss = 1.0, tbdy_s1 = 0.4;          // TBDY 2018 map coefficients
     int site_class = 2;                           // ZA..ZE as 0..4
@@ -206,6 +211,45 @@ inline bool solve_dynamic_phase(
             }
         }
     }
+    // UNDRAINED GROUND IN THE LINEAR PATH. An Undrained (A)/(B) soil carries its pore fluid: the
+    // static solver adds Kw/n to the skeleton's bulk modulus, and Kw/n is derived so that
+    // K' + Kw/n is the undrained bulk modulus of the undrained Poisson's ratio nu_u at the
+    // skeleton's shear modulus (MaterialModel::kw_over_n) -- for the stress-dependent models, at
+    // the stiffness of the present stress. The linear path assembles an isotropic elastic (E, nu)
+    // and used the skeleton's own, so until 2026-10-22 a saturated undrained clay shook as if it
+    // were drained: the shear wave right, everything volumetric (P waves, the rocking of a block
+    // or a structure, a surface wave) too soft. The undrained pair keeps G and takes nu_u:
+    // E_u = 2 G (1 + nu_u) = E' (1 + nu_u) / (1 + nu'), and a depth profile scales with it. The
+    // nonlinear path is untouched: it solves with the models themselves, Kw/n included.
+    std::vector<LinearElastic> mats_u = mats;
+    std::vector<MaterialProfile> profiles_u = profiles;
+    {
+        const auto undrained_here = [&models](int mi) {
+            return mi >= 0 && mi < (int)models.size() && models[(size_t)mi].undrained &&
+                   !models[(size_t)mi].ignore_undrained && !models[(size_t)mi].total_stress;
+        };
+        const auto to_undrained = [](LinearElastic& le, double nu_u, double* e_inc) {
+            const double nu = le.poisson_ratio;
+            if (!(nu_u > nu) || !(nu_u < 0.5)) return;
+            const double r = (1.0 + nu_u) / (1.0 + nu);
+            le.youngs_modulus *= r;
+            le.poisson_ratio = nu_u;
+            if (e_inc) *e_inc *= r;
+        };
+        for (int mi = 0; mi < (int)mats_u.size(); ++mi)
+            if (undrained_here(mi))
+                to_undrained(mats_u[(size_t)mi], models[(size_t)mi].undrained_poisson,
+                             mi < (int)profiles_u.size() ? &profiles_u[(size_t)mi].E_inc : nullptr);
+        if (!gauss_elastic.empty() && mesh.element_count > 0) {
+            const size_t ngp = gauss_elastic.size() / (size_t)mesh.element_count;
+            for (int e = 0; e < mesh.element_count; ++e) {
+                const int mi = mesh.element_material[e];
+                if (!undrained_here(mi)) continue;
+                for (size_t g = 0; g < ngp; ++g)
+                    to_undrained(gauss_elastic[(size_t)e * ngp + g], models[(size_t)mi].undrained_poisson, nullptr);
+            }
+        }
+    }
     constexpr double kG = kGravity;   // gravity [m/s^2] -> mass density rho = gamma/g [Mg/m^3]
     // Mass density. Below the water table the soil is SATURATED: its total unit weight (grains +
     // pore water) is gamma_sat, and it is the TOTAL mass that carries the seismic inertia force
@@ -239,7 +283,7 @@ inline bool solve_dynamic_phase(
         assemble_mass_phreatic(mesh, dofs, density, density_sat, in.water_table_y, bM, act);
     else
         assemble_mass(mesh, dofs, density, bM, act);
-    assemble_stiffness(mesh, dofs, mats, bK, act, profiles, gauss_elastic);
+    assemble_stiffness(mesh, dofs, mats_u, bK, act, profiles_u, gauss_elastic);
     assemble_structural_mass(mesh, dofs, structures, bM);
     assemble_structural_stiffness(mesh, dofs, structures, bK);
     const katai::math::CsrMatrix Mmat = bM.build(), Kmat = bK.build();
@@ -287,7 +331,7 @@ inline bool solve_dynamic_phase(
     bool has_ff = false;
     struct FFSide { FreeFieldColumnResult col; std::vector<int> ux_eq; };
     std::vector<FFSide> ff_sides;
-    if (in.free_field && !mats.empty()) {
+    if (in.free_field && !mats_u.empty()) {
         const auto edges = katai::mesh::extract_boundary_edges(mesh, act);
         // Adjacent-material dashpot coefficients c_n = rho Vp, c_t = rho Vs (Lysmer-Kuhlemeyer).
         // Density is WATER-AWARE: below the water table the far field is saturated too -- with
@@ -296,9 +340,9 @@ inline bool solve_dynamic_phase(
         // interior produced spurious reflections (audit finding). (xe, ye) = edge midpoint.
         auto mat_props = [&](int mat, double xe, double ye, double& cn, double& ct,
                              double& G, double& rho) {
-            mat = std::clamp(mat, 0, (int)mats.size() - 1);
-            const double E = std::fmax(0.0, mats[mat].youngs_modulus);
-            const double nu = std::clamp(mats[mat].poisson_ratio, 0.0, 0.49);
+            mat = std::clamp(mat, 0, (int)mats_u.size() - 1);
+            const double E = std::fmax(0.0, mats_u[mat].youngs_modulus);
+            const double nu = std::clamp(mats_u[mat].poisson_ratio, 0.0, 0.49);
             const bool sat = in.has_water && ye < in.water_table_y(xe);
             rho = std::fmax(1e-12, sat ? density_sat[mat] : density[mat]);
             G = E / (2.0 * (1.0 + nu));
@@ -408,9 +452,9 @@ inline bool solve_dynamic_phase(
             for (int i = 0; i < be.npe; ++i)
                 if (mesh.y[be.node[i]] > ymin_d + ytol2) { on_base_edge = false; break; }
             if (!on_base_edge) continue;
-            const int mi2 = std::clamp(be.material, 0, (int)mats.size() - 1);
-            const double E2 = std::fmax(0.0, mats[mi2].youngs_modulus);
-            const double nu2 = std::clamp(mats[mi2].poisson_ratio, 0.0, 0.49);
+            const int mi2 = std::clamp(be.material, 0, (int)mats_u.size() - 1);
+            const double E2 = std::fmax(0.0, mats_u[mi2].youngs_modulus);
+            const double nu2 = std::clamp(mats_u[mi2].poisson_ratio, 0.0, 0.49);
             // A base edge below the water table uses the saturated density (same rationale as
             // the lateral dashpots: the rho-Vs impedance must match the interior mass).
             double xb = 0.0;
@@ -444,7 +488,26 @@ inline bool solve_dynamic_phase(
             for (int p = A.row_ptr[rr]; p < A.row_ptr[rr + 1]; ++p)
                 bC.add_entry(rr, A.col_indices[p], s * A.values[p]);
     };
-    add_scaled(Mmat, ray.alpha); add_scaled(Kmat, ray.beta);
+    // THE STIFFNESS-PROPORTIONAL DAMPING LEAVES THE JOINTS OUT. beta K was built on the full
+    // initial stiffness, the interfaces' elastic springs included, and a joint spring is stiff by
+    // construction (G over a virtual thickness of a tenth of an element): a joint slipping at a
+    // rate v met a viscous resistance beta k_s v far above its Coulomb strength, so it could not
+    // slip at all. Measured on Newmark's sliding block (KV-DYN-004): 5% damping left 0.8% of the
+    // closed-form slip. Contact springs carry no material damping; they are excluded, as is usual
+    // for zero-thickness contact elements -- the interfaces and the embedded beams' skin and foot
+    // springs (the beam goes with them; its own share of the damping is small beside the soil's).
+    katai::math::CsrMatrix Kdamp;
+    {
+        katai::math::SparseMatrixBuilder bKd(neq);
+        assemble_stiffness(mesh, dofs, mats_u, bKd, act, profiles_u, gauss_elastic);
+        Structures no_joints = structures;
+        no_joints.interfaces.clear();
+        no_joints.interfaces5.clear();
+        no_joints.embedded_beams.clear();
+        assemble_structural_stiffness(mesh, dofs, no_joints, bKd);
+        Kdamp = bKd.build();
+    }
+    add_scaled(Mmat, ray.alpha); add_scaled(Kdamp, ray.beta);
     if (has_ff) add_scaled(Cb, 1.0);                     // lateral dashpots into the global C
     if (has_cbase) add_scaled(Cbase, 1.0);               // base absorbers into the global C
     const katai::math::CsrMatrix Cmat = bC.build();
@@ -750,6 +813,8 @@ inline bool solve_dynamic_phase(
         const std::vector<GaussState> nl_init =
             init_states ? *init_states : std::vector<GaussState>{};
         NewmarkNonlinearOptions nlopt;   // gamma=1/2, beta=1/4, 30 Newton, tol 1e-6
+        if (in.max_iterations > 0) nlopt.max_newton = in.max_iterations;
+        if (in.tolerance > 0.0) nlopt.newton_tol = in.tolerance;
         // Stream the committed structural state to the envelope observer (fires right before
         // each on_step, incl. step 0 = the seeded parent state) -- the diagrams then use the
         // solver's REAL constitutive state, never a stale or zero one (D6b rule).
@@ -994,12 +1059,28 @@ inline bool solve_dynamic_phase(
     R.load_factor = 1.0; R.iterations = nst;
     R.active = act;
     R.ok = true;
-    char buf[220];
-    if (dyn_nl)
+    char buf[320];
+    if (dyn_nl && !nl_ok) {
+        // A time step that did not converge ends the phase, and the phase did NOT complete: it is
+        // reported as failed (the phases after it are not calculated), with the time it reached as
+        // its load fraction. The fields up to that instant stay viewable. Until 2026-10-22 this
+        // returned ok = true with "STOPPED early" in the message only, so the phases after it ran
+        // as if the shaking had been completed.
+        R.ok = false;
+        R.load_factor = nst > 0 ? (double)nl_steps / nst : 0.0;
+        R.iterations = nl_steps;
+        R.stopped_by = NewtonResult::Abandonment::IterationBudget;
         std::snprintf(buf, sizeof(buf),
-                      "Nonlinear dynamic analysis: %d/%d steps over %.3g s, peak |u| = %.4g m.%s",
-                      nl_steps, nst, dur, peak,
-                      nl_ok ? "" : " STOPPED early -- a step did not converge; the result is partial.");
+                      "Nonlinear dynamic analysis STOPPED at step %d of %d (t = %.4g s of %.3g s): a "
+                      "time step did not converge within its iterations. The result is partial; peak "
+                      "|u| up to then = %.4g m. More time steps (a smaller step), more iterations per "
+                      "step or a looser tolerance may carry it through; a ground that is collapsing "
+                      "will not.",
+                      nl_steps, nst, dur * nl_steps / std::max(1, nst), dur, peak);
+    } else if (dyn_nl)
+        std::snprintf(buf, sizeof(buf),
+                      "Nonlinear dynamic analysis: %d/%d steps over %.3g s, peak |u| = %.4g m.",
+                      nl_steps, nst, dur, peak);
     else
         std::snprintf(buf, sizeof(buf), "Dynamic analysis: %d steps over %.3g s, peak |u| = %.4g m.",
                       nst, dur, peak);

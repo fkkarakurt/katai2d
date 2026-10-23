@@ -34,7 +34,7 @@ inline void add_interface_sigma_n0_baseline(const Structures& structures, const 
             const int nd = ncp[q].node;
             const auto fr = iface::edge_frame(Xe, ncp[q].xi);
             const double bcoef[4] = {fr.s, -fr.c, -fr.s, fr.c};
-            const double wJ = ncp[q].w * fr.J;
+            const double wJ = ncp[q].w * fr.J * (ie.axisymmetric ? Xe(nd, 0) : 1.0);   // r-weighted in axisymmetry
             const int idx[4] = {dofs.equation(dofs.global_dof(ie.soil_nodes[nd], 0)),
                                 dofs.equation(dofs.global_dof(ie.soil_nodes[nd], 1)),
                                 dofs.equation(ie.struct_dof[2 * nd + 0]),
@@ -51,7 +51,7 @@ inline void add_interface_sigma_n0_baseline(const Structures& structures, const 
             const int nd = ncp5[q].node;
             const auto fr = iface::edge_frame5(Xe, ncp5[q].xi);
             const double bcoef[4] = {fr.s, -fr.c, -fr.s, fr.c};
-            const double wJ = ncp5[q].w * fr.J;
+            const double wJ = ncp5[q].w * fr.J * (ie.axisymmetric ? Xe(nd, 0) : 1.0);   // r-weighted in axisymmetry
             const int idx[4] = {dofs.equation(dofs.global_dof(ie.soil_nodes[nd], 0)),
                                 dofs.equation(dofs.global_dof(ie.soil_nodes[nd], 1)),
                                 dofs.equation(ie.struct_dof[2 * nd + 0]),

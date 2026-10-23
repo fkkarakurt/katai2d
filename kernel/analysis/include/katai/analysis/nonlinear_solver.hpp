@@ -282,6 +282,9 @@ struct InterfaceElement {
     // that side are orphaned and fixed, so a joint left in place would hold the wall against
     // points fixed in space AND keep pressing it with the earth pressure of the removed soil.
     bool active = true;
+    // The joint of an axisymmetric model: its traction acts on a ring, so each Newton-Cotes
+    // point (a node of the joint) weighs its radius r -- the integral per radian, as the soil's.
+    bool axisymmetric = false;
 };
 
 // 5-NODE (quartic) plate — sits on a tri15 edge (the structural partner of the 15-node soil
@@ -306,6 +309,7 @@ struct InterfaceElement5 {
     int soil_elem = -1; // as InterfaceElement::soil_elem
     int soil_elem2 = -1; // as InterfaceElement::soil_elem2
     bool active = true;   // see InterfaceElement::active
+    bool axisymmetric = false;   // see InterfaceElement::axisymmetric
 };
 
 // Bundle of structural elements embedded in the soil (plate + anchor + geogrid + interface;

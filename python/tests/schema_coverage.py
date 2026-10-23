@@ -69,6 +69,7 @@ KEY_TO_ATTR = {
     "ignoreund": "ignore_undrained",
     "resetsmall": "reset_small_strain",
     "resetdisp": "reset_displacements",
+    "headramp": "head_ramp",
     "tol": "tolerance",
     "loadsteps": "load_steps",
     "maxiter": "max_iterations",
@@ -220,6 +221,7 @@ def coverage_project():
     ph.ignore_undrained = True
     ph.reset_small_strain = True
     ph.reset_displacements = True
+    ph.head_ramp = True   # v22: written only when set
     ph.tolerance = 1e-5
     ph.load_steps = 12
     ph.max_iterations = 40

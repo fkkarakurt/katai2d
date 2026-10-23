@@ -6,6 +6,14 @@
 //   2. 2D confined patch test: a linear field h=a·x+b·y prescribed on the whole
 //      boundary is reproduced exactly in the interior, for ANISOTROPIC k (∇²h=0).
 // Exercises assemble_seepage (1-DOF-per-node DofMap, Dirichlet lift, SPD solve).
+//
+// verify: KV-FLW-007
+//   oracle:   closed_form
+//   source:   Darcy's law with continuity, div(k grad h) = 0: a column between two prescribed heads has the linear head h1 + (h2 - h1) x / L and the uniform specific discharge k (h1 - h2) / L; a linear head field is an exact solution for anisotropic k, so a patch test reproduces it in the interior
+//   locator:  the nodal heads and the element discharges of the column; the interior heads of the 2-D patch; the nodal error under refinement on 6- and 15-noded elements
+//   quantity: head [m]; specific discharge [m/day]; convergence order [-]
+//   expected: the linear profile and the uniform discharge to 1e-9, no transverse discharge, the patch reproduced to 1e-9, a monotone error decrease with the order of the element
+//   band:     1e-9 relative (the solution is in the element space), as asserted
 #include <katai/analysis/seepage.hpp>
 #include <katai/fem/assembly/assembler.hpp>
 #include <katai/fem/assembly/dof_map.hpp>

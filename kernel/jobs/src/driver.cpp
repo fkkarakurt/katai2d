@@ -4,6 +4,7 @@
 // Batch 2 moved the ENGINE INCLUDE SET here too: the header now carries only the
 // declaration closure, so consumers stop parsing the twenty-odd headers below.
 #include <katai/jobs/driver.hpp>
+#include <katai/jobs/flow_driver.hpp>   // resolve_hydros: wells and drains, as the steady flow reads them
 
 #include <array>
 #include <cmath>
@@ -11,6 +12,8 @@
 #include <exception>
 #include <memory>
 #include <unordered_map>
+#include <limits>
+#include <set>
 
 #include <katai/analysis/consolidation.hpp>          // time-dependent Biot consolidation phase
 #include <katai/analysis/dynamics.hpp>                // DynamicsSolveFactory (injected into the Dynamic strategy)
@@ -281,6 +284,14 @@ static bool phase_flow_head(const model::Project& pr, const katai::mesh::Mesh& m
         }
     }
 
+    // WHICH NODES THE FLOW HAS, counted again now the ends are split. An end the mesh had already
+    // split -- a free interface ends on the boundary with a twin of its own -- can give the copy
+    // every element its twin had, and the twin, still counted, became an equation with nothing in
+    // it: PARDISO stopped on a zero pivot and the exception left the run. A node no element uses
+    // is outside the flow.
+    std::fill(used.begin(), used.end(), 0);
+    for (int c : fm.connectivity) used[c] = 1;
+
     // Permeability and retention per material, under the rules of the groundwater-flow calculation.
     std::vector<katai::core::Permeability> perm(pr.materials.size(), {1.0, 1.0});
     std::vector<katai::core::WaterRetention> ret(pr.materials.size());
@@ -386,7 +397,16 @@ static bool phase_flow_head(const model::Project& pr, const katai::mesh::Mesh& m
     opt.relax = seep.empty() ? 0.15 : 0.05;
     opt.max_iter = 1200;
     opt.tol = 1e-5;
-    const auto res = katai::core::solve_unconfined_seepage_face(fm, fx, fv, seep, perm, lin, opt);
+    katai::core::UnconfinedResult res;
+    try {
+        res = katai::core::solve_unconfined_seepage_face(fm, fx, fv, seep, perm, lin, opt);
+    } catch (const std::exception& e) {
+        // A singular flow system is a model the flow cannot be solved on; said, not thrown out of
+        // the run.
+        msg = std::string("The groundwater flow of this phase could not be solved: ") + e.what() +
+              ". A part of the ground may hold no head (a region closed on every side).";
+        return false;
+    }
     if (!res.converged) {
         msg = "The groundwater flow of this phase did not converge (residual " +
               std::to_string(res.residual) + ").";
@@ -603,6 +623,35 @@ static std::vector<katai::core::FlowEdge> flow_edges_from(const model::Project& 
     return edges;
 }
 
+// PRESCRIBED-FLUX EDGES of the regions active in a phase, integrated onto the nodes (the boundary
+// flux term q N_i of the weak form, inflow positive) -- the same integration the steady flow solve
+// does. `any` says whether a non-zero flux was found at all. A region excavated in the phase has
+// no ground for its edges to bring water into, so its edges are left out.
+static std::vector<double> phase_edge_flux(const model::Project& pr, const katai::mesh::Mesh& mesh,
+                                           const model::Phase* cfg, bool& any) {
+    std::vector<double> nodal(mesh.node_count, 0.0);
+    any = false;
+    for (std::size_t pi = 0; pi < pr.polygons.size(); ++pi) {
+        // silent-drop-ok: an excavated region has no ground for its edges to bring water into
+        if (cfg && !cfg->active_poly(pi)) continue;
+        const auto& P = pr.polygons[pi];
+        const int n = (int)P.x.size();
+        // silent-drop-ok: no flow conditions stated, or a mismatch the validator refuses
+        // (polygons[i].edge_flow)
+        if (n < 3 || (int)P.edge_flow.size() != n) continue;
+        for (int i = 0; i < n; ++i) {
+            if (P.edge_flow[i] != (int)model::FlowBCType::Flux) continue;
+            const double q = (int)P.edge_flux.size() == n ? P.edge_flux[i] : 0.0;
+            if (q == 0.0) continue;   // silent-drop-ok: a zero flux IS the closed condition
+            const auto chain = katai::mesh::collect_chain(mesh, P.x[i], P.y[i],
+                                                          P.x[(i + 1) % n], P.y[(i + 1) % n]);
+            katai::core::accumulate_boundary_flux(mesh, chain, q, nodal);
+            any = true;
+        }
+    }
+    return nodal;
+}
+
 // The original declaration scan, kept unfiltered on purpose: a flow BC declared on a
 // polygon too degenerate to yield a matchable edge must still disable the top-drain
 // fallback (the engine header states the same asymmetry from its side).
@@ -786,9 +835,9 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             if (m == pr_phase.structs[si].material) continue;   // silent-drop-ok: unchanged
             if (pr_phase.structs[si].kind != model::StructKind::Plate ||
                 m >= (int)pr_phase.plates.size()) {
-                R.message = "Phase \"" + io.config->name + "\" gives structure " +
+                refuse(R, "K2D-I005", io.config->name, "Phase \"" + io.config->name + "\" gives structure " +
                             std::to_string(si + 1) + " plate material " + std::to_string(m + 1) +
-                            ": it is not a plate, or the project has no such plate material.";
+                            ": it is not a plate, or the project has no such plate material.");
                 return R;
             }
             pr_phase.structs[si].material = m;
@@ -799,10 +848,10 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         for (size_t i = 0; i < pr_phase.polygons.size(); ++i) {
             const int m = io.config->material_of(i, pr_phase.polygons[i].material);
             if (m >= (int)pr_phase.materials.size()) {
-                R.message = "Phase \"" + io.config->name + "\" gives soil region " +
+                refuse(R, "K2D-I005", io.config->name, "Phase \"" + io.config->name + "\" gives soil region " +
                             std::to_string(i + 1) + " material " + std::to_string(m + 1) +
                             ", and the project has " + std::to_string(pr_phase.materials.size()) +
-                            " material(s).";
+                            " material(s).");
                 return R;
             }
             pr_phase.polygons[i].material = m;
@@ -990,7 +1039,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
     }
     for (int e = 0; e < mesh.element_count; ++e)
         if (mesh.element_material[e] < 0 || mesh.element_material[e] >= (int)mats.size()) {
-            R.message = "An element has no valid material; assign a material to every soil region.";
+            refuse(R, "K2D-I002", "", "An element has no valid material; assign a material to every soil region.");
             return R;
         }
     // Honest refusals live with the models: each catalogue entry names the parameter/drainage
@@ -1011,10 +1060,10 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         if (s.kind == model::StructKind::Plate && s.material >= 0 &&
             s.material < (int)pr.plates.size() && pr.plates[s.material].elastoplastic &&
             !(pr.plates[s.material].Mp > 0.0) && !(pr.plates[s.material].Np > 0.0)) {
-            R.message = "Plate material '" + pr.plates[s.material].name +
+            refuse(R, "K2D-I001", pr.plates[s.material].name, "Plate material '" + pr.plates[s.material].name +
                         "' is marked elastoplastic but both Mp and Np are 0 (= unlimited): the "
                         "plate would run elastic while the input promises a plastic hinge. Enter "
-                        "Mp and/or Np (> 0), or uncheck 'elastoplastic' for an elastic plate.";
+                        "Mp and/or Np (> 0), or uncheck 'elastoplastic' for an elastic plate.");
             return R;
         }
     // Depth-varying E'(y) / c'(y), evaluated per stress point by every deformation phase's own assembly.
@@ -1075,10 +1124,29 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
     // ACTIVE soil -- an excavated region carries no weight and the pit floor is the surface.
     const auto poly_on = [&io](size_t i) { return !io.config || io.config->active_poly(i); };
     const auto material_at = [&pr, &poly_on](double x, double y) {
-        int mat = -1;
-        for (size_t i = 0; i < pr.polygons.size(); ++i)
-            if (poly_on(i) && point_in_polygon(x, y, pr.polygons[i])) mat = pr.polygons[i].material;
-        return mat;   // last wins
+        const auto at = [&](double px, double py) {
+            int mat = -1;
+            for (size_t i = 0; i < pr.polygons.size(); ++i)
+                if (poly_on(i) && point_in_polygon(px, py, pr.polygons[i])) mat = pr.polygons[i].material;
+            return mat;   // last wins
+        };
+        int mat = at(x, y);
+        if (mat >= 0) return mat;
+        // A POINT ON THE MODEL'S RIGHT OR TOP BOUNDARY is outside every region by the half-open
+        // rule point_in_polygon follows (a point on a left or bottom edge is inside), so the soil
+        // column above a node on the right boundary weighed nothing: the wished-in-place normal
+        // stress of an interface ended at zero there (measured on Newmark's sliding block,
+        // KV-DYN-004: the joint lost its end stations' share of friction, 4.2% of the whole on
+        // 6-noded elements), and so did any K0 seed read at that boundary. The ground a boundary
+        // point belongs to is the region it bounds: look a hair inside. A point in the air finds
+        // nothing either way.
+        const double e = 1e-7 * (1.0 + std::fabs(x) + std::fabs(y));
+        const double probe[5][2] = {{-e, 0.0}, {0.0, -e}, {-e, -e}, {e, 0.0}, {0.0, e}};
+        for (const auto& d : probe) {
+            mat = at(x + d[0], y + d[1]);
+            if (mat >= 0) return mat;
+        }
+        return -1;
     };
     // THE SHEAR MODULUS AN INTERFACE IS DERIVED FROM is the soil's own: Young's modulus for the
     // elastic and Mohr-Coulomb models, and E50 for the hardening models -- slipping is shearing,
@@ -1862,7 +1930,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
     const auto adjacent_soil_props = [&](const WallSpec& w, const std::vector<int>& node_r,
                                          const std::vector<int>& node_l, int soil_a, int soil_b,
                                          int soil_mid, katai::core::iface::InterfaceProps& ip,
-                                         int& strength_mat, int& adjacent_mat) {
+                                         int& strength_mat, int& adjacent_mat, double& side) {
         const auto& st = pr.structs[w.si];
         bool left = false;
         for (size_t i = 0; i < node_l.size(); ++i)
@@ -1870,6 +1938,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         const double mx = 0.5 * (mesh.x[soil_a] + mesh.x[soil_b]);
         const double my = 0.5 * (mesh.y[soil_a] + mesh.y[soil_b]);
         const double sgn = left ? -1.0 : 1.0;
+        side = sgn;
         const int mat = material_at(mx + sgn * 1e-3 * w.nx, my + sgn * 1e-3 * w.ny);
         if (mat < 0 || mat >= (int)pr.materials.size()) return;
         adjacent_mat = mat;   // the initial normal stress is this soil's too (its K0)
@@ -1963,7 +2032,12 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             return R;
         }
         // sigma_n / sigma'_v on the wall's line (vertical -> K0), with the K0 of the soil the
-        // interface element lies against -- like its strength, not the wall's midpoint soil's.
+        // interface element lies against -- like its strength, not the wall's midpoint soil's --
+        // and the overburden of THAT side, read a millimetre into it. Read on the line itself, a
+        // wall drawn along the edge of a pit's region took one overburden for both its faces --
+        // which one depended on the side the pit was drawn on, by the half-open point-in-polygon
+        // rule: after the excavation the retained face could see the pit's, or the pit face the
+        // retained ground's.
         const auto wall_k0_factor = [&k0_by_mat](const WallSpec& ws, int mat) {
             const double k0 = (mat >= 0 && mat < (int)k0_by_mat.size()) ? k0_by_mat[(size_t)mat] : 0.5;
             return k0 * ws.nx * ws.nx + ws.ny * ws.ny;
@@ -1979,12 +2053,14 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             const size_t if0 = structures.interfaces5.size();
             for (auto& ie : wb.interfaces) {
                 int smat_e = w.strength_mat, adj = w.soil_mat;
+                double side = 0.0;
                 adjacent_soil_props(w, wb.node_r, wb.node_l, ie.soil_nodes[0], ie.soil_nodes[4],
-                                    ie.soil_nodes[2], ie.props, smat_e, adj);
+                                    ie.soil_nodes[2], ie.props, smat_e, adj, side);
                 const double fac_e = wall_k0_factor(w, adj);
                 for (int q = 0; q < 5; ++q) {
                     const int nd = ie.soil_nodes[ncp[q].node];
-                    ie.sigma_n0[q] = fac_e * eff_sigma_v(mesh.x[nd], mesh.y[nd]);
+                    ie.sigma_n0[q] = fac_e * eff_sigma_v(mesh.x[nd] + side * 1e-3 * w.nx,
+                                                         mesh.y[nd] + side * 1e-3 * w.ny);
                 }
                 structures.interfaces5.push_back(ie);
                 iface5_strength_mat.push_back(smat_e);
@@ -2004,12 +2080,14 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             const size_t if0 = structures.interfaces.size();
             for (auto& ie : wb.interfaces) {
                 int smat_e = w.strength_mat, adj = w.soil_mat;
+                double side = 0.0;
                 adjacent_soil_props(w, wb.node_r, wb.node_l, ie.soil_nodes[0], ie.soil_nodes[1],
-                                    ie.soil_nodes[2], ie.props, smat_e, adj);
+                                    ie.soil_nodes[2], ie.props, smat_e, adj, side);
                 const double fac_e = wall_k0_factor(w, adj);
                 for (int q = 0; q < 3; ++q) {
                     const int nd = ie.soil_nodes[ncp[q].node];
-                    ie.sigma_n0[q] = fac_e * eff_sigma_v(mesh.x[nd], mesh.y[nd]);
+                    ie.sigma_n0[q] = fac_e * eff_sigma_v(mesh.x[nd] + side * 1e-3 * w.nx,
+                                                         mesh.y[nd] + side * 1e-3 * w.ny);
                 }
                 structures.interfaces.push_back(ie);
                 iface_strength_mat.push_back(smat_e);
@@ -2420,9 +2498,9 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         for (size_t di = 0; di < pr.disps.size(); ++di)
             if (disp_on(di)) any_disp_active = true;
         if (any_disp_active && phase != InitialPhase::GravityLoading) {
-            R.message = "Prescribed displacements are only supported in Plastic (staged "
+            refuse(R, "K2D-S001", "prescribed displacements", "Prescribed displacements are only supported in Plastic (staged "
                         "construction) phases and the gravity-loading initial phase in this "
-                        "build; deactivate them in this phase.";
+                        "build; deactivate them in this phase.");
             return R;
         }
         for (size_t di = 0; di < pr.disps.size(); ++di) {
@@ -2685,10 +2763,10 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 const bool kept = carry_plan.carried && c < carry_plan.record_installed.size() &&
                                   !carry_plan.record_installed[c];
                 if (!kept || (cr.plates[1] == cr.plates[0] && cr.plates5[1] == cr.plates5[0])) {
-                    R.message = "Phase \"" + io.config->name + "\" changes the line contraction of "
+                    refuse(R, "K2D-S006", io.config->name, "Phase \"" + io.config->name + "\" changes the line contraction of "
                                 "structure " + std::to_string(cr.si + 1) + ", which is not a plate "
                                 "carried from the phase before. A contraction is applied to a plate "
-                                "that is already in place: install it in an earlier phase.";
+                                "that is already in place: install it in an earlier phase.");
                     return R;
                 }
                 const double shrink = -0.5 * dC;
@@ -2770,35 +2848,41 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
     // and the circular footing on saturated ground are reachable. What is still missing is
     // refused rather than silently integrated as plane strain.
     if (axi) {
+        // A JOINT IS THE SAME ELEMENT IN AXISYMMETRY, integrated per radian: its traction acts on
+        // a ring, and each Newton-Cotes point weighs its radius (KV-STR-016: a cylinder pulled
+        // through a cohesive joint carries c_i a H per radian). So soil-to-soil interfaces --
+        // the shaft and the base of a pile modelled as a volume, the joint under a tank -- are
+        // built and weighted. A plate is a shell with a HOOP membrane force and an anchor is a
+        // ring, so they are different elements rather than the same ones integrated
+        // differently, and they are still refused rather than approximated.
+        for (auto& ie : structures.interfaces) ie.axisymmetric = true;
+        for (auto& ie : structures.interfaces5) ie.axisymmetric = true;
         const bool has_structs =
             !structures.plates.empty() || !structures.plates5.empty() || !structures.anchors.empty() ||
-            !structures.geogrids.empty() || !structures.interfaces.empty() ||
-            !structures.interfaces5.empty() || !structures.embedded_beams.empty();
-        if (has_structs) { R.message = "Structural elements are not supported in axisymmetric mode yet "
-                                       "(soil-only). A plate in axisymmetry is a shell with a HOOP "
+            !structures.geogrids.empty() || !structures.embedded_beams.empty();
+        if (has_structs) { refuse(R, "K2D-S002", "axisymmetric", "Plates, anchors, geogrids and embedded beams are not supported in "
+                                       "axisymmetric mode yet. A plate in axisymmetry is a shell with a HOOP "
                                        "membrane force and an anchor is a ring, so they are different "
                                        "elements rather than the same ones integrated differently -- "
-                                       "which is why this is refused instead of approximated. Use "
-                                       "plane strain for walls/anchors/plates."; return R; }
+                                       "which is why this is refused instead of approximated. A pile is "
+                                       "modelled as a soil region with interfaces along its shaft and base; "
+                                       "use plane strain for walls, anchors and plates."); return R; }
     }
 
     // Staged-phase scope guards: the static path below is axisymmetric-aware end to end
     // (r-weighted gravity and internal-force baseline, axisym Newton kinematics, axisym
-    // reactions), so a PLASTIC phase that keeps every element active -- load / prescribed-
-    // displacement staging, the bearing-capacity workflow -- runs the same verified machinery
-    // as the initial phase. What is NOT plumbed for axisymmetry is refused honestly rather
-    // than silently integrated as plane strain: the time-dependent phase inputs carry no
-    // kinematics flag, and the axisym gravity / internal-force assemblies take no
-    // element-activity mask.
+    // reactions, the water on exposed faces), and the r-weighted assemblies take the phase's
+    // element-activity mask, so a PLASTIC phase with excavation and fill -- a shaft, a
+    // cylindrical pit, a tank's foundation dug and backfilled -- runs the same machinery as the
+    // initial phase (KV-EXC-003: the one-dimensional heave, and the path independence of an
+    // elastic excavation). Until 2026-10-22 activation changes were refused here, on the
+    // ground that the masks were not passed; two calls did not pass them. What is NOT plumbed
+    // for axisymmetry is refused honestly rather than silently integrated as plane strain: the
+    // time-dependent phase inputs carry no kinematics flag.
     if (io.config && axi) {
-        if (io.config->type != model::PhaseType::Plastic) {
-            R.message = "Only Plastic phases are available in axisymmetric mode yet "
-                        "(consolidation, flow, dynamic and safety phases are plane-strain only).";
-            return R;
-        }
-        if (!act.empty()) {
-            R.message = "Excavation / fill (activation changes) is not available in "
-                        "axisymmetric mode yet -- keep every soil polygon active.";
+        if (io.config->type != model::PhaseType::Plastic && io.config->type != model::PhaseType::Safety) {
+            refuse(R, "K2D-S002", "axisymmetric", "Only Plastic and Safety phases are available in axisymmetric mode yet "
+                        "(consolidation, flow and dynamic phases are plane-strain only).");
             return R;
         }
         // THE 6-NODED TRIANGLE IN AXISYMMETRY OVERESTIMATES A COLLAPSE LOAD. Plastic flow at
@@ -2833,17 +2917,45 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         (io.config->pore_from_flow ||
          (io.config->type == model::PhaseType::Safety && io.parent_config &&
           io.parent_config->pore_from_flow && same_water_as_parent));
-    if (phase_flow) {
-        if (axi) { R.message = "Pore pressures from a groundwater flow are not available in axisymmetric mode yet."; return R; }
+    // THE FLOW THE PHASE BEFORE ENDED WITH. Right after a transient flow phase -- a drawdown -- or
+    // after a phase that took a flow's head, that head IS the pore pressure field the phase is
+    // about, and it is taken as it is; a steady flow is solved only when there is none. Until
+    // 2026-10-23 a steady flow was solved here whatever the phase before had left, so the effective
+    // stress after a drawdown was that of a settled water table.
+    // Only a transient flow's head is taken over (`flow_head_transient`). A steady flow handed on
+    // by the phase before is solved again here, on this phase's own water: the stages of an
+    // excavation each lower it, and taking the stage before's head left the pit at its old level
+    // (measured on a staged excavation: the wall's movement 1.5% short in two stages).
+    const bool prev_flow_head = phase_flow && io.prev && io.prev->flow_head_transient &&
+                                (int)io.prev->flow_head.size() == mesh.node_count;
+    if (phase_flow && prev_flow_head) {
+        if (axi) { refuse(R, "K2D-S002", "axisymmetric", "Pore pressures from a groundwater flow are not available in axisymmetric mode yet."); return R; }
         if (io.config->type != model::PhaseType::Plastic && io.config->type != model::PhaseType::Safety) {
-            R.message = "Pore pressures from a steady groundwater flow are available in Plastic and "
+            refuse(R, "K2D-S003", io.config->name, "Pore pressures from a groundwater flow are available in Plastic and Safety "
+                        "phases; a consolidation, transient-flow or dynamic phase computes its own "
+                        "pore pressures.");
+            return R;
+        }
+        phase_head = Eigen::Map<const Eigen::VectorXd>(io.prev->flow_head.data(), mesh.node_count);
+        // Said by the phase that takes the head from the transient flow itself (a time series); a
+        // Safety phase continuing that phase takes it on in turn without repeating it.
+        if (!io.prev->consol_time.empty())
+            note(R, "K2D-A038", io.config->name,
+                 "The pore pressures of this phase are those the transient groundwater flow of the "
+                 "phase before it ended with, at " + dnum(io.prev->consol_time.back()) +
+                     " day(s): the drawdown, not a settled water table. A steady flow is solved "
+                     "when the phase before did not end a transient flow.");
+    } else if (phase_flow) {
+        if (axi) { refuse(R, "K2D-S002", "axisymmetric", "Pore pressures from a groundwater flow are not available in axisymmetric mode yet."); return R; }
+        if (io.config->type != model::PhaseType::Plastic && io.config->type != model::PhaseType::Safety) {
+            refuse(R, "K2D-S003", io.config->name, "Pore pressures from a steady groundwater flow are available in Plastic and "
                         "Safety phases; a consolidation, transient-flow or dynamic phase computes its "
-                        "own pore pressures.";
+                        "own pore pressures.");
             return R;
         }
         if (!pr.has_water && !io.config->water_override) {
-            R.message = "This phase takes its pore pressures from a groundwater flow but has no water "
-                        "table to hold its boundaries at. Give it one (or the project one).";
+            refuse(R, "K2D-I003", io.config->name, "This phase takes its pore pressures from a groundwater flow but has no water "
+                        "table to hold its boundaries at. Give it one (or the project one).");
             return R;
         }
         std::vector<std::pair<int, int>> joined;
@@ -2851,8 +2963,8 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         for (const auto& w : walls) {
             const bool closed = w.active && w.flow_barrier == 1;
             if (w.flow_barrier == 2 && w.active) {
-                R.message = "Wall \"" + w.name + "\" is semi-permeable, which the groundwater flow of a "
-                            "staged phase does not take yet: make it permeable or impermeable.";
+                refuse(R, "K2D-S004", w.name, "Wall \"" + w.name + "\" is semi-permeable, which the groundwater flow of a "
+                            "staged phase does not take yet: make it permeable or impermeable.");
                 return R;
             }
             if (closed) {
@@ -2865,8 +2977,8 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         for (const auto& sp : soil_ifaces) {
             const bool closed = sp.active && sp.flow_barrier == 1;
             if (sp.flow_barrier == 2 && sp.active) {
-                R.message = "Interface \"" + sp.name + "\" is semi-permeable, which the groundwater flow "
-                            "of a staged phase does not take yet: make it permeable or impermeable.";
+                refuse(R, "K2D-S004", sp.name, "Interface \"" + sp.name + "\" is semi-permeable, which the groundwater flow "
+                            "of a staged phase does not take yet: make it permeable or impermeable.");
                 return R;
             }
             if (closed) {
@@ -2879,9 +2991,9 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         // An impermeable line the mesh was not split along cannot stop water -- refused, not ignored.
         for (const auto& s : pr.structs)
             if (s.flow_barrier == 1 && s.kind == model::StructKind::Plate && !(s.iface_pos || s.iface_neg)) {
-                R.message = "Plate \"" + s.name + "\" is marked impermeable to water but has no "
+                refuse(R, "K2D-I004", s.name, "Plate \"" + s.name + "\" is marked impermeable to water but has no "
                             "interfaces, so the ground is not split along it and water would cross it. "
-                            "Give it interfaces for a groundwater flow to see it.";
+                            "Give it interfaces for a groundwater flow to see it.");
                 return R;
             }
         std::string fmsg;
@@ -2889,30 +3001,58 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             R.message = fmsg;
             return R;
         }
+        // The flow of a staged phase takes its boundaries from the water table only (above); a
+        // well or a drain active in the phase is not part of it. Said, not dropped.
+        for (std::size_t hi = 0; hi < pr.hydros.size(); ++hi)
+            if (io.config->active_hydro(hi)) {
+                warn(R, "K2D-A035", pr.hydros[hi].name,
+                     std::string(model::hydro_kind_name(pr.hydros[hi].kind)) + " \"" + pr.hydros[hi].name +
+                         "\" is active, but the groundwater flow of a staged phase takes its boundaries "
+                         "from the water table only: the well or drain is not part of the pore "
+                         "pressures of this phase. A dewatering by wells or drains is solved by the "
+                         "steady groundwater-flow calculation, or stated as region water levels.");
+                break;
+            }
+    } else if (io.config && !flow_head &&
+               (io.config->type == model::PhaseType::Plastic || io.config->type == model::PhaseType::Safety)) {
+        for (std::size_t hi = 0; hi < pr.hydros.size(); ++hi)
+            if (io.config->active_hydro(hi)) {
+                note(R, "K2D-A036", pr.hydros[hi].name,
+                     "Wells and drains act in groundwater-flow calculations; this phase takes its pore "
+                     "pressures from the water table, on which they have no effect. Take the phase's "
+                     "pore pressures from a groundwater flow, or lower the water as region water levels.");
+                break;
+            }
     }
     // A phase whose regions state their own water (Phase::poly_water) is handed on as a head field
     // too, built from those rules -- the same path a flow takes, so every consumer reads one field.
     const bool region_water = !phase_flow && !flow_head && io.config && io.config->any_region_water();
     if (region_water) {
         if (axi) {
-            R.message = "Region water levels are not available in axisymmetric mode yet.";
+            refuse(R, "K2D-S002", "axisymmetric", "Region water levels are not available in axisymmetric mode yet.");
             return R;
         }
         if (io.config->type != model::PhaseType::Plastic && io.config->type != model::PhaseType::Safety) {
-            R.message = "Region water levels are available in Plastic and Safety phases; a "
-                        "consolidation, transient-flow or dynamic phase computes its own pore pressures.";
+            refuse(R, "K2D-S003", io.config->name, "Region water levels are available in Plastic and Safety phases; a "
+                        "consolidation, transient-flow or dynamic phase computes its own pore pressures.");
             return R;
         }
         region_water_head(pr, mesh, act, *io.config, kGammaWater, phase_head);
     }
     const bool phase_heads = phase_flow || region_water;
     const Eigen::VectorXd* flow_head_used = phase_heads ? &phase_head : flow_head;
+    // The head a flow gave this phase is handed on with its result: a transient flow after it
+    // starts from it, and -- when it is a transient flow's -- so does the next phase that takes its
+    // pore pressures from a flow.
+    if (phase_flow && phase_head.size() == mesh.node_count)
+        R.flow_head.assign(phase_head.data(), phase_head.data() + phase_head.size());
+    R.flow_head_transient = prev_flow_head;
 
     // Groundwater-flow coupling validity: the head field must match the solved mesh (embedded
     // walls SPLIT the mesh -- the flow result was computed on the unsplit one, so reject honestly).
     const bool flow = flow_head_used != nullptr;
     if (flow && !phase_heads) {
-        if (axi) { R.message = "Groundwater-flow coupling is not available in axisymmetric mode yet."; return R; }
+        if (axi) { refuse(R, "K2D-S002", "axisymmetric", "Groundwater-flow coupling is not available in axisymmetric mode yet."); return R; }
         if (io.config) { R.message = "Groundwater-flow coupling inside staged phases is not supported yet "
                                      "(use the water level, or single-phase flow coupling)."; return R; }
         if (flow_head->size() != (Eigen::Index)mesh.node_count) {
@@ -2984,7 +3124,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             katai::core::assemble_pore_pressure_load(mesh, dofs, pore, f, pore_mask);
         }
     } else if (axi) {
-        katai::core::assemble_axisym_gravity(mesh, dofs, gamma, f);   // r-weighted body force
+        katai::core::assemble_axisym_gravity(mesh, dofs, gamma, f, act);   // r-weighted body force
     } else {
         katai::core::assemble_gravity(mesh, dofs, gamma, f, act);
     }
@@ -3933,7 +4073,8 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 // anchor's lock-off force).
                 sfin.parent_state = init;
                 sfin.parent_force = Eigen::VectorXd::Zero(dofs.equation_count());
-                katai::core::assemble_internal_force(mesh, dofs, init, sfin.parent_force, act);
+                if (axi) katai::core::assemble_axisym_internal_force(mesh, dofs, init, sfin.parent_force, act);
+                else katai::core::assemble_internal_force(mesh, dofs, init, sfin.parent_force, act);
                 // ...and the force of the excess pore pressure the parent left (a consolidation
                 // stopped short, an undrained construction phase), exactly as a chained phase
                 // holds it: the short-term factor of safety is the one that reads it.
@@ -3942,7 +4083,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 if (any_struct_carry) {
                     sfin.parent_force += katai::core::structural_internal_force(
                         mesh, dofs, models, structures, carry_init,
-                        katai::core::Kinematics::PlaneStrain);
+                        axi ? katai::core::Kinematics::Axisymmetric : katai::core::Kinematics::PlaneStrain);
                     sfin.parent_structures = carry_init;
                 }
             }
@@ -4012,13 +4153,13 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             const bool any_new = std::find(new3.begin(), new3.end(), 1) != new3.end() ||
                                  std::find(new5.begin(), new5.end(), 1) != new5.end();
             if (any_new && phase != InitialPhase::GravityLoading) {
-                R.message = std::string("An interface or a wall with interfaces is activated in a ") +
+                refuse(R, "K2D-S005", "interface", std::string("An interface or a wall with interfaces is activated in a ") +
                             (phase == InitialPhase::Consolidation ? "consolidation"
                              : phase == InitialPhase::FullyCoupled ? "fully-coupled"
                                                                    : "dynamic") +
                             " phase. Activating one takes over the ground's stress at its line, and "
                             "this build does that in a Plastic (staged construction) phase only: "
-                            "activate it in a Plastic phase first, then run this phase.";
+                            "activate it in a Plastic phase first, then run this phase.");
                 return R;
             }
             if (any_new) {
@@ -4124,7 +4265,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         const bool struct_baseline = static_carry || seeded_interfaces > 0;
         Eigen::VectorXd B = Eigen::VectorXd::Zero(dofs.equation_count());
         if (baseline) {
-            if (axi) katai::core::assemble_axisym_internal_force(mesh, dofs, init, B);  // r-weighted baseline
+            if (axi) katai::core::assemble_axisym_internal_force(mesh, dofs, init, B, act);  // r-weighted baseline
             else katai::core::assemble_internal_force(mesh, dofs, init, B, act);
             if (struct_baseline) {
                 // Full structural baseline at (parent datum + committed plastic state). This
@@ -4217,6 +4358,19 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 cm.eoed = schema_oedometer_modulus(Mt);   // only the automatic first time step reads it
             }
             cin.flow_edges = flow_edges_from(pr);
+            {   // A prescribed inflow is part of a groundwater flow, not of the excess pore pressure
+                // this phase solves: for the excess pressure the edge is closed, and the inflow
+                // itself reaches no pore pressure here. Said, not dropped.
+                bool any_flux = false;
+                (void)phase_edge_flux(pr, mesh, io.config, any_flux);
+                if (any_flux)
+                    warn(R, "K2D-A033", "",
+                         "A prescribed-flux edge is not applied in a consolidation phase: the phase solves the "
+                         "excess pore pressure, for which the edge is closed, and the inflow it "
+                         "prescribes reaches no pore pressure in it. A prescribed inflow (rainfall, "
+                         "recharge) is applied by the groundwater-flow calculations: a steady flow, "
+                         "or a transient flow phase for its development in time.");
+            }
             cin.have_flow_bcs = any_flow_bc_declared(pr);
             bool well_in_phase = false;
             cin.drain_nodes = phase_drain_nodes(pr, mesh, io, well_in_phase);
@@ -4319,6 +4473,19 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 fm.total_stress = Mt.drainage == model::Drainage::UndrainedC;
             }
             fin.flow_edges = flow_edges_from(pr);
+            {   // A prescribed inflow is part of a groundwater flow, not of the excess pore pressure
+                // this phase solves: for the excess pressure the edge is closed, and the inflow
+                // itself reaches no pore pressure here. Said, not dropped.
+                bool any_flux = false;
+                (void)phase_edge_flux(pr, mesh, io.config, any_flux);
+                if (any_flux)
+                    warn(R, "K2D-A033", "",
+                         "A prescribed-flux edge is not applied in a fully coupled phase: the phase solves the "
+                         "excess pore pressure, for which the edge is closed, and the inflow it "
+                         "prescribes reaches no pore pressure in it. A prescribed inflow (rainfall, "
+                         "recharge) is applied by the groundwater-flow calculations: a steady flow, "
+                         "or a transient flow phase for its development in time.");
+            }
             fin.have_flow_bcs = any_flow_bc_declared(pr);
             bool well_in_fc = false;
             fin.drain_nodes = phase_drain_nodes(pr, mesh, io, well_in_fc);
@@ -4379,29 +4546,151 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             }
             tin.flow_edges = flow_edges_from(pr);
             tin.active = act;
-            // Wells and drains in a TRANSIENT flow phase: refused by name rather than dropped.
-            // This solver takes a prescribed-head boundary set and no source term, so a well's
-            // discharge has nowhere to enter and a NORMAL drain's one-sided rule (pore pressures
-            // below the drain's head are left untouched) cannot be re-evaluated as the
-            // head moves through the time steps -- applying it as a plain fixed head would let a
-            // drain FEED water into ground that is drier than it, which is the opposite of what
-            // a drain does. This build does not apply them here yet, and says so.
-            for (std::size_t hi = 0; hi < pr.hydros.size(); ++hi) {
-                if (io.config && !io.config->active_hydro(hi)) continue;
-                const model::HydroLine& H = pr.hydros[hi];
-                R.message = std::string(model::hydro_kind_name(H.kind)) + " \"" + H.name +
-                            "\" is active in a transient flow phase, which this build cannot "
-                            "solve with it: the transient solver takes prescribed heads and no "
-                            "discharge, and a drain's one-sided rule is not re-evaluated as the "
-                            "head moves. Run the dewatering as a steady groundwater-flow "
-                            "calculation (both are exact there), or deactivate it in this phase.";
+            // THE SEAMS. A wall with interfaces, or an interface on mesh edges, splits the mesh,
+            // so the two sides of the line are two sets of nodes. The coupled phases tie the
+            // sides of a permeable seam to one pore equation (pore_tie above); this solver works
+            // node by node, so it is handed a mesh in which each tied pair IS one node, and its
+            // answer is written back to both. Until 2026-10-22 it was handed the split mesh as it
+            // was, and every seam -- permeable or not -- stopped the water. An impermeable seam
+            // stays split; a semi-permeable one is refused, as in the coupled phases.
+            if (semi_permeable) {
+                refuse(R, "K2D-S004", "transient flow", "A semi-permeable wall or interface is active in a transient flow phase, "
+                            "which this build cannot solve with it (its seam passes water against a "
+                            "resistance, which the transient solver has no term for). Declare it "
+                            "impermeable or fully permeable in this phase, or run the flow as a "
+                            "steady calculation, where a confined semi-permeable screen is solved.");
                 return R;
             }
-            tin.fallback_head.resize(mesh.node_count);
-            for (int n = 0; n < mesh.node_count; ++n)
-                tin.fallback_head[n] = pr.has_water ? water_table_at(pr, mesh.x[n], io.config) : mesh.y[n];
-            if (io.config) { tin.duration_day = io.config->duration; tin.time_steps = io.config->time_steps; }
-            if (!katai::core::solve_transient_flow_phase(mesh, tin, R)) return R;
+            std::vector<int> to_flow(mesh.node_count);
+            int flow_nodes = 0;
+            {
+                std::vector<int> rep(mesh.node_count);
+                for (int n = 0; n < mesh.node_count; ++n) {
+                    int r = n, guard = 0;
+                    while (pore_tie[r] >= 0 && pore_tie[r] != r && guard++ < 16) r = pore_tie[r];
+                    rep[n] = r;
+                }
+                std::vector<int> idx(mesh.node_count, -1);
+                for (int n = 0; n < mesh.node_count; ++n)
+                    if (rep[n] == n) idx[n] = flow_nodes++;
+                for (int n = 0; n < mesh.node_count; ++n) to_flow[n] = idx[rep[n]];
+            }
+            const bool tied = flow_nodes != mesh.node_count;
+            katai::mesh::Mesh fmesh;
+            if (tied) {
+                fmesh.nodes_per_element = mesh.nodes_per_element;
+                fmesh.element_count = mesh.element_count;
+                fmesh.element_material = mesh.element_material;
+                fmesh.node_count = flow_nodes;
+                fmesh.x.assign(flow_nodes, 0.0); fmesh.y.assign(flow_nodes, 0.0);
+                for (int n = 0; n < mesh.node_count; ++n) {
+                    fmesh.x[to_flow[n]] = mesh.x[n]; fmesh.y[to_flow[n]] = mesh.y[n];
+                }
+                fmesh.connectivity.resize(mesh.connectivity.size());
+                for (size_t c = 0; c < mesh.connectivity.size(); ++c)
+                    fmesh.connectivity[c] = to_flow[mesh.connectivity[c]];
+                auto remap = [&to_flow](const std::vector<int>& v) {
+                    std::vector<int> o; o.reserve(v.size());
+                    for (int n : v) o.push_back(to_flow[n]);
+                    std::sort(o.begin(), o.end()); o.erase(std::unique(o.begin(), o.end()), o.end());
+                    return o;
+                };
+                fmesh.bottom_nodes = remap(mesh.bottom_nodes); fmesh.top_nodes = remap(mesh.top_nodes);
+                fmesh.left_nodes = remap(mesh.left_nodes); fmesh.right_nodes = remap(mesh.right_nodes);
+                fmesh.boundary_nodes = remap(mesh.boundary_nodes);
+            }
+            const katai::mesh::Mesh& flow_mesh = tied ? fmesh : mesh;
+            {   // the prescribed inflow, integrated onto the nodes as the steady solve does
+                bool any_flux = false;
+                std::vector<double> q = phase_edge_flux(pr, flow_mesh, io.config, any_flux);
+                if (any_flux) tin.nodal_flux = std::move(q);
+            }
+            // SEEPAGE FACES, WELLS AND DRAINS: one-sided conditions, resolved by an active set in
+            // every time step by the rule the steady flow solve applies to the same objects. A
+            // seepage face is open (zero water pressure) while water leaves the ground through it
+            // and closed otherwise; a drain only takes water out; a well pumps its discharge until
+            // the ground falls to its h_min. Until 2026-10-23 the first was closed with a warning
+            // and the other two refused.
+            for (int n : katai::core::flow_seepage_nodes(tin.flow_edges, flow_mesh)) {
+                katai::core::HeadLimit L; L.node = n; L.level = flow_mesh.y[n]; L.from_above = true;
+                tin.limits.push_back(L);
+            }
+            {
+                std::vector<katai::core::Permeability> kperm(pr.materials.size());
+                for (size_t mi = 0; mi < pr.materials.size(); ++mi)
+                    kperm[mi] = {pr.materials[mi].kx, pr.materials[mi].ky};
+                const katai::app::HydroResolution hyd = katai::app::resolve_hydros(pr, flow_mesh, kperm, io.config);
+                if (!hyd.ok) { R.message = hyd.message; return R; }
+                std::vector<char> own_taken(flow_mesh.node_count, 0);
+                for (const auto& hn : hyd.level) {
+                    katai::core::HeadLimit L;
+                    L.node = hn.node; L.level = hn.level; L.from_above = hn.from_above; L.always = hn.always;
+                    // A node's well discharge is counted once, however many well lines share it.
+                    if (!hn.from_above && !own_taken[hn.node]) { L.own_flux = hyd.well_flux[hn.node]; own_taken[hn.node] = 1; }
+                    tin.limits.push_back(L);
+                }
+                if (hyd.any_well) {
+                    if (tin.nodal_flux.empty()) tin.nodal_flux.assign(flow_mesh.node_count, 0.0);
+                    for (int n = 0; n < flow_mesh.node_count; ++n) tin.nodal_flux[n] += hyd.well_flux[n];
+                }
+            }
+            // The state the phase starts from: the head the phase before it ended with, when that
+            // phase was a groundwater flow; the water table otherwise.
+            if (io.prev && (int)io.prev->flow_head.size() == mesh.node_count) {
+                tin.initial_head.assign(flow_mesh.node_count, 0.0);
+                for (int n = 0; n < mesh.node_count; ++n) tin.initial_head[to_flow[n]] = io.prev->flow_head[n];
+            }
+            // A phase with a water level of its own gives it to its Head edges (the water outside
+            // the ground); the ground starts from the water of the phase before it, which is where
+            // the water stood until this phase moved it.
+            if (io.config && io.config->water_override && pr.has_water && io.config->wx.size() >= 2) {
+                tin.head_level.resize(flow_mesh.node_count);
+                for (int n = 0; n < flow_mesh.node_count; ++n)
+                    tin.head_level[n] = water_table_at(pr, flow_mesh.x[n], io.config);
+            }
+            // THE FACES AN EXCAVATION EXPOSES: the edges of the active ground that are not on the
+            // model's own boundary. They take the phase's water as their head (the engine makes the
+            // part above it a seepage face), as the steady flow of a staged phase does.
+            if (std::find(act.begin(), act.end(), 0) != act.end()) {
+                using Key = std::pair<int, int>;
+                std::set<Key> outer;
+                for (const auto& ed : katai::mesh::extract_exposed_edges(flow_mesh, {}))
+                    outer.insert(std::minmax(ed.node[0], ed.node[ed.npe - 1]));
+                tin.face_head.assign(flow_mesh.node_count, std::numeric_limits<double>::quiet_NaN());
+                for (const auto& ed : katai::mesh::extract_exposed_edges(flow_mesh, act)) {
+                    if (outer.count(std::minmax(ed.node[0], ed.node[ed.npe - 1]))) continue;   // silent-drop-ok: an outer edge has its own flow condition
+                    for (int i = 0; i < ed.npe; ++i) {
+                        const int n = ed.node[i];
+                        tin.face_head[n] = pr.has_water || (io.config && io.config->water_override)
+                                               ? water_table_at(pr, flow_mesh.x[n], io.config)
+                                               : -1e30;
+                    }
+                }
+            }
+            tin.fallback_head.resize(flow_mesh.node_count);
+            for (int n = 0; n < flow_mesh.node_count; ++n)
+                tin.fallback_head[n] = pr.has_water ? water_table_at(pr, flow_mesh.x[n], io.parent_config) : flow_mesh.y[n];
+            if (io.config) {
+                tin.duration_day = io.config->duration; tin.time_steps = io.config->time_steps;
+                tin.ramp_heads = io.config->head_ramp;
+            }
+            tin.solve_factory = [](const katai::math::CsrMatrix& A) {
+                return factorize_once(katai::linsolve::MatrixType::RealSymmetricPositiveDefinite, A);
+            };
+            if (!katai::core::solve_transient_flow_phase(flow_mesh, tin, R)) return R;
+            if (tied) {   // back onto every node of the split mesh: a tied pair shares its answer
+                const auto spread = [&](const std::vector<double>& v) {
+                    std::vector<double> o(mesh.node_count, 0.0);
+                    if ((int)v.size() == flow_nodes)
+                        for (int n = 0; n < mesh.node_count; ++n) o[n] = v[to_flow[n]];
+                    return o;
+                };
+                R.pore = spread(R.pore);
+                if (!R.saturation.empty()) R.saturation = spread(R.saturation);
+                if (!R.flow_head.empty()) R.flow_head = spread(R.flow_head);
+                R.disp = Eigen::VectorXd::Zero(2 * mesh.node_count);
+                R.stress.stress.assign(mesh.node_count, Eigen::Vector3d::Zero());
+            }
             R.mesh = std::move(mesh);   // flow-only: skip the deformation post-processing tail
             return R;
         } else if (phase == InitialPhase::Dynamic) {
@@ -4426,6 +4715,8 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             din.gamma_sat = gamma_sat;  // (NonPorous holds no water: its saturated weight IS gamma_unsat)
             if (io.config) {
                 din.nonlinear = io.config->dynamic_nonlinear;
+                din.max_iterations = io.config->max_iterations;
+                din.tolerance = io.config->tolerance;
                 din.free_field = io.config->seismic_free_field;
                 din.duration = io.config->duration;
                 din.time_steps = io.config->time_steps;

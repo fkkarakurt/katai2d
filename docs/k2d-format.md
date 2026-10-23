@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **21** · Current `.res` version: **10**
+Current `.k2d` version: **22** · Current `.res` version: **11**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -54,7 +54,10 @@ phase from steady groundwater flow (`phases[i].flowpore`), which an older build 
 the phreatic line,
 and **v21** the region water (`phases[i].pwater`, `pwlevel`), which an older build would ignore
 and give every region the phase's water table -- under a pit, hydrostatic water from the floor
-where the file states the water arriving from outside.
+where the file states the water arriving from outside,
+and **v22** a water level that moves over a transient flow phase (`phases[i].headramp`), which an
+older build would ignore and make the change at the phase's first instant -- an instantaneous
+drawdown where the file states one at a rate.
 Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
@@ -379,8 +382,12 @@ A well or a drain drawn *inside* the model. Its line is embedded in the
 mesh like a load line. A **well** prescribes a discharge spread along it and stops extracting once
 the head reaches `h_min`; a **drain** holds the head at `head` — a *normal* drain only takes water
 away, a *vacuum* drain holds its head in both directions. Activated per phase through the phase
-`hydro` flags. Read by the groundwater-flow calculation; in consolidation and fully-coupled phases
-a drain sets the excess pore pressure to zero and a well is reported as not applied (`K2D-A009`).
+`hydro` flags. Read by the steady groundwater-flow calculation and by transient flow phases, which
+resolve both as one-sided conditions in every time step (the well's discharge spread the same way,
+its `h_min` and a normal drain's one-sidedness the same rules); in consolidation and fully-coupled
+phases a drain sets the excess pore pressure to zero and a well is reported as not applied
+(`K2D-A009`); a Plastic or Safety phase that takes its pore pressures from the water table, or
+from the steady flow of a staged phase, does not read them (`K2D-A036`, `K2D-A035`).
 
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
@@ -427,7 +434,7 @@ with `name` (default `"Well"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
 | `dry` | 01[] | — | `[]` | Soil regions, by index, whose space holds no free water while they are switched off in this phase (a tunnel kept dry, a pit pumped dry); a MISSING entry counts as not dry. By default an excavated region below the water table holds the water standing in it, which presses on the ground around it. Written only when a region is flagged |
 | `pwater` | int[] | — | `[]` | Region water, by soil-region index: 0 = the phase's water table (also every MISSING entry), 1 = a hydrostatic level of the region's own at `pwlevel[i]` [m], 2 = the pore pressure interpolated linearly with depth, along each vertical, between its values just above and just below the region (taken from whatever region, active or not, lies there, by its own rule; above the ground surface, the water table). Written only when a region uses 1 or 2 |
 | `pwlevel` | number[] | m | `[]` | The level of each region whose `pwater` is 1; read only for those |
-| `flowpore` | bool | — | `false` | Pore pressures from a steady-state groundwater flow on the ground active in this phase instead of the phreatic line: below the water table every boundary of that ground (the model sides and the faces an excavation exposes) is held at the head of the table, above it is a seepage face, the base is closed, and an impermeable wall or interface closes its line. Written only when set |
+| `flowpore` | bool | — | `false` | Pore pressures from a steady-state groundwater flow on the ground active in this phase instead of the phreatic line: below the water table every boundary of that ground (the model sides and the faces an excavation exposes) is held at the head of the table, above it is a seepage face, the base is closed, and an impermeable wall or interface closes its line. Right after a transient flow phase the phase takes the head that flow ended with instead (`K2D-A038`), and a Safety phase continuing it reads the same field. Written only when set |
 | `cloadstart` | bool | — | `false` | Consolidation ending on a time: put the phase's load on at its first instant instead of placing it linearly over the duration (the default). The pore pressure the phase inherits is taken up at the first instant either way |
 | `pmat` | int[] | — | `[]` | The material of each soil region in this phase, by region index: −1 (also every MISSING entry) = the material the region was drawn with, otherwise an index into `materials`. The stresses are kept; a hardening model's cap and shear hardening are re-read from them where the material changed. Written only when a region's material is changed |
 | `smat` | int[] | — | `[]` | The section of each plate in this phase, by structure index: an index into the plate materials, `-1` = the one it was drawn with. The plate keeps the normal force and the bending moment it carries; from this phase on it deforms with the new stiffness and weighs the new weight. Written only when a plate is changed |
@@ -438,6 +445,7 @@ with `name` (default `"Well"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
 | `mstage` | num | — | `1` | Fraction of this phase's staged change to apply. Staged (non-initial) phases only. Written only when below 1 |
 | `ignoreund` | bool | — | `false` | Solve Undrained (A)/(B) materials as drained in this phase: the water adds no stiffness and no new excess pore pressure is generated, while the excess pore pressure generated in earlier phases is kept as it is; strength parameters unchanged. Written only when true |
 | `resetsmall` | bool | — | `false` | Clear the Hardening Soil small-strain history at the start of this phase, so the soil meets the phase at G0 instead of the stiffness earlier phases degraded it to. Stress, shear hardening `gamma_p` and the preconsolidation pressure are carried over untouched — the option resets the *history*, not the state. Staged (non-initial) phases only; raises `K2D-M005` saying how many stress points it cleared, or that no small-strain material was present to clear. Written only when true |
+| `headramp` | bool | — | `false` | Transient flow phases: the Head edges reach this phase's heads linearly over its duration, from the heads the phase starts from (the head the groundwater-flow phase before it ended with) -- a reservoir lowered or raised at a rate. Off: the change is made at the phase's first instant. In a transient flow phase the part of a Head edge that its water stands below is a seepage face, so a slope face exposed by a drawdown drains at zero pressure, and a phase with a water level of its own (`water`, `wx`, `wy`) gives that level to its Head edges as their head. Written only when set |
 | `resetdisp` | bool | — | `false` | Reset displacements to zero: the total displacement reported from this phase on counts from the start of this phase. The state (stresses, structural forces) is not touched |
 | `tol` | num | — | *by material class* | Tolerated relative force residual. Written only when set |
 | `loadsteps` | int | — | *by material class* | Load increments for this phase. Not a cap on automatic steps: KATAI splits the load into a fixed number of increments (with adaptive cut-back), it does not step automatically to a cap. Written only when set |
@@ -485,7 +493,16 @@ u32 phase count · per phase: flags + scalars + message + displacements/stresses
   stiffness-weighted force error, reported beside it and deciding nothing; a reopened result that
   had only that one could show a number above its tolerance under a phase that converged. A file
   older than v10 reads this field back as **NaN**, shown as "not recorded" — zero would be a
-  measurement nobody made.
+  measurement nobody made · **v11** everything else the run reported, so that a reopened result
+  says what the run said: the TOTAL displacement since the start of the staged construction (the
+  phase sequence's own sum, which leaves out the initial phase and the phases that commit no state
+  and starts again after a reset — a front end that summed the stored increments counted the
+  initial phase and the Safety mechanism in it), whether a factor of safety is only a lower bound,
+  the design approach that makes it an over-design factor, the diagnostics (a warning that
+  qualifies a number belongs with the number), the excess pore pressure field, the consolidation
+  curve, the degree of saturation, the support reactions and the seismic records.
+- Files are written whole or not at all: a save goes to a temporary file beside the target,
+  which replaces it only once complete. Paths are UTF-8 on every platform.
 - Committed Gauss states are NOT stored: restored results are for viewing and post-processing;
   continuing a staged run re-calculates. This is honest and keeps the file an order of magnitude
   smaller.

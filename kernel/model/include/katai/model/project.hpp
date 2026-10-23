@@ -369,10 +369,12 @@ inline const char* const* flow_bc_names() {
 // (site response / SSI). Boundaries: absorbing base + free-field sides (docs/references/dynamic-seismic-
 // formulation.md). Enum VALUES are file-stable (appended); names array is indexed by the enum value.
 enum class PhaseType { Plastic, Safety, Consolidation, TransientFlow, FullyCoupled, Dynamic };
+inline constexpr int kPhaseTypeCount = 6;
 inline const char* const* phase_type_names() {
     static const char* n[] = {"Plastic (staged construction)", "Safety (phi-c reduction)",
                               "Consolidation (time-dependent)", "Transient groundwater flow",
                               "Fully coupled flow-deformation", "Dynamic (seismic time-history)"};
+    static_assert(sizeof(n) / sizeof(n[0]) == kPhaseTypeCount, "one name per PhaseType");
     return n;
 }
 
@@ -677,6 +679,12 @@ struct Phase {
     // the pore pressure it generates to dissipate: the column of the one-dimensional theory,
     // which is loaded at once. Read by a consolidation phase that ends on a time only.
     bool consol_load_at_start = false;
+    // TRANSIENT FLOW ONLY (`headramp`): the Head edges reach the heads of this phase linearly over
+    // its duration, from the heads the phase starts from -- a reservoir lowered or raised at a
+    // rate. Off (the default), they change at the phase's first instant: an instantaneous
+    // drawdown. Read when the phase starts from the head a groundwater-flow phase before it ended
+    // with; from the water table there is no head to move from.
+    bool head_ramp = false;
 };
 
 // A soil region: an explicit polygon (drawn by the user) with a material. Classic, rock-solid:
@@ -855,7 +863,9 @@ struct Project {
     double y_min = 0.0, y_max = 20.0;           // model vertical extent (BC edges)
     // Analysis mode: plane strain (default) or axisymmetric. In axisymmetric mode the
     // x-coordinate is the RADIUS r (x=0 is the symmetry axis) and the integration is r-weighted; used
-    // for circular footings, piles, shafts and cylinders. (v1: soil-only, dry, no structural elements.)
+    // for circular footings, piles, shafts and cylinders: soil, water, excavation and fill, and
+    // interfaces (a pile is a soil region with interfaces); plates, anchors, geogrids and embedded
+    // beams are refused there, and only Plastic and Safety phases follow the initial one.
     bool axisymmetric = false;
     // How the initial phase establishes the in-situ state, and the global mesh settings.
     // Both belong to the file contract: a .k2d must determine the whole run, or no case
@@ -882,39 +892,218 @@ struct Project {
     }
 };
 
-// Editing the polygon list. Every phase -- the initial one included -- holds the activation of
-// its polygons BY INDEX, so an edit that shifts indices has to shift those flags with them:
-// deleting polygon i and leaving the flags where they were hands polygon i's excavation to the
-// polygon after it, silently, in every later phase. These two are the only edits that shift.
+// EDITING THE OBJECT LISTS. Every phase -- the initial one included -- holds what it does to the
+// project's objects BY INDEX: which regions, structures, loads, prescribed displacements, wells
+// and drains are active; which regions are dry, have water of their own or change material;
+// which plates change section or contract. An edit that shifts an index has to shift every one
+// of those with it: deleting structure i and leaving the flags where they were hands structure
+// i's activation to the structure after it, silently, in every later phase -- the model solved
+// is then another model than the one on the screen. So the lists are edited ONLY through the
+// functions below (the Studio's delete commands call them), and test_project_edit checks each
+// against the project built without the deleted object.
+namespace detail {
+template <class V>
+inline void erase_index(V& v, size_t i) {
+    if (i < v.size()) v.erase(v.begin() + (long)i);
+}
+// Insert n copies of `value` before position i of a per-object vector whose missing entries
+// read as `missing`: a vector that is short of i only needs padding when the inserted value is
+// not what a missing entry already says.
+template <class V, class T>
+inline void insert_index(V& v, size_t i, size_t n, const T& value, const T& missing) {
+    if (i < v.size()) {
+        v.insert(v.begin() + (long)i, n, value);
+    } else if (!(value == missing)) {
+        v.resize(i, missing);
+        v.insert(v.end(), n, value);
+    }
+}
+template <class F>
+inline void for_each_phase(Project& p, F f) {
+    f(p.initial);
+    for (auto& ph : p.phases) f(ph);
+}
+// A reference into a list from which entry `gone` was removed: the entries after it move down
+// one place; a reference to the removed entry itself becomes `orphan`.
+inline void remap_reference(int& ref, size_t gone, int orphan = -1) {
+    if (ref < 0) return;
+    if (ref == (int)gone) ref = orphan;
+    else if (ref > (int)gone) --ref;
+}
+}  // namespace detail
+
 inline void erase_polygon(Project& p, size_t i) {
     if (i >= p.polygons.size()) return;
     p.polygons.erase(p.polygons.begin() + (long)i);
-    auto fix = [i](Phase& ph) {
-        if (i < ph.poly_active.size()) ph.poly_active.erase(ph.poly_active.begin() + (long)i);
-    };
-    fix(p.initial);
-    for (auto& ph : p.phases) fix(ph);
+    detail::for_each_phase(p, [i](Phase& ph) {
+        detail::erase_index(ph.poly_active, i);
+        detail::erase_index(ph.poly_dry, i);
+        detail::erase_index(ph.poly_water, i);
+        detail::erase_index(ph.poly_water_level, i);
+        detail::erase_index(ph.poly_material, i);
+    });
 }
 
-// Insert `pieces` before position i. In every phase each piece takes the activation polygon
-// `like` had there (an index into the list BEFORE the insertion; -1 = active), which is what a
-// polygon cut into pieces needs: the pieces are excavated wherever the whole was.
+// Insert `pieces` before position i. In every phase each piece takes what polygon `like` had
+// there (an index into the list BEFORE the insertion; -1 = the defaults) -- its activation, its
+// dry flag, its water and its material -- which is what a polygon cut into pieces needs: the
+// pieces are excavated, kept dry, flooded and improved wherever the whole was.
 inline void insert_polygons(Project& p, size_t i, const std::vector<SoilPolygon>& pieces, int like) {
     if (pieces.empty()) return;
     i = std::min(i, p.polygons.size());
-    auto fix = [&](Phase& ph) {
-        const bool on = like < 0 || ph.active_poly((size_t)like);
-        auto& v = ph.poly_active;
-        if (on) {   // a short vector already reads as active past its end
-            if (i < v.size()) v.insert(v.begin() + (long)i, pieces.size(), 1);
-        } else {
-            if (v.size() < i) v.resize(i, 1);
-            v.insert(v.begin() + (long)i, pieces.size(), 0);
-        }
-    };
-    fix(p.initial);
-    for (auto& ph : p.phases) fix(ph);
+    const size_t n = pieces.size();
+    detail::for_each_phase(p, [&](Phase& ph) {
+        const bool has = like >= 0;
+        const size_t l = has ? (size_t)like : 0;
+        const char on = (!has || ph.active_poly(l)) ? 1 : 0;
+        const char dry = (has && ph.dry_poly(l)) ? 1 : 0;
+        const int wm = has ? ph.water_mode(l) : Phase::kRegionWaterTable;
+        const double wl = has ? ph.water_level(l) : 0.0;
+        const int mat = (has && l < ph.poly_material.size()) ? ph.poly_material[l] : -1;
+        detail::insert_index(ph.poly_active, i, n, on, (char)1);
+        detail::insert_index(ph.poly_dry, i, n, dry, (char)0);
+        detail::insert_index(ph.poly_water, i, n, wm, Phase::kRegionWaterTable);
+        detail::insert_index(ph.poly_water_level, i, n, wl, 0.0);
+        detail::insert_index(ph.poly_material, i, n, mat, -1);
+    });
     p.polygons.insert(p.polygons.begin() + (long)i, pieces.begin(), pieces.end());
+}
+
+inline void erase_struct(Project& p, size_t i) {
+    if (i >= p.structs.size()) return;
+    p.structs.erase(p.structs.begin() + (long)i);
+    detail::for_each_phase(p, [i](Phase& ph) {
+        detail::erase_index(ph.struct_active, i);
+        detail::erase_index(ph.struct_material, i);
+        detail::erase_index(ph.struct_contraction, i);
+    });
+}
+inline void erase_load(Project& p, size_t i) {
+    if (i >= p.loads.size()) return;
+    p.loads.erase(p.loads.begin() + (long)i);
+    detail::for_each_phase(p, [i](Phase& ph) { detail::erase_index(ph.load_active, i); });
+}
+inline void erase_disp(Project& p, size_t i) {
+    if (i >= p.disps.size()) return;
+    p.disps.erase(p.disps.begin() + (long)i);
+    detail::for_each_phase(p, [i](Phase& ph) { detail::erase_index(ph.disp_active, i); });
+}
+inline void erase_hydro(Project& p, size_t i) {
+    if (i >= p.hydros.size()) return;
+    p.hydros.erase(p.hydros.begin() + (long)i);
+    detail::for_each_phase(p, [i](Phase& ph) { detail::erase_index(ph.hydro_active, i); });
+}
+
+// THE MATERIAL LISTS. A material is referred to by index from the regions, the borehole layers,
+// the interfaces that name a soil of their own, the structures, and the phases that change a
+// region's material or a plate's section. Deleting one moves every later index down; what
+// pointed at the deleted material itself is left WITHOUT one: a region or a layer or a
+// structure without a material is refused when the model is calculated, so the gap shows, and
+// an interface or a phase change falls back to what it is when nothing is named (the soil beside
+// the joint; the material the region or plate was drawn with). That fallback is a change of
+// model, which is why material_uses() exists: the Studio says what will change and asks first.
+enum class MaterialList { Soil, Plate, Anchor, Geogrid, EmbeddedBeam };
+inline MaterialList material_list_of(StructKind k) {
+    switch (k) {
+        case StructKind::Plate:   return MaterialList::Plate;
+        case StructKind::Anchor:  return MaterialList::Anchor;
+        case StructKind::Geogrid: return MaterialList::Geogrid;
+        default:                  return MaterialList::EmbeddedBeam;   // Interface has no set
+    }
+}
+struct MaterialUses {
+    int regions = 0, layers = 0, interfaces = 0, structures = 0, phase_changes = 0;
+    int total() const { return regions + layers + interfaces + structures + phase_changes; }
+};
+inline MaterialUses material_uses(const Project& p, MaterialList list, size_t m) {
+    MaterialUses u;
+    const int mi = (int)m;
+    auto count_phase = [&](const Phase& ph) {
+        if (list == MaterialList::Soil)
+            for (int v : ph.poly_material) u.phase_changes += (v == mi);
+        if (list == MaterialList::Plate)
+            for (size_t s = 0; s < ph.struct_material.size() && s < p.structs.size(); ++s)
+                u.phase_changes += (ph.struct_material[s] == mi);
+    };
+    if (list == MaterialList::Soil) {
+        for (const auto& P : p.polygons) u.regions += (P.material == mi);
+        for (const auto& L : p.strata) u.layers += (L.material == mi);
+        for (const auto& s : p.structs) u.interfaces += (s.iface_material == mi);
+    } else {
+        for (const auto& s : p.structs)
+            if (s.kind != StructKind::Interface && material_list_of(s.kind) == list)
+                u.structures += (s.material == mi);
+    }
+    count_phase(p.initial);
+    for (const auto& ph : p.phases) count_phase(ph);
+    return u;
+}
+inline void erase_material(Project& p, MaterialList list, size_t m) {
+    switch (list) {
+        case MaterialList::Soil:
+            if (m >= p.materials.size()) return;
+            p.materials.erase(p.materials.begin() + (long)m);
+            for (auto& P : p.polygons) detail::remap_reference(P.material, m);
+            for (auto& L : p.strata) detail::remap_reference(L.material, m);
+            for (auto& s : p.structs) detail::remap_reference(s.iface_material, m);
+            detail::for_each_phase(p, [m](Phase& ph) {
+                for (int& v : ph.poly_material) detail::remap_reference(v, m);
+            });
+            return;
+        case MaterialList::Plate:
+            if (m >= p.plates.size()) return;
+            p.plates.erase(p.plates.begin() + (long)m);
+            for (auto& s : p.structs)
+                if (s.kind == StructKind::Plate) detail::remap_reference(s.material, m);
+            detail::for_each_phase(p, [&p, m](Phase& ph) {
+                for (size_t s = 0; s < ph.struct_material.size(); ++s)
+                    if (s >= p.structs.size() || p.structs[s].kind == StructKind::Plate)
+                        detail::remap_reference(ph.struct_material[s], m);
+            });
+            return;
+        case MaterialList::Anchor:
+            if (m >= p.anchors.size()) return;
+            p.anchors.erase(p.anchors.begin() + (long)m);
+            break;
+        case MaterialList::Geogrid:
+            if (m >= p.geogrids.size()) return;
+            p.geogrids.erase(p.geogrids.begin() + (long)m);
+            break;
+        case MaterialList::EmbeddedBeam:
+            if (m >= p.embedded.size()) return;
+            p.embedded.erase(p.embedded.begin() + (long)m);
+            break;
+    }
+    for (auto& s : p.structs)
+        if (s.kind != StructKind::Interface && material_list_of(s.kind) == list)
+            detail::remap_reference(s.material, m);
+}
+
+// THE VERTICES OF A REGION. Each edge carries its own boundary conditions (edge_bc, edge_flow,
+// edge_head, edge_flux; one entry per edge, edge k running from vertex k to vertex k+1), and a
+// list may be empty when nothing is stated for that kind. Splitting edge k at its midpoint gives
+// both halves edge k's conditions; deleting vertex k merges edges k-1 and k into the edge that
+// arrives at k, which keeps its own.
+inline void split_edge(SoilPolygon& P, size_t k) {
+    const size_t n = P.x.size();
+    if (n < 2 || k >= n) return;
+    const size_t j = (k + 1) % n;
+    const double xm = 0.5 * (P.x[k] + P.x[j]), ym = 0.5 * (P.y[k] + P.y[j]);
+    P.x.insert(P.x.begin() + (long)k + 1, xm);
+    P.y.insert(P.y.begin() + (long)k + 1, ym);
+    auto dup = [k](auto& v) {
+        if (k < v.size()) v.insert(v.begin() + (long)k + 1, v[k]);
+    };
+    dup(P.edge_bc); dup(P.edge_flow); dup(P.edge_head); dup(P.edge_flux);
+}
+inline void erase_vertex(SoilPolygon& P, size_t k) {
+    if (P.x.size() <= 3 || k >= P.x.size()) return;
+    P.x.erase(P.x.begin() + (long)k);
+    P.y.erase(P.y.begin() + (long)k);
+    detail::erase_index(P.edge_bc, k);
+    detail::erase_index(P.edge_flow, k);
+    detail::erase_index(P.edge_head, k);
+    detail::erase_index(P.edge_flux, k);
 }
 
 } // namespace katai::model

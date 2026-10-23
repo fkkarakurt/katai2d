@@ -9,6 +9,14 @@
 // Smooth wall (uy free) -> no wall friction -> Rankine is exact. Exercises the new
 // prescribed-displacement + constant-force solver path, K0 initial stress, and MC
 // plasticity at the active/passive limit. Reference: Rankine (1857); Das, Craig.
+//
+// verify: KV-STR-018
+//   oracle:   closed_form
+//   source:   Rankine, W.J.M. (1857). On the stability of loose earth. Phil. Trans. R. Soc. Lond. 147, 9-27 -- the thrusts on a smooth vertical wall: P = 1/2 K gamma H^2 with Ka = tan^2(45 - phi/2) and Kp = tan^2(45 + phi/2); Jaky's K0 = 1 - sin(phi) at rest
+//   locator:  the horizontal thrust on the wall integrated from the recovered stresses, at rest, after an active and after a passive translation of the wall
+//   quantity: thrust [kN/m]
+//   expected: at rest and active within 2%, passive within 3%, in the order active < at rest < passive
+//   band:     2% / 3%, as asserted (nodal stress recovery; the passive state needs the larger movement)
 #include <katai/analysis/initial_stress.hpp>
 #include <katai/analysis/nonlinear_solver.hpp>
 #include <katai/fem/assembly/assembler.hpp>

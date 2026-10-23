@@ -24,6 +24,7 @@
 #include <vector>
 
 #include <katai/analysis/results.hpp>   // SolveResult family (engine-owned since Stage B1)
+#include <katai/io/utf8_path.hpp>
 #include <katai/mesh/mesh.hpp>
 
 // The namespace is still katai::app: this file predates the io module and every
@@ -66,9 +67,18 @@ using katai::core::InterfaceStation;
 // residual over the fixed load scale). v7 stored only the stiffness-weighted force error, which is
 // reported beside it but decides nothing, so a reopened result could show a number above its
 // tolerance under a phase that had converged -- and could not show the one that let it stop.
-// Older files predate each feature, so reading the fields back as false/0/None is correct for them
-// -- except the v10 force error, which reads back as NaN: zero would be a measurement nobody made.
-inline constexpr std::uint32_t kResultsFileVersion = 10;
+// v11 stores everything else the run reported, so that a reopened result says what the run said:
+// the TOTAL displacement since the start of the staged construction (the phase sequence's own
+// sum, which skips the initial phase and the phases that commit no state and starts again after a
+// reset -- a front end that summed the stored increments itself counted the initial phase and the
+// Safety mechanism in it), whether a factor of safety is only a LOWER BOUND, the design approach
+// that makes it an over-design factor, the diagnostics (a warning that qualifies a number belongs
+// with the number), the excess pore pressure field, the consolidation curve, the degree of
+// saturation, the support reactions and the seismic records.
+// Older files predate each feature, so reading the fields back as false/0/None/empty is correct
+// for them -- except the v10 force error, which reads back as NaN: zero would be a measurement
+// nobody made.
+inline constexpr std::uint32_t kResultsFileVersion = 11;
 
 inline std::uint64_t fnv1a64(const std::string& s) {
     std::uint64_t h = 1469598103934665603ull;
@@ -147,12 +157,16 @@ inline katai::mesh::Mesh rmesh(Reader& r) {
 
 }  // namespace detail
 
+// `version` writes the layout of an earlier version (the fields it did not have are left out); it
+// exists so the reader's handling of old files can be tested on files this writer produced.
 inline bool save_results(const std::string& path, std::uint64_t model_hash,
-                         const std::vector<SolveResult>& phases, std::string* err = nullptr) {
+                         const std::vector<SolveResult>& phases, std::string* err = nullptr,
+                         std::uint32_t version = kResultsFileVersion) {
     if (phases.empty()) { if (err) *err = "no results to save"; return false; }
+    if (version < 10 || version > kResultsFileVersion) { if (err) *err = "cannot write that version"; return false; }
     detail::Writer w;
     w.raw("K2DR", 4);
-    w.put<std::uint32_t>(kResultsFileVersion);
+    w.put<std::uint32_t>(version);
     w.put<std::uint64_t>(model_hash);
     detail::wmesh(w, phases.front().mesh);   // phases share the mesh; store it once
     w.put<std::uint32_t>((std::uint32_t)phases.size());
@@ -243,17 +257,31 @@ inline bool save_results(const std::string& path, std::uint64_t model_hash,
         w.put<double>(R.consol_degree_reached);
         // v10: the force error the phase was accepted on.
         w.put<double>(cv.global_error);
+        if (version < 11) continue;
+        // v11: the rest of what the run reported (see kResultsFileVersion).
+        w.vec(std::vector<double>(R.disp_total.data(), R.disp_total.data() + R.disp_total.size()));
+        w.put<std::uint8_t>(R.fos_lower_bound ? 1 : 0);
+        w.put<std::int32_t>((std::int32_t)R.design_approach);
+        w.put<std::uint32_t>((std::uint32_t)R.diagnostics.size());
+        for (const auto& d : R.diagnostics) {
+            w.put<std::int32_t>((std::int32_t)d.severity);
+            w.str(d.code); w.str(d.subject); w.str(d.message);
+        }
+        w.vec(R.excess_pore);
+        w.vec(R.consol_time); w.vec(R.consol_settlement); w.vec(R.consol_excess_pore);
+        w.vec(R.saturation);
+        w.vec(std::vector<double>(R.reaction.data(), R.reaction.data() + R.reaction.size()));
+        w.vec(R.dyn_time); w.vec(R.dyn_surface_ax);
+        w.vec(R.dyn_period); w.vec(R.dyn_response_sa); w.vec(R.dyn_design_sa); w.vec(R.dyn_design_sa_ec8);
+        w.put<double>(R.dyn_peak_surface_a);
+        w.put<double>(R.dyn_model_f1);
     }
-    std::ofstream f(path, std::ios::binary);
-    if (!f) { if (err) *err = "cannot open file for writing: " + path; return false; }
-    f.write(w.buf.data(), (std::streamsize)w.buf.size());
-    if (!f.good()) { if (err) *err = "write failed: " + path; return false; }
-    return true;
+    return katai::io::write_file_atomically(path, w.buf, err);
 }
 
 inline bool load_results(const std::string& path, std::uint64_t model_hash,
                          std::vector<SolveResult>& out, std::string* err = nullptr) {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(katai::io::utf8_path(path), std::ios::binary);
     if (!f) { if (err) *err = "no results file"; return false; }
     std::ostringstream ss;
     ss << f.rdbuf();
@@ -387,6 +415,50 @@ inline bool load_results(const std::string& path, std::uint64_t model_hash,
         // it must not report a perfect one.
         R.convergence.global_error =
             ver >= 10 ? r.get<double>() : std::numeric_limits<double>::quiet_NaN();
+        if (ver >= 11) {   // absent in v10: the rest of what the run reported
+            const std::vector<double> total = r.vec<double>();
+            R.disp_total = Eigen::Map<const Eigen::VectorXd>(total.data(), (Eigen::Index)total.size());
+            R.fos_lower_bound = r.get<std::uint8_t>() != 0;
+            const auto da = r.get<std::int32_t>();
+            // an approach this reader does not know is left at None: understate, never invent
+            if (da >= (std::int32_t)katai::core::DesignApproach::None &&
+                da <= (std::int32_t)katai::core::DesignApproach::TBDY2018_Seismic)
+                R.design_approach = (katai::core::DesignApproach)da;
+            const auto nd = r.get<std::uint32_t>();
+            if (nd > 100000) { r.ok = false; break; }
+            for (std::uint32_t d = 0; d < nd && r.ok; ++d) {
+                Diagnostic g;
+                const auto sev = r.get<std::int32_t>();
+                // an unknown severity reads as a Warning: it qualifies the result either way
+                g.severity = (sev >= 0 && sev <= (std::int32_t)DiagnosticSeverity::Refusal)
+                                 ? (DiagnosticSeverity)sev : DiagnosticSeverity::Warning;
+                g.code = r.str(); g.subject = r.str(); g.message = r.str();
+                R.diagnostics.push_back(std::move(g));
+            }
+            R.excess_pore = r.vec<double>();
+            R.consol_time = r.vec<double>();
+            R.consol_settlement = r.vec<double>();
+            R.consol_excess_pore = r.vec<double>();
+            R.saturation = r.vec<double>();
+            const std::vector<double> reaction = r.vec<double>();
+            R.reaction = Eigen::Map<const Eigen::VectorXd>(reaction.data(), (Eigen::Index)reaction.size());
+            R.dyn_time = r.vec<double>();
+            R.dyn_surface_ax = r.vec<double>();
+            R.dyn_period = r.vec<double>();
+            R.dyn_response_sa = r.vec<double>();
+            R.dyn_design_sa = r.vec<double>();
+            R.dyn_design_sa_ec8 = r.vec<double>();
+            R.dyn_peak_surface_a = r.get<double>();
+            R.dyn_model_f1 = r.get<double>();
+            const auto nodal = [&mesh](std::size_t n, std::size_t per) {
+                return n == 0 || n == (std::size_t)mesh.node_count * per;
+            };
+            if (!nodal((std::size_t)R.disp_total.size(), 2) || !nodal(R.excess_pore.size(), 1) ||
+                !nodal(R.saturation.size(), 1) || !nodal((std::size_t)R.reaction.size(), 2) ||
+                R.consol_time.size() != R.consol_settlement.size() ||
+                R.dyn_time.size() != R.dyn_surface_ax.size())
+                r.ok = false;
+        }
         // Per-phase sanity: nodal arrays must match the stored mesh.
         if (R.disp.size() != (Eigen::Index)mesh.node_count * 2 ||
             (int)R.stress.stress.size() != mesh.node_count ||

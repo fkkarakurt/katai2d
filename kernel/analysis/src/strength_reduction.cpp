@@ -38,6 +38,25 @@ static void factor_strength(MaterialModel& m, double srf) {
     m.ssc.c /= srf;
     m.ssc.phi = std::atan(std::tan(m.ssc.phi) / srf);
     if (m.ssc.psi > m.ssc.phi) m.ssc.psi = m.ssc.phi;
+    // Hoek-Brown has no c' and phi' to divide: the reduction is made inside the criterion, at each
+    // stress point's own sigma'_3 (hoekbrown::Params::msf; Benz, Schwab, Vermeer & Kauther 2008).
+    // A tensile strength the user entered is a strength like the Mohr-Coulomb one and is divided
+    // the same way (the criterion's own apex does not move under the reduction), and the
+    // dilatancy is held within the reduced friction of the tangent at zero confinement, as psi
+    // is held within phi above.
+    if (m.type == MaterialType::HoekBrown) {
+        m.hb.msf *= srf;
+        m.hb.sigt_user /= srf;
+        hoekbrown::Params hp = m.hb;
+        hp.E = m.youngs_modulus; hp.nu = m.poisson_ratio;
+        const hoekbrown::Constants hc = hoekbrown::constants_of(hp);
+        const double g0 = -hoekbrown::dfbar_full_dx(0.0, hp, hc);
+        if (g0 > 0.0) {
+            const double phi_t = std::asin(g0 / (2.0 + g0));
+            const double phi_r = std::atan(std::tan(phi_t) / m.hb.msf);
+            if (m.hb.psi > phi_r) m.hb.psi = phi_r;
+        }
+    }
 }
 
 // An interface's strength is a soil strength -- c_i = R_inter c and tan(phi_i) = R_inter tan(phi) --

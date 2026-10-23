@@ -16,9 +16,24 @@
   note  = {cited by KV-EXC-001},
 }
 
+@misc{benz2008,
+  title = {Benz, T., Schwab, R., Kauther, R.A. & Vermeer, P.A. (2008). A Hoek-Brown criterion with intrinsic material strength factorization. Int. J. Rock Mech. Min. Sci. 45(2), 210-222 -- strength reduction of the Hoek-Brown envelope through its local Mohr-Coulomb tangent; the tangent construction evaluated in this file},
+  note  = {cited by KV-CST-021},
+}
+
 @misc{borgh2018,
   title = {Borgh, R. (2018). Sensitivity analysis of numerical models for diaphragm walls with cross-walls in soft soils. Master's thesis, Department of Architecture and Civil Engineering, Chalmers University of Technology, Gothenburg},
   note  = {cited by KV-CST-019},
+}
+
+@misc{carslaw1959,
+  title = {Carslaw, H.S. & Jaeger, J.C. (1959). Conduction of Heat in Solids, 2nd ed. Oxford -- the diffusion equation S_s dh/dt = k d2h/dy2: the Fourier-series isochrone of a uniform initial excess head in a column drained at one end (Terzaghi's form), the erfc front of a sudden head step at the end of a semi-infinite column, and the linear steady profile},
+  note  = {cited by KV-FLW-006},
+}
+
+@misc{carslaw1959b,
+  title = {Carslaw, H.S. & Jaeger, J.C. (1959). Conduction of Heat in Solids, 2nd ed. Oxford, sec. 2.5 (a surface value rising linearly in time, the i2erfc solution) and sec. 3.3 (the Fourier series of a slab with one face held, Terzaghi's isochrone); Darcy's law for the well and the drain},
+  note  = {cited by KV-FLW-008},
 }
 
 @misc{charny1951,
@@ -49,6 +64,11 @@
 @misc{darcy,
   title = {Darcy's law for one-dimensional steady flow through a homogeneous column; the boundary term itself is the Galerkin weak form of steady groundwater flow, in which a prescribed normal flux q_n contributes the surface integral of N q_n over the boundary to the right-hand side; KATAI 2D input contract (docs/k2d-format.md, edge_flow = 3 / edge_flux), with the sign convention positive = into the soil and the scope limit that consolidation carries no non-zero prescribed outflow},
   note  = {cited by KV-FLW-002},
+}
+
+@misc{darcyb,
+  title = {Darcy's law with continuity, div(k grad h) = 0: a column between two prescribed heads has the linear head h1 + (h2 - h1) x / L and the uniform specific discharge k (h1 - h2) / L; a linear head field is an exact solution for anisotropic k, so a patch test reproduces it in the interior},
+  note  = {cited by KV-FLW-007},
 }
 
 @misc{davis1973,
@@ -152,41 +172,51 @@
 }
 
 @misc{kataid,
+  title = {KATAI 2D input contract (docs/k2d-format.md, phases[i].poly / struct / load / disp / hydro / dry / pwater / pwlevel / pmat / smat / scontr: a phase addresses the project's objects by index; regions, layers, interfaces and structures address the material lists by index)},
+  note  = {cited by KV-GEO-004},
+}
+
+@misc{kataie,
   title = {KATAI 2D input contract (docs/k2d-format.md, soil region object -- how regions combine: the last region containing a point owns it; edges are noded to 1e-5 of the model diagonal)},
   note  = {cited by KV-GEO-002},
 }
 
-@misc{kataie,
+@misc{kataif,
   title = {KATAI 2D input contract (docs/k2d-format.md, soil region object; per-edge conditions run vertex j -> j+1; a phase activates regions by index)},
   note  = {cited by KV-GEO-003},
 }
 
-@misc{kataif,
+@misc{kataig,
   title = {KATAI 2D input contract (docs/k2d-format.md, strata / boreholes / level / head) -- (R1) with several boreholes the soil-layer positions are interpolated between the logs; every soil layer is used throughout the whole model contour, so all layers appear in all boreholes, and the top and bottom of a layer may vary between boreholes, which gives non-horizontal layers of non-uniform thickness and layers that locally have zero thickness; (R2) a layer that does not exist at a borehole is given zero thickness there (bottom level equal to top level); (R3) a single borehole head gives a horizontal water surface extending to the model boundaries, and several heads combine into a non-horizontal one},
   note  = {cited by KV-GEO-001},
 }
 
-@misc{kataig,
+@misc{kataih,
   title = {KATAI 2D input contract (docs/k2d-format.md, structs of type plate): a plate is a beam on the mesh nodes it is drawn along, and plates that share a node are rigidly connected there (translations and rotation), so a plate drawn as two consecutive lines is the same structure as the plate drawn as one},
   note  = {cited by KV-STR-015},
 }
 
-@misc{kataih,
+@misc{kataii,
   title = {KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res) -- a barrier is Fully permeable (no effect on flow), Impermeable (a full separation of the pore-pressure degrees of freedom of the interface node pairs, zero cross permeability), or Semi-permeable with a HYDRAULIC RESISTANCE d/k in units of time, the head difference dh across the wall divided by the average discharge q through it per unit area, d/k = dh/q. Read against Darcy's law in series: the two halves of a confined aquifer and the screen between them are three resistances the same discharge passes through},
   note  = {cited by KV-FLW-004},
 }
 
-@misc{kataii,
+@misc{kataij,
   title = {KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res) for the three cross-permeability cases and what each means (fully permeable, the default: no effect on flow; impermeable: separate pore-pressure degrees of freedom on the two sides; semi-permeable: a hydraulic resistance d/k); and the drained limit of Biot consolidation, as in KV-STR-006 -- once the excess pore pressure is gone the coupled problem IS the drained problem, which this program solves by an independent path (solve_nonlinear, with a real Coulomb return on the joint)},
   note  = {cited by KV-STR-007},
 }
 
-@misc{kataij,
+@misc{kataik,
   title = {KATAI 2D input contract (docs/k2d-format.md, tol) for the tolerated error every criterion is measured against; the deformation convergence criteria as a FAMILY are stated in full in the locator (and in kernel/analysis/include/katai/analysis/nonlinear_solver.hpp, NewtonResult::Convergence, and internal_forces.hpp, LocalErrorProbe). THE SAME STIFFNESS PARAMETER CAN BE WRITTEN AS EITHER OF TWO RECIPROCALS: elastic work over total, or total over elastic. Only total over elastic has the behaviour the parameter exists to show -- exactly unity while the solution is fully elastic, approaching zero at failure -- and supports the uses built on it (a mechanism is suspected below CSP 0.5, collapse below 0.015). The inverted form is >= 1 and GROWS without bound as a mechanism forms, which would make the stiffness-weighted force error loosen towards failure instead of tightening. Implemented as total over elastic, deliberately, and this case is what holds it there},
   note  = {cited by KV-NUM-013},
 }
 
-@misc{kataik,
+@misc{katail,
+  title = {KATAI 2D input-safety property (an input may be used differently from the way it was written, but never in silence; docs/diagnostics.md): the independent path is the same model with the condition removed, which must run without the code},
+  note  = {cited by KV-DIA-003},
+}
+
+@misc{kataim,
   title = {KATAI 2D input-safety property (no input may be discarded in silence): the independent path is the same problem with the object drawn where the mesh actually takes it, plus global vertical equilibrium of the support reactions},
   note  = {cited by KV-DIA-001},
 }
@@ -194,6 +224,11 @@
 @misc{mindlin,
   title = {Mindlin (Timoshenko) beam theory for a simply supported span, bending plus shear deformation, closed forms stated in full; KATAI 2D input contract (docs/k2d-format.md, plates)},
   note  = {cited by KV-STR-003},
+}
+
+@misc{newmark1965,
+  title = {Newmark, N.M. (1965). Effects of earthquakes on dams and embankments. Geotechnique 15(2), 139-160 -- the rigid block on a frictional plane under a rectangular acceleration pulse: d = V^2/(2N) (1 - N/A), N = g tan(phi) for a horizontal plane},
+  note  = {cited by KV-DYN-004},
 }
 
 @misc{p1994,
@@ -204,6 +239,16 @@
 @misc{prandtl1921,
   title = {Prandtl (1921) bearing-capacity wedge solution for a weightless Tresca (phi = 0) half-space},
   note  = {cited by KV-FND-005, KV-FND-010},
+}
+
+@misc{prandtl1921b,
+  title = {Prandtl, L. (1921) and Reissner, H. (1924): the bearing capacity of a weightless cohesive-frictional soil under a strip, q_ult = c Nc with Nc = (Nq - 1) cot(phi), Nq = e^(pi tan phi) tan^2(45 + phi/2)},
+  note  = {cited by KV-FND-018},
+}
+
+@misc{rankine,
+  title = {Rankine, W.J.M. (1857). On the stability of loose earth. Phil. Trans. R. Soc. Lond. 147, 9-27 -- the thrusts on a smooth vertical wall: P = 1/2 K gamma H^2 with Ka = tan^2(45 - phi/2) and Kp = tan^2(45 + phi/2); Jaky's K0 = 1 - sin(phi) at rest},
+  note  = {cited by KV-STR-018},
 }
 
 @misc{ruppert1995,
@@ -231,6 +276,11 @@
   note  = {cited by KV-CST-006},
 }
 
+@misc{soft,
+  title = {Soft Soil primary loading line eps_v = lambda* ln(p'/p'0) on a proportional (K0nc) stress path (the model's definition, KATAI 2D docs/k2d-format.md, Soft Soil lam_star); one-dimensional consolidation with a stress-dependent compressibility m_v = lambda*/sigma'_v (Terzaghi's equation with the strain written in full)},
+  note  = {cited by KV-CON-005},
+}
+
 @misc{terzaghi1943,
   title = {Terzaghi (1943) one-dimensional consolidation, degree-of-consolidation series U(Tv) = 1 - sum_j (2/M^2) exp(-M^2 Tv), M = (2j+1) pi/2, Tv = cv t / H_dr^2, cv = k Eoed / gamma_w -- the same closed form KV-CON-002 is measured against; the estimator is the solution-verification procedure of Roache (1994) and Celik et al. (2008), ASME J. Fluids Eng. 130(7):078001, applied on the TIME axis, whose order is fixed in advance by the scheme: katai/analysis/consolidation.hpp integrates fully implicitly (alpha = 1), i.e. backward Euler, whose global error is O(dt)},
   note  = {cited by KV-NUM-010},
@@ -247,6 +297,11 @@
 }
 
 @misc{terzaghib,
+  title = {Terzaghi's effective stress principle with one-dimensional (oedometric, nu = 0) linear elasticity: a pore pressure change du under constant total stress changes the vertical effective stress by -du, and the settlement is the integral of -du / E over the height},
+  note  = {cited by KV-FLW-009},
+}
+
+@misc{terzaghic,
   title = {Terzaghi's effective-stress principle (sigma' = sigma - u) applied to a change of phreatic level in a laterally confined column; the per-phase water condition itself follows KATAI 2D input contract (docs/k2d-format.md, phases[i].water_override / wx / wy: a phase may use its own phreatic line instead of the project's), and the case that required it is the DGGT / Schweiger triple-anchored excavation, which dewaters before excavating},
   note  = {cited by KV-CST-003},
 }
@@ -269,6 +324,11 @@
 @misc{terzaghi1943f,
   title = {Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley, New York -- the effective stress principle and the one-dimensional confined column; Biot, M.A. (1941). General theory of three-dimensional consolidation. J. Appl. Phys. 12, 155-164, for the undrained limit of the coupled column (the pore fluid adds its bulk stiffness Kw/n to the skeleton); the undrained relations of isotropic linear elasticity as recorded in docs/references/effective-stress-formulation.md; KATAI 2D input contract (docs/k2d-format.md, `ignoreund`: no water stiffness and no new excess pore pressure, the pressure generated earlier kept)},
   note  = {cited by KV-CST-017},
+}
+
+@misc{a,
+  title = {a bar restrained at both ends under an imposed free strain eps0 carries N = -EA eps0, and a change of section between two increments of eps0 changes only the stiffness of the later increment (incremental elasticity: the force is a state, the section a property of the increment); KATAI 2D input contract, docs/k2d-format.md, phases[i].smat and scontr},
+  note  = {cited by KV-STR-020},
 }
 
 @misc{classical,
@@ -311,9 +371,19 @@
   note  = {cited by KV-EXC-002},
 }
 
+@misc{one,
+  title = {one-dimensional (oedometric, nu = 0) linear elasticity with a change of material between two load increments: the stress is a state carried across the change, the stiffness a property of each increment; KATAI 2D input contract, docs/k2d-format.md, phases[i].pmat},
+  note  = {cited by KV-CST-022},
+}
+
 @misc{one1943,
   title = {one-dimensional consolidation with a compressible pore fluid: (m_v + n/Kw) du/dt = (k/gamma_w) d2u/dz2 under constant total stress (Terzaghi 1943; Biot 1941 for the storage term), and the undrained response of a laterally confined layer to a surcharge q, u0 = q / (1 + n Eoed / Kw), both stated in full; the two-layer time history from a cell-centred finite-volume solution of that equation (2400 cells, backward Euler at 1e-6 day) written in the test and sharing no code with the engine; KATAI 2D input contract (docs/k2d-format.md, e_init for the porosity n = e/(1+e))},
   note  = {cited by KV-CON-004},
+}
+
+@misc{oneb,
+  title = {one-dimensional elastic unloading of a laterally confined column, heave = gamma h (H - h) / E_oed with E_oed = E (1 - nu) / ((1 + nu)(1 - 2 nu)); and the path independence of a linear elastic body (the stress of the final geometry under its own weight), evaluated in this file by gravity loading the excavated geometry directly},
+  note  = {cited by KV-EXC-003},
 }
 
 @misc{statics,
@@ -327,6 +397,11 @@
 }
 
 @misc{theb,
+  title = {the M-N interaction of a plate hinge, |N|/Np + |M|/Mp <= 1 (KATAI 2D input contract, docs/k2d-format.md, plates[i].elastoplastic / Mp / Np); for a simply supported beam under a central load the onset P_lim = 2 Mp / s_g at the critical stress point, s_g its distance from the support},
+  note  = {cited by KV-STR-017},
+}
+
+@misc{thec,
   title = {the Rankine tension cut-off, stated in full: three additional yield functions f4 = sigma'1 - sigma_t <= 0, f5 = sigma'2 - sigma_t <= 0, f6 = sigma'3 - sigma_t <= 0 with an associated flow rule, sigma_t being the tensile strength, zero unless one is entered; KATAI 2D input contract (docs/k2d-format.md, tension_cutoff / tensile_strength), where the cut-off and the tensile strength are failure parameters shared by the Hardening Soil family and Mohr-Coulomb alike},
   note  = {cited by KV-CST-011},
 }
@@ -336,7 +411,7 @@
   note  = {cited by KV-CST-010},
 }
 
-@misc{thec,
+@misc{thed,
   title = {the analysis driver's former inline SoilModel construction (build_problem.hpp before commit b35bb9a), duplicated verbatim in this test as the oracle},
   note  = {cited by KV-NUM-001},
 }
@@ -344,6 +419,11 @@
 @misc{the2007,
   title = {the central difference of the returned stress with respect to the strain increment, taken with a step of 1e-5 of the increment's norm along a random direction, against the tangent the same call hands back (Hardening Soil with small-strain stiffness after Benz, T. (2007), Small-Strain Stiffness of Soils and its Numerical Consequences, Mitteilung 55, Institut fuer Geotechnik, Universitaet Stuttgart, Sec. 6.1 and App. A: the stiffness of a step depends on the direction of the step's strain increment)},
   note  = {cited by KV-NUM-014},
+}
+
+@misc{thee,
+  title = {the change of permeability log10(k/k0) = de/ck with de from the volumetric strain (KATAI 2D input contract, docs/k2d-format.md, materials[i].ck); one-dimensional consolidation of a linear skeleton (Terzaghi's equation written with a variable permeability in conservative form)},
+  note  = {cited by KV-CON-006},
 }
 
 @misc{the1943,
@@ -356,22 +436,27 @@
   note  = {cited by KV-CST-016},
 }
 
-@misc{thed,
+@misc{thef,
   title = {the embedded beam (pile row) as KATAI 2D defines it, KATAI 2D input contract (docs/k2d-format.md, embedded: Tskin_max / Fmax_base / Lspacing; structs[i].conn for the connection point). The element's purpose fixes the loading path twice over: its material data set carries the bearing capacity (skin resistance and base resistance) and not a stiffness response, and it is meant for axially loaded piles rather than for failure under transverse load -- so the defining quantity of this element is its AXIAL capacity},
   note  = {cited by KV-STR-004},
 }
 
-@misc{thee,
+@misc{theg,
   title = {the geogrid element as KATAI 2D defines it, KATAI 2D input contract (docs/k2d-format.md, geogrids: EA / Np / elastoplastic): a flexible elastic or elastoplastic line element representing a grid or sheet of fabric that sustains tension and no compression, whose axial stiffness EA is the axial force F per unit width divided by the axial strain eps = dl/l, so F = EA eps (stated in full)},
   note  = {cited by KV-STR-005},
 }
 
-@misc{thef,
+@misc{the1948,
+  title = {the infinite slope (Taylor, D.W. (1948). Fundamentals of Soil Mechanics. Wiley, New York, ch. 16): on planes parallel to the surface sigma_n = gamma z cos^2 beta and tau = gamma z sin beta cos beta, from the equilibrium of a vertical slice whose two sides carry equal and opposite forces},
+  note  = {cited by KV-SLP-004},
+}
+
+@misc{theh,
   title = {the logarithmic compression law of the Soft Soil model, stated in full: e_v = lambda* ln(p'/p'_0) in primary loading and e_v^e = kappa* ln(p'/p'_0) in unloading/reloading, with the tangent bulk modulus K_ur = p'/kappa*; M is not an input but is derived from K0nc so that primary one-dimensional compression reaches that K0nc; KATAI 2D input contract (docs/k2d-format.md, lamstar / kapstar / k0nc_auto). The same equations are verified at the material point and through a hand-built BVP in test_soft_soil},
   note  = {cited by KV-CST-009},
 }
 
-@misc{theg,
+@misc{thei,
   title = {the method of consistent deformations (force method) for a statically indeterminate beam with a support settlement, and the linear axial spring of an anchor, both stated in full in the locator; the plate is a Timoshenko beam whose shear rigidity is kGA' = k EA / (2 (1 + nu)) with the rectangular-section shear coefficient k = 5/6, the same expression KV-STR-003 verifies its deflections with},
   note  = {cited by KV-STR-009},
 }
@@ -391,12 +476,17 @@
   note  = {cited by KV-CST-012},
 }
 
-@misc{theh,
+@misc{thej,
   title = {the principle of superposition for a linear elastic system (each phase of a chain of linear solves is the solve of that phase's change, and the solves add); the KATAI 2D input contract for staged activation (docs/k2d-format.md, phases[i].struct) and for the anchor lock-off force (anchors[i].prestress: applied when the anchor is activated, the anchor behaving as an elastic spring from that state); the prestress equivalence of KV-STR-001 (a constant internal force N0 along the anchor axis is, in the residual, an external force of N0 along that axis at the attached node)},
   note  = {cited by KV-STR-012},
 }
 
-@misc{thei,
+@misc{the1961,
+  title = {the proportionality of a Tresca collapse load to the undrained strength (a weightless soil), so that strength reduction at a constant load q finds q_ult/q; the circular smooth-footing bearing capacity q_ult = 5.69 s_u (Cox, A.D., Eason, G. & Hopkins, H.G. (1961). Axially symmetric plastic deformations in soils. Phil. Trans. R. Soc. Lond. A 254, 1-45) as a sanity bound},
+  note  = {cited by KV-FND-017},
+}
+
+@misc{thek,
   title = {the same numerical control applied through two independent routes -- the .k2d file (model::Phase::tolerance / load_steps / max_iterations since io v7, and substep_tolerance since io v15) and the jobs-layer seam (app::NumericalControls, the route KV-NUM-007 measures with) -- must reach the same solver and produce the same run; the controls themselves are the phase-level numerical control parameters of KATAI 2D input contract (docs/k2d-format.md, tol / loadsteps / maxiter / substol), whose per-phase presence in the input is what makes a calculation reproducible by a third party},
   note  = {cited by KV-NUM-008},
 }
@@ -406,14 +496,24 @@
   note  = {cited by KV-NUM-007},
 }
 
-@misc{thej,
+@misc{thel,
   title = {the saturated limit of the fully-coupled (unsaturated Biot + Bishop) formulation is the consolidation (saturated Biot) formulation -- kernel/analysis/coupled_flow_deformation.hpp states the reduction and test_coupled_flow measures it for soil alone; here the same reduction is asked for with a structure in the system. The drained limit is the one KV-STR-006 uses: once the excess pore pressure is gone, the coupled problem IS the drained problem, which solve_nonlinear solves by a different path},
   note  = {cited by KV-STR-008},
+}
+
+@misc{them,
+  title = {the shaft capacity of a cylinder in a cohesive joint, F = 2 pi a H c_i (per radian c_i a H), and the elastic joint's shear force k_s u (2 pi a H); KATAI 2D input contract (docs/k2d-format.md, axisymmetric, structs[i].iface_ks)},
+  note  = {cited by KV-STR-016},
 }
 
 @misc{the2007b,
   title = {the small-strain stiffness degradation law of the Hardening Soil small-strain model (Benz, T. (2007). Small-strain stiffness of soils and its numerical consequences. PhD thesis, Universitat Stuttgart; modified Hardin-Drnevich after Santos & Correia 2001), stated in full: secant G_s/G0 = 1/(1 + a |gamma|/gamma_ref) with a = 0.385, tangent G_t = G0/(1 + a gamma/gamma_ref)^2 cut off below at G_ur = E_ur/(2(1+nu_ur)), and Masing's rule (Masing 1926) gamma_0.7,re-loading = 2 gamma_0.7,virgin-loading, which this build applies as a constant factor throughout loading rather than at a detected reversal; KATAI 2D input contract (docs/k2d-format.md, G0ref / gamma07); the same equations are verified at the material point in test_hssmall},
   note  = {cited by KV-CST-008},
+}
+
+@misc{the1970,
+  title = {the thick-walled cylinder under a uniform radial displacement of its inner face, plane strain (Lame; Timoshenko, S.P. & Goodier, J.N. (1970). Theory of Elasticity, 3rd ed. McGraw-Hill, sec. 30), with the ring's hoop equilibrium N = p R and its hoop strain u / R = eps0 + N / EA},
+  note  = {cited by KV-STR-019},
 }
 
 @misc{undrained,

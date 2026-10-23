@@ -15,6 +15,14 @@
 // As in Prandtl, the footing-edge stress singularity on a uniform mesh makes the
 // FE capacity approach the exact value from slightly above; the domain is sized to
 // contain the (wider, deeper) phi > 0 collapse mechanism so it is not truncated.
+//
+// verify: KV-FND-018
+//   oracle:   closed_form
+//   source:   Prandtl, L. (1921) and Reissner, H. (1924): the bearing capacity of a weightless cohesive-frictional soil under a strip, q_ult = c Nc with Nc = (Nq - 1) cot(phi), Nq = e^(pi tan phi) tan^2(45 + phi/2)
+//   locator:  the highest equilibrated load factor of a flexible strip footing on a weightless Mohr-Coulomb soil with associated flow (phi = psi = 20 deg)
+//   quantity: bearing capacity factor Nc [-]
+//   expected: within 5% of 14.835
+//   band:     5%, as asserted (the footing-edge singularity on a uniform mesh, approached from above)
 #include <katai/analysis/nonlinear_solver.hpp>
 #include <katai/fem/assembly/assembler.hpp>
 #include <katai/fem/assembly/dof_map.hpp>

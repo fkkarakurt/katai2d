@@ -74,6 +74,15 @@ struct Params {
     // min below).
     bool tension_cutoff = false;
     double sigt_user = 0.0;   // [kPa, >= 0] magnitude; read only when tension_cutoff
+    // STRENGTH REDUCTION FACTOR (sum Msf of a Safety phase); 1 = the criterion as stated. The
+    // Hoek-Brown curve has no c' and phi' to divide, so the reduction is made where the curve is:
+    // at each sigma'_3 the envelope's tangent is a Mohr-Coulomb line (c_t, phi_t), and the
+    // reduced envelope passes through that line with c_t / Msf and tan(phi_t) / Msf -- the form
+    // f_red = f / eta of Benz, Schwab, Vermeer & Kauther (2008), with
+    //   eta = 1/2 ( Msf (2 - f') sqrt(1 + (1/Msf^2 - 1) f'^2 / (2 - f')^2) + f' ),
+    // f' = d fbar / d sigma'_3. Every tangent keeps its intercept c_t / tan(phi_t) with the
+    // stress axis, so the tensile apex sigma_t does not move.
+    double msf = 1.0;
 };
 
 // The rock-mass constants derived from GSI and D (Hoek, Carranza-Torres & Corkum 2002).
@@ -101,17 +110,60 @@ inline Constants constants_of(const Params& P) {
 // sigma'_3). The bracket is the criterion's own domain: it reaches zero exactly at the isotropic
 // tensile apex x = sigma_t, and there is no surface beyond that -- which is why the apex is a
 // return region and not a special case bolted on.
-inline double fbar(double x, const Params& P, const Constants& C) {
+inline double fbar_full(double x, const Params& P, const Constants& C) {
     const double sci = std::fabs(P.sigci);
     const double bracket = C.mb * (-x / sci) + C.s;
     if (bracket <= 0.0) return 0.0;
     return sci * std::pow(bracket, C.a);
 }
-inline double dfbar_dx(double x, const Params& P, const Constants& C) {
+inline double dfbar_full_dx(double x, const Params& P, const Constants& C) {
     const double sci = std::fabs(P.sigci);
     const double bracket = C.mb * (-x / sci) + C.s;
     if (bracket <= 0.0) return 0.0;
     return -C.a * C.mb * std::pow(bracket, C.a - 1.0);
+}
+
+// The reduction divisor eta of the strength-reduced envelope (see Params::msf), as a function of
+// g = -fbar' >= 0, with its derivative d eta / d g. Written in the form
+//     eta = 2 M^2 (1 + g) / (M u S + g),   u = 2 + g,   S = sqrt(1 + (1/M^2 - 1) g^2 / u^2),
+// which is the published expression with its numerator rationalised: the two large terms of the
+// published form cancel as g grows towards the tensile apex, and this one does not. M = 1 gives
+// eta = 1 exactly.
+struct Eta { double eta = 1.0, deta_dg = 0.0; };
+inline Eta reduction_eta(double g, double M) {
+    Eta r;
+    if (M == 1.0) return r;
+    const double k = 1.0 / (M * M) - 1.0;
+    const double u = 2.0 + g;
+    const double S = std::sqrt(1.0 + k * g * g / (u * u));
+    const double D = M * u * S + g;
+    const double N = 2.0 * M * M * (1.0 + g);
+    r.eta = N / D;
+    const double dS = 2.0 * k * g / (S * u * u * u);
+    const double dD = M * (S + u * dS) + 1.0;
+    r.deta_dg = (2.0 * M * M * D - N * dD) / (D * D);
+    return r;
+}
+
+// fbar(x) and its slope as the return mapping reads them: the full criterion, or -- in a Safety
+// trial -- the strength-reduced envelope fbar / eta(x).
+inline double fbar(double x, const Params& P, const Constants& C) {
+    const double f = fbar_full(x, P, C);
+    if (P.msf == 1.0 || f <= 0.0) return f;
+    return f / reduction_eta(-dfbar_full_dx(x, P, C), P.msf).eta;
+}
+inline double dfbar_dx(double x, const Params& P, const Constants& C) {
+    const double fp = dfbar_full_dx(x, P, C);
+    if (P.msf == 1.0) return fp;
+    const double sci = std::fabs(P.sigci);
+    const double bracket = C.mb * (-x / sci) + C.s;
+    if (bracket <= 0.0) return 0.0;
+    const double f = sci * std::pow(bracket, C.a);
+    // fbar'' = a (a - 1) m_b^2 bracket^(a - 2) / |sigma_ci|; g = -fbar', so dg/dx = -fbar''
+    const double fpp = C.a * (C.a - 1.0) * C.mb * C.mb * std::pow(bracket, C.a - 2.0) / sci;
+    const Eta e = reduction_eta(-fp, P.msf);
+    const double deta_dx = e.deta_dg * (-fpp);
+    return (fp * e.eta - f * deta_dx) / (e.eta * e.eta);
 }
 
 // The yield function in the SOLVER's ordering (s1 >= s2 >= s3, tension positive) -- AND WITH THE

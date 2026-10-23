@@ -8,6 +8,14 @@
 //       Dirichlet jump.)
 //   (C) Steady-state regression: constant head gradient → long time → linear profile (= steady seepage).
 // See docs/references/transient-unsaturated-flow-formulation.md (W1).
+//
+// verify: KV-FLW-006
+//   oracle:   closed_form
+//   source:   Carslaw, H.S. & Jaeger, J.C. (1959). Conduction of Heat in Solids, 2nd ed. Oxford -- the diffusion equation S_s dh/dt = k d2h/dy2: the Fourier-series isochrone of a uniform initial excess head in a column drained at one end (Terzaghi's form), the erfc front of a sudden head step at the end of a semi-infinite column, and the linear steady profile
+//   locator:  the nodal excess head at depths Z = 0.3..0.7 of the column at several time factors; the head along the erfc front at d = 0.15..0.9; the steady profile at long time
+//   quantity: excess head over its initial value [-]; head over the step [-]; head [m]
+//   expected: within 0.03 of the isochrone, within 3% of the step on the erfc front, the steady profile within 1e-3
+//   band:     0.03 / 3% / 1e-3, as asserted (time and space discretisation of a coarse column)
 #include <katai/analysis/transient_flow.hpp>
 #include <katai/geometry/rectangular_domain.hpp>
 #include <katai/mesh/mesh.hpp>

@@ -17,6 +17,7 @@
 
 #include <Eigen/Core>
 
+#include <katai/analysis/seepage.hpp>   // Permeability
 #include <katai/mesh/mesh.hpp>
 #include <katai/model/project.hpp>
 
@@ -45,6 +46,27 @@ struct FlowResult {
 // Water unit weight [kN/m^3] (= build_problem.hpp kGammaWater; distinct name so the two headers
 // can be included in either order / independently).
 inline constexpr double kFlowGammaWater = 9.81;
+
+// The hydraulic conditions drawn inside the model (`hydros`), resolved onto a mesh -- shared by the
+// steady and the transient groundwater flow, so a well or a drain means the same thing in both.
+//   level      the nodes that MAY be held at a head, and which way each holds: a drain's nodes
+//              from above (a Vacuum drain `always`), an extraction well's nodes at its h_min
+//              from below;
+//   well_flux  each well's discharge spread along its line, every edge carrying a share in
+//              proportion to (the conductivity across the line x the edge's length), so the
+//              water comes out of the layers that can deliver it (negative = extraction).
+// A line that does not lie on the mesh, or a well of zero length, is refused (ok = false).
+struct HydroNode { int node; double level; bool from_above; bool always; std::size_t owner; };
+struct HydroResolution {
+    std::vector<HydroNode> level;
+    std::vector<double> well_flux;
+    bool any_well = false, any_drain = false;
+    bool ok = true;
+    std::string message;
+};
+HydroResolution resolve_hydros(const model::Project& pr, const katai::mesh::Mesh& mesh,
+                               const std::vector<katai::core::Permeability>& perm,
+                               const model::Phase* phase);
 
 // Definition in kernel/jobs/src/flow_driver.cpp (section 5.2). `phase` selects which wells and
 // drains are switched on (hydraulic conditions are activated per calculation phase); nullptr

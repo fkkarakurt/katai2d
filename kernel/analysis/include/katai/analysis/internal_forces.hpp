@@ -912,7 +912,8 @@ public:
             for (int q = 0; q < iface::kPointCount; ++q) {
                 const int nd = ncpts[q].node;  // local node index [A,B,middle]
                 const auto fr = iface::edge_frame(Xe, ncpts[q].xi);
-                const double c = fr.c, s = fr.s, wJ = ncpts[q].w * fr.J;
+                const double c = fr.c, s = fr.s;
+                const double wJ = ncpts[q].w * fr.J * (ie.axisymmetric ? Xe(nd, 0) : 1.0);   // r at the node
                 // Equation indices of the 4 DOFs: soil x,y (base) + structure x,y (extra DOFs).
                 const int gdx[4] = {dofs.global_dof(ie.soil_nodes[nd], 0),
                                     dofs.global_dof(ie.soil_nodes[nd], 1),
@@ -962,7 +963,8 @@ public:
             for (int q = 0; q < iface::kPointCount5; ++q) {
                 const int nd = ncpts5[q].node;
                 const auto fr = iface::edge_frame5(Xe, ncpts5[q].xi);
-                const double c = fr.c, s = fr.s, wJ = ncpts5[q].w * fr.J;
+                const double c = fr.c, s = fr.s;
+                const double wJ = ncpts5[q].w * fr.J * (ie.axisymmetric ? Xe(nd, 0) : 1.0);   // r at the node
                 const int gdx[4] = {dofs.global_dof(ie.soil_nodes[nd], 0),
                                     dofs.global_dof(ie.soil_nodes[nd], 1),
                                     ie.struct_dof[2 * nd + 0], ie.struct_dof[2 * nd + 1]};

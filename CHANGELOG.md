@@ -6,6 +6,261 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A drawdown in a transient flow phase: seepage faces, wells, drains and a moving water level (`.k2d` v22)
+
+A transient flow phase closed its seepage faces (with a warning), refused wells and drains, started
+from the water table whatever the phase before it had done, and applied every head at its first
+instant -- so the classical rapid drawdown of a slope could not be modelled. It now:
+
+- resolves **seepage faces, drains and a well's h_min** as one-sided conditions in every time step,
+  by the active-set rule the steady flow solve applies to the same objects (wells and drains are
+  read through one shared resolution, so a well's discharge is spread along its line the same way
+  in both). A face is open at zero pressure while water leaves the ground through it; a drain only
+  takes water out; a well pumps its discharge until the ground falls to its h_min;
+- makes the part of a **Head edge that its water stands below a seepage face**: held at the head,
+  it drew the ground's water out by suction through a face open to the air;
+- **starts from the head the phase before it ended with**, when that phase was a groundwater flow
+  (the result carries the nodal head, suction included); otherwise from the water of the phase it
+  continues;
+- gives a **phase's own water level to its Head edges**: a drawdown is a phase whose level is lower;
+- moves the Head edges **linearly over the duration** when asked (`phases[i].headramp`, `.k2d` v22):
+  a reservoir lowered at a rate. An older build would make the change at the first instant;
+- takes the **storage of a step against the state at the end of the step before**, prescribed nodes
+  included, so a head that changes in time stores and releases the water it should (nothing
+  changes for a constant head);
+- **splits a step that does not converge** (up to 512 parts, each given four times the iterations),
+  and **damps** the Picard update when it grows and caps it at a metre (measured: a 1142 m update
+  where a drain asked for 6);
+- is solved with the **sparse direct solver** every other phase uses. It was given a dense LU,
+  refactorised every Picard iteration, which grows with the cube of the node count;
+- is solved on the **ground active in the phase**: the soil an excavation had removed went on
+  conducting and storing water. The **faces an excavation exposes** take the phase's water as their
+  head (a seepage face above it), as the steady flow of a staged phase treats them -- a pit pumped
+  down takes water from the ground around it;
+
+A phase that takes its pore pressures from a groundwater flow (`flowpore`) right after a transient
+flow phase now takes the **head that flow ended with**, not a steady flow of its own, and says so
+(K2D-A038); it hands the head on, so a Safety phase after it reads the same field. A drawdown thus
+reaches the effective stress and the factor of safety (KV-FLW-009: the settlement of a column whose
+water table a drawdown lowered, against the closed form to 0.000%).
+
+Verified (KV-FLW-008) against closed forms: a water boundary raised at a constant rate within 0.20%
+of the rise of Carslaw and Jaeger's i2erfc solution (the change made at once lies 20% away); a
+drawdown below the ground surface whose excess over the face dissipates as Terzaghi's isochrone
+within 0.04%, the face at zero pressure; a well within and beyond what the ground can supply, at its
+Darcy head and at h_min, exact; a drain that holds its head under the water and feeds no water into
+drier ground; the same ramp through the file and the phase sequence within 0.78%; the ground under
+an excavation draining as the same ground meshed alone; and a pit pumped down, run to its steady
+state, within 1.3 mm (0.04% of the head drop) of the steady flow of a staged phase -- a separate
+solver. K2D-A034 is retired. On the default sand retention curve the ground a drain dries four
+metres above the water stopped the Picard iteration (a 6 m drop asked for a 1142 m update);
+damped, capped at a metre an update and given four times the iterations once a step is split, it
+converges (the chord capacity of the retention curve was tried and did not help), and a pit in the
+same sand, run in 50-day steps that have to be split, reaches the steady staged flow within 0.8 mm.
+
+### A wall along a pit's edge reads each face's own overburden
+
+The initial normal stress of a wall's interface was read with the overburden on the wall's line
+itself. A wall drawn along the edge of a pit's region has that edge under it, and the half-open
+point-in-polygon rule put the line in one region or the other: after the excavation one face took
+the other face's overburden, and which one depended on the side the pit was drawn on. Each face now
+reads its own side, a millimetre into it. Found on the published staged excavation by bisection
+(the shift of its wall followed this lookup alone): its wall now moves 23.58 / 56.73 mm in the
+second and third stages (published 24.1 / 57.1; before, 23.46 / 56.47).
+
+### Every refusal carries a code
+
+Nineteen refusals stopped a run with a message and no code, so a script could only match the prose.
+They now carry stable codes in two new families: `K2D-I…` for input a run cannot be built from (an
+elastoplastic plate with no capacity, an element without a material, pore
+pressures from a flow with no water, an impermeable plate the mesh is not split along, a phase
+naming a material the project does not have) and `K2D-S…` for a combination this build does not
+solve, refused by name (a prescribed displacement outside a Plastic phase; what axisymmetry does not
+solve yet; flow pore pressures or region water in a phase that computes its own; a semi-permeable
+line where the flow cannot take one; an interface activated outside a Plastic phase; a contraction
+on a plate installed in the same phase). Each is triggered by a test, with the same model without
+its condition (KV-DIA-003).
+
+### The pore pressure shown is the one the phase computed
+
+The pore-pressure field of a result showed the steady part only -- the water table or the flow the
+phase was set up in -- and the total stresses were taken with it, so during a consolidation the
+pressure an engineer read was the hydrostatic one, not the one still draining. It is now the steady
+part plus the excess the phase generated, and the excess pore pressure is a field of its own.
+
+### Every diagnostic code is checked to be said, and not said without its cause
+
+Sixteen documented codes were raised by no test. Each now has the smallest model that raises it and
+the same model without the condition, which must not (KV-DIA-003). The input-safety gate now fails
+when a documented code is raised nowhere, a raised code is not documented, or no test triggers it;
+three codes that only a numerical event or a flow field computed outside the run raises are listed
+there with their reasons. On a structured mesh of right-angled 6-noded elements no point is farther
+than a quarter of the element from every node, so K2D-G013 can never be raised there -- measured, and
+the test is placed on an unstructured mesh.
+
+### The phase editor reaches every phase key
+
+A region's material in a phase, a plate's section and its line contraction, the reset of the
+displacements, the load placed at the start of a consolidation, the integration tolerance, the
+change of permeability `ck`, the end bearing of a wall's foot, the skin resistance at a pile's end,
+the virtual thickness of an interface and the material of a free interface were in the file and the
+engine but not in the editor. A new phase no longer copies what the phase before it did once (a
+reset, a partial stage). A phase can be duplicated and moved up or down the chain, and removing
+one asks first. A consolidation curve is drawn against time, resampled from its growing steps,
+rather than against the step count, and a cross section reads any result field along a line,
+interpolated with the elements' own shape functions (exact at the nodes), and copies it as CSV.
+
+### A factor of safety with a Hoek-Brown rock
+
+A Safety phase on a model with a Hoek-Brown material was refused: the criterion has no c' and
+phi' to divide. The strength is now reduced inside the criterion (Benz, Schwab, Kauther &
+Vermeer 2008): at each stress point's own sigma'_3 the envelope's tangent is a Mohr-Coulomb line,
+reduced as Mohr-Coulomb is reduced (c and tan phi divided by the factor), and the reduced envelope
+passes through it. The published form f/eta is implemented with its numerator rationalised, so it
+does not lose digits towards the tensile apex, and the apex itself does not move under the
+reduction. A user's tensile cut-off is divided like a Mohr-Coulomb one, and the dilatancy is held
+within the reduced friction at zero confinement. The reduced envelope equals an independent
+tangent construction to 7e-16 and a homogeneous rock block under a confining and a major stress
+has the factor at which the reduced envelope passes through its state, within 0.1% (KV-CST-021).
+The phase says that its factor is not that of a Mohr-Coulomb fit to the same envelope (K2D-A037).
+
+### Axisymmetric models: excavation and fill, interfaces, and a factor of safety
+
+An axisymmetric model refused every change of the active regions, on the ground that the
+r-weighted assemblies took no element-activity mask; they did, and two calls did not pass it. A
+shaft, a cylindrical pit or a tank foundation dug and backfilled now runs: the heave of a confined
+column losing its top layer is the one-dimensional closed form (exact on 15-noded elements, 0.1%
+on 6-noded), and the stress after a pit is dug is the stress of the same geometry loaded without
+the pit, to 3e-12 kPa (KV-EXC-003).
+
+Interfaces are built in axisymmetry and integrated per radian, each Newton-Cotes point weighing its
+radius: the shaft and base of a pile modelled as a volume, the joint under a tank. A cylinder
+pulled through a cohesive joint carries c_i a H per radian at full slip, to every printed digit,
+and the elastic load-transfer closed form within 0.3% before it slips (KV-STR-016). Plates,
+anchors, geogrids and embedded beams stay refused there: a plate in axisymmetry is a shell with a
+hoop force, a different element.
+
+A Safety phase runs in axisymmetry: every trial of the strength-reduction search is a nonlinear
+solve with the phase's options, and the r-z kinematics now reach them all, with the parent's
+internal force r-weighted. A circular footing on weightless Tresca clay at half its collapse
+pressure has a factor of safety whose product with the pressure is the collapse pressure the same
+model reaches by loading, within 0.7%, at 5.5 s_u -- the circular footing's, not the strip's 5.14
+(KV-FND-017).
+
+### A joint slips under a damped earthquake, and the ground at the model's right edge has weight
+
+Two defects, both found by the first closed-form check of the nonlinear dynamic phase (Newmark's
+sliding block, KV-DYN-004: the permanent slip of a block on a frictional joint under an
+acceleration pulse):
+- **The stiffness-proportional part of Rayleigh damping was built on the full initial stiffness,
+  the joints' elastic springs included.** A joint spring is stiff by construction, so a joint
+  slipping at a rate v met a viscous resistance beta k_s v far above its Coulomb strength: with 5%
+  damping the block slipped 0.8% of the closed form. Every nonlinear dynamic run with damping and an
+  interface (a wall beside its soil) had its joint slip suppressed in this way, in the unsafe
+  direction. Contact springs -- interfaces and the embedded beams' skin and foot springs -- are now
+  left out of the damping matrix, as is usual for zero-thickness contact elements.
+- **The soil column above a node on the model's right or top boundary weighed nothing**, because a
+  point on those edges is outside every region by the half-open point-in-polygon rule. An interface
+  reaching the right boundary started its end station with no normal stress, and so no friction:
+  8.6% too much slip on 6-noded elements, 3.9% on 15-noded ones. A boundary point now takes the
+  region it bounds.
+
+With both, the slip is Newmark's within 0.5% on both element orders. A pulse below the yield
+acceleration leaves no slip.
+
+### An undrained soil in a linear dynamic phase carries its pore fluid
+
+The linear dynamic path assembled the skeleton's own elastic pair for an Undrained (A)/(B) soil,
+so a saturated undrained clay shook as if it were drained. The shear wave was right; everything
+volumetric was too soft, measured as a 9.9% larger peak displacement on a block standing on its
+base. The undrained pair keeps the shear modulus and takes the undrained Poisson's ratio (the
+static solver's own K' + Kw/n), and a depth profile scales with it. It now equals the nonlinear
+path, which solves with the models themselves, to 1.7e-13.
+
+### A nonlinear dynamic phase that stops early has failed, and reads its iteration controls
+
+A time step that did not converge ended the phase with ok = true and "STOPPED early" in the
+message only, so the phases after it ran as if the shaking had been completed. Such a phase is now
+reported failed, with the time it reached as its load fraction and its fields up to then
+viewable. The phase's own tolerated error and maximum iterations are read by the nonlinear dynamic
+Newton; they were not, and a phase that set them was solved with 30 iterations and 1e-6.
+
+### A prescribed inflow reaches a transient flow phase; a seepage face there is said to be closed
+
+A prescribed-flux edge (a rainfall infiltration, a recharge) reached every time-dependent phase as
+a closed edge, silently. A transient flow phase now applies it, integrated onto the nodes as the
+steady flow solve does: a saturated column under an inflow reaches the closed-form head q L / k
+above its base to every printed digit. A consolidation or fully coupled phase solves the excess pore
+pressure, for which the edge is closed, and now says that the inflow is not applied (K2D-A033). A
+seepage face in a transient flow phase was closed there and said so (K2D-A034); it is now solved
+(see the drawdown entry above).
+
+### A permeable wall lets water through in a transient flow phase
+
+A wall with interfaces, or an interface on mesh edges, splits the mesh. The coupled phases tie the
+two sides of a permeable seam to one pore equation; the transient flow solver was handed the split
+mesh as it was, so every seam -- fully permeable included -- stopped the water (a 10.3 kPa jump
+across a wall declared permeable). It now solves on a mesh in which each tied pair is one node. A
+semi-permeable seam is refused there, as in the coupled phases.
+
+### Wells and drains in a staged phase's groundwater flow are said, not dropped
+
+The groundwater flow of a staged phase (`flowpore`) takes its boundaries from the water table; a
+well or drain active in the phase was not part of it, silently. It is now said (K2D-A035), and a
+well or drain active in a phase that takes its pore pressures from the water table, on which it
+has no effect, is noted (K2D-A036).
+
+### A reopened result says what the run said (`.res` v11)
+
+The results file now stores the total displacement since the start of the staged construction
+(the phase sequence's own sum, which leaves out the initial phase and the phases that commit no
+state and starts again after a reset), whether a factor of safety is only a lower bound, the
+design approach that makes it an over-design factor, the diagnostics, the excess pore pressure
+field, the consolidation curve, the degree of saturation, the support reactions and the seismic
+records. A reopened lower bound read as a definite factor, and a reopened run had lost the
+warnings that qualify its numbers. Older files read as before, the new fields empty.
+
+### Paths with letters outside ASCII; a save replaces the file whole or not at all
+
+Paths are UTF-8 everywhere in the tree and are opened as UTF-8 on every platform. A narrow file
+stream reads them in the ANSI code page on Windows, so a project under a folder or name with
+Turkish letters could not be opened by the program that saved it. The command line and the Studio
+run with the UTF-8 process code page. A project or results file is written beside its target and
+moved over it once complete, so a save that fails part way leaves the file that was there.
+
+### Deleting an object keeps every phase on the objects it was set for
+
+Every phase holds what it does to the project's objects by index. Deleting a structure, a load, a
+prescribed displacement or a well erased it from its list and left the phases alone, so every
+later object took over its neighbour's settings in every phase -- the model solved was another
+model than the one drawn. Deleting a region shifted its activation but not its dry flag, its water
+or its phase material, and deleting a material left the layers, interfaces and phase changes that
+named it on the wrong one. The kernel now provides the edits (`erase_struct`, `erase_load`,
+`erase_disp`, `erase_hydro`, `erase_material`, `erase_polygon` for every phase setting,
+`insert_polygons`, `split_edge`, `erase_vertex`) and `material_uses` to say what a deletion
+changes; regenerating the ground from boreholes resets the region settings when the regions
+change, and says so.
+
+### New verification cases
+
+KV-GEO-004 (an edit equals the project built without the object, in every phase setting),
+KV-CON-005 (Soft Soil consolidating under a fill against an independent finite-difference column:
+the degree of consolidation within 0.0011 at every step), KV-CON-006 (the change of permeability
+against the same column, within 0.15%), KV-SLP-004 (initial stresses on a slope against the
+infinite slope, within 0.03%), KV-DYN-004 (Newmark's sliding block, within 0.5%), KV-EXC-003 and
+KV-STR-016 (axisymmetric excavation and interfaces), KV-FND-017 (an axisymmetric factor of safety), KV-CST-021 (Hoek-Brown strength reduction),
+KV-FLW-008 (transient flow conditions), KV-FLW-009 (a drawdown's pore pressures reach the deformation:
+the settlement against the closed form to 0.000%), KV-STR-019 (a tunnel lining that contracts in
+elastic ground, against the thick cylinder and the ring's hoop equilibrium: displacement +0.47%,
+hoop force -0.49%), KV-STR-020 (a plate that changes its section in a phase keeps the force it
+carries and the new section takes what comes after: 5000 / 15000 / -5000 kN/m exactly),
+KV-CST-022 (a soil region that changes its material keeps its stresses and the new material takes
+the load after: the settlements of both phases exactly),
+KV-DIA-003 (diagnostic codes); and declarations for tests that
+had none: KV-STR-017 (the plate hinge's M-N diamond), KV-FLW-006 (transient saturated flow: the
+isochrone, the erfc front, the steady limit), KV-FLW-007 (Darcy seepage), KV-STR-018 (Rankine's
+thrusts), KV-FND-018 (the Prandtl-Reissner bearing capacity).
+
 ### A plate on the ground surface with an interface on each face is solved by either linear solver
 
 Such a plate has no ground on its upper face. The mesh is split along it all the same, and the

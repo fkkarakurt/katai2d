@@ -631,7 +631,8 @@ class _Phases:
              steps=None, tolerance=None, load_steps=None, max_iterations=None,
              apply_fraction=None, ignore_undrained=None, reset_small_strain=None,
              design=None, water=None, dry=(), wet=(), pore_pressure=None, region_water=None,
-             materials=None, reset_displacements=None, plates=None, contraction=None):
+             materials=None, reset_displacements=None, plates=None, contraction=None,
+             ramp=None):
         ph = _core.Phase()
         ph.name = name
         ph.type = ptype
@@ -649,6 +650,8 @@ class _Phases:
         if reset_small_strain is not None: ph.reset_small_strain = reset_small_strain
         # Reset displacements: `result.displacement_total` counts from the start of this phase.
         if reset_displacements is not None: ph.reset_displacements = bool(reset_displacements)
+        # Transient flow: ramp=True moves the Head edges linearly over the phase (`headramp`).
+        if ramp is not None: ph.head_ramp = bool(ramp)
         # Design code: the partial factors of EC7 or TBDY 2018 applied to THIS phase, so a
         # characteristic run and its design check live in one file and are read side by side.
         # Unset = characteristic values, which is what an unfactored analysis means.
@@ -732,9 +735,10 @@ class _Phases:
                 raise ValueError(f"contraction= is given to a plate, not {h!r}")
         self._prj._phase_contraction.append({h.index: float(v) for h, v in (contraction or {}).items()})
         self._prj._phase_water_set.append(water is not None)
-        # pore_pressure="flow": this phase's pore pressures from a steady groundwater flow on its
-        # active ground (Phase.pore_from_flow); "phreatic" from the water table. Unset = as the
-        # phase before, like the water itself.
+        # pore_pressure="flow": this phase's pore pressures from a groundwater flow on its active
+        # ground (Phase.pore_from_flow) -- the head a transient flow phase right before it ended
+        # with (a drawdown), or a steady flow when there is none; "phreatic" from the water table.
+        # Unset = as the phase before, like the water itself.
         if pore_pressure is not None:
             if pore_pressure not in ("flow", "phreatic"):
                 raise ValueError(f'pore_pressure must be "flow" or "phreatic", not {pore_pressure!r}')
@@ -780,8 +784,10 @@ class _Phases:
         phase that names no water keeps the previous phase's, and
         ``water="project"`` returns to the project's own table.
 
-        ``pore_pressure="flow"`` takes this phase's pore pressures from a steady
-        groundwater flow on its active ground: below the water table every
+        ``pore_pressure="flow"`` takes this phase's pore pressures from a groundwater
+        flow: right after a :meth:`transient_flow` phase, the head it ended with (the
+        drawdown is the pore pressure the phase is about); otherwise a steady flow on
+        its active ground, in which below the water table every
         boundary of that ground (the model's sides, the faces an excavation
         exposes) is held at the table's head, above it is a seepage face, the
         base is closed, and a wall drawn with ``barrier="impermeable"`` closes
@@ -863,7 +869,11 @@ class _Phases:
         """Time-dependent GROUNDWATER FLOW alone: heads and the free surface move,
         the skeleton does not. duration [day], ``steps`` time steps over it. Use it
         for a drawdown or a filling reservoir when the deformation is not the
-        question; for both at once use :meth:`fully_coupled`."""
+        question; for both at once use :meth:`fully_coupled`. The phase starts from the
+        head the flow phase before it ended with; ``ramp=True`` lowers or raises the
+        Head edges to this phase's heads linearly over the duration (a drawdown at a
+        rate), otherwise at its first instant. Where a Head edge's water stands below
+        it, the edge is a seepage face; wells (with their h_min) and drains act."""
         return self._add(name, _core.PhaseType.TransientFlow,
                          duration=duration, steps=steps, **kw)
 

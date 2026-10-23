@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <katai/io/issue.hpp>
+#include <katai/io/utf8_path.hpp>
 #include <katai/model/project.hpp>
 
 namespace katai::model {
@@ -158,7 +159,13 @@ namespace katai::model {
 // table -- under a pit, hydrostatic water from the floor where the file states the water arriving
 // from outside, and twice the effective stress at the toe of the wall. Written only when a region
 // uses it, so every older file is byte-identical below the version line.
-inline constexpr int kProjectFileVersion = 21;
+// v22 (2026-10): A WATER LEVEL THAT MOVES OVER A TRANSIENT FLOW PHASE (`phases[i].headramp`): the
+// Head edges go linearly from the heads the phase starts from to its own over the duration -- a
+// reservoir lowered at a rate. An older build reads no such key and makes the change at the
+// first instant: an instantaneous drawdown, which is the more severe case for a slope, and not
+// the one the file states. Written only when set, so every older file is byte-identical below the
+// version line.
+inline constexpr int kProjectFileVersion = 22;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -438,6 +445,7 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     if (ph.ignore_undrained) wfield(o, "ignoreund", true);
     if (ph.reset_small_strain) wfield(o, "resetsmall", true);
     if (ph.reset_displacements) wfield(o, "resetdisp", true);
+    if (ph.head_ramp) wfield(o, "headramp", true);
     closeobj(o); o += ',';
 }
 inline Phase rphase(const Json& j) {
@@ -494,6 +502,7 @@ inline Phase rphase(const Json& j) {
     ph.ignore_undrained = j.flag("ignoreund", ph.ignore_undrained);
     ph.reset_small_strain = j.flag("resetsmall", ph.reset_small_strain);
     ph.reset_displacements = j.flag("resetdisp", false);
+    ph.head_ramp = j.flag("headramp", false);
     return ph;
 }
 
@@ -1035,18 +1044,16 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
 }
 
 // ----------------------------------------------------------------------------------- file IO --
+// The path is UTF-8 (katai/io/utf8_path.hpp). The file is written beside its target first and
+// moved over it only once it is complete, so a save that fails part way -- a full disk, a crash,
+// a pulled stick -- leaves the project that was there before, not half of the new one.
 inline bool save_project(const Project& p, const std::string& path, std::string* err = nullptr) {
-    std::ofstream f(path, std::ios::binary);
-    if (!f) { if (err) *err = "cannot open file for writing: " + path; return false; }
-    const std::string text = project_to_json(p);
-    f.write(text.data(), (std::streamsize)text.size());
-    if (!f.good()) { if (err) *err = "write failed: " + path; return false; }
-    return true;
+    return katai::io::write_file_atomically(path, project_to_json(p), err);
 }
 
 inline bool load_project(const std::string& path, Project& out, std::string* err = nullptr,
                          std::vector<katai::io::Issue>* notes = nullptr) {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(katai::io::utf8_path(path), std::ios::binary);
     if (!f) { if (err) *err = "cannot open file: " + path; return false; }
     std::ostringstream ss;
     ss << f.rdbuf();

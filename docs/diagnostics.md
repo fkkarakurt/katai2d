@@ -46,6 +46,24 @@ the code is never reworded, reused or retired into something else.
 | `K2D-G012` | refusal | An **embedded beam** has no material assigned, a non-positive length or diameter, or a hinged connection point that is not on the mesh at all (its head would be tied to nothing). |
 | `K2D-G013` | warning | An **embedded beam** with a hinged connection is tied to the nearest mesh node, and that node is more than a quarter of the local element size from the pile head as drawn. The pile is connected where the message says, not where it was drawn; refine the mesh at the head if that distance matters. |
 
+Codes in the `K2D-I…` family are about **input the run cannot be built from** -- an element
+without a material, a phase naming a material the project does not have; `K2D-S…` about a
+**combination this build does not solve**, refused by name rather than run as something else.
+
+| Code | Severity | Raised when |
+|---|---|---|
+| `K2D-I001` | refusal | A **plate material is elastoplastic with both capacities at 0** (Mp and Np unlimited): the plate would run elastic while the input promises a hinge. Enter Mp and/or Np, or make the plate elastic. |
+| `K2D-I002` | refusal | An **element has no valid material**: a soil region without one. |
+| `K2D-I003` | refusal | A phase **takes its pore pressures from a groundwater flow but there is no water** -- neither the project's water table nor one of the phase's -- to hold the flow's boundaries at. |
+| `K2D-I004` | refusal | A **plate is impermeable to water but has no interfaces**, so the ground is not split along it and the flow would cross it. |
+| `K2D-I005` | refusal | A phase **names a material the project does not have** for a soil region, or a plate material for a structure that is not a plate. |
+| `K2D-S001` | refusal | A **prescribed displacement is active in a phase that cannot impose one** (only Plastic phases and gravity loading do). |
+| `K2D-S002` | refusal | An **axisymmetric model asks for what axisymmetry does not solve yet**: plates, anchors, geogrids or embedded beams; a phase other than Plastic or Safety; pore pressures from a groundwater flow, region water or a flow coupling. |
+| `K2D-S003` | refusal | **Pore pressures from a groundwater flow, or region water, in a phase that computes its own** (consolidation, flow, dynamics): only Plastic and Safety phases take them. |
+| `K2D-S004` | refusal | A **semi-permeable wall or interface where the flow cannot take one**: the flow of a staged phase, or a transient flow phase. The steady groundwater-flow calculation solves it. |
+| `K2D-S005` | refusal | An **interface (or a wall with interfaces) is activated in a phase other than Plastic**: taking over the ground's stress at its line is done in a staged construction phase. |
+| `K2D-S006` | refusal | A phase **changes the line contraction of a plate that is not carried from the phase before**: a contraction applies to a lining already in place. |
+
 Codes in the `K2D-M…` family are about a **material parameter** the selected model does not read;
 `K2D-A…` about a limit of the **analysis** that shapes how a result may be read.
 
@@ -94,6 +112,12 @@ Codes in the `K2D-M…` family are about a **material parameter** the selected m
 | `K2D-A030` | warning | A plate has **end bearing but no stress point below its foot within half its equivalent thickness**: the zone is the thickness, not the mesh, so on this mesh the option has no effect. Refine the mesh around the foot of the plate to a size below that thickness. |
 | `K2D-A031` | warning | A **factor of safety on 6-noded elements with a wall or an interface** in the model: beside a wall these elements overstate the factor (measured on an anchored excavation: 1.63 and 1.55 on 2 m and 1 m meshes, 1.49 on 15-noded elements on the 2 m mesh). Use 15-noded elements for the factor of safety of a retaining structure, or refine well below the wall's embedded length. |
 | `K2D-A032` | note | One or more increments were solved with the **small-strain stiffness read from a fixed strain increment** (Hardening Soil with small-strain stiffness): the stiffness of a step depends on the direction of its strain increment, and where the ground reverses the iteration does not close on a stiffness that follows the iterate. The fixed increment is the best iterate reached, replaced by the answer and solved again twice; the note gives the distance left between the two. More load steps make it smaller. |
+| `K2D-A033` | warning | A **prescribed-flux edge in a consolidation or fully coupled phase**: the phase solves the excess pore pressure, for which the edge is closed, and the inflow it prescribes reaches no pore pressure in it. A prescribed inflow (rainfall, recharge) is applied by the groundwater-flow calculations -- a steady flow, or a transient flow phase for its development in time. |
+| `K2D-A034` | retired | **No longer raised.** It warned that a seepage-face edge was closed in a transient flow phase. The transient solver now resolves seepage faces, drains and wells' h_min as one-sided conditions in every time step, by the rule the steady flow solve applies, so the face is open where water leaves the ground and closed where it does not. |
+| `K2D-A035` | warning | A **well or drain active in a phase whose pore pressures come from a groundwater flow** (`flowpore`): the flow of a staged phase takes its boundaries from the water table only, so the well or drain is not part of the pore pressures of the phase. A dewatering by wells or drains is solved by the steady groundwater-flow calculation, or stated as region water levels. |
+| `K2D-A036` | note | A **well or drain active in a Plastic or Safety phase that takes its pore pressures from the water table**: wells and drains act in groundwater-flow calculations, and on a phreatic water table they have no effect. |
+| `K2D-A038` | note | A phase that takes its pore pressures from a groundwater flow **takes those the transient flow phase before it ended with** (the time is in the message): the drawdown, not a settled water table. A steady flow is solved when the phase before did not end a transient flow, so each stage of an excavation solves its own water. |
+| `K2D-A037` | note | A **factor of safety with a Hoek-Brown material**: the strength is reduced inside the criterion -- at each stress point the envelope's tangent is reduced as a Mohr-Coulomb line (c and tan phi divided by the factor) at that point's own confinement (Benz, Schwab, Kauther & Vermeer 2008). The factor is not that of a Mohr-Coulomb material fitted to the same envelope. |
 
 ## Where they appear
 
@@ -127,4 +151,8 @@ drawn object can fail to become an engine object. That completeness is held by a
 (`scripts/check_silent_drop.py`), which fails the build when a build loop skips user input without
 either raising a diagnostic or stating why nothing is lost — so the list grows with the code rather
 than drifting behind it. The runtime behaviour is pinned by `tests/test_no_silent_drop.cpp`
-(verification case `KV-DIA-001`), one fixture per code.
+(verification case `KV-DIA-001`) and `tests/test_diagnostic_codes.cpp` (`KV-DIA-003`), which raise each code with its condition and
+check that the same model without it does not. The same gate fails when a documented code is raised
+nowhere, when a raised code is not documented, or when no test triggers it. Three codes are excepted,
+each with its reason: two that only a numerical event of a hard run raises (`K2D-A019`, `K2D-A032`),
+and one on the hand-over of a flow field computed outside the run (`K2D-A011`).

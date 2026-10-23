@@ -691,36 +691,17 @@ inline ValidationReport validate_project(const model::Project& p) {
               "state only; with staged phases present, add a Safety phase at the point of "
               "interest instead");
 
-    // TWO WAYS OF DIVIDING A STRENGTH THAT IS NOT THERE. Both phi-c reduction and the
-    // material-factored design approaches work on c' and tan(phi'), and Hoek-Brown has neither:
-    // its strength is the curve. Left to run, each would touch nothing, the rock would be solved
-    // at FULL strength, and the result would be reported as though the reduction or the design
-    // factors had been applied -- wrong in the safe-looking direction, which is the direction
-    // that gets built. The engine refuses both (safety.hpp and the driver's design-code seam say
-    // why and what to do instead); saying it here refuses the project before a mesh is built.
+    // A STRENGTH THAT IS NOT A c'/phi' PAIR. The material-factored design approaches divide c'
+    // and tan(phi'), and Hoek-Brown has neither: its strength is the curve. Left to run, they would
+    // touch nothing, the rock would be solved at FULL strength, and the result would be reported
+    // as though the design factors had been applied -- wrong in the safe-looking direction. The
+    // engine refuses it (the driver's design-code seam says why); saying it here refuses the
+    // project before a mesh is built. A Safety phase is different since 2026-10-22: the strength
+    // reduction is made inside the criterion (hoekbrown::Params::msf), so it is not refused.
     {
         bool rock = false;
         for (const auto& m : p.materials) rock |= m.model == model::SoilModel::HoekBrown;
         if (rock) {
-            bool safety_phase = p.initial_procedure == model::InitialProcedure::Safety;
-            std::string where = "initial_procedure";
-            for (size_t i = 0; i < p.phases.size() && !safety_phase; ++i)
-                if (p.phases[i].type == model::PhaseType::Safety) {
-                    safety_phase = true;
-                    where = "phases[" + std::to_string(i) + "].type";
-                }
-            if (safety_phase)
-                r.add(Severity::Error, where,
-                      "a Safety analysis (phi-c reduction) cannot be run on a model that contains "
-                      "a Hoek-Brown material in this build: that model has no c' or phi' for the "
-                      "reduction to act on, so the rock would keep full strength through every "
-                      "trial and the factor of safety would come out too HIGH. A strength "
-                      "reduction for this model has to reformulate the Hoek-Brown yield function "
-                      "itself, and that is not implemented yet. A "
-                      "Mohr-Coulomb material fitted to the envelope over the confining range the "
-                      "problem spans (the equivalent c'/phi' of Hoek, Carranza-Torres & Corkum "
-                      "2002) will run, but its factor of safety belongs "
-                      "to that fit and does not correspond to the Hoek-Brown one");
             for (size_t i = 0; i < p.phases.size(); ++i) {
                 const auto da = p.phases[i].design_approach;
                 if (da != model::DesignApproach::EC7_DA1_C2 &&

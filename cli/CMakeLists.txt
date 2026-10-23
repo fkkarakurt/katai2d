@@ -25,6 +25,11 @@ if(WIN32 AND MSVC)
   list(APPEND KATAI_CLI_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/katai.rc")
 endif()
 
+# The process code page is UTF-8 (cmake/utf8.manifest): the command line and every narrow file
+# call read UTF-8, which is what the kernel reads paths as.
+if(WIN32 AND MSVC)
+  list(APPEND KATAI_CLI_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/utf8.manifest")
+endif()
 add_executable(katai_cli ${KATAI_CLI_SOURCES})
 set_target_properties(katai_cli PROPERTIES
   OUTPUT_NAME katai

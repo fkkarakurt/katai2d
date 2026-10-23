@@ -75,6 +75,31 @@ TransientFlowResult solve_transient_flow(
 //   (1'int N(theta^{n+1}-theta^n) = int dtheta); NO lumping (avoids the tri6 corner-node
 //   int N_corner = 0 degeneracy). Element-generic; mixed materials Gauss-based. Verification:
 //   saturated Terzaghi + mass conservation + Philip sqrt(t).
+// A node that MAY be held at a head: a one-sided condition, resolved by an active set inside
+// every time step -- the rule the steady flow solve applies to the same objects.
+//   from_above  a seepage face (level = the node's elevation, zero water pressure) or a Normal
+//               drain (level = its head): held while the free head would rise above the level,
+//               released when holding it would push water INTO the ground, so a face or a drain
+//               only ever takes water out;
+//   from_below  an extraction well's h_min: held while the well's discharge would pull the head
+//               below it, its own nodal discharge `own_flux` (the share of the well's discharge
+//               the caller put on this node, negative = extraction) then withdrawn; released when
+//               the ground can supply that share at the level again;
+//   always      a Vacuum drain: held in both directions;
+//   follows_bc  the node of a water boundary whose level moves (`head_bc` gives it): held at
+//               that head in both directions while the water stands above the node, a seepage
+//               face once the water has fallen below it -- the face of a slope that a drawdown
+//               exposes.
+// A node that is also a prescribed-head node keeps the prescribed head.
+struct HeadLimit {
+    int node = -1;
+    double level = 0.0;
+    bool from_above = true;
+    bool always = false;
+    double own_flux = 0.0;
+    bool follows_bc = false;
+};
+
 struct UnsaturatedFlowResult {
     std::vector<double> times;                  // size nsteps+1
     std::vector<Eigen::VectorXd> head;          // nodal total head h (node_count)
@@ -83,6 +108,13 @@ struct UnsaturatedFlowResult {
     std::vector<double> darcy_influx;           // net boundary Darcy inflow that step (pos = inflow)
     int max_picard_iters = 0;
     bool converged = true;
+    // The one-sided conditions (HeadLimit): whether every step's active set settled, the most
+    // passes one step took, and which nodes are held at the end (node_count; empty = none given).
+    bool limits_settled = true;
+    int max_limit_passes = 0;
+    std::vector<char> held;
+    // How many of the steps did not converge whole and were split (into up to 512 parts).
+    int split_steps = 0;
 };
 
 
@@ -91,7 +123,10 @@ struct UnsaturatedFlowResult {
 // specific storage (= n.gamma_w/Kw), `retention` van Genuchten/Mualem. BCs:
 // `is_prescribed` + `head_bc(node,t)`; `initial_head` (node_count). `flux` (optional) nodal
 // source. `solve_factory` empty = dense LU (refactorized every Picard iteration -- H is
-// nonlinear). In the saturated limit (psi>=0 everywhere) reduces to W1 (consistent storage).
+// nonlinear). `limits` (optional): seepage faces, drains and wells' h_min (HeadLimit). The
+// storage of a step is taken against the state at the END of the step before, prescribed nodes
+// included, so a head that changes in time stores and releases the water it should. In the
+// saturated limit (psi>=0 everywhere) reduces to W1 (consistent storage).
 // Element type from the mesh.
 // Definition in kernel/analysis/src/transient_flow.cpp (section 5.2).
 UnsaturatedFlowResult solve_transient_unsaturated_flow(
@@ -100,6 +135,6 @@ UnsaturatedFlowResult solve_transient_unsaturated_flow(
     const std::vector<WaterRetention>& retention, const std::vector<char>& is_prescribed,
     const HeadBoundary& head_bc, const std::vector<double>& initial_head, double dt, int nsteps,
     const std::vector<double>* flux = nullptr, const TransientFlowSolveFactory& solve_factory = {},
-    int max_picard = 60, double picard_tol = 1e-7);
+    int max_picard = 60, double picard_tol = 1e-7, const std::vector<HeadLimit>* limits = nullptr);
 
 }  // namespace katai::core

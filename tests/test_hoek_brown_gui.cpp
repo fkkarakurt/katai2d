@@ -223,13 +223,13 @@ int main() {
         check(std::fabs(reached[i] / envel[i] - 1.0) < 0.001,
               "the stress it carries is the Hoek-Brown envelope at that confinement, within 0.1%");
     }
-    // ---- AND THE ANALYSIS THIS MODEL CANNOT BE ASKED FOR --------------------------------
-    // phi-c reduction divides c and phi; Hoek-Brown reads neither, so every trial would run the
-    // rock at full strength, nothing would ever bring it down, and the search would report its
-    // cap itself -- "FoS > 3.0", whatever the rock. The refusal is what is checked here,
-    // because a wrong number in the safe-looking direction is the worst kind this program can
-    // produce. (A strength reduction that is defined for this model has to reformulate the
-    // Hoek-Brown yield function itself, and this build does not have it.)
+    // ---- A FACTOR OF SAFETY ON ROCK ---------------------------------------------------------
+    // phi-c reduction divides c and phi; Hoek-Brown reads neither, so dividing them would run the
+    // rock at full strength through every trial and the search would report its cap -- "FoS >
+    // 3.0", whatever the rock. Until 2026-10-22 the phase was refused for that reason. The
+    // reduction is now made inside the criterion (hoekbrown::Params::msf, KV-CST-021): the phase
+    // runs, the factor is a real one and not the search's cap, and the .k2d contract no longer
+    // refuses it.
     {
         auto pr = specimen(1000.0, 0.001);
         m::Phase sf; sf.name = "FoS"; sf.type = m::PhaseType::Safety;
@@ -237,19 +237,18 @@ int main() {
         pr.phases.push_back(sf);
         const auto M = katai::app::mesh_from_project(pr, 0.5, 6);
         const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
-        const bool refused = res.size() == 3 && !res[2].ok &&
-                             res[2].message.find("Hoek-Brown") != std::string::npos;
-        check(refused, "a Safety phase on rock is REFUSED, not answered with an inflated factor");
-        if (res.size() == 3) std::printf("      %s\n", res[2].message.c_str());
-        check(res.size() == 3 && res[2].fos < 0.0,
-              "and no factor of safety is reported at all");
-        // The same refusal at the schema, before a mesh is ever built.
+        const bool ran = res.size() == 3 && res[2].ok && res[2].fos > 0.0;
+        check(ran, "a Safety phase on rock runs");
+        if (res.size() == 3) std::printf("      FoS %.4f%s  (%s)\n", res[2].fos,
+                                         res[2].fos_lower_bound ? " lower bound" : "", res[2].message.substr(0, 120).c_str());
+        check(ran && !res[2].fos_lower_bound && res[2].fos < 3.0,
+              "and its factor is the rock's, not the search's cap");
         const auto rep = katai::io::validate_project(pr);
         bool schema = false;
         for (const auto& is : rep.issues)
             schema |= is.severity == katai::io::Severity::Error &&
-                      is.message.find("Hoek-Brown") != std::string::npos;
-        check(schema, "and the .k2d contract refuses it too, before a mesh is built");
+                      is.message.find("Safety") != std::string::npos;
+        check(!schema, "and the .k2d contract does not refuse it");
     }
 
     // ---- AND THE DESIGN APPROACH THAT WOULD HAVE FACTORED NOTHING ------------------------

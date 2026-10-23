@@ -157,4 +157,34 @@ inline void flow_head_nodes(const std::vector<FlowEdge>& edges, const katai::mes
     }
 }
 
+// The seepage-face nodes for a transient flow phase: a boundary node on a Seepage flow edge that
+// is not also on a Head edge (a prescribed head wins at a corner, as in the steady flow solve).
+inline std::vector<int> flow_seepage_nodes(const std::vector<FlowEdge>& edges, const katai::mesh::Mesh& mesh) {
+    std::vector<int> out;
+    for (int node : mesh.boundary_nodes) {
+        const double xn = mesh.x[node], yn = mesh.y[node];
+        double best_d = 1e300;
+        struct Hit { FlowEdgeKind kind; double d; };
+        std::vector<Hit> hits;
+        hits.reserve(edges.size());
+        for (const FlowEdge& e : edges) {
+            const double ex = e.bx - e.ax, ey = e.by - e.ay, l2 = ex * ex + ey * ey;
+            if (l2 < 1e-18) continue;
+            double t = ((xn - e.ax) * ex + (yn - e.ay) * ey) / l2; t = std::clamp(t, 0.0, 1.0);
+            const double d = std::hypot(xn - (e.ax + t * ex), yn - (e.ay + t * ey));
+            best_d = std::fmin(best_d, d);
+            hits.push_back({e.kind, d});
+        }
+        const double tol = best_d + 1e-9 + 1e-7 * std::fmax(std::fabs(xn), std::fabs(yn));
+        bool head = false, seep = false;
+        for (const auto& h : hits) {
+            if (h.d > tol) continue;
+            head = head || h.kind == FlowEdgeKind::Head;
+            seep = seep || h.kind == FlowEdgeKind::Seepage;
+        }
+        if (seep && !head) out.push_back(node);
+    }
+    return out;
+}
+
 } // namespace katai::core

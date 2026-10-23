@@ -35,7 +35,7 @@ struct SafetyPhase {
     bool nonlinear_soil = false;    // any nonlinear constitutive model present
     bool has_hardening = false;     // hardening family present
     bool has_softsoil = false;      // soft-soil family present
-    bool axisymmetric = false;      // r-z mode; refused (not available yet)
+    bool axisymmetric = false;      // r-z kinematics for every trial solve
     std::vector<char> active;       // element activity; empty = everything active
     // Numerical controls for the TRIAL solves inside the strength-reduction search; 0 = this
     // strategy's own defaults below. Each trial is a means to an end (does this reduced-strength
@@ -147,10 +147,10 @@ inline bool solve_safety_phase(
                     "model -- linear-elastic soil has no shear strength to reduce.";
         return false;
     }
-    if (in.axisymmetric) {
-        R.message = "Safety analysis is not available in axisymmetric mode yet.";
-        return false;
-    }
+    // AXISYMMETRY. Every trial of the search is a solve_nonlinear with the phase's options, so
+    // the r-z kinematics reach all of them through NewtonOptions; the load vector and the parent's
+    // internal force arrive r-weighted from the caller. Until 2026-10-22 the mode was refused --
+    // no factor of safety for a circular footing, a tank or a shaft (KV-FND-017).
     // Hardening Soil / Soft Soil Safety is gated honestly: phi-c reduction re-solves gravity per
     // trial, and a cap model from a stress-free state over-shoots the cap -> it either diverges
     // (hang) or returns a FALSE collapse (a meaningless factor of safety, even for a stable
@@ -169,42 +169,24 @@ inline bool solve_safety_phase(
                     "Mohr-Coulomb material with the same c' and phi'.";
         return false;
     }
-    // HOEK-BROWN HAS NOTHING FOR phi-c REDUCTION TO HOLD, and the failure is silent in the
-    // dangerous direction. factor_strength divides c and phi -- fields this model never reads --
-    // so every trial would run the rock at FULL strength, no reduction would ever bring it down,
-    // and the search would walk to its cap and report the cap itself -- "FoS > 3.0", for any
-    // rock mass whatever, however weak. Nothing here would say so.
-    //
-    // Strength reduction IS defined for this model, and it is not a conversion: the Hoek-Brown
-    // yield function is rewritten with the strength reduction factor inside it, evaluated at
-    // each stress point's own sigma'_3 (Benz, Schwab, Kauther & Vermeer 2008, Int. J. Rock
-    // Mech. Min. Sci. 45(2), 210-222). The factor that gives is in general not the factor of
-    // safety of a Mohr-Coulomb material fitted to the same envelope, because the two strength
-    // curves are reduced differently. This build does not implement that form, so the
-    // analysis is refused. (Until 2026-09 this comment said no rule exists. It had been drawn from
-    // a description that defines only the tension cut-off's reduction; the rule for the yield
-    // function itself is the reformulation above.)
-    //
-    // What the refusal offers instead is a Mohr-Coulomb fit, and it has to say what that is. The
-    // conversion (the equivalent c'/phi' of Hoek, Carranza-Torres & Corkum 2002, a linear fit that
-    // balances the areas above and below the curve) is a fit over a confining range whose upper
-    // limit sigma'_3max is left to the engineer, because it depends on the application -- and, as
-    // stated above, its factor of safety is not the Hoek-Brown one. It is the engineer's
-    // approximation, stated with the range it was made over, not a stand-in for the rule.
+    // HOEK-BROWN: THE REDUCTION IS MADE INSIDE THE CRITERION. Dividing c' and phi' -- fields
+    // this model never reads -- would leave the rock at full strength through every trial and the
+    // search would report its own cap. The Hoek-Brown yield function is instead rewritten with the
+    // strength reduction factor inside it, evaluated at each stress point's own sigma'_3 (Benz,
+    // Schwab, Kauther & Vermeer 2008, Int. J. Rock Mech. Min. Sci. 45(2), 210-222):
+    // factor_strength sets hoekbrown::Params::msf, and the criterion's tangent at every sigma'_3
+    // is reduced as a Mohr-Coulomb line would be (KV-CST-021). Until 2026-10-22 this was refused.
+    // The factor it gives is in general NOT that of a Mohr-Coulomb material fitted to the same
+    // envelope, because the two strength curves are reduced differently -- which is said.
     for (const auto& m : models)
         if (m.type == MaterialType::HoekBrown) {
-            R.message =
-                "Safety analysis (phi-c reduction) is not available for the Hoek-Brown model in this "
-                "build: its strength is the Hoek-Brown curve, not a c'/phi' pair, so reducing c' and "
-                "phi' would leave the rock at full strength through every trial and the factor of "
-                "safety reported would be too HIGH, not merely imprecise. The strength reduction "
-                "defined for this model reformulates the Hoek-Brown yield function itself, and "
-                "this build does not implement it yet. A Mohr-Coulomb material fitted to the "
-                "envelope over the confining range your problem actually spans will run a Safety "
-                "phase, but the factor it gives belongs to that fit: it does not correspond to the "
-                "Hoek-Brown factor of safety, so state it as an approximation, with the range it "
-                "was made over.";
-            return false;
+            add_diagnostic(R, DiagnosticSeverity::Note, "K2D-A037", "Safety",
+                           "The Hoek-Brown strength is reduced inside the criterion: at each "
+                           "stress point the envelope's tangent is reduced as a Mohr-Coulomb line "
+                           "(c and tan phi divided by the factor) at that point's own confinement. "
+                           "The factor of safety this gives is not that of a Mohr-Coulomb material "
+                           "fitted to the same envelope.");
+            break;
         }
     if (in.from_parent() && (in.has_hardening || in.has_softsoil))
         add_diagnostic(R, DiagnosticSeverity::Note, "K2D-A020", "Safety",
@@ -218,6 +200,7 @@ inline bool solve_safety_phase(
     sopt.newton = NewtonOptions{in.load_steps > 0 ? in.load_steps : 8,
                                 in.max_iterations > 0 ? in.max_iterations : 120,
                                 in.tolerance > 0.0 ? in.tolerance : 1e-3};
+    sopt.newton.kinematics = in.axisymmetric ? Kinematics::Axisymmetric : Kinematics::PlaneStrain;
     const auto sr =
         in.from_parent()
             ? safety_analysis(mesh, dofs, f,

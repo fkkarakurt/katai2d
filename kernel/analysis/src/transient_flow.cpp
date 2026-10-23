@@ -131,14 +131,13 @@ UnsaturatedFlowResult unsaturated_flow_impl(
     const std::vector<WaterRetention>& retention, const std::vector<char>& is_prescribed,
     const HeadBoundary& head_bc, const std::vector<double>& initial_head,
     const std::vector<double>* flux, double dt, int nsteps,
-    const TransientFlowSolveFactory& solve_factory, int max_picard, double picard_tol) {
+    const TransientFlowSolveFactory& solve_factory, int max_picard, double picard_tol,
+    const std::vector<HeadLimit>* limits) {
     constexpr int N = E::kNodeCount;
     const int nc = mesh.node_count;
 
     std::vector<int> feq(nc, -1);
     int nf = 0;
-    for (int n = 0; n < nc; ++n)
-        if (is_prescribed.empty() || !is_prescribed[n]) feq[n] = nf++;
     auto prescribed = [&](int n) { return !is_prescribed.empty() && is_prescribed[n]; };
     const auto gp = E::gauss_points();
 
@@ -155,7 +154,7 @@ UnsaturatedFlowResult unsaturated_flow_impl(
     // storage_vec (node), water volume = int theta. Suction psi = y-h.
     //   storage_vec_i = (1/dt)[ int N_i(theta-theta_prev) + (int N' S_s.S_e N.(h-h_prev))_i ],
     //   theta = n.S.
-    auto assemble = [&](const Eigen::VectorXd& h, const Eigen::VectorXd& hprev,
+    auto assemble = [&](const Eigen::VectorXd& h, const Eigen::VectorXd& hprev, double dts,
                         math::SparseMatrixBuilder& Ab, math::SparseMatrixBuilder& Hb,
                         Eigen::VectorXd& storage_vec, double& water_vol) {
         storage_vec.setZero(nc);
@@ -182,8 +181,8 @@ UnsaturatedFlowResult unsaturated_flow_impl(
                 const double psi = y_gp - h_gp, psip = y_gp - hp_gp;       // emme (current / prev)
                 const double Se = effective_saturation(w, psi);
                 const double kr = relative_permeability(w, Se);
-                const double C = -ne * moisture_capacity(w, psi) + ss * Se;
                 const double theta = ne * saturation(w, psi), theta_p = ne * saturation(w, psip);
+                const double C = -ne * moisture_capacity(w, psi) + ss * Se;
                 Eigen::Matrix<double, 1, N> gx, gy;
                 for (int i = 0; i < N; ++i) { gx(0, i) = sd.B(0, 2 * i); gy(0, i) = sd.B(1, 2 * i + 1); }
                 He.noalias()  += wdet * kr * (pm.kx * gx.transpose() * gx + pm.ky * gy.transpose() * gy);
@@ -199,11 +198,11 @@ UnsaturatedFlowResult unsaturated_flow_impl(
                 for (int b = 0; b < N; ++b) {
                     const int nb = mesh.node_of(e, b);
                     Hb.add_entry(na, nb, He(a, b));
-                    Ab.add_entry(na, nb, He(a, b) + Ce(a, b) / dt);
+                    Ab.add_entry(na, nb, He(a, b) + Ce(a, b) / dts);
                 }
             }
         }
-        storage_vec /= dt;
+        storage_vec /= dts;
     };
 
     Eigen::VectorXd h(nc);
@@ -214,27 +213,90 @@ UnsaturatedFlowResult unsaturated_flow_impl(
         return S;
     };
 
+    // THE ONE-SIDED CONDITIONS. `on[i]` says whether limit i holds its node; it is carried from
+    // step to step (the set rarely changes within a few steps) and starts from the initial head:
+    // a face or a drain below the water holds, a well pumps its rated discharge.
+    const std::size_t nl = limits ? limits->size() : 0;
+    std::vector<HeadLimit> lim = limits ? *limits : std::vector<HeadLimit>{};
+    // A moving water boundary at time t: submerged, it holds the water's head both ways; exposed,
+    // it is a seepage face at the node's own elevation.
+    const auto follow = [&](HeadLimit& L, double t) {
+        const double g = head_bc(L.node, t);
+        const double y = mesh.y[L.node];
+        L.always = g >= y;
+        L.from_above = true;
+        L.level = g >= y ? g : y;
+    };
+    for (HeadLimit& L : lim)
+        if (L.follows_bc && L.node >= 0 && L.node < nc) follow(L, 0.0);
+    std::vector<char> on(nl, 0);
+    Eigen::VectorXd own = Eigen::VectorXd::Zero(nc);   // the wells' discharge on their own nodes
+    for (std::size_t i = 0; i < nl; ++i) {
+        const HeadLimit& L = lim[i];
+        if (L.node < 0 || L.node >= nc || prescribed(L.node)) continue;
+        const double htol = 1e-9 * std::fmax(1.0, std::fabs(L.level));
+        on[i] = L.always || (L.from_above && h(L.node) >= L.level - htol);
+        if (!L.from_above) own(L.node) += L.own_flux;
+    }
+    std::vector<char> held(nc, 0);
     UnsaturatedFlowResult R;
+    if (nl > 0) R.held.assign(nc, 0);
     {  // t=0 record
         math::SparseMatrixBuilder Ab(nc), Hb(nc);
         Ab.reserve((std::size_t)mesh.element_count * N * N); Hb.reserve((std::size_t)mesh.element_count * N * N);
         Eigen::VectorXd sv; double vol = 0.0;
-        assemble(h, h, Ab, Hb, sv, vol);
+        assemble(h, h, dt, Ab, Hb, sv, vol);
         R.times.push_back(0.0); R.head.push_back(h); R.saturation.push_back(nodal_sat(h));
         R.water_volume.push_back(vol); R.darcy_influx.push_back(0.0);
     }
 
-    for (int step = 0; step < nsteps; ++step) {
-        const double t = (step + 1) * dt;
+    // ONE BACKWARD-EULER STEP from the current state at t0 over dts: the active set of the
+    // one-sided conditions around the Picard iteration. Returns whether it converged; the water
+    // volume and the net boundary inflow rate of the step are left in `water_vol` / `infl`.
+    double water_vol = 0.0, infl = 0.0;
+    const auto one_step = [&](double t0, double dts, int iter_cap) -> bool {
+        const double t = t0 + dts;
+        // h^n is the state the step starts from, the prescribed nodes included: a head that
+        // changes in time then stores (or releases) the water of the change in the elements
+        // beside it. Taken after the update, as it once was, that storage was lost at every
+        // boundary node whose head moved -- nothing for a constant head, which never moves.
+        const Eigen::VectorXd hn = h;
         for (int n = 0; n < nc; ++n) if (prescribed(n)) h(n) = head_bc(n, t);   // prescribed = g(t)
-        const Eigen::VectorXd hn = h;   // h^n (prescribed values current)
-        double water_vol = 0.0;
+        for (std::size_t i = 0; i < nl; ++i)
+            if (lim[i].follows_bc && lim[i].node >= 0 && lim[i].node < nc) {
+                follow(lim[i], t);
+                if (lim[i].always) on[i] = 1;   // under the water: held at its head
+            }
         Eigen::VectorXd Hh = Eigen::VectorXd::Zero(nc), storage_vec = Eigen::VectorXd::Zero(nc);
-        bool ok = false; int it = 0;
-        for (; it < max_picard; ++it) {
+        Eigen::VectorXd qstep = qv;
+        bool ok = false; int it = 0, passes = 0;
+        bool settled = nl == 0;
+        for (int pass = 0; pass < (nl > 0 ? 30 : 1); ++pass) {
+        passes = pass + 1;
+        // This pass's equations: every node that is neither prescribed nor held.
+        std::fill(held.begin(), held.end(), 0);
+        for (std::size_t i = 0; i < nl; ++i) {
+            const HeadLimit& L = lim[i];
+            if (!on[i] || L.node < 0 || L.node >= nc || prescribed(L.node) || held[L.node]) continue;
+            held[L.node] = 1;
+            h(L.node) = L.level;
+        }
+        nf = 0;
+        for (int n = 0; n < nc; ++n) feq[n] = (!prescribed(n) && !held[n]) ? nf++ : -1;
+        // A well node held at h_min no longer receives its share of the discharge: what the
+        // ground gives at that head is the hold's own flux.
+        qstep = qv;
+        for (int n = 0; n < nc; ++n) if (held[n]) qstep(n) -= own(n);
+        ok = false; it = 0;
+        // DAMPED PICARD. Across a steep retention curve the full Picard update can overshoot the
+        // front and come back past it, the iteration then cycling instead of converging; when an
+        // update is larger than the one before it, the next is taken at half its length (down to
+        // a tenth). Convergence is judged on the full update, so damping never stops it early.
+        double omega = 1.0, dprev = 1e300;
+        for (; it < iter_cap; ++it) {
             math::SparseMatrixBuilder Ab(nc), Hb(nc);
             Ab.reserve((std::size_t)mesh.element_count * N * N); Hb.reserve((std::size_t)mesh.element_count * N * N);
-            assemble(h, hn, Ab, Hb, storage_vec, water_vol);
+            assemble(h, hn, dts, Ab, Hb, storage_vec, water_vol);
             const math::CsrMatrix A = Ab.build();
             Hh = Hb.build() * h;
             math::SparseMatrixBuilder Affb(std::max(1, nf));   // extract A_ff (free^2)
@@ -248,7 +310,7 @@ UnsaturatedFlowResult unsaturated_flow_impl(
             const math::CsrMatrix Aff = Affb.build();
             Eigen::VectorXd rhs = Eigen::VectorXd::Zero(std::max(1, nf));
             for (int n = 0; n < nc; ++n)
-                if (feq[n] >= 0) rhs(feq[n]) = qv(n) - Hh(n) - storage_vec(n);
+                if (feq[n] >= 0) rhs(feq[n]) = qstep(n) - Hh(n) - storage_vec(n);
             Eigen::VectorXd delta = Eigen::VectorXd::Zero(std::max(1, nf));
             if (nf > 0) {
                 if (solve_factory) { delta = solve_factory(Aff)(rhs); }
@@ -261,19 +323,89 @@ UnsaturatedFlowResult unsaturated_flow_impl(
                 }
             }
             double dmax = 0.0, scale = 1e-30;
+            bool finite = true;
             for (int n = 0; n < nc; ++n)
-                if (feq[n] >= 0) { h(n) += delta(feq[n]); dmax = std::fmax(dmax, std::fabs(delta(feq[n]))); scale = std::fmax(scale, std::fabs(h(n))); }
+                if (feq[n] >= 0) {
+                    dmax = std::fmax(dmax, std::fabs(delta(feq[n]))); scale = std::fmax(scale, std::fabs(h(n)));
+                    finite = finite && std::isfinite(delta(feq[n]));
+                }
+            if (!finite) break;
+            if (dmax > dprev) omega = std::fmax(0.1, 0.5 * omega);
+            dprev = dmax;
+            // And no update moves a head by more than a metre: where the ground has just dried, its
+            // capacity is near zero and the linearised step can be hundreds of metres long (measured:
+            // 1142 m, the drain beside it having asked for 6). A metre at a time, the iteration walks
+            // the front there instead of jumping past it.
+            const double step_scale = std::fmin(omega, 1.0 / std::fmax(dmax, 1e-300));
+            for (int n = 0; n < nc; ++n)
+                if (feq[n] >= 0) h(n) += step_scale * delta(feq[n]);
             if (dmax < picard_tol * scale + 1e-12) { ok = true; ++it; break; }
         }
         R.max_picard_iters = std::max(R.max_picard_iters, it);
-        if (!ok) R.converged = false;
-        // Net boundary water discharge = reaction sum R = sum_{prescribed}(storage_i + (H.h)_i)
-        // (pos = inflow). Global balance: sum R = sum_all storage = d(total store)/dt -> matches
-        // int dtheta in the time integral (mass conservation).
-        double infl = 0.0;
-        for (int n = 0; n < nc; ++n) if (prescribed(n)) infl += storage_vec(n) + Hh(n);
-        R.darcy_influx.push_back(infl);
-        R.times.push_back(t); R.head.push_back(h); R.saturation.push_back(nodal_sat(h));
+        if (!ok || nl == 0) break;
+        // The water each held node exchanges with the outside (positive = into the ground), and
+        // the set that follows from it -- the steady flow solve's rule, step by step.
+        double qscale = 1e-30;
+        for (int n = 0; n < nc; ++n) qscale = std::fmax(qscale, std::fabs(Hh(n)) + std::fabs(storage_vec(n)));
+        const double qtol = 1e-9 * qscale;
+        bool changed = false;
+        for (std::size_t i = 0; i < nl; ++i) {
+            const HeadLimit& L = lim[i];
+            if (L.node < 0 || L.node >= nc || prescribed(L.node) || L.always) continue;
+            const int n = L.node;
+            const double htol = 1e-9 * std::fmax(1.0, std::fabs(L.level));
+            const double react = storage_vec(n) + Hh(n) - qstep(n);
+            if (!on[i]) {
+                const bool binds = L.from_above ? h(n) > L.level + htol : h(n) < L.level - htol;
+                if (binds) { on[i] = 1; changed = true; }
+            } else if (L.from_above) {
+                if (react > qtol) { on[i] = 0; changed = true; }          // it would feed water in
+            } else if (-react >= std::fabs(own(n)) - qtol) {
+                on[i] = 0; changed = true;                                // the ground supplies the well again
+            }
+        }
+        if (!changed) { settled = true; break; }
+        }   // active-set passes
+        R.max_limit_passes = std::max(R.max_limit_passes, passes);
+        if (!ok) return false;
+        if (!settled) R.limits_settled = false;
+        // Net boundary water discharge = reaction sum R = sum_{prescribed, held}(storage_i +
+        // (H.h)_i - q_i) (pos = inflow). Global balance: sum R + sum q = sum_all storage =
+        // d(total store)/dt -> matches int dtheta in the time integral (mass conservation).
+        infl = 0.0;
+        for (int n = 0; n < nc; ++n)
+            if (prescribed(n) || held[n]) infl += storage_vec(n) + Hh(n) - (held[n] ? qstep(n) : 0.0);
+        return true;
+    };
+
+    for (int step = 0; step < nsteps; ++step) {
+        const double t0 = step * dt;
+        // A STEP THAT DOES NOT CONVERGE IS SPLIT. A wetting or drying front crossing a steep
+        // retention curve within one step is the usual cause, and halving the step until the
+        // front moves less in each part is what a user would do by hand -- asked to, instead,
+        // with "use more, smaller time steps". Up to 512 parts (measured: a pit in the default
+        // sand, run in 50-day steps, needs them and then matches the steady flow to 0.8 mm); the
+        // step is then reported as one, at its end, with its time-averaged boundary inflow.
+        const Eigen::VectorXd h_start = h;
+        const std::vector<char> on_start = on;
+        bool done = false;
+        double infl_avg = 0.0;
+        for (int parts = 1; parts <= 512 && !done; parts *= 2) {
+            h = h_start; on = on_start;
+            bool all = true;
+            infl_avg = 0.0;
+            for (int p = 0; p < parts && all; ++p) {
+                // A split step is a hard one: its parts are given four times the iterations.
+                all = one_step(t0 + p * dt / parts, dt / parts, parts > 1 ? 4 * max_picard : max_picard);
+                infl_avg += infl / parts;
+            }
+            done = all;
+            if (done && parts > 1) R.split_steps += 1;
+        }
+        if (!done) R.converged = false;
+        if (nl > 0) R.held = held;
+        R.darcy_influx.push_back(infl_avg);
+        R.times.push_back(t0 + dt); R.head.push_back(h); R.saturation.push_back(nodal_sat(h));
         R.water_volume.push_back(water_vol);
         if (!R.converged) break;
     }
@@ -287,12 +419,12 @@ UnsaturatedFlowResult solve_transient_unsaturated_flow(
     const std::vector<WaterRetention>& retention, const std::vector<char>& is_prescribed,
     const HeadBoundary& head_bc, const std::vector<double>& initial_head, double dt, int nsteps,
     const std::vector<double>* flux, const TransientFlowSolveFactory& solve_factory,
-    int max_picard, double picard_tol) {
+    int max_picard, double picard_tol, const std::vector<HeadLimit>* limits) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::unsaturated_flow_impl<Tri15Element>(mesh, perm, porosity, ss_sat, retention,
-            is_prescribed, head_bc, initial_head, flux, dt, nsteps, solve_factory, max_picard, picard_tol);
+            is_prescribed, head_bc, initial_head, flux, dt, nsteps, solve_factory, max_picard, picard_tol, limits);
     return detail::unsaturated_flow_impl<Tri6Element>(mesh, perm, porosity, ss_sat, retention,
-        is_prescribed, head_bc, initial_head, flux, dt, nsteps, solve_factory, max_picard, picard_tol);
+        is_prescribed, head_bc, initial_head, flux, dt, nsteps, solve_factory, max_picard, picard_tol, limits);
 }
 
 }  // namespace katai::core

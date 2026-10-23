@@ -21,6 +21,14 @@
 //       from the interaction.
 //   (6) Moment plateau + diagram: the capped Gauss M expand to the stations by Lagrange.
 //   (7) tri15 (5-node plate): the same onset + saturation pins.
+//
+// verify: KV-STR-017
+//   oracle:   closed_form
+//   source:   the M-N interaction of a plate hinge, |N|/Np + |M|/Mp <= 1 (KATAI 2D input contract, docs/k2d-format.md, plates[i].elastoplastic / Mp / Np); for a simply supported beam under a central load the onset P_lim = 2 Mp / s_g at the critical stress point, s_g its distance from the support
+//   locator:  the return map against a brute-force nearest point of the diamond (energy norm); the BVP onset bracket at 0.9 / 1.1 P_lim; the saturated Gauss moment at 1.5 P_lim; the interaction plateau Mp (1 - T/Np) under an axial pre-tension T = Np/2
+//   quantity: plastic state below and above the onset [-]; Gauss moment at saturation [kNm/m]; the M-N point at the hinge [-]
+//   expected: no plastic state at 0.9 P_lim (bit zero), a hinge at 1.1 P_lim, |M| = Mp at saturation, the hinge on the diamond under the pre-tension; the same on 5-node plates
+//   band:     1e-9 relative on the saturated moment and on the diamond (a clamp, not an approximation)
 #include <katai/analysis/nonlinear_solver.hpp>
 #include <katai/analysis/structural_forces.hpp>
 #include <katai/fem/assembly/dof_map.hpp>

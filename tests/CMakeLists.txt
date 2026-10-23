@@ -61,6 +61,15 @@ katai_add_test(test_geometry2d katai::geometry)     # planar arrangement: geomet
 katai_add_test(test_model_mesh katai::jobs katai::mesh katai::model)  # project polygon -> FE mesh (katai/jobs/mesh_builder.hpp)
 katai_add_test(test_mesh_multi_region katai::jobs katai::mesh katai::model)  # regions that share, touch or overlap one another mesh as one conforming partition
 katai_add_test(test_region_edit katai::jobs katai::mesh katai::model)  # close a region against existing ones, split regions with a line, keep phase flags aligned
+katai_add_test(test_project_edit katai::model)  # KV-GEO-004: deleting / splitting an object or a material = the project built without it, in every phase setting
+katai_add_test(test_soft_soil_consolidation katai::jobs katai::mesh katai::model katai::analysis)  # KV-CON-005: a Soft Soil clay consolidating under a fill = an independent 1-D finite-difference column
+katai_add_test(test_axisym_safety katai::jobs katai::mesh katai::model katai::analysis)  # KV-FND-017: a factor of safety in axisymmetry (circular footing on Tresca clay) = the collapse multiplier by loading
+katai_add_test(test_axisym_interface katai::jobs katai::mesh katai::model katai::analysis)  # KV-STR-016: an interface in axisymmetry (a pile shaft) carries c_i a H per radian at full slip
+katai_add_test(test_axisym_excavation katai::jobs katai::mesh katai::model katai::analysis)  # KV-EXC-003: excavation in axisymmetry = 1-D closed form; a pit = the geometry loaded without it (elastic path independence)
+katai_add_test(test_sliding_block_dynamic katai::jobs katai::mesh katai::model katai::analysis)  # KV-DYN-004: permanent slip of a block on a frictional joint under an acceleration pulse = Newmark (1965)
+katai_add_test(test_permeability_change katai::jobs katai::mesh katai::model katai::analysis)  # KV-CON-006: consolidation with ck (log10 k/k0 = de/ck) = an independent 1-D column
+katai_add_test(test_infinite_slope_stress katai::jobs katai::mesh katai::model katai::analysis)  # KV-SLP-004: initial stresses on a slope (gravity loading, K0 falling back) = the infinite slope
+katai_add_test(test_unicode_paths katai::io katai::model katai::analysis)  # a project and its results under a path with letters outside ASCII; a save replaces the file whole or not at all
 katai_add_test(test_plate_mesh katai::jobs katai::mesh katai::model)  # regression: a structural line does not delete the mesh (outline separation)
 katai_add_test(test_mesh_domain katai::jobs katai::mesh katai::model)  # mesh triangles must NOT spill outside the domain (load/structure/non-convex)
 katai_add_test(test_mesh_quality_signal katai::jobs katai::mesh katai::model)  # KV-DIA-002: a mesh says whether it reached its own quality bound. Ruppert guarantees the angle, but the loop carries a step cap and the valve used to open in silence -- the K2D-A012 argument, applied to the mesher
@@ -114,6 +123,13 @@ katai_add_test(test_anchor_mesh_repro katai::jobs katai::mesh katai::analysis ka
 katai_add_test(test_constitutive katai::jobs katai::mesh katai::analysis katai::model)  # the GUI constitutive model is genuinely in effect, LE/MC/HS
 katai_add_test(test_hoek_brown katai::materials)   # Hoek-Brown (rock): the closed forms of Hoek, Carranza-Torres & Corkum (2002), the envelope, and the Tresca degeneration against the verified MC return (KV-CST-014)
 katai_add_test(test_hoek_brown_tunnel katai::jobs katai::mesh katai::analysis katai::model)  # a tunnel unloaded into Hoek-Brown rock, against the closed form (KV-CST-016): the case that found the missing axisymmetric branch, the elastic tangent and the retry that never reached it
+katai_add_test(test_hoek_brown_safety katai::jobs katai::mesh katai::analysis katai::model katai::materials)  # KV-CST-021: Hoek-Brown strength reduction = the reduced tangent construction; a rock block's factor of safety
+katai_add_test(test_diagnostic_codes katai::jobs katai::mesh katai::model katai::analysis)  # every documented diagnostic code is said when its condition holds, and not said when it does not
+katai_add_test(test_transient_flow_conditions katai::jobs katai::mesh katai::model katai::analysis)  # KV-FLW-008: a rising water boundary (i2erfc), a drawdown below the surface (seepage face, Terzaghi), a well's h_min and a one-sided drain (Darcy)
+katai_add_test(test_drawdown_pore_handover katai::jobs katai::mesh katai::model katai::analysis)  # KV-FLW-009: a drawdown's pore pressures reach the deformation; the top settles by the effective stress added
+katai_add_test(test_line_contraction_ring katai::jobs katai::mesh katai::model katai::analysis)  # KV-STR-019: a lining that contracts in elastic ground = the thick cylinder with the ring's hoop equilibrium
+katai_add_test(test_plate_section_change katai::jobs katai::mesh katai::model katai::analysis)  # KV-STR-020: a plate that changes its section keeps the force it carries; the new section takes what comes after
+katai_add_test(test_region_material_change katai::jobs katai::mesh katai::model katai::analysis)  # KV-CST-022: a region that changes its material keeps its stresses; the new material takes the load after
 katai_add_test(test_hoek_brown_gui katai::jobs katai::mesh katai::analysis katai::model)  # Hoek-Brown from a .k2d: a confined specimen fails ON the generalised Hoek-Brown envelope, at two confinements (KV-CST-015)
 katai_add_test(test_axisym_gui katai::jobs katai::mesh katai::analysis katai::model)  # Axisymmetric GUI path: K0 + r-weighted gravity/traction + radial hoop
 katai_add_test(test_axisym_water katai::jobs katai::mesh katai::analysis katai::model katai::fem katai::geometry)  # Water table in axisymmetric mode: the K0 equilibrium identity and the HOOP pore term (KV-CST-013)
@@ -430,6 +446,8 @@ endif()
 # replaces it with its own average as soon as it has one.
 set(_katai_slow_tests
   test_hs_footing 890             test_phase_numerics_009 781
+  test_axisym_safety 400          test_sliding_block_dynamic 30
+  test_transient_flow_conditions 90
   test_no_silent_drop_tension_cutoff_ignored 469  test_slope_fos_convergence 535
   test_tolerance_independence 409 test_phase_numerics_008 401
   test_hs_axisym 317              test_input_corpus_kv-cst-012 306

@@ -166,6 +166,15 @@ struct SolveResult {
     Eigen::VectorXd disp_total;
     NodalStressField stress;                   // nodal EFFECTIVE [sxx, syy, sxy] (pore on rhs)
     std::vector<double> pore;                  // nodal pore pressure u >= 0 (hydrostatic), size node_count
+    // The nodal total head [m] at the end of a groundwater-flow phase (size node_count), suction
+    // included where the ground is unsaturated -- which `pore`, a pressure clipped at zero, cannot
+    // carry. A transient flow phase starts from it. Empty after any other phase.
+    std::vector<double> flow_head;
+    // Whether `flow_head` is the end of a TRANSIENT flow (set by a transient flow phase and by a
+    // phase that took one over). Only such a head is taken over by the next phase that reads its
+    // pore pressures from a flow: a steady flow is solved again on that phase's own water, which
+    // may have moved (each stage of an excavation lowers it).
+    bool flow_head_transient = false;
     bool ok = false;
     std::string message;
     double max_disp = 0.0;
@@ -224,8 +233,8 @@ struct SolveResult {
     // pressure the phase was set up in -- the water table or the flow field -- and it is what the
     // driver writes there for every phase, so without this field the pressure the phase actually
     // COMPUTED existed only as a maximum per time step: the engineer could see that something was
-    // still draining, but not where. In-memory result, like `reaction`: results_io does not
-    // persist it (a restored result is for viewing, and this one is re-computed by re-running).
+    // still draining, but not where. Written to `.res` since v11, so a reopened result shows the
+    // pressure the phase computed, not the hydrostatic part alone.
     std::vector<double> excess_pore;
     // WHY the consolidation march ended, when it was asked to end on a state rather than on a time
     // interval (ConsolidationStop above). `consol_stop` is what was ASKED for; `consol_stop_met`

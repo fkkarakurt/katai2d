@@ -25,6 +25,16 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace api = katai::api;
 
 namespace {
@@ -213,6 +223,10 @@ int cmd_info() {
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    // The process code page is UTF-8 (cmake/utf8.manifest); so is what this program prints.
+    SetConsoleOutputCP(CP_UTF8);
+#endif
     if (argc < 2) return usage();
     const std::string cmd = argv[1];
     if (cmd == "info") return argc == 2 ? cmd_info() : usage();

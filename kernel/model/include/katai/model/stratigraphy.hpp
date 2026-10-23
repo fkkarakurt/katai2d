@@ -204,6 +204,29 @@ inline bool apply_stratigraphy(Project& pr, std::string* message = nullptr) {
     const StratigraphyResult R = stratigraphy_from_boreholes(pr);
     if (message) *message = R.message;
     if (!R.ok) return false;
+    // The phases hold their region settings by index (activation, dry, water, material). When the
+    // new ground has the same regions in the same order -- the same layers, re-levelled -- those
+    // settings still describe the same regions and are kept. Otherwise they would land on other
+    // regions, so they are cleared, and the message says so: an excavation that silently moved
+    // to another layer is worse than one that has to be clicked again.
+    bool same_regions = R.polygons.size() == pr.polygons.size();
+    for (size_t i = 0; same_regions && i < R.polygons.size(); ++i)
+        same_regions = R.polygons[i].material == pr.polygons[i].material;
+    if (!same_regions) {
+        int cleared = 0;
+        auto clear = [&cleared](Phase& ph) {
+            const bool had = !ph.poly_active.empty() || !ph.poly_dry.empty() || !ph.poly_water.empty() ||
+                             !ph.poly_water_level.empty() || !ph.poly_material.empty();
+            ph.poly_active.clear(); ph.poly_dry.clear(); ph.poly_water.clear();
+            ph.poly_water_level.clear(); ph.poly_material.clear();
+            cleared += had ? 1 : 0;
+        };
+        clear(pr.initial);
+        for (auto& ph : pr.phases) clear(ph);
+        if (cleared > 0 && message)
+            *message += " The regions changed, so the region settings of " + std::to_string(cleared) +
+                        " phase(s) (excavation, dry, water, material) were reset: set them again.";
+    }
     pr.polygons = R.polygons;
     if (R.has_water) {
         pr.has_water = true;

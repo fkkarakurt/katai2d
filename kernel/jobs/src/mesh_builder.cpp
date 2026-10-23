@@ -16,6 +16,18 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
     MeshResult R;
     if (pr.polygons.empty()) { R.message = "No soil polygons to mesh."; return R; }
     if (max_area <= 0.0) { R.message = "Element size must be positive."; return R; }
+    // A REGION WITHOUT A MATERIAL is refused before it is meshed. Its elements used to take
+    // material 0 -- the first in the list -- in silence, so a region drawn and never assigned was
+    // solved as whatever soil came first.
+    for (const auto& P : pr.polygons)
+        if (P.material < 0 || P.material >= (int)pr.materials.size()) {
+            R.message = "Soil region \"" + P.name + "\" has no material" +
+                        (P.material >= 0 ? " (it names material " + std::to_string(P.material + 1) +
+                                               " of " + std::to_string(pr.materials.size()) + ")"
+                                         : std::string()) +
+                        ": assign one before meshing.";
+            return R;
+        }
 
     // 1) Build a CLEAN planar straight-line graph (PSLG). Raw input segments are the soil polygon
     // edges plus the internal lines the mesh has to follow (plates, geogrids, interfaces, line

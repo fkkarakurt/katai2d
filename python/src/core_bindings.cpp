@@ -487,6 +487,8 @@ NB_MODULE(_core, m) {
                 "1 = the whole stage")
         .def_rw("ignore_undrained", &api::Phase::ignore_undrained,
                 "treat Undrained (A)/(B) materials as drained in this phase")
+        .def_rw("head_ramp", &api::Phase::head_ramp,
+                "transient flow: the Head edges reach this phase's heads linearly over its duration")
         .def_rw("reset_displacements", &api::Phase::reset_displacements,
                 "the total displacement reported from this phase on counts from its start")
         .def_rw("reset_small_strain", &api::Phase::reset_small_strain,

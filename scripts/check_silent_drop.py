@@ -133,6 +133,53 @@ def classify(lines: list[str], idx: int, loop_head: int) -> tuple[str, str]:
     return "SILENT", line.strip()
 
 
+# --- every documented code is raised, and said by a test ---------------------------------------
+# A diagnostic code that no test triggers is a statement nobody has checked is ever made: the
+# condition guarding it can rot and the run then says nothing, which is the failure the code
+# exists to prevent. The codes below are raised by the numerics of a hard run (an increment kept
+# at its best iterate, a stiffness read from a fixed strain increment) or on a path no front end
+# reaches without a flow field computed outside the run; they are listed with the reason, and the
+# list only shrinks.
+CODE = re.compile(r"K2D-[A-Z][0-9]{3}")
+UNTESTED_CODES = {
+    "K2D-A011": "the legacy hand-over of an external flow field; staged phases solve their own flow",
+    "K2D-A019": "raised only when Newton stagnates below 1e-3 of the load scale, a numerical event",
+    "K2D-A032": "raised only when the small-strain stiffness falls back to a fixed strain increment",
+}
+TABLE_ROW = re.compile(r"\|\s*`(K2D-[A-Z][0-9]{3})`\s*\|\s*(\w+)")
+
+
+def codes_in(globs: tuple[str, ...]) -> set[str]:
+    found: set[str] = set()
+    for g in globs:
+        for f in REPO_ROOT.glob(g):
+            found |= set(CODE.findall(f.read_text(encoding="utf-8", errors="replace")))
+    return found
+
+
+def check_codes() -> list[str]:
+    doc = (REPO_ROOT / "docs/diagnostics.md").read_text(encoding="utf-8")
+    documented: set[str] = set()
+    retired: set[str] = set()
+    for line in doc.splitlines():
+        m = TABLE_ROW.match(line)
+        if m:
+            (retired if m.group(2) == "retired" else documented).add(m.group(1))
+    raised = codes_in(("kernel/**/*.hpp", "kernel/**/*.cpp"))
+    tested = codes_in(("tests/*.cpp", "python/tests/*.py"))
+    problems = []
+    for c in sorted(documented - raised):
+        problems.append(f"{c} is documented but raised nowhere in kernel/ -- retire it in the table")
+    for c in sorted(raised - documented - retired):
+        problems.append(f"{c} is raised in kernel/ but not documented in docs/diagnostics.md")
+    for c in sorted((documented & raised) - tested - set(UNTESTED_CODES)):
+        problems.append(f"{c} is raised but no test triggers it -- add a case to "
+                        "tests/test_diagnostic_codes.cpp (the condition, and the same model without it)")
+    for c in sorted(set(UNTESTED_CODES) & tested):
+        problems.append(f"{c} is now tested -- remove it from UNTESTED_CODES so the list shrinks")
+    return problems
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--list", action="store_true", help="print every classified continue")
@@ -175,6 +222,7 @@ def main() -> int:
                     "nothing, warn(R, ...) when it is used differently than drawn -- or, if "
                     "nothing is lost, say why with a 'silent-drop-ok: <reason>' comment.")
 
+    failures += check_codes()
     if failures:
         print("check_silent_drop: FAILED\n")
         for f in failures:
@@ -183,7 +231,8 @@ def main() -> int:
     print(f"check_silent_drop: OK -- {counts['selection']} selection, "
           f"{counts['diagnosed']} diagnosed, {counts['annotated']} annotated, "
           f"{counts['scoped-out']} in loops declared out of scope; "
-          "0 silent drops in the driver's build loops.")
+          "0 silent drops in the driver's build loops; every documented code raised and "
+          f"tested ({len(UNTESTED_CODES)} excepted, each with its reason).")
     return 0
 
 

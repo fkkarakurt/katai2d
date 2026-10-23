@@ -83,6 +83,32 @@ std::vector<katai::app::SolveResult> build_phases() {
             R.stress.stress[n] = Eigen::Vector3d(-10.5 * n - k, -20.25 * n, 3.125 * n);
         R.pore = {0, 1.5, 3, 4.5, 6, 7.5};
         if (k == 1) R.active = {0};   // excavated element
+        // v11: the rest of what the run reported. The total displacement is the phase sequence's
+        // own sum (the initial phase counts for nothing, so it is NOT the sum of the stored
+        // increments), the lower-bound flag and the design approach change what `fos` means,
+        // and a diagnostic qualifies the numbers it sits beside.
+        R.disp_total = Eigen::VectorXd::LinSpaced(12, 0.25 * k, -0.125);
+        R.fos_lower_bound = k == 1;
+        R.design_approach = k == 1 ? katai::core::DesignApproach::EC7_DA3 : katai::core::DesignApproach::None;
+        if (k == 1) {
+            R.diagnostics.push_back({katai::core::DiagnosticSeverity::Warning, "K2D-A031", "Wall",
+                                     "6-noded elements beside a wall overstate the factor."});
+            R.diagnostics.push_back({katai::core::DiagnosticSeverity::Note, "K2D-A018", "", "structures \"take part\""});
+            R.excess_pore = {0, -1.5, -3.25, -4.5, -6, -7.75};
+            R.consol_time = {0.0, 0.5, 2.0};
+            R.consol_settlement = {0.0, 0.0125, 0.03};
+            R.consol_excess_pore = {9.5, 4.25, 1.0};
+            R.saturation = {1, 1, 0.875, 0.75, 1, 1};
+            R.reaction = Eigen::VectorXd::LinSpaced(12, -3.0, 4.5);
+            R.dyn_time = {0.0, 0.01, 0.02};
+            R.dyn_surface_ax = {0.0, 0.5, -0.25};
+            R.dyn_period = {0.1, 0.2};
+            R.dyn_response_sa = {2.5, 3.0};
+            R.dyn_design_sa = {2.0, 2.75};
+            R.dyn_design_sa_ec8 = {1.5, 2.25};
+            R.dyn_peak_surface_a = 0.5;
+            R.dyn_model_f1 = 2.875;
+        }
     }
     katai::app::StructForce sf;
     sf.name = "Wall"; sf.kind = 0; sf.yielded = true;
@@ -128,6 +154,24 @@ bool same(const katai::app::SolveResult& a, const katai::app::SolveResult& b) {
         a.consol_pore_reference != b.consol_pore_reference ||
         a.consol_degree_reached != b.consol_degree_reached) return false;
     if (a.disp.size() != b.disp.size() || (a.disp - b.disp).cwiseAbs().maxCoeff() != 0.0) return false;
+    // v11
+    if (a.disp_total.size() != b.disp_total.size() ||
+        (a.disp_total.size() > 0 && (a.disp_total - b.disp_total).cwiseAbs().maxCoeff() != 0.0)) return false;
+    if (a.fos_lower_bound != b.fos_lower_bound || a.design_approach != b.design_approach) return false;
+    if (a.diagnostics.size() != b.diagnostics.size()) return false;
+    for (size_t i = 0; i < a.diagnostics.size(); ++i) {
+        const auto& x = a.diagnostics[i]; const auto& y = b.diagnostics[i];
+        if (x.severity != y.severity || x.code != y.code || x.subject != y.subject || x.message != y.message)
+            return false;
+    }
+    if (a.excess_pore != b.excess_pore || a.consol_time != b.consol_time ||
+        a.consol_settlement != b.consol_settlement || a.consol_excess_pore != b.consol_excess_pore ||
+        a.saturation != b.saturation || a.dyn_time != b.dyn_time || a.dyn_surface_ax != b.dyn_surface_ax ||
+        a.dyn_period != b.dyn_period || a.dyn_response_sa != b.dyn_response_sa ||
+        a.dyn_design_sa != b.dyn_design_sa || a.dyn_design_sa_ec8 != b.dyn_design_sa_ec8 ||
+        a.dyn_peak_surface_a != b.dyn_peak_surface_a || a.dyn_model_f1 != b.dyn_model_f1) return false;
+    if (a.reaction.size() != b.reaction.size() ||
+        (a.reaction.size() > 0 && (a.reaction - b.reaction).cwiseAbs().maxCoeff() != 0.0)) return false;
     if (a.stress.stress.size() != b.stress.stress.size()) return false;
     for (size_t i = 0; i < a.stress.stress.size(); ++i)
         if (a.stress.stress[i] != b.stress.stress[i]) return false;
@@ -206,12 +250,37 @@ int main() {
     check(!katai::app::load_results(path, hash, cut, &err) && !err.empty(),
           "truncated file rejected");
 
-    // A version 9 file is the same bytes without the v10 field, the last double of each phase
-    // record. Reading one must not invent the ratio the step stopped on -- it comes back NaN,
-    // "not recorded" -- and every other field must come back exactly as before.
+    // A version 10 file has none of the v11 fields: they read back empty / false / None, and
+    // everything a v10 file did hold comes back exactly.
     {
         err.clear();
-        check(katai::app::save_results(path, hash, phases, &err), "results saved again");
+        check(katai::app::save_results(path, hash, phases, &err, 10), "results saved in the v10 layout");
+        std::vector<katai::app::SolveResult> v10;
+        check(katai::app::load_results(path, hash, v10, &err) && v10.size() == 2, "a version 10 file still loads");
+        if (v10.size() == 2) {
+            bool rest_same = true;
+            for (int k = 0; k < 2; ++k) {
+                auto expect = phases[k];
+                expect.disp_total.resize(0); expect.fos_lower_bound = false;
+                expect.design_approach = katai::core::DesignApproach::None;
+                expect.diagnostics.clear(); expect.excess_pore.clear(); expect.consol_time.clear();
+                expect.consol_settlement.clear(); expect.consol_excess_pore.clear(); expect.saturation.clear();
+                expect.reaction.resize(0); expect.dyn_time.clear(); expect.dyn_surface_ax.clear();
+                expect.dyn_period.clear(); expect.dyn_response_sa.clear(); expect.dyn_design_sa.clear();
+                expect.dyn_design_sa_ec8.clear(); expect.dyn_peak_surface_a = 0.0; expect.dyn_model_f1 = 0.0;
+                rest_same = rest_same && same(expect, v10[k]);
+            }
+            check(rest_same && !v10[1].fos_lower_bound && v10[1].diagnostics.empty(),
+                  "...without the v11 fields: no lower-bound flag, no diagnostics, no total -- and the rest exact");
+        }
+    }
+
+    // A version 9 file is the same bytes without the v10 field, the last double of each phase
+    // record (of the v10 layout). Reading one must not invent the ratio the step stopped on -- it
+    // comes back NaN, "not recorded" -- and every other field must come back exactly as before.
+    {
+        err.clear();
+        check(katai::app::save_results(path, hash, phases, &err, 10), "results saved again (v10 layout)");
         std::string data;
         {
             std::ifstream in(path, std::ios::binary);
@@ -246,6 +315,13 @@ int main() {
             for (int k = 0; k < 2; ++k) {
                 auto expect = phases[k];
                 expect.convergence.global_error = old[k].convergence.global_error;
+                expect.disp_total.resize(0); expect.fos_lower_bound = false;
+                expect.design_approach = katai::core::DesignApproach::None;
+                expect.diagnostics.clear(); expect.excess_pore.clear(); expect.consol_time.clear();
+                expect.consol_settlement.clear(); expect.consol_excess_pore.clear(); expect.saturation.clear();
+                expect.reaction.resize(0); expect.dyn_time.clear(); expect.dyn_surface_ax.clear();
+                expect.dyn_period.clear(); expect.dyn_response_sa.clear(); expect.dyn_design_sa.clear();
+                expect.dyn_design_sa_ec8.clear(); expect.dyn_peak_surface_a = 0.0; expect.dyn_model_f1 = 0.0;
                 rest_same = rest_same && same(expect, old[k]);
             }
             check(rest_same, "...and every other field is unchanged");

@@ -839,6 +839,42 @@ void test_nonlinear_dynamic_gui() {
         check(rel > 0.01, "MC nonlinear DEPARTS from linear-elastic (the soil genuinely yielded during shaking)");
     }
 
+    // A TIME STEP THAT DOES NOT CONVERGE ENDS THE PHASE AS FAILED. The phase's own controls are read
+    // (they were not, until 2026-10-22): one Newton iteration to a 1e-14 residual cannot be met by
+    // a yielding soil, so the phase stops -- and says so with ok = false, the time it reached as its
+    // load fraction, and a following phase that is not calculated. It used to return ok = true with
+    // "STOPPED early" in the message only, and the phases after it ran on.
+    {
+        m::Project pr;
+        m::Material s; s.model = m::SoilModel::MohrCoulomb;
+        s.E = E; s.nu = nu; s.gamma_unsat = gamma; s.gamma_sat = gamma; s.e_init = 0.5;
+        s.c = 20.0; s.phi = 25.0; s.psi = 0.0;
+        pr.materials.push_back(s);
+        m::SoilPolygon P; P.material = 0;
+        P.x = {0, W, W, 0}; P.y = {0, 0, H, H};
+        P.edge_bc = {(int)m::BCType::FullyFixed, (int)m::BCType::VerticallyFixed,
+                     (int)m::BCType::Free, (int)m::BCType::VerticallyFixed};
+        pr.polygons.push_back(P); pr.has_water = false;
+        m::Phase p; p.type = m::PhaseType::Dynamic; p.name = "Quake";
+        p.seismic_wave = m::SeismicWave::Harmonic; p.seismic_amp = 4.0; p.seismic_freq = f1;
+        p.damping_ratio = xi; p.rayleigh_f1 = f1; p.rayleigh_f2 = 3 * f1;
+        p.duration = 1.0; p.time_steps = 100;
+        p.dynamic_nonlinear = true;
+        p.max_iterations = 1; p.tolerance = 1e-14;
+        pr.phases.push_back(p);
+        m::Phase after; after.name = "After"; after.type = m::PhaseType::Plastic;
+        pr.phases.push_back(after);
+        const auto M = katai::app::mesh_from_project(pr, 1.0, 6);
+        const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
+        const bool stopped = res.size() == 2 && !res[1].ok;
+        if (res.size() >= 2) std::printf("   %s\n", res[1].message.c_str());
+        check(stopped, "a dynamic phase whose time step does not converge is reported FAILED, and the phase after it is not calculated");
+        if (stopped)
+            check(res[1].load_factor < 1.0 && res[1].message.find("STOPPED at step") != std::string::npos &&
+                      res[1].disp.size() == 2 * (Eigen::Index)res[1].mesh.node_count,
+                  "...with the time it reached as its fraction, and its fields up to then viewable");
+    }
+
     // Seismic effective-stress recovery: the nonlinear path carries the committed stress through the
     // shaking (parent K0/gravity stress + plastic evolution) and reports the post-earthquake nodal field;
     // the linear path solves about a zero-stress datum, so it leaves the field zero (deferred).
@@ -853,6 +889,53 @@ void test_nonlinear_dynamic_gui() {
         check(s_nl > 1.0, "NONLINEAR: seismic effective-stress field recovered (post-earthquake state)");
         check(s_lin < 1e-9, "LINEAR: stress recovery deferred (zero -- it solves about a zero-stress datum)");
     }
+}
+
+// UNDRAINED GROUND IN THE LINEAR PATH. The linear dynamic path assembled the skeleton's own (E, nu)
+// for an Undrained (A) soil, so a saturated undrained clay shook as if it were drained (until
+// 2026-10-22). Oracle (independent path): the NONLINEAR path solves with the material models
+// themselves, whose undrained stiffness is D' + (Kw/n) m m^T -- the static solver's undrained
+// machinery, not the linear path's (E, nu) conversion. For an elastic soil the two must agree; the
+// block has free sides, so its response is not pure shear and the pore fluid's bulk stiffness shows:
+// the drained block must answer differently, or the comparison could not tell the two apart.
+void test_undrained_linear_dynamic_gui() {
+    std::printf("-- An undrained soil in a linear dynamic phase carries its pore fluid --\n");
+    constexpr double W = 16.0, H = 8.0, E = 20000.0, nu = 0.25, gamma = 18.0;
+    auto run = [&](m::Drainage dr, bool nonlinear) -> katai::app::SolveResult {
+        m::Project pr;
+        m::Material s; s.model = m::SoilModel::LinearElastic; s.drainage = dr;
+        s.E = E; s.nu = nu; s.gamma_unsat = gamma; s.gamma_sat = gamma; s.e_init = 0.5;
+        pr.materials.push_back(s);
+        m::SoilPolygon P; P.material = 0;
+        P.x = {0, W, W, 0}; P.y = {0, 0, H, H};
+        P.edge_bc = {(int)m::BCType::FullyFixed, (int)m::BCType::Free,
+                     (int)m::BCType::Free, (int)m::BCType::Free};   // a block standing on its base
+        pr.polygons.push_back(P); pr.has_water = false;
+        m::Phase p; p.type = m::PhaseType::Dynamic; p.name = "Quake";
+        p.seismic_wave = m::SeismicWave::Harmonic; p.seismic_amp = 0.5; p.seismic_freq = 3.0;
+        p.damping_ratio = 0.05; p.rayleigh_f1 = 2.0; p.rayleigh_f2 = 10.0;
+        p.duration = 1.0; p.time_steps = 200;
+        p.dynamic_nonlinear = nonlinear;
+        pr.phases.push_back(p);
+        const auto M = katai::app::mesh_from_project(pr, 1.0, 6);
+        if (!M.ok) return {};
+        const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
+        return res.size() == 2 ? res[1] : katai::app::SolveResult{};
+    };
+    const auto und_lin = run(m::Drainage::Undrained, false);
+    const auto und_nl = run(m::Drainage::Undrained, true);
+    const auto dr_lin = run(m::Drainage::Drained, false);
+    check(und_lin.ok && und_nl.ok && dr_lin.ok, "undrained linear, undrained nonlinear and drained linear runs solved");
+    if (!(und_lin.ok && und_nl.ok && dr_lin.ok)) {
+        std::printf("  (%s | %s | %s)\n", und_lin.message.c_str(), und_nl.message.c_str(), dr_lin.message.c_str());
+        return;
+    }
+    const double rel = std::fabs(und_nl.max_disp - und_lin.max_disp) / std::fmax(und_nl.max_disp, 1e-12);
+    const double rel_dr = std::fabs(dr_lin.max_disp - und_nl.max_disp) / std::fmax(und_nl.max_disp, 1e-12);
+    std::printf("  peak |u|: undrained linear %.6e, undrained nonlinear %.6e (rel %.2e); drained linear %.6e (rel %.2e)\n",
+                und_lin.max_disp, und_nl.max_disp, rel, dr_lin.max_disp, rel_dr);
+    check(rel_dr > 0.02, "the drained block answers differently (the comparison can tell the two apart)");
+    check(rel < 0.005, "the linear path's undrained block = the models' own undrained stiffness (nonlinear path)");
 }
 
 // The nonlinear dynamic path RESOLVES the interface slip that the linear path can only MEASURE. This is
@@ -1167,6 +1250,7 @@ int main() {
     test_site_response();
     test_freefield_sides();
     test_nonlinear_dynamic_gui();
+    test_undrained_linear_dynamic_gui();
     test_nonlinear_resolves_slip();
     test_nonlinear_carry_identity();
     test_anchor_envelope_consistency();

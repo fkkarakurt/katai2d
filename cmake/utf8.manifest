@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <!-- The process code page is UTF-8 (Windows 10 version 1903 and later). Every narrow Win32
+       and C runtime call of the executable (the file dialogs, fopen, the streams, getenv, the
+       command line) then reads and writes UTF-8, which is what the rest of the tree passes
+       around. Without it a path with letters outside ASCII came back from the file dialog in the
+       ANSI code page and could not be opened by the kernel, which reads paths as UTF-8.
+       CMake merges this file into the manifest the linker writes. -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

@@ -287,11 +287,11 @@ int main() {
     // envelope while the user believed su was in force.
     probe(base, [&](m::Project& p) { add_rock(p).drainage = m::Drainage::UndrainedB; },
           "materials[4].drainage", E, "Hoek-Brown asked for an undrained shear strength");
-    // And the one that costs a whole analysis type: phi-c reduction has nothing to reduce in a
-    // Hoek-Brown material, so the factor of safety would come out too HIGH rather than merely
-    // imprecise. The baseline's own Safety phase is what this fires on.
-    probe(base, [&](m::Project& p) { add_rock(p); }, "phases[3].type", E,
-          "a Safety phase in a model that contains rock");
+    // A Safety phase in a model with rock is no longer refused: the Hoek-Brown strength is reduced
+    // inside the criterion (the engine's K2D-A037; KV-CST-021). The baseline's own Safety phase is
+    // what the refusal used to fire on, so it is the case that must now pass.
+    probe_accepts(base, [&](m::Project& p) { add_rock(p); }, "phases[3].type",
+                  "a Safety phase in a model that contains rock");
     // Same defect, the other seam: EC7's material-factored approaches divide c' and tan(phi'),
     // which this model has not, so the rock would be solved at CHARACTERISTIC strength under a
     // report that says the design approach was applied.
