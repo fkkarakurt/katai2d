@@ -12,6 +12,8 @@
 // build_structural_carry matches it structure by structure, so that a phase which
 // activates or removes a structure still continues every other one.
 
+#include <array>
+#include <tuple>
 #include <vector>
 
 #include <Eigen/Core>
@@ -77,6 +79,30 @@ inline bool build_structural_init(const StructCarryState& ps, const Structures& 
     return true;
 }
 
+// A JOINT KEEPS THE STRESS IT WAS INSTALLED WITH. Its normal stress is sigma_n0 + k_n du_n, a law
+// of the joint alone, like the soil's stress is a law of its own strain. Until 2026-10-23 the chain
+// carried a joint's slip but every phase rebuilt sigma_n0 from the K0 formula on that phase's
+// geometry, and the difference to the stress the parent was in equilibrium with acted in the phase
+// as a load between wall and ground: an excavation took K0 gamma (depth dug) off the pit face at
+// once, with nothing beside it having moved, and a phase that changed nothing after a wall
+// installed on loaded ground moved the wall (the joint's stress jumped by 48%, KV-STR-021).
+// `begin` is the first joint of a structure in each phase's solver order; per = points per joint.
+template <class Joint>
+inline void gather_sigma_n0(const std::vector<Joint>& joints, std::vector<double>& out) {
+    out.clear();
+    for (const auto& ie : joints) out.insert(out.end(), ie.sigma_n0.begin(), ie.sigma_n0.end());
+}
+template <class Joint>
+inline void carry_sigma_n0(const std::vector<double>& from, size_t parent_begin,
+                           std::vector<Joint>& joints, size_t child_begin, size_t count) {
+    const size_t per = std::tuple_size<decltype(Joint::sigma_n0)>::value;
+    for (size_t j = 0; j < count; ++j) {
+        if ((parent_begin + j + 1) * per > from.size() || child_begin + j >= joints.size()) return;
+        for (size_t q = 0; q < per; ++q)
+            joints[child_begin + j].sigma_n0[q] = from[(parent_begin + j) * per + q];
+    }
+}
+
 // What the carry across a phase boundary did, for the phase to act on and to say.
 struct StructuralCarry {
     bool carried = false;         // the phase starts from the parent's structural state
@@ -116,6 +142,8 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
     // before (build_structural_init checks it), anything else is not.
     if (ps.records.empty()) {
         if (!child_records.empty() || !build_structural_init(ps, structures, dofs, out)) return plan;
+        carry_sigma_n0(ps.interface_sigma_n0, 0, structures.interfaces, 0, structures.interfaces.size());
+        carry_sigma_n0(ps.interface5_sigma_n0, 0, structures.interfaces5, 0, structures.interfaces5.size());
         plan.carried = true;
         plan.full_datum = ps.full_disp;
         structures.fixed_datum = fixed_part(ps.full_disp, dofs);
@@ -211,6 +239,10 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
                        (size_t)iface::kPointCount);
             copy_slice(ps.interface5_slip, p->interfaces5, out.interface5_slip, cr.interfaces5,
                        (size_t)iface::kPointCount5);
+            carry_sigma_n0(ps.interface_sigma_n0, p->interfaces[0], structures.interfaces,
+                           cr.interfaces[0], cr.interfaces[1] - cr.interfaces[0]);
+            carry_sigma_n0(ps.interface5_sigma_n0, p->interfaces5[0], structures.interfaces5,
+                           cr.interfaces5[0], cr.interfaces5[1] - cr.interfaces5[0]);
             copy_slice(ps.embedded_skin_slip, p->skin, out.embedded_skin_slip, cr.skin, 1);
             copy_slice(ps.embedded_foot_slip, p->embedded, out.embedded_foot_slip, cr.embedded, 1);
             copy_slice(ps.plate_plastic, p->plates, out.plate_plastic, cr.plates,

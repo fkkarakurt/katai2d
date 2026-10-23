@@ -129,6 +129,11 @@ struct StructCarryState {
     std::vector<double> anchor_plastic, geogrid_plastic, interface_slip, interface5_slip,
                         embedded_skin_slip, embedded_foot_slip,   // committed plastic state (solver order)
                         plate_plastic, plate5_plastic;            // plate M-N hinge state ([eps_p,kap_p]xGauss)
+    // The normal stress each joint point was installed with (solver order, laid out as the slips).
+    // A joint's stress is that plus what its own opening adds; a phase continues it instead of
+    // rebuilding it from the K0 formula on its own geometry (structural_carry.hpp). Empty = a
+    // state written without it, whose phase then seeds its joints as it builds them.
+    std::vector<double> interface_sigma_n0, interface5_sigma_n0;
     // Per drawn structure (StructCarryRecord), and the datum of every installation cohort still in
     // use, as FULL global-DOF vectors in this phase's numbering. node_dofs = the mesh's own DOFs
     // (2 per node), which keep their numbers from phase to phase. Empty records = a state that

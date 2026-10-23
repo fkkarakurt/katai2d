@@ -6,6 +6,21 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A wall's joint keeps the stress it was installed with
+
+A joint's normal stress is the stress it was installed with plus what its own opening and closing
+add. The phase chain carried a joint's slip but rebuilt that installed stress in every phase from
+the at-rest formula on the phase's own geometry, and the difference to the stress the phase before
+had been in equilibrium with acted as a load between wall and ground: an excavation took
+K0 gamma (depth dug) off the pit face at once with nothing beside it having moved, a wall started
+by gravity loading took the at-rest pressure in its first phase, and a phase that changed nothing
+after a wall installed on loaded ground moved the wall -- its joint's stress jumped by 48% of what
+it carried. The installed stress is now carried from phase to phase (KV-STR-021). The same test
+checks the seed of a wall in place from the start against the closed form: each face takes
+K0 times the overburden of its own side, read a millimetre into it, which a wall in a step of the
+ground surface makes visible (the low face carried the high side's 81 kPa at the toe instead of
+45 before that reading).
+
 ### A Head edge above its water is a seepage face in the steady flow too
 
 The steady groundwater flow held a Head edge at its head over its whole length, so the part of it
@@ -16,7 +31,6 @@ from the same dam drawn with an explicit seepage face. Charny's discharge hid it
 +0.8% now): it holds whatever the face above the tailwater does. The part of a Head edge above its
 water is now a seepage face, as in a transient flow phase and in the steady flow of a staged phase;
 a model whose every Head edge stands above its water is refused with the reason (KV-FLW-010).
-
 
 ### A drawdown in a transient flow phase: seepage faces, wells, drains and a moving water level (`.k2d` v22)
 

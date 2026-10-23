@@ -2037,7 +2037,10 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         // wall drawn along the edge of a pit's region took one overburden for both its faces --
         // which one depended on the side the pit was drawn on, by the half-open point-in-polygon
         // rule: after the excavation the retained face could see the pit's, or the pit face the
-        // retained ground's.
+        // retained ground's. This seed is the stress of a joint in place from the start: one
+        // installed in a later phase takes the ground's stress at its line then (below), and one
+        // carried from the phase before keeps the stress it was installed with (structural_carry.hpp,
+        // KV-STR-021) -- whatever this phase's geometry would make of the formula.
         const auto wall_k0_factor = [&k0_by_mat](const WallSpec& ws, int mat) {
             const double k0 = (mat >= 0 && mat < (int)k0_by_mat.size()) ? k0_by_mat[(size_t)mat] : 0.5;
             return k0 * ws.nx * ws.nx + ws.ny * ws.ny;
@@ -4813,6 +4816,8 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         // records (with the installation cohort each ended up in), the cohorts' datums in this
         // phase's numbering, and the count of mesh DOFs that keep their numbers.
         R.struct_state.records = struct_records;
+        katai::core::gather_sigma_n0(structures.interfaces, R.struct_state.interface_sigma_n0);
+        katai::core::gather_sigma_n0(structures.interfaces5, R.struct_state.interface5_sigma_n0);
         R.struct_state.install_datum = katai::core::install_datum_full(structures, dofs);
         R.struct_state.node_dofs = 2 * mesh.node_count;
         }

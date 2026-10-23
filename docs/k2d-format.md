@@ -328,7 +328,7 @@ A gap wider than the tolerance is real geometry and stays empty.
 | `y1` | num | m | `0` | Start point y |
 | `x2` | num | m | `0` | End point x |
 | `y2` | num | m | `0` | End point y |
-| `iface_pos` | bool | — | `false` | Positive-side interface attached |
+| `iface_pos` | bool | — | `false` | Positive-side interface attached. A wall's joint starts from the at-rest stress of the ground on its own side (K0 times that side's overburden) when it is in place from the start, or from the stress the ground carries at its line when a later phase installs it, and keeps that stress from phase to phase: its normal stress then changes only through its own opening and closing |
 | `iface_neg` | bool | — | `false` | Negative-side interface attached |
 | `iface_material` | int | — | `-1` | Soil material override for the interfaces (−1 = adjacent soil) |
 | `iface_kn` | num | kN/m³ | `0` | Interface normal stiffness (stress per unit relative normal movement). `0` = derived from the adjacent soil: E_oed,i / t_v with G_i = R_inter² G, ν_i = 0.45 and a virtual thickness t_v of 0.1 × the element length. Written only when set |
