@@ -13,6 +13,8 @@
 //              of this surface cannot solve an invalid project.
 //   results    MeshResult / SolveResult (displacements, stresses, pore pressures,
 //              structural diagrams, factor of safety, time series)
+//   checks     liquefaction:: -- the design-code evaluations that run beside the finite
+//              elements (TBDY 2018 Annex 16B liquefaction triggering)
 //
 // What is deliberately ABSENT is the boundary: no stiffness or element state, no
 // Gauss points, no solver iterations, no detail:: namespace, no engine header. A
@@ -30,8 +32,11 @@
 #include <katai/materials/material_model.hpp>   // the undrained-stiffness conversions
 #include <katai/jobs/job.hpp>
 #include <katai/linsolve/direct_solver.hpp>   // backend_name(): result provenance
+#include <katai/analysis/liquefaction.hpp>     // checks: TBDY 2018 Annex 16B triggering
 
 namespace katai::api {
+
+namespace liquefaction = ::katai::core::liquefaction;
 
 // -- build: the input contract's types ------------------------------------------------
 using model::Project;

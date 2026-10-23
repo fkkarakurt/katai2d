@@ -155,6 +155,7 @@ katai_add_test(test_staged_struct_carry katai::jobs katai::mesh katai::analysis 
 katai_add_test(test_interface_seed_carry katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-021: a wall's joint starts from its own side's at-rest stress and keeps it from phase to phase
 katai_add_test(test_coupled_struct_carry katai::jobs katai::mesh katai::analysis katai::model)  # KV-CON-007: a coupled, flow or dynamic phase continues the structures and hands them on
 katai_add_test(test_pseudo_static katai::jobs katai::mesh katai::analysis katai::model)  # KV-SLP-005: pseudo-static kh W, kv W against the closed-form sliding block
+katai_add_test(test_liquefaction_tbdy katai::analysis)  # KV-LIQ-001: TBDY 2018 Annex 16B against the AFAD worked example
 katai_add_test(test_site_response_benchmark katai::jobs katai::mesh katai::analysis katai::model)  # BENCHMARK Wave-1: multi-layer site response vs a layered viscoelastic transfer-matrix solution (independent oracle, Track 7)
 katai_add_test(test_compliant_base katai::jobs katai::mesh katai::analysis katai::model)  # Compliant (absorbing) base vs a layered solution with a radiation BC: uniform |T|~1, rigid-vs-compliant tooth, honest guards
 katai_add_test(test_real_record katai::jobs katai::mesh katai::analysis katai::model)  # Real record: accelerogram input (bit-for-bit wiring) + El Centro 1940 NS (published PGA + spectral shape) + a product run

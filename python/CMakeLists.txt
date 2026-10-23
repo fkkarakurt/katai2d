@@ -231,6 +231,12 @@ set_tests_properties(test_python_wall_in_pieces PROPERTIES
   LABELS "python;analysis;structures"
   ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
 
+add_test(NAME test_python_liquefaction
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/liquefaction.py)
+set_tests_properties(test_python_liquefaction PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
 add_test(NAME test_python_solver_robustness
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/solver_robustness.py)
 set_tests_properties(test_python_solver_robustness PROPERTIES

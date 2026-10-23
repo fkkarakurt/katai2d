@@ -6,6 +6,23 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### Liquefaction triggering by TBDY 2018 Annex 16B
+
+The simplified method of the code's mandatory Annex 16B, one SPT test at a time: the blow count
+corrected to N1,60 (Eq. 16B.1-16B.2, Table 16B.1) and for fines to N1,60f (Eq. 16B.3), the cyclic
+resistance of a magnitude 7.5 earthquake (Eq. 16B.4b) scaled to the design magnitude (Eq. 16B.4c)
+against the cyclic shear stress of the simplified method (Eq. 16B.5-16B.6), and the code's
+condition tau_R / tau_eq >= 1.10 (Eq. 16.3). The screening is the code's: above the water table,
+deeper than 20 m or not a liquefiable soil (16.6.2, 16.6.4) there is nothing to evaluate, and with
+N1,60 >= 30 no evaluation is required (16.6.5). What the annex does not say is not filled in: a
+test whose N1,60f reaches 30 lies beyond the curve of Eq. 16B.4b (undefined at 34, stated for
+N1,60cs < 30 by Youd et al. 2001) and gets no factor. From Python, `katai.liquefaction.spt` for
+one test and `katai.liquefaction.boring` for a log in uniform ground. KV-LIQ-001 reproduces the
+worked example AFAD published for the code (IMO Ankara, 2023): the chain at 6.00 m (C_N 1.141,
+N1,60 21.7, N1,60f 25.6, tau_R 22.3, r_d 0.954, tau_eq 21.3, factor 1.05) and the factors at 3.00,
+9.00 and 10.50 m (0.90, 0.83, 0.79), with one slip of the slides' own arithmetic stated (their
+alpha = 2.739 where the equation gives 2.767, invisible in N1,60f at its printed precision).
+
 ### Pseudo-static acceleration, and the TBDY 2018 verdict on a slope (`.k2d` v23)
 
 A phase states a horizontal and a vertical seismic coefficient (`phases[i].kh`, `kv`), applied as

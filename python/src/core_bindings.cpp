@@ -593,6 +593,42 @@ NB_MODULE(_core, m) {
           "Write a .res results file -- the same writer `katai solve --out` uses. "
           "model_hash = fnv1a64(project_to_json(project)), the staleness stamp every "
           "front end checks before trusting a .res against a project.");
+    // ------------------------------------- checks: liquefaction (TBDY 2018 Annex 16B) --
+    m.def("liquefaction_rod_factor", [](double rod_length) {
+        bool in_table = true;
+        return api::liquefaction::rod_length_factor(rod_length, in_table);
+    }, "rod_length"_a, "C_R of TBDY 2018 Table 16B.1 from the rod length [m].");
+    m.def("liquefaction_tbdy2018",
+          [](double depth, double N, double fines, double sigma_v, double sigma_v_eff, double SDS,
+             double Mw, double CR, double CS, double CB, double CE, bool below_water,
+             bool susceptible, double sigma_v_eff_at_test, double required) {
+              api::liquefaction::SptTest t;
+              t.depth = depth; t.N = N; t.fines = fines;
+              t.sigma_v = sigma_v; t.sigma_v_eff = sigma_v_eff;
+              t.sigma_v_eff_at_test = sigma_v_eff_at_test;
+              t.c.CR = CR; t.c.CS = CS; t.c.CB = CB; t.c.CE = CE;
+              t.below_water = below_water; t.susceptible = susceptible;
+              api::liquefaction::Design d;
+              d.SDS = SDS; d.Mw = Mw; d.required = required;
+              const api::liquefaction::Result r = api::liquefaction::evaluate(t, d);
+              using V = api::liquefaction::Verdict;
+              const char* verdict = r.verdict == V::Safe        ? "safe"
+                                    : r.verdict == V::Triggered ? "triggered"
+                                    : r.verdict == V::NotRequired ? "not required"
+                                    : r.verdict == V::BeyondCurve ? "beyond curve"
+                                                                  : "not susceptible";
+              nb::dict o;
+              o["CN"] = r.CN; o["N160"] = r.N160; o["alpha"] = r.alpha; o["beta"] = r.beta;
+              o["N160f"] = r.N160f; o["CRR75"] = r.CRR75; o["CM"] = r.CM; o["tau_R"] = r.tau_R;
+              o["rd"] = r.rd; o["tau_eq"] = r.tau_eq; o["FS"] = r.FS;
+              o["verdict"] = verdict; o["note"] = r.note;
+              return o;
+          },
+          "depth"_a, "N"_a, "fines"_a, "sigma_v"_a, "sigma_v_eff"_a, "SDS"_a, "Mw"_a, "CR"_a,
+          "CS"_a, "CB"_a, "CE"_a, "below_water"_a, "susceptible"_a, "sigma_v_eff_at_test"_a,
+          "required"_a,
+          "One SPT test by the simplified liquefaction triggering method of TBDY 2018 Annex 16B "
+          "(katai.liquefaction.spt is the documented entry).");
     m.def("fnv1a64", &api::fnv1a64, "text"_a,
           "The canonical model hash: fnv1a64(project_to_json(project)) is what every "
           "front end stamps into a .res for staleness detection.");

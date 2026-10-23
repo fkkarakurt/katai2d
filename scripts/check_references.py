@@ -75,7 +75,12 @@ ORACLES = ("closed_form", "independent_path", "external_code", "published_benchm
 # the input contract states and levels a reader can compute by hand. It earns its row because a wrong
 # stratigraphy is the one error no residual can see: the mesher will mesh it, every phase will
 # converge on it, and the answer will be a correct solution to a model nobody meant.
-CLASSES = ("NUM", "CST", "FND", "EXC", "SLP", "CON", "FLW", "STR", "DYN", "SSI", "DIA", "GEO")
+#
+# LIQ is the third, added 2026-10-23. It verifies a design-code evaluation that runs beside the
+# finite elements rather than through them -- liquefaction triggering by the simplified method of
+# TBDY 2018 Annex 16B -- against worked examples published for that code. Whether a layer keeps
+# its strength in an earthquake decides what any deformation analysis of it may assume.
+CLASSES = ("NUM", "CST", "FND", "EXC", "SLP", "CON", "FLW", "STR", "DYN", "SSI", "DIA", "GEO", "LIQ")
 
 CASE_RE = re.compile(r"^KV-(" + "|".join(CLASSES) + r")-\d{3}$")
 # Only 'KV-...' or 'none ...' payloads open a block: an English sentence that
