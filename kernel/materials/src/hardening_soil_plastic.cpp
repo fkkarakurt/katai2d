@@ -367,12 +367,15 @@ HsState hs_return_principal(const HardeningSoilParams& p,
     return both();  // both exceeded
 }
 
-HsIntegrated hs_integrate(const HardeningSoilParams& p,
+HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
                           const Eigen::Vector3d& sigma_n, double gamma_p_n,
                           double pp_n, const Eigen::Vector3d& dstrain,
                           double stol,
                           HsSubstepPlan* plan_out,
                           const HsSubstepPlan* plan_in) {
+    // This call's own copy, with the cap's c.cot(phi) worked out once (HardeningSoilParams::cap_cc).
+    HardeningSoilParams p = p_in;
+    p.cap_cc = p_in.cap_shift();
     const double pr = p.p_ref, plim = 0.1 * pr;  // p_limit: σ3 floor in the stiffness laws
     const double nu = p.nu_ur;
     const detail::HsDilatancy dil = detail::hs_dilatancy(p);
@@ -1187,6 +1190,12 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     // at the start of the increment does not see it. A higher order is worth having only together
     // with a walk that stops at those events.
     double nreal = 1.0;
+    // The estimate's first pass over the whole increment is the walk's own step when the
+    // increment needs no subdivision -- the same two evaluations at the same state, strain and
+    // stiffness. Kept and taken as that step instead of being made again: the integration of a
+    // point that stays elastic, or nearly so, cost twice what it does.
+    Inc whole_k1, whole_k2;
+    bool have_whole = false;
     if (replaying) {
         // Replay: the subdivision is uniform, so its one step size reproduces it exactly.
         nreal = 1.0 / plan_in->dT;
@@ -1198,6 +1207,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
             const Eigen::Vector3d de = dT * dstrain_w;
             const Inc f1 = increment(s0, gp0, ev0, de);
             const Inc f2 = increment(s0 + f1.dsig, gp0 + f1.dgp, ev0 + f1.dev, de);
+            if (pass == 0 && dT == 1.0) { whole_k1 = f1; whole_k2 = f2; have_whole = true; }
             // No plasticity gate on the estimate. An elastic step is not error-free here: E_ur
             // moves with sigma3, so the elastic response is nonlinear and its own error is what
             // the pair measures. Where the stiffness really is constant the two evaluations
@@ -1231,8 +1241,9 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p,
     for (double T = 0.0; T < 1.0 - 1e-12 && taken < kMaxSubsteps + 2; ++taken) {
         const double dT = std::min(dT_full, 1.0 - T);
         const Eigen::Vector3d de = dT * dstrain_w;
-        const Inc k1 = increment(sig, gp, ev, de);
-        const Inc k2 = increment(sig + k1.dsig, gp + k1.dgp, ev + k1.dev, de);
+        const bool whole = have_whole && taken == 0 && dT == 1.0 && sig == s0 && gp == gp0 && ev == ev0;
+        const Inc k1 = whole ? whole_k1 : increment(sig, gp, ev, de);
+        const Inc k2 = whole ? whole_k2 : increment(sig + k1.dsig, gp + k1.dgp, ev + k1.dev, de);
         sig += 0.5 * (k1.dsig + k2.dsig);
         gp += 0.5 * (k1.dgp + k2.dgp);
         ev += 0.5 * (k1.dev + k2.dev);
@@ -1346,7 +1357,9 @@ void hs_calibrate_cap(HardeningSoilParams& p, double K0_NC) {
     // constitutive substeps of the run (37% on a single strip load). The answer is a function
     // of the parameters alone, so it is kept. The key is every member the walk can read; the
     // size check is there so that a member added to the struct is added here as well.
-    static_assert(sizeof(HardeningSoilParams) == 18 * sizeof(double),
+    // cap_cc is not a parameter but the integrator's copy of c.cot(phi), derived from two that are
+    // keyed (and NaN on every set of parameters that reaches this function), so it is not keyed.
+    static_assert(sizeof(HardeningSoilParams) == 19 * sizeof(double),
                   "a member was added to HardeningSoilParams: add it to the calibration key");
     using Key = std::array<double, 16>;
     const Key key{p.E50_ref, p.Eur_ref, p.Eoed_ref, p.m, p.p_ref, p.cohesion, p.friction,
@@ -1368,31 +1381,65 @@ void hs_calibrate_cap(HardeningSoilParams& p, double K0_NC) {
         }
     } keep{p, key};
     const double Kp = hs_cap_Kp(p, K0_NC);
-    // Inner: at a given α find k (β=p_ref/(k·K_p)) for Eoed_ref; return K0.
+    // THE TWO ROOTS ARE FOUND BY REGULA FALSI (the Illinois variant), not by bisection. Each
+    // evaluation is an oedometer walk at the calibration's own integration tolerance, and the
+    // bisections took about 290 of them -- 4 of the 6 s the initial phase of a staged excavation
+    // with two Hardening Soils spent before its first equilibrium step. Both functions are smooth
+    // and monotone in the bracket (Eoed rises with k; K0 falls with alpha, read here in log alpha
+    // where it is closer to straight), so the false position, with the Illinois halving that keeps
+    // it from stalling on one end, needs a fraction of the walks to reach a root far inside the
+    // brackets the bisections stopped at (1e-4 on k, 2e-3 on alpha). The roots are the same
+    // roots; they are now found to 1e-6 on k and 1e-5 on log alpha rather than to the midpoint of
+    // the last bracket.
+    const auto illinois = [](auto&& f, double a, double fa, double b, double fb, double xtol,
+                             int maxit) {
+        // f(a) and f(b) of opposite sign; returns the root's estimate.
+        double c = a;
+        int side = 0;
+        for (int it = 0; it < maxit; ++it) {
+            const double c_prev = c;
+            c = (a * fb - b * fa) / (fb - fa);
+            if (!std::isfinite(c)) c = 0.5 * (a + b);
+            const double fc = f(c);
+            if (fc == 0.0 || (it > 0 && std::fabs(c - c_prev) < xtol)) return c;
+            if ((fc > 0.0) == (fb > 0.0)) {
+                b = c; fb = fc;
+                if (side == -1) fa *= 0.5;
+                side = -1;
+            } else {
+                a = c; fa = fc;
+                if (side == +1) fb *= 0.5;
+                side = +1;
+            }
+            if (std::fabs(b - a) < xtol) return c;
+        }
+        return c;
+    };
+    // Inner: at a given alpha, the k (beta = p_ref / (k Kp)) that gives Eoed_ref; returns K0.
     auto solve_k_return_K0 = [&](double alpha) {
         p.cap_alpha = alpha;
-        double klo = 0.2, khi = 5.0;  // k correction factor (around ≈1)
-        for (int it = 0; it < 40; ++it) {
-            const double km = 0.5 * (klo + khi);
-            p.cap_beta = p.p_ref / (km * Kp);
+        const auto eoed_gap = [&](double k) {
+            p.cap_beta = p.p_ref / (k * Kp);
             double e, k0; hs_oedometer_probe(p, e, k0);
-            if (e > p.Eoed_ref) khi = km; else klo = km;  // Eoed grows with k (stiff cap)
-            if (khi - klo < 1e-4) break;
-        }
-        p.cap_beta = p.p_ref / (0.5 * (klo + khi) * Kp);
+            return e - p.Eoed_ref;   // rises with k (a stiffer cap)
+        };
+        const double klo = 0.2, khi = 5.0;
+        const double glo = eoed_gap(klo), ghi = eoed_gap(khi);
+        const double k = (glo > 0.0) == (ghi > 0.0)
+                             ? (std::fabs(glo) < std::fabs(ghi) ? klo : khi)
+                             : illinois(eoed_gap, klo, glo, khi, ghi, 1e-6, 60);
+        p.cap_beta = p.p_ref / (k * Kp);
         double e, k0; hs_oedometer_probe(p, e, k0);
         return k0;
     };
-    // Outer: bisect α for K0=K0_NC (K0 falls with α).
-    double alo = 0.1, ahi = 80.0;
+    // Outer: alpha for K0 = K0_NC (K0 falls with alpha), in log alpha.
+    const double alo = 0.1, ahi = 80.0;
     const double klo = solve_k_return_K0(alo), khi = solve_k_return_K0(ahi);
-    if ((K0_NC - klo) * (K0_NC - khi) <= 0.0) {  // bracketed → reachable
-        for (int it = 0; it < 30; ++it) {
-            const double am = 0.5 * (alo + ahi), km = solve_k_return_K0(am);
-            if (km > K0_NC) alo = am; else ahi = am;
-            if (ahi - alo < 2e-3) break;
-        }
-        solve_k_return_K0(0.5 * (alo + ahi));
+    if ((K0_NC - klo) * (K0_NC - khi) <= 0.0) {  // bracketed -> reachable
+        const auto k0_gap = [&](double la) { return solve_k_return_K0(std::exp(la)) - K0_NC; };
+        const double la = illinois(k0_gap, std::log(alo), klo - K0_NC, std::log(ahi), khi - K0_NC,
+                                   1e-5, 60);
+        solve_k_return_K0(std::exp(la));
     } else {
         solve_k_return_K0(std::fabs(klo - K0_NC) < std::fabs(khi - K0_NC) ? alo : ahi);
     }

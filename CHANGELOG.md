@@ -6,6 +6,62 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### Faster, with the same answers
+
+Where the time went was measured first: `katai solve --timings` prints, per phase, the tangent and
+residual assemblies, the matrix compile, the linear solves and the increments taken (a Safety
+phase now reports its continuation, which it did not). Measured on published examples run from
+the command line, one at a time:
+
+| example | before | after |
+|---|---|---|
+| staged excavation, two Hardening Soils, six phases | 68 s | 40 s |
+| anchored excavation with a factor of safety, eight phases | 185 s | 65 s (its Safety phase 123 s -> 19 s) |
+| slope on Hardening Soil with a factor of safety | 332 s | 198 s (its Safety phase 130 s -> 50 s) |
+| embankment on soft clay, consolidation in four phases | 209 s | 149 s |
+
+Every factor of safety above is unchanged (1.630; 1.832). The displacements of a path-dependent
+analysis move within what its tolerances allow, because the iterates are not the same ones: by
+1e-5 of the excavation's, and by up to 0.7% of the consolidating embankment's over its four
+phases (the calibration below accounts for 0.3% of it). What changed:
+
+- **the strength reduction's predictor is the secant of the last accepted step.** The tangent at
+  the committed state reads a point on its yield surface as elastic, so the predicted
+  displacement per unit of factor was several times too small and the arc length was reached at
+  a factor far past the limit: a step predicted at 1.86 converged at 1.619, and the first six of
+  its 21 iterations went on walking the factor back. With the secant the same factor took 42
+  steps instead of 189. The tangent predictor still starts the path and retries a step that
+  failed;
+- **a consolidation, a fully coupled and an unsaturated transient phase keep one linear solver
+  for the phase.** A solver was made anew at every iteration, so the matrix's pattern was
+  analysed again every time: 131 ms against the 30 ms of the factorization itself on the
+  excavation's mesh. The pattern is analysed once and each iteration only refactorizes;
+- **PARDISO refines a solution only when its factorization perturbed a pivot.** It refined twice
+  after every solve, a matrix product and two more triangular solves each time: 5.2 ms per solve
+  against 1.5. Every solution is still checked against its system;
+- the line search's first trial is the full Newton step and it is taken (343 of the 371 iterations
+  of the excavation). Its residual was assembled without the tangent, and the next iteration
+  assembled the same displacement again, tangent and all. The first trial now assembles the
+  tangent too, with its own copy of the local-convergence memory, and an iteration that starts
+  where an accepted full step ended takes it as its own, in the load-controlled solve and in the
+  strength reduction alike. The iterates are bit for bit those of before;
+- the cap calibration of Hardening Soil (an oedometer walk per evaluation) finds its two roots by
+  regula falsi instead of bisection, to 1e-6 on the stiffness factor and 1e-5 on log alpha instead
+  of 1e-4 and 2e-3, and the soils of a project are calibrated side by side. The excavation's initial
+  phase took 9.4 s, it takes 4.7. The roots are more exact, so Hardening Soil results move by what
+  the bisection left: 1e-5 on the excavation, up to 0.3% on an embankment on soft clay;
+- the geostatic stress and a wall's initial normal stress integrate the overburden one midpoint
+  per layer segment, exact for the piecewise-constant unit weight, instead of 400 to 600 steps of
+  a point-in-region search each;
+- a Hardening Soil integration that needs no subdivision takes the error estimate's own pass as
+  its step instead of repeating it, and the cap's c cot(phi) is worked out once per integration.
+
+### Build: executables are linked whole
+
+Without debug information (the default) an executable is linked with `/INCREMENTAL:NO`. Four test
+executables relinked incrementally after a change to the analysis library crashed before `main`, a
+call through address 0, while the same objects linked afresh ran clean.
+
 ### A semi-permeable screen in every groundwater flow
 
 A wall or interface with a hydraulic resistance passes water across its line against that

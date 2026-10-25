@@ -140,10 +140,17 @@ std::vector<GaussState> k0_layered_impl(const mesh::Mesh& mesh, const K0LayeredO
                         if (b > y + 1e-12 && b < y_surf - 1e-12) seg.push_back(b);
                     std::sort(seg.begin(), seg.end());
                 }
+                // With the breaks known, gamma' is constant on each segment and one midpoint per
+                // segment IS the integral; the column used to be walked in up to 600 steps anyway,
+                // each one a point-in-region search -- 8 of the 9 s a published staged excavation
+                // spent in its initial phase. Without them, the steps as before.
                 const int ns_total = std::max(1, opt.integration_steps);
                 for (size_t sgi = 0; sgi + 1 < seg.size(); ++sgi) {
                     const double a = seg[sgi], b = seg[sgi + 1];
-                    const int ns = std::max(1, (int)((b - a) / (y_surf - y) * ns_total + 0.5));
+                    if (b - a <= 0.0) continue;
+                    const int ns = opt.strata_breaks
+                                       ? 1
+                                       : std::max(1, (int)((b - a) / (y_surf - y) * ns_total + 0.5));
                     const double dt = (b - a) / ns;
                     for (int i = 0; i < ns; ++i) sv += opt.eff_unit_weight(x, a + (i + 0.5) * dt) * dt;
                 }

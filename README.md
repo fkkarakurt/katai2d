@@ -330,7 +330,7 @@ telling the truth fails the build rather than the first reader who tries it.
 ## The command line
 
 ```
-katai solve <file.k2d> [--out <file.res>]   # run the staged analysis
+katai solve <file.k2d> [--out <file.res>] [--timings]   # run the staged analysis (--timings: where each phase's time went)
 katai validate <file.k2d>                   # schema + physics validation, no solve
 katai info                                  # version and file-format information
 ```

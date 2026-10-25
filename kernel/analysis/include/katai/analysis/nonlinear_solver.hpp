@@ -652,6 +652,8 @@ struct NewtonResult {
         int n_tangent = 0;               // number of tangent assemblies
         int n_residual = 0;              // number of residual-only assemblies (line search)
         int n_solve = 0;                 // number of linear solves
+        int n_steps = 0;                 // accepted increments (of the load, or of the strength
+                                         // reduction factor on a Safety continuation)
     } timings;
 };
 

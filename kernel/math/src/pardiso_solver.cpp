@@ -111,6 +111,14 @@ PardisoSolver::PardisoSolver(MatrixType type) : type_(type) {
     // pardisoinit fills sensible iparm defaults for the given mtype.
     pardisoinit(handle_.data(), &mtype, control_.data());
     control_[34] = 1;  // zero-based (C-style) indexing
+    // Iterative refinement only when the factorization perturbed a pivot (iparm(8) = 0: two
+    // steps then, none otherwise). pardisoinit sets up to two steps after EVERY solve, for the
+    // symmetric and the nonsymmetric types alike, and each is a product with the matrix and a
+    // further pair of triangular solves: measured on a staged excavation's factor of safety,
+    // 5.2 ms per solve against 1.5 without, 50 of the phase's 116 s of linear algebra. A
+    // factorization that needed no perturbation is backward stable as it stands, and every
+    // solution is checked against its system in the linsolve layer whatever PARDISO did.
+    control_[7] = 0;
     // Developer override for measuring settings, e.g. KATAI_PARDISO_IPARM=7=0,10=0 (zero-based
     // index=value). Never set by the program itself.
     if (const char* e = std::getenv("KATAI_PARDISO_IPARM")) {

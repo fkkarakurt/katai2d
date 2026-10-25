@@ -13,6 +13,7 @@
 #include <memory>
 #include <unordered_map>
 #include <limits>
+#include <thread>
 #include <set>
 
 #include <katai/analysis/consolidation.hpp>          // time-dependent Biot consolidation phase
@@ -177,6 +178,22 @@ static std::function<Eigen::VectorXd(const Eigen::VectorXd&)> factorize_once(
     std::shared_ptr<katai::linsolve::DirectSolver> s = katai::linsolve::make_direct_solver(type);
     s->factorize(a);
     return [s](const Eigen::VectorXd& b) { return s->solve(b); };
+}
+
+// Iterating seam: a new matrix on every iteration of a coupled or unsaturated phase, the same
+// pattern. One solver for the phase, refactorized on each call, so the symbolic analysis is done
+// once: through factorize_once every iteration made a new solver and analysed the pattern again,
+// which on the mesh of a staged excavation cost 131 ms against the 30 of the factorization
+// itself. The solve a call returns is valid until the next call -- the iterations take it at once.
+using IteratingSolveFactory =
+    std::function<std::function<Eigen::VectorXd(const Eigen::VectorXd&)>(const katai::math::CsrMatrix&)>;
+static IteratingSolveFactory reusing_factory(katai::linsolve::MatrixType type) {
+    std::shared_ptr<katai::linsolve::DirectSolver> s = katai::linsolve::make_direct_solver(type);
+    return [s](const katai::math::CsrMatrix& a) {
+        s->factorize(a);
+        return std::function<Eigen::VectorXd(const Eigen::VectorXd&)>(
+            [s](const Eigen::VectorXd& b) { return s->solve(b); });
+    };
 }
 
 // Plate inertia lives with the plate element (Stage B6); this wrapper only supplies the
@@ -930,6 +947,30 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
     bool nonlinear_soil = false;
     bool has_hardening = false;  // hardening family present (needs a 1% tolerated error)
     bool has_softsoil = false;   // soft-soil family present (FD tangent -> same step/tol class)
+    // THE CAP CALIBRATIONS OF THE HARDENING SOILS, ALL AT ONCE. Building a Hardening Soil model
+    // calibrates its cap on an oedometer walk (hs_calibrate_cap: two nested bisections), once per
+    // soil and kept for the job; the soils were calibrated one after the other inside the loop
+    // below, and on a published staged excavation with two of them that was 5 of the 8 s its
+    // initial phase took. They are independent, so they are built here side by side, once, for
+    // the calibration's own cache; the loop then finds them there. The same calibration, the same
+    // bits -- only no longer in a queue.
+    {
+        std::vector<const katai::core::ModelEntry*> ents(pr.materials.size(), nullptr);
+        int hardening = 0;
+        for (size_t i = 0; i < pr.materials.size(); ++i) {
+            ents[i] = katai::core::find_model(constitutive_name(pr.materials[i].model));
+            if (ents[i] && ents[i]->hardening_family) ++hardening;
+        }
+        // One thread per soil (the pool hands out pieces of many items, and two soils were one
+        // piece on the calling thread).
+        if (hardening > 1) {
+            std::vector<std::thread> calib;
+            for (size_t i = 0; i < pr.materials.size(); ++i)
+                if (ents[i] && ents[i]->hardening_family)
+                    calib.emplace_back([&, i] { (void)ents[i]->build(to_material_params(pr.materials[i])); });
+            for (auto& t : calib) t.join();
+        }
+    }
     for (const auto& m : pr.materials) {
         katai::core::LinearElastic le; le.youngs_modulus = m.E; le.poisson_ratio = m.nu;
         mats.push_back(le);
@@ -1251,13 +1292,39 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         return top;
     };
     // Effective vertical stress sigma'_v (<=0) at a point: vertical integral of gamma' above it.
+    // gamma' discontinuity elevations along the column at x: polygon (layer) edge crossings + the
+    // water table. Between two of them gamma' is constant, so the overburden integral is one
+    // midpoint per segment and exact (the level-ground K0 identity f_int(sigma_K0) = f_gravity
+    // holds to round-off even with layers and water).
+    const auto column_breaks = [&pr, &io, water](double x) {
+        std::vector<double> br;
+        if (water) br.push_back(water_table_at(pr, x, io.config));
+        for (const auto& P : pr.polygons) {
+            const int n = (int)P.x.size();
+            for (int i = 0; i < n; ++i) {
+                const double ax = P.x[i], ay = P.y[i], bx = P.x[(i + 1) % n], by = P.y[(i + 1) % n];
+                const double lo = std::min(ax, bx), hi = std::max(ax, bx);
+                if (x < lo - 1e-9 || x > hi + 1e-9) continue;
+                const double dx = bx - ax;
+                const double t = std::fabs(dx) < 1e-12 ? 0.0 : std::clamp((x - ax) / dx, 0.0, 1.0);
+                br.push_back(ay + t * (by - ay));
+            }
+        }
+        return br;
+    };
+    // Effective vertical stress sigma'_v (<=0) at a point: the column integral of gamma' above it,
+    // segment by segment between the breaks (it was 400 steps of a point-in-region search each).
     const auto eff_sigma_v = [&](double x, double y) {
         const double y_surf = ground_surface(x);
         if (y_surf <= y) return 0.0;
-        const int ns = 400;
-        const double dt = (y_surf - y) / ns;
+        std::vector<double> seg{y, y_surf};
+        for (double b : column_breaks(x))
+            if (b > y + 1e-12 && b < y_surf - 1e-12) seg.push_back(b);
+        std::sort(seg.begin(), seg.end());
         double sv = 0.0;
-        for (int i = 0; i < ns; ++i) sv += eff_unit_weight(x, y + (i + 0.5) * dt) * dt;
+        for (size_t i = 0; i + 1 < seg.size(); ++i)
+            if (seg[i + 1] > seg[i])
+                sv += eff_unit_weight(x, 0.5 * (seg[i] + seg[i + 1])) * (seg[i + 1] - seg[i]);
         return -sv;
     };
 
@@ -3557,22 +3624,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 }
             }
     }
-    k0opt.strata_breaks = [&pr, &io, water](double x) {
-        std::vector<double> br;
-        if (water) br.push_back(water_table_at(pr, x, io.config));
-        for (const auto& P : pr.polygons) {
-            const int n = (int)P.x.size();
-            for (int i = 0; i < n; ++i) {
-                const double ax = P.x[i], ay = P.y[i], bx = P.x[(i + 1) % n], by = P.y[(i + 1) % n];
-                const double lo = std::min(ax, bx), hi = std::max(ax, bx);
-                if (x < lo - 1e-9 || x > hi + 1e-9) continue;
-                const double dx = bx - ax;
-                const double t = std::fabs(dx) < 1e-12 ? 0.0 : std::clamp((x - ax) / dx, 0.0, 1.0);
-                br.push_back(ay + t * (by - ay));
-            }
-        }
-        return br;
-    };
+    k0opt.strata_breaks = column_breaks;
     // K0 procedure: seed the geostatic stress so undisturbed self-weight gives ~zero displacement.
     // Gravity loading: start from zero stress (self-weight produces settlement). Either way the
     // recovered stress comes from the solver's committed Gauss states below.
@@ -4635,9 +4687,8 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             const katai::core::ConsolidationSolveFactory lef = [](const katai::math::CsrMatrix& Asys) {
                 return factorize_once(katai::linsolve::MatrixType::RealSymmetricIndefinite, Asys);
             };
-            const katai::core::ConsolidationSolveFactory plf = [](const katai::math::CsrMatrix& Asys) {
-                return factorize_once(katai::linsolve::MatrixType::RealNonsymmetric, Asys);
-            };
+            const katai::core::ConsolidationSolveFactory plf =
+                reusing_factory(katai::linsolve::MatrixType::RealNonsymmetric);
             std::vector<katai::core::GaussState> committed;
             if (!katai::core::solve_consolidation_phase(mesh, dofs, models, profiles, init, dF,
                                                         nonlinear_soil, cin, lef, plf, R, committed))
@@ -4706,9 +4757,8 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             const katai::core::ConsolidationSolveFactory lef = [](const katai::math::CsrMatrix& Asys) {
                 return factorize_once(katai::linsolve::MatrixType::RealSymmetricIndefinite, Asys);
             };
-            const katai::core::ConsolidationSolveFactory plf = [](const katai::math::CsrMatrix& Asys) {
-                return factorize_once(katai::linsolve::MatrixType::RealNonsymmetric, Asys);
-            };
+            const katai::core::ConsolidationSolveFactory plf =
+                reusing_factory(katai::linsolve::MatrixType::RealNonsymmetric);
             std::vector<katai::core::GaussState> committed;
             if (!katai::core::solve_fully_coupled_phase(mesh, dofs, models, profiles, init, dF,
                                                         nonlinear_soil, fin, lef, plf, R, committed))
@@ -4866,9 +4916,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 tin.duration_day = io.config->duration; tin.time_steps = io.config->time_steps;
                 tin.ramp_heads = io.config->head_ramp;
             }
-            tin.solve_factory = [](const katai::math::CsrMatrix& A) {
-                return factorize_once(katai::linsolve::MatrixType::RealSymmetricPositiveDefinite, A);
-            };
+            tin.solve_factory = reusing_factory(katai::linsolve::MatrixType::RealSymmetricPositiveDefinite);
             if (!katai::core::solve_transient_flow_phase(flow_mesh, tin, R)) return R;
             if (tied) {   // back onto every node of the split mesh: a tied pair shares its answer
                 const auto spread = [&](const std::vector<double>& v) {

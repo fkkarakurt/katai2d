@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace katai::core {
 
@@ -79,7 +80,12 @@ struct HardeningSoilParams {
     // by 7% at 50 kPa and 26% at 20 kPa for c = 5 kPa, phi = 29 degrees, m = 0.8. With c = 0 the
     // expressions are the old ones exactly. beta is calibrated on the oedometer through these
     // functions (hs_calibrate_cap), so it follows the law it is used with.
+    // cap_shift() as an integrator's own copy fixed it (NaN = not fixed): the copy reads it at
+    // every substep of every stress point, and its sine and cosine were 5% of the CPU time of a
+    // Hardening Soil excavation. Only a copy that will not have its strength changed sets it.
+    double cap_cc = std::numeric_limits<double>::quiet_NaN();
     double cap_shift() const {
+        if (cap_cc == cap_cc) return cap_cc;
         const double s = std::sin(friction);
         return s > 1e-12 ? cohesion * std::cos(friction) / s : 0.0;
     }

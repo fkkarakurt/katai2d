@@ -43,7 +43,7 @@ int usage() {
     std::fprintf(stderr,
                  "katai -- KATAI 2D command line\n"
                  "usage:\n"
-                 "  katai solve <file.k2d> [--out <file.res>]\n"
+                 "  katai solve <file.k2d> [--out <file.res>] [--timings]\n"
                  "  katai validate <file.k2d>\n"
                  "  katai info\n"
                  "exit codes: 0 ok, 2 usage, 3 file error, 4 input contract refused, "
@@ -154,7 +154,7 @@ int cmd_validate(const std::string& path) {
     return 0;
 }
 
-int cmd_solve(const std::string& path, const std::string& out) {
+int cmd_solve(const std::string& path, const std::string& out, bool timings) {
     api::Project pr;
     std::vector<api::Issue> notes;
     if (const int rc = load(path, pr, notes)) return rc;
@@ -196,6 +196,23 @@ int cmd_solve(const std::string& path, const std::string& out) {
             std::printf("  FoS %s %.3f", R.fos_lower_bound ? ">" : "=", R.fos);
         std::printf("\n");
         print_convergence(R);
+        // Where the time went (--timings): the phase's wall clock, and inside its main Newton
+        // solve the tangent assemblies (the constitutive integration happens there), the
+        // residual-only assemblies of the line search, the sparse matrix compile and the
+        // linear solves, and the increments it took. A Safety phase's breakdown is the
+        // continuation that found its factor; a coupled phase aggregates many solves and prints
+        // only its wall clock.
+        if (timings) {
+            const auto& T = R.timings;
+            const double wall = i < job.timings().size() ? job.timings()[i].seconds : 0.0;
+            std::printf("  time    %.2f s", wall);
+            if (T.total > 0.0)
+                std::printf(" -- solve %.2f s: tangent %d x %.2f s, residual %d x %.2f s, "
+                            "matrix %.2f s, linear %d x %.2f s, %d steps",
+                            T.total, T.n_tangent, T.assemble_tangent, T.n_residual,
+                            T.assemble_residual, T.csr_build, T.n_solve, T.linear_solve, T.n_steps);
+            std::printf("\n");
+        }
         print_diagnostics(R);
     }
     std::printf("solved %zu phase(s) in %.2f s\n", res.size(), total_s);
@@ -233,12 +250,14 @@ int main(int argc, char** argv) {
     if (cmd == "validate") return argc == 3 ? cmd_validate(argv[2]) : usage();
     if (cmd == "solve") {
         std::string file, out;
+        bool timings = false;
         for (int i = 2; i < argc; ++i) {
             if (std::strcmp(argv[i], "--out") == 0 && i + 1 < argc) out = argv[++i];
+            else if (std::strcmp(argv[i], "--timings") == 0) timings = true;
             else if (argv[i][0] == '-' || !file.empty()) return usage();
             else file = argv[i];
         }
-        return file.empty() ? usage() : cmd_solve(file, out);
+        return file.empty() ? usage() : cmd_solve(file, out, timings);
     }
     return usage();
 }

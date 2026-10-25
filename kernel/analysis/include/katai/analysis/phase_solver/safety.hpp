@@ -228,6 +228,7 @@ inline bool solve_safety_phase(
     // honestly (the GUI shows "FoS > cap") instead of presenting the cap as a real FoS.
     R.fos_lower_bound = !sr.bracketed;
     R.disp = sr.mechanism.displacement.head(mesh.node_count * 2);
+    R.timings = sr.mechanism.timings;   // the continuation that found the factor
     R.stress = recover_nodal_stresses_from_gauss(mesh, sr.mechanism.gauss_states, in.active);
     return true;
 }

@@ -151,9 +151,16 @@ if(POLICY CMP0141)
 endif()
 # CMake's own RelWithDebInfo link flags carry /debug, and /debug is what writes the .pdb. With no
 # symbols in the objects it would write an empty one at full price, so it goes with them.
+# /INCREMENTAL goes as well, for /INCREMENTAL:NO. An incremental link patches the previous image
+# in place, and here that was not safe: measured 2026-10-24, four test executables relinked
+# incrementally after a change to katai_analysis crashed before main (a call through address 0)
+# while the same objects linked afresh ran clean. A link redone in full each time is slower; a
+# binary that is not the one its objects describe is not a build.
 if(MSVC AND NOT KATAI_DEBUG_INFO)
   foreach(_kind EXE SHARED MODULE)
     string(REPLACE "/debug" "" CMAKE_${_kind}_LINKER_FLAGS_RELWITHDEBINFO
+           "${CMAKE_${_kind}_LINKER_FLAGS_RELWITHDEBINFO}")
+    string(REGEX REPLACE "/INCREMENTAL(:YES)?( |$)" "/INCREMENTAL:NO\\2" CMAKE_${_kind}_LINKER_FLAGS_RELWITHDEBINFO
            "${CMAKE_${_kind}_LINKER_FLAGS_RELWITHDEBINFO}")
   endforeach()
 endif()

@@ -443,6 +443,28 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     probe.prev_foot = &prev_foot;
     probe.tolerated = rtol;
     result.convergence.tolerated = rtol;
+    // THE FULL STEP'S ASSEMBLY, KEPT. The line search's first trial is the full Newton step, and
+    // it is taken: 343 of the 371 iterations of a published staged excavation (Hardening Soil).
+    // Its residual was assembled without the tangent, and the next iteration then assembled the
+    // same displacement again, tangent and all -- every constitutive integration done twice. The
+    // first trial now assembles the tangent too, into its own builder and with its own copy of
+    // the probe's memory (the probe overwrites the previous iterate's stress with the current
+    // one, which a trial that is turned down must not do), and an iteration that starts where an
+    // accepted full step ended takes it as its own assembly. The same displacement under the same
+    // controls is the same assembly, so the iterates are bit for bit those of before.
+    math::SparseMatrixBuilder builder_t(neq);
+    detail::LocalErrorProbe probe_t;
+    std::vector<GaussState> prev_sc_t;
+    std::vector<double> prev_deps_t;
+    std::vector<detail::PrevPoint> prev_iface_t, prev_iface5_t, prev_skin_t, prev_foot_t;
+    const auto point_probe = [&](detail::LocalErrorProbe& pb, bool trial) {
+        pb.prev_sigma_c = trial ? &prev_sc_t : &prev_sc;
+        pb.prev_deps = trial ? &prev_deps_t : &prev_deps;
+        pb.prev_iface = trial ? &prev_iface_t : &prev_iface;
+        pb.prev_iface5 = trial ? &prev_iface5_t : &prev_iface5;
+        pb.prev_skin = trial ? &prev_skin_t : &prev_skin;
+        pb.prev_foot = trial ? &prev_foot_t : &prev_foot;
+    };
 
     // ===================================================================================
     // STRENGTH CONTINUATION BY ARC LENGTH (NewtonOptions::srf_reduce).
@@ -484,6 +506,10 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         result.srf = s_cur;
         result.srf_path.push_back({s_cur, 0.0});
         set_srf(s_cur);
+        // The last accepted arc step (displacement and factor), for the secant predictor below.
+        Eigen::VectorXd sec_du;
+        double sec_ds = 0.0;
+        bool sec_ok = false;
         for (int stepn = 0; stepn < 2000; ++stepn) {
             if (s_cur >= options.srf_max) break;
             cur_lambda = 0.0;
@@ -491,51 +517,100 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             Eigen::VectorXd du = Eigen::VectorXd::Zero(neq);
             prev_sc = committed;
             std::fill(prev_deps.begin(), prev_deps.end(), 0.0);
-            // ---- predictor at the committed state
-            const double eps0 = 1.0e-6 * s_cur;
-            set_srf(s_cur + eps0);
-            const Eigen::VectorXd fe0 = assemble(du, false, nullptr);
-            set_srf(s_cur);
-            builder.clear();
-            const Eigen::VectorXd f00 = assemble(du, true, &builder);
-            const Eigen::VectorXd fs0 = (fe0 - f00) / eps0;
-            Eigen::VectorXd v;
-            bool solved = true;
-            try {
-                v = linear_solve(builder.build_cached(kt_cache), fs0);
-                ++result.timings.n_solve;
-            } catch (const math::SingularSystem&) {
-                solved = false;
-            }
-            if (!solved || !v.allFinite()) break;
-            const double vnorm = v.norm();
-            // With no plastic response the path is vertical in s: such a step is controlled by s.
-            const bool arc = vnorm * options.srf_first_step > 1e-12 * std::max(1.0, u_free.norm()) &&
-                             vnorm > 0.0;
             Eigen::VectorXd n;
             double s_try;
-            if (arc) {
-                if (dl < 0.0) dl = options.srf_first_step * vnorm;
-                const double ds_pred = dl / vnorm;
-                du = -ds_pred * v;
+            bool arc = false;
+            // ---- THE SECANT PREDICTOR. Once the path is on its arc, the step before is the best
+            // account there is of where it goes: the same points go on yielding and the factor
+            // rises by little for a lot of displacement. The tangent at the committed state does
+            // not know that -- a point on its yield surface with no strain increment yet reads as
+            // elastic, the predicted displacement per unit of factor is several times too small,
+            // and the arc length is reached by a factor far beyond the limit. Measured on an
+            // anchored excavation in Hardening Soil near its factor of 1.62: a predicted factor of
+            // 1.86 for a step that converged at 1.6193, the first six of its 21 iterations spent
+            // walking the factor back. The secant along the last accepted step at the current
+            // arc length is the predictor; the tangent one starts the path, follows a step
+            // controlled by the factor and retries a step that failed. With it the factor of that
+            // excavation (1.630 either way) took 42 steps and 20 s instead of 189 and 119 s, and
+            // the factor of a slope on Hardening Soil 51 s instead of 122 (1.832 against 1.831,
+            // within its resolution).
+            if (sec_ok) {
+                const double scale = dl / sec_du.norm();
+                du = scale * sec_du;
                 n = du / du.norm();
-                s_try = s_cur + ds_pred;
+                s_try = s_cur + scale * sec_ds;
+                arc = true;
             } else {
-                s_try = s_cur + s_ctrl_step;
+                // ---- predictor at the committed state
+                const double eps0 = 1.0e-6 * s_cur;
+                set_srf(s_cur + eps0);
+                const Eigen::VectorXd fe0 = assemble(du, false, nullptr);
+                set_srf(s_cur);
+                builder.clear();
+                const Eigen::VectorXd f00 = assemble(du, true, &builder);
+                const Eigen::VectorXd fs0 = (fe0 - f00) / eps0;
+                Eigen::VectorXd v;
+                bool solved = true;
+                const auto t_csr0 = Clock::now();
+                const math::CsrMatrix& k0 = builder.build_cached(kt_cache);
+                result.timings.csr_build += elapsed(t_csr0);
+                const auto t_lin0 = Clock::now();
+                try {
+                    v = linear_solve(k0, fs0);
+                    ++result.timings.n_solve;
+                } catch (const math::SingularSystem&) {
+                    solved = false;
+                }
+                result.timings.linear_solve += elapsed(t_lin0);
+                if (!solved || !v.allFinite()) break;
+                const double vnorm = v.norm();
+                // With no plastic response the path is vertical in s: such a step is controlled by s.
+                arc = vnorm * options.srf_first_step > 1e-12 * std::max(1.0, u_free.norm()) &&
+                      vnorm > 0.0;
+                if (arc) {
+                    if (dl < 0.0) dl = options.srf_first_step * vnorm;
+                    const double ds_pred = dl / vnorm;
+                    du = -ds_pred * v;
+                    n = du / du.norm();
+                    s_try = s_cur + ds_pred;
+                } else {
+                    s_try = s_cur + s_ctrl_step;
+                }
             }
             // ---- corrector
+            // The iterate's own assembly comes first and the factor's derivative only after the
+            // convergence test, which (a) saves the derivative's residual on the iterate that
+            // converges and (b) leaves the iterate's assembly the last one made when it does --
+            // the trial states committed below are the last assembled. An iterate that starts
+            // where an accepted full step ended takes that step's assembly as its own (the
+            // load-controlled path below explains the kept assembly): the same displacement at
+            // the same factor, the same bits.
             bool conv = false;
             int its = 0;
+            bool kept = false;
+            Eigen::VectorXd kept_fi;
             for (int it = 0; it < max_it; ++it) {
                 its = it + 1;
                 const double eps = 1.0e-6 * s_try;
-                set_srf(s_try + eps);
-                const Eigen::VectorXd fe = arc ? assemble(du, false, nullptr) : Eigen::VectorXd();
                 set_srf(s_try);
-                builder.clear();
-                probe.reset_counts();
-                probe.first_iterate = (it == 0);
-                const Eigen::VectorXd fi = assemble(du, true, &builder, &probe);
+                const bool reuse = kept;
+                kept = false;
+                if (reuse) {
+                    std::swap(builder, builder_t);
+                    prev_sc.swap(prev_sc_t);
+                    prev_deps.swap(prev_deps_t);
+                    prev_iface.swap(prev_iface_t);
+                    prev_iface5.swap(prev_iface5_t);
+                    prev_skin.swap(prev_skin_t);
+                    prev_foot.swap(prev_foot_t);
+                    probe = probe_t;
+                    point_probe(probe, false);
+                } else {
+                    builder.clear();
+                    probe.reset_counts();
+                    probe.first_iterate = (it == 0);
+                }
+                const Eigen::VectorXd fi = reuse ? std::move(kept_fi) : assemble(du, true, &builder, &probe);
                 const Eigen::VectorXd r = held - fi;
                 const double rnorm = r.norm();
                 measure_convergence(probe, fi, r, rnorm, cf_norm, ref, rtol, result.convergence);
@@ -550,8 +625,17 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                     conv = true;
                     break;
                 }
+                Eigen::VectorXd fe;
+                if (arc) {
+                    set_srf(s_try + eps);
+                    fe = assemble(du, false, nullptr);
+                    set_srf(s_try);
+                }
+                const auto t_csr = Clock::now();
                 const math::CsrMatrix& kt = builder.build_cached(kt_cache);
+                result.timings.csr_build += elapsed(t_csr);
                 Eigen::VectorXd a, b;
+                const auto t_lin = Clock::now();
                 try {
                     a = linear_solve(kt, r);
                     ++result.timings.n_solve;
@@ -560,8 +644,10 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                         ++result.timings.n_solve;
                     }
                 } catch (const math::SingularSystem&) {
+                    result.timings.linear_solve += elapsed(t_lin);
                     break;
                 }
+                result.timings.linear_solve += elapsed(t_lin);
                 if (!a.allFinite() || (arc && !b.allFinite())) break;
                 double dsi = 0.0;
                 if (arc) {
@@ -575,8 +661,27 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 double alpha = 1.0;
                 for (int ls = 0; ls < 6; ++ls) {
                     set_srf(s_try + alpha * dsi);
-                    const double rt = (held - assemble(du + alpha * ddu, false, nullptr)).norm();
-                    if (std::isfinite(rt) && rt < std::max(rnorm, 10.0 * rtol * ref)) break;
+                    const bool full = ls == 0;
+                    if (full) {
+                        builder_t.clear();
+                        prev_sc_t = prev_sc;
+                        prev_deps_t = prev_deps;
+                        prev_iface_t = prev_iface;
+                        prev_iface5_t = prev_iface5;
+                        prev_skin_t = prev_skin;
+                        prev_foot_t = prev_foot;
+                        probe_t = probe;
+                        point_probe(probe_t, true);
+                        probe_t.reset_counts();
+                        probe_t.first_iterate = false;
+                    }
+                    Eigen::VectorXd ft = full ? assemble(du + alpha * ddu, true, &builder_t, &probe_t)
+                                              : assemble(du + alpha * ddu, false, nullptr);
+                    const double rt = (held - ft).norm();
+                    if (std::isfinite(rt) && rt < std::max(rnorm, 10.0 * rtol * ref)) {
+                        if (full) { kept = true; kept_fi = std::move(ft); }
+                        break;
+                    }
                     alpha *= 0.5;
                 }
                 du += alpha * ddu;
@@ -598,8 +703,11 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 u_struct += du;
                 const double s_prev = s_cur;
                 s_cur = s_try;
+                sec_ok = arc && du.norm() > 0.0;
+                if (sec_ok) { sec_du = du; sec_ds = s_cur - s_prev; }
                 result.srf = std::max(result.srf, s_cur);
                 result.srf_path.push_back({s_cur, u_free.cwiseAbs().maxCoeff()});
+                ++result.timings.n_steps;
                 if (debug) {
                     // e = d ln(s - s0) / d ln u over the last doubling of the displacement
                     const double un = result.srf_path.back()[1];
@@ -653,6 +761,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             } else {
                 trial = committed;
                 if (arc) dl *= 0.5; else s_ctrl_step *= 0.5;
+                sec_ok = false;   // the retry predicts from the tangent
                 set_srf(s_cur);
                 if (++cut > 12 || (!arc && s_ctrl_step < options.srf_resolution * s_cur)) {
                     result.srf_limit = true;   // no equilibrium beyond: the limit
@@ -795,10 +904,32 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         std::vector<double> progress;   // this attempt's residual norms, iterate by iterate
         std::vector<double> best_history;   // ... and the best of them so far, iterate by iterate
         stall_floor = 0.0;
+        bool kept = false;              // the last accepted full step's assembly is in builder_t
+        Eigen::VectorXd kept_fint;
+        double kept_floor = 0.0;
+        bool kept_consistent = false, kept_freeze = false;
         for (int iter = 0; iter < options.max_iterations; ++iter) {
-            builder.clear();
-            probe.reset_counts();
-            probe.first_iterate = first_iterate;
+            // Taken only under the controls it was made under: the stall floor moves after the line
+            // search, and the tangent mode and the small-strain freeze between attempts.
+            const bool reuse = kept && !elastic_mode &&
+                               kept_floor == std::max(vertex_floor_mode ? kVertexFloor : 0.0, stall_floor) &&
+                               kept_consistent == hs_consistent_mode && kept_freeze == small_freeze;
+            kept = false;
+            if (reuse) {
+                std::swap(builder, builder_t);
+                prev_sc.swap(prev_sc_t);
+                prev_deps.swap(prev_deps_t);
+                prev_iface.swap(prev_iface_t);
+                prev_iface5.swap(prev_iface5_t);
+                prev_skin.swap(prev_skin_t);
+                prev_foot.swap(prev_foot_t);
+                probe = probe_t;
+                point_probe(probe, false);
+            } else {
+                builder.clear();
+                probe.reset_counts();
+                probe.first_iterate = first_iterate;
+            }
             first_iterate = false;
             // The family is gathered on every accepted iterate and NOT on the line search's
             // trial evaluations, which is both correct (only an accepted iterate's local error
@@ -806,7 +937,8 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             // entirely, the same five cases run in 1.1/2.4/4.3/6.8/0.8 s with it and
             // 1.2/2.9/4.6/7.5/0.7 s without -- inside the noise, with identical iteration
             // counts and bit-identical answers.
-            const Eigen::VectorXd f_int = assemble(du_free, true, &builder, &probe);
+            const Eigen::VectorXd f_int =
+                reuse ? std::move(kept_fint) : assemble(du_free, true, &builder, &probe);
             const Eigen::VectorXd residual = target - f_int;
             const double rnorm = residual.norm();
             if (rnorm < best_rnorm) {
@@ -1001,12 +1133,34 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             double alpha_rejected = 0.0;   // the smallest step the search turned down
             double rn_kept = 0.0;          // the residual at the step it took
             for (int ls = 0; ls < 12 && !improved; ++ls) {
-                const Eigen::VectorXd fi = assemble(du_free + alpha * delta,
-                                                    false, nullptr);
+                const bool full = ls == 0 && !elastic_mode;
+                if (full) {
+                    builder_t.clear();
+                    prev_sc_t = prev_sc;
+                    prev_deps_t = prev_deps;
+                    prev_iface_t = prev_iface;
+                    prev_iface5_t = prev_iface5;
+                    prev_skin_t = prev_skin;
+                    prev_foot_t = prev_foot;
+                    probe_t = probe;
+                    point_probe(probe_t, true);
+                    probe_t.reset_counts();
+                    probe_t.first_iterate = false;
+                }
+                const double floor_now = std::max(vertex_floor_mode ? kVertexFloor : 0.0, stall_floor);
+                Eigen::VectorXd fi = full ? assemble(du_free + alpha * delta, true, &builder_t, &probe_t)
+                                          : assemble(du_free + alpha * delta, false, nullptr);
                 const double rn = (target - fi).norm();
                 if (rn < (1.0 - 1.0e-4 * alpha) * gate) {
                     improved = true;
                     rn_kept = rn;
+                    if (full) {
+                        kept = true;
+                        kept_fint = std::move(fi);
+                        kept_floor = floor_now;
+                        kept_consistent = hs_consistent_mode;
+                        kept_freeze = small_freeze;
+                    }
                     break;
                 }
                 if (alpha <= kAlphaFloor) break;
@@ -1309,6 +1463,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             plate_committed = plate_trial;
             plate5_committed = plate5_trial;
             lambda = target_lambda;
+            ++result.timings.n_steps;
             result.load_factor = lambda;
             dlam = std::min(init_dlam, dlam * 1.5);  // allow recovery
         } else if (has_small && !small_freeze &&
