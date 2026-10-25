@@ -665,6 +665,19 @@ struct Phase {
             if (c != 0.0) return true;
         return false;
     }
+    // RE-TENSIONING of an anchor, by structure index [kN per anchor, tension-positive]: the anchor
+    // -- already in place, carried from the phase before -- is jacked to this force in this phase
+    // and locked again where the wall comes to. It is an event of this phase only: the next phase
+    // continues from the lock (a spring from there), and a missing entry or 0 is no jack.
+    std::vector<double> struct_retension;
+    double retension_of(size_t si) const {
+        return si < struct_retension.size() ? struct_retension[si] : 0.0;
+    }
+    bool any_retension() const {
+        for (double p : struct_retension)
+            if (p != 0.0) return true;
+        return false;
+    }
     // PORE PRESSURES FROM A STEADY-STATE GROUNDWATER FLOW CALCULATION instead of the phreatic
     // line. The flow is solved on the ground active in this phase: below the water table (this
     // phase's, else the project's) every boundary of that ground -- the model's sides and the faces
@@ -840,7 +853,13 @@ struct MeshSettings {
     double elem_size = 2.0;   // target element edge length [m]
     int order = 6;            // element type: 6 = quadratic tri6, 15 = quartic tri15
     bool auto_refine = true;  // ~2x finer near structural elements and loads
+    // RELATIVE ELEMENT SIZE: 0 = elem_size above is the size; above 0 the size is this factor times
+    // a twentieth of the model's diagonal (element_size below), so a model drawn wider keeps the
+    // same density of elements. 2 / 1.33 / 1 / 0.67 / 0.5 are very coarse ... very fine.
+    double rel = 0.0;
 };
+// A twentieth of the model's diagonal: the element size of a relative factor of 1.
+inline constexpr double kRelativeElementBase = 1.0 / 20.0;
 
 struct Project {
     std::string name = "Untitled project";
@@ -977,6 +996,17 @@ inline void insert_polygons(Project& p, size_t i, const std::vector<SoilPolygon>
     p.polygons.insert(p.polygons.begin() + (long)i, pieces.begin(), pieces.end());
 }
 
+// The target element edge length the mesh is generated with [m]: elem_size, or under a relative
+// size (mesh.rel > 0) that factor times a twentieth of the model's diagonal. Everything that reads
+// the element size -- the mesher and the virtual thickness of an interface -- reads it here.
+inline double element_size(const Project& p) {
+    if (p.mesh.rel > 0.0) {
+        const double d = std::hypot(p.x_max - p.x_min, p.y_max - p.y_min);
+        if (d > 0.0) return p.mesh.rel * kRelativeElementBase * d;
+    }
+    return p.mesh.elem_size;
+}
+
 inline void erase_struct(Project& p, size_t i) {
     if (i >= p.structs.size()) return;
     p.structs.erase(p.structs.begin() + (long)i);
@@ -984,6 +1014,7 @@ inline void erase_struct(Project& p, size_t i) {
         detail::erase_index(ph.struct_active, i);
         detail::erase_index(ph.struct_material, i);
         detail::erase_index(ph.struct_contraction, i);
+        detail::erase_index(ph.struct_retension, i);
     });
 }
 inline void erase_load(Project& p, size_t i) {

@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["katai2d"],
   "properties": {
-    "katai2d": { "type": "integer", "minimum": 1, "maximum": 23 },
+    "katai2d": { "type": "integer", "minimum": 1, "maximum": 24 },
     "name": { "type": "string" },
     "axisymmetric": { "type": "boolean" },
     "initial_procedure": { "type": "integer", "minimum": 0, "maximum": 2 },
@@ -66,7 +66,8 @@
       "properties": {
         "elem_size": { "type": "number" },
         "order": { "type": "integer", "enum": [6, 15] },
-        "auto_refine": { "type": "boolean" }
+        "auto_refine": { "type": "boolean" },
+        "rel": { "type": "number", "minimum": 0 }
       },
       "additionalProperties": true
     },
@@ -315,6 +316,7 @@
         "pmat": { "type": "array", "items": { "type": "integer", "minimum": -1 } },
         "smat": { "type": "array", "items": { "type": "integer", "minimum": -1 } },
         "scontr": { "type": "array", "items": { "type": "number" } },
+        "sjack": { "type": "array", "items": { "type": "number" } },
         "pwater": { "type": "array", "items": { "type": "integer", "enum": [0, 1, 2] } },
         "pwlevel": { "$ref": "#/$defs/numbers" },
         "water_override": { "type": "boolean" },

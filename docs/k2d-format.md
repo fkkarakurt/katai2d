@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **23** · Current `.res` version: **11**
+Current `.k2d` version: **24** · Current `.res` version: **11**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -60,7 +60,11 @@ older build would ignore and make the change at the phase's first instant -- an 
 drawdown where the file states one at a rate,
 and **v23** a phase's pseudo-static acceleration (`phases[i].kh`, `kv`), which an older build would
 ignore and run the phase as the static case -- a factor of safety above the seismic one the file
-asks for.
+asks for,
+and **v24** the re-tensioning of an anchor in a phase (`phases[i].sjack`), which an older build
+would ignore and leave the anchor at the force it carried -- the wall without the re-stressing the
+file states -- and a relative element size (`mesh.rel`), which an older build would ignore and mesh
+at `elem_size`.
 Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
@@ -160,6 +164,7 @@ flagged places differs from the in-memory default of a freshly created object.
 | `elem_size` | num | m | `2` | Target element edge length; the mesher's target triangle area is 0.5 · elem_size² |
 | `order` | int | — | `6` | Element type: 6 = quadratic tri6, 15 = quartic tri15 |
 | `auto_refine` | bool | — | `true` | Automatic ~2× refinement near structural elements and loads |
+| `rel` | num | — | `0` | Relative element size: `0` = `elem_size` is the size; above 0 the target element edge is this factor times a twentieth of the model's diagonal (from `x_min`..`x_max`, `y_min`..`y_max`), so a model drawn wider keeps the same density; 2 / 1.33 / 1 / 0.67 / 0.5 are very coarse … very fine. It also sets the virtual thickness of the interfaces, which `elem_size` sets otherwise. Written only when set |
 
 #### Soil material object (`materials[i]`)
 
@@ -442,6 +447,7 @@ with `name` (default `"Well"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
 | `pmat` | int[] | — | `[]` | The material of each soil region in this phase, by region index: −1 (also every MISSING entry) = the material the region was drawn with, otherwise an index into `materials`. The stresses are kept; a hardening model's cap and shear hardening are re-read from them where the material changed. Written only when a region's material is changed |
 | `smat` | int[] | — | `[]` | The section of each plate in this phase, by structure index: an index into the plate materials, `-1` = the one it was drawn with. The plate keeps the normal force and the bending moment it carries; from this phase on it deforms with the new stiffness and weighs the new weight. Written only when a plate is changed |
 | `scontr` | num[] | — | `[]` | Line contraction of each plate, by structure index: the area loss of the closed line it is part of, as a fraction (0.005 = 0.5 %), total at the end of this phase. The plate takes half of it as a shrinkage strain, applied with the phase's staged change. A later phase repeats the value to keep it; `0` takes it back. Written only when a plate has one |
+| `sjack` | num[] | kN | `[]` | Re-tensioning of each anchor, by structure index, tension-positive, per anchor like `prestress`: an anchor carried from the phase before is jacked to this force in this phase -- it holds it while the wall moves -- and is locked again where the wall comes to; from the next phase it is a spring from that lock. The wall takes the difference between this force and the one the anchor carried. An event of this phase only: a later phase does not repeat it. `0` (and every missing entry) = no jack. Plastic phases only; on a structure that is not an anchor carried from the phase before, or in another phase type, the run is refused (`K2D-S008`). Written only when set |
 | `water_override` | bool | — | `false` | Use this phase's own phreatic line instead of the project's |
 | `wx` | num[] | m | `[]` | Phase phreatic polyline, x (used when `water_override`) |
 | `wy` | num[] | m | `[]` | Phase phreatic polyline, y (used when `water_override`) |

@@ -455,6 +455,9 @@ NB_MODULE(_core, m) {
                 "plate material index of each structure in this phase (-1 = as drawn)")
         .def_rw("struct_contraction", &api::Phase::struct_contraction,
                 "line contraction of each plate (area loss as a fraction), total at the end of the phase")
+        .def_rw("struct_retension", &api::Phase::struct_retension,
+                "re-tension force of each anchor in this phase [kN per anchor] (0 = none): an anchor "
+                "already in place is jacked to it and locked again")
         .def_rw("poly_water", &api::Phase::poly_water,
                 "region water mode per soil region: 0 = the water table, 1 = a level of its own "
                 "(poly_water_level), 2 = interpolated between the regions above and below")
@@ -519,7 +522,10 @@ NB_MODULE(_core, m) {
         .def(nb::init<>())
         .def_rw("elem_size", &api::MeshSettings::elem_size, "target element edge [m]")
         .def_rw("order", &api::MeshSettings::order, "6 = tri6, 15 = tri15")
-        .def_rw("auto_refine", &api::MeshSettings::auto_refine);
+        .def_rw("auto_refine", &api::MeshSettings::auto_refine)
+        .def_rw("rel", &api::MeshSettings::rel,
+                "relative element size: 0 = elem_size; above 0 this factor times a twentieth of the "
+                "model's diagonal");
 
     nb::class_<api::Project>(m, "Project")
         .def(nb::init<>())

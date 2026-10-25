@@ -172,76 +172,81 @@
 }
 
 @misc{katai,
+  title = {KATAI 2D input contract (docs/k2d-format.md, anchors[i].prestress and phases[i].sjack): an anchor installed with a lock-off force holds it through its installation phase and is locked at the end; an anchor re-tensioned in a later Plastic phase holds the re-tension force through that phase and is locked again at the end, after which it is an elastic spring from that lock. The identity used as the oracle follows from linear elasticity of the ground and from the jack adding no stiffness: the ground's response depends only on the forces the anchor applies, N1 then N2 - N1 on one path and N2 on the other},
+  note  = {cited by KV-STR-022},
+}
+
+@misc{kataib,
   title = {KATAI 2D input contract (docs/k2d-format.md, anchors[i].prestress): in the phase that activates it a node-to-node or fixed-end anchor holds its lock-off force and is locked at the end of that phase, after which it behaves as an elastic spring from that state; the equivalences used as the oracle are that a constant force N0 along the anchor axis is, in the residual, an external force of the same magnitude and direction, and that on a linear-elastic model a later phase's increment is superposable -- so the same problem can be built twice from different primitives},
   note  = {cited by KV-STR-001},
 }
 
-@misc{kataib,
+@misc{kataic,
   title = {KATAI 2D input contract (docs/k2d-format.md, dilatancy_cutoff / e_max / e_init): the dilatancy cut-off sets the mobilised dilatancy to zero once the void ratio reaches the critical (maximum) void ratio; a minimum void ratio plays no part in the rule, which is why KATAI does not carry one},
   note  = {cited by KV-CST-004},
 }
 
-@misc{kataic,
+@misc{kataid,
   title = {KATAI 2D input contract (docs/k2d-format.md, ignoreund): in a phase that ignores undrained behaviour, the undrained response of Undrained (A)/(B) materials is temporarily excluded so that no excess pore pressure is generated, while the strength parameters stay as declared. The independent path is the same model with the material DECLARED drained: if the option means what the contract says, the two must be the same calculation},
   note  = {cited by KV-CST-005},
 }
 
-@misc{kataid,
+@misc{kataie,
   title = {KATAI 2D input contract (docs/k2d-format.md, phases[i].poly / struct / load / disp / hydro / dry / pwater / pwlevel / pmat / smat / scontr: a phase addresses the project's objects by index; regions, layers, interfaces and structures address the material lists by index)},
   note  = {cited by KV-GEO-004},
 }
 
-@misc{kataie,
+@misc{kataif,
   title = {KATAI 2D input contract (docs/k2d-format.md, soil region object -- how regions combine: the last region containing a point owns it; edges are noded to 1e-5 of the model diagonal)},
   note  = {cited by KV-GEO-002},
 }
 
-@misc{kataif,
+@misc{kataig,
   title = {KATAI 2D input contract (docs/k2d-format.md, soil region object; per-edge conditions run vertex j -> j+1; a phase activates regions by index)},
   note  = {cited by KV-GEO-003},
 }
 
-@misc{kataig,
+@misc{kataih,
   title = {KATAI 2D input contract (docs/k2d-format.md, strata / boreholes / level / head) -- (R1) with several boreholes the soil-layer positions are interpolated between the logs; every soil layer is used throughout the whole model contour, so all layers appear in all boreholes, and the top and bottom of a layer may vary between boreholes, which gives non-horizontal layers of non-uniform thickness and layers that locally have zero thickness; (R2) a layer that does not exist at a borehole is given zero thickness there (bottom level equal to top level); (R3) a single borehole head gives a horizontal water surface extending to the model boundaries, and several heads combine into a non-horizontal one},
   note  = {cited by KV-GEO-001},
 }
 
-@misc{kataih,
+@misc{kataii,
   title = {KATAI 2D input contract (docs/k2d-format.md, structs of type plate): a plate is a beam on the mesh nodes it is drawn along, and plates that share a node are rigidly connected there (translations and rotation), so a plate drawn as two consecutive lines is the same structure as the plate drawn as one},
   note  = {cited by KV-STR-015},
 }
 
-@misc{kataii,
+@misc{kataij,
   title = {KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res) -- a barrier is Fully permeable (no effect on flow), Impermeable (a full separation of the pore-pressure degrees of freedom of the interface node pairs, zero cross permeability), or Semi-permeable with a HYDRAULIC RESISTANCE d/k in units of time, the head difference dh across the wall divided by the average discharge q through it per unit area, d/k = dh/q. Read against Darcy's law in series: the two halves of a confined aquifer and the screen between them are three resistances the same discharge passes through},
   note  = {cited by KV-FLW-004},
 }
 
-@misc{kataij,
+@misc{kataik,
   title = {KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res) for the three cross-permeability cases and what each means (fully permeable, the default: no effect on flow; impermeable: separate pore-pressure degrees of freedom on the two sides; semi-permeable: a hydraulic resistance d/k); and the drained limit of Biot consolidation, as in KV-STR-006 -- once the excess pore pressure is gone the coupled problem IS the drained problem, which this program solves by an independent path (solve_nonlinear, with a real Coulomb return on the joint)},
   note  = {cited by KV-STR-007},
 }
 
-@misc{kataik,
+@misc{katail,
   title = {KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res): a semi-permeable barrier passes q = dh / R per unit area, R = d/k [day]; Darcy's law in series across a strip of width d: the strip of permeability d / (R + d/k) has the resistance of the screen plus that of the soil it replaces},
   note  = {cited by KV-FLW-011},
 }
 
-@misc{katail,
+@misc{kataim,
   title = {KATAI 2D input contract (docs/k2d-format.md, tol) for the tolerated error every criterion is measured against; the deformation convergence criteria as a FAMILY are stated in full in the locator (and in kernel/analysis/include/katai/analysis/nonlinear_solver.hpp, NewtonResult::Convergence, and internal_forces.hpp, LocalErrorProbe). THE SAME STIFFNESS PARAMETER CAN BE WRITTEN AS EITHER OF TWO RECIPROCALS: elastic work over total, or total over elastic. Only total over elastic has the behaviour the parameter exists to show -- exactly unity while the solution is fully elastic, approaching zero at failure -- and supports the uses built on it (a mechanism is suspected below CSP 0.5, collapse below 0.015). The inverted form is >= 1 and GROWS without bound as a mechanism forms, which would make the stiffness-weighted force error loosen towards failure instead of tightening. Implemented as total over elastic, deliberately, and this case is what holds it there},
   note  = {cited by KV-NUM-013},
 }
 
-@misc{kataim,
+@misc{katain,
   title = {KATAI 2D input contract (docs/k2d-format.md, tol, cstop / cminp): a Consolidation phase with a state stop ends at the first time step whose largest excess pore pressure is at or below cminp, and its answer is that time; the tolerated error is relative to the forces in play. The independent path is the same phase solved at a tolerance more than three decades tighter, where the stop time has stopped moving},
   note  = {cited by KV-NUM-015},
 }
 
-@misc{katain,
+@misc{kataio,
   title = {KATAI 2D input-safety property (an input may be used differently from the way it was written, but never in silence; docs/diagnostics.md): the independent path is the same model with the condition removed, which must run without the code},
   note  = {cited by KV-DIA-003},
 }
 
-@misc{kataio,
+@misc{kataip,
   title = {KATAI 2D input-safety property (no input may be discarded in silence): the independent path is the same problem with the object drawn where the mesh actually takes it, plus global vertical equilibrium of the support reactions},
   note  = {cited by KV-DIA-001},
 }

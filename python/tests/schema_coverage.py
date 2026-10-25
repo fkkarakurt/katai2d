@@ -99,6 +99,7 @@ KEY_TO_ATTR = {
     "smat": "struct_material",
     "punch": "prevent_punching",
     "scontr": "struct_contraction",
+    "sjack": "struct_retension",
     "pwater": "poly_water",
     "pwlevel": "poly_water_level",
     "hyd_res": "hydraulic_resistance",
@@ -116,6 +117,9 @@ def coverage_project():
     pr.has_water = True
     pr.wx = [0.0, 10.0]
     pr.wy = [4.0, 4.0]
+    mesh = pr.mesh
+    mesh.rel = 0.67   # written only when set
+    pr.mesh = mesh
 
     soil = core.Material()
     soil.name = "Soil"
@@ -244,6 +248,7 @@ def coverage_project():
     ph.poly_material = [0]
     ph.struct_material = [0]
     ph.struct_contraction = [0.005]
+    ph.struct_retension = [120.0]
     ph.struct_active = [1]
     ph.load_active = [1]
     ph.disp_active = [1]

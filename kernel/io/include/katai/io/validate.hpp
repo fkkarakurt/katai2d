@@ -694,6 +694,13 @@ inline ValidationReport validate_project(const model::Project& p) {
               "x_min must be >= 0 (got " + num(p.x_min) + " m)");
 
     // -- Mesh and initial procedure --------------------------------------------
+    if (!(p.mesh.rel >= 0.0))
+        r.add(Severity::Error, "mesh.rel",
+              "the relative element size must be 0 (off) or positive (got " + num(p.mesh.rel) + ")");
+    else if (p.mesh.rel > 0.0 && !(std::hypot(p.x_max - p.x_min, p.y_max - p.y_min) > 0.0))
+        r.add(Severity::Error, "mesh.rel",
+              "a relative element size needs the model's extent (x_min..x_max, y_min..y_max), "
+              "which is empty");
     if (!(p.mesh.elem_size > 0.0))
         r.add(Severity::Error, "mesh.elem_size",
               "the target element size must be positive (got " + num(p.mesh.elem_size) + " m)");

@@ -633,7 +633,7 @@ class _Phases:
              apply_fraction=None, ignore_undrained=None, reset_small_strain=None,
              design=None, water=None, dry=(), wet=(), pore_pressure=None, region_water=None,
              materials=None, reset_displacements=None, plates=None, contraction=None,
-             ramp=None, kh=None, kv=None):
+             ramp=None, kh=None, kv=None, retension=None):
         ph = _core.Phase()
         ph.name = name
         ph.type = ptype
@@ -740,6 +740,14 @@ class _Phases:
                     self._prj._structs[h.index].kind != _core.StructKind.Plate:
                 raise ValueError(f"contraction= is given to a plate, not {h!r}")
         self._prj._phase_contraction.append({h.index: float(v) for h, v in (contraction or {}).items()})
+        # Re-tension: {anchor: 450.0} jacks an anchor already in place to that force in this phase
+        # [kN per anchor, tension-positive] and locks it again where the wall comes to. An event of
+        # this phase only: the next phase continues from the lock. Plastic phases, carried anchors.
+        for h in (retension or {}):
+            if not isinstance(h, StructHandle) or \
+                    self._prj._structs[h.index].kind != _core.StructKind.Anchor:
+                raise ValueError(f"retension= is given to an anchor, not {h!r}")
+        self._prj._phase_retension.append({h.index: float(v) for h, v in (retension or {}).items()})
         self._prj._phase_water_set.append(water is not None)
         # pore_pressure="flow": this phase's pore pressures from a groundwater flow on its active
         # ground (Phase.pore_from_flow) -- the head a transient flow phase right before it ended
@@ -777,6 +785,11 @@ class _Phases:
         ``materials={region: material}`` gives a region another material from this
         phase on (improved ground, a clay undrained while loaded and drained
         afterwards): its stresses are kept, the new model's own state starts from them.
+
+        ``retension={anchor: kN}`` re-stresses an anchor installed in an earlier
+        phase: the jack is raised to that force (per anchor, like the material's
+        ``prestress``) over this phase, and the anchor is locked again where the
+        wall comes to. It applies to this phase only.
 
         ``region_water={region: level}`` gives a region a hydrostatic water level
         of its own; ``{region: "interpolate"}`` makes its pore pressure vary
@@ -931,11 +944,18 @@ class _Phases:
         return b
 
 
+# Relative element sizes by name: the factor on a twentieth of the model's diagonal.
+_RELATIVE_MESH = {"very coarse": 2.0, "coarse": 1.33, "medium": 1.0, "fine": 0.67, "very fine": 0.5}
+
+
 class Project:
     """A KATAI 2D analysis, built the way the problem is described.
 
     Parameters: ``kind`` "plane_strain" (default) or "axisymmetric";
     ``element`` "tri6" (default) or "tri15"; ``mesh_size`` target element edge [m];
+    ``relative_mesh`` instead sizes the elements from the model: "very coarse",
+    "coarse", "medium", "fine", "very fine" or a factor (1 = medium = a twentieth of
+    the model's diagonal), so a model drawn wider keeps the same density;
     ``auto_refine`` refines near structures and loads.
 
     Build with ``prj.materials`` / ``prj.geometry`` / ``prj.water`` /
@@ -945,7 +965,7 @@ class Project:
     """
 
     def __init__(self, name, *, kind="plane_strain", element="tri6",
-                 mesh_size=2.0, auto_refine=True):
+                 mesh_size=2.0, auto_refine=True, relative_mesh=None):
         if kind not in ("plane_strain", "axisymmetric"):
             raise ValueError("kind must be 'plane_strain' or 'axisymmetric'")
         if element not in ("tri6", "tri15"):
@@ -955,6 +975,16 @@ class Project:
         self._element = element
         self._mesh_size = mesh_size
         self._auto_refine = auto_refine
+        if relative_mesh is None:
+            self._mesh_rel = 0.0
+        elif isinstance(relative_mesh, str):
+            if relative_mesh not in _RELATIVE_MESH:
+                raise ValueError(f"relative_mesh: one of {list(_RELATIVE_MESH)} or a factor, not {relative_mesh!r}")
+            self._mesh_rel = _RELATIVE_MESH[relative_mesh]
+        else:
+            self._mesh_rel = float(relative_mesh)
+            if not self._mesh_rel > 0.0:
+                raise ValueError("relative_mesh: a positive factor")
         self._materials = []
         self._polygons = []
         self._loads = []
@@ -975,6 +1005,7 @@ class Project:
         self._phase_materials = []
         self._phase_plates = []
         self._phase_contraction = []
+        self._phase_retension = []
         self._phase_water_set = []
         self._phase_pore_set = []
         self.materials = _Materials(self)
@@ -1025,6 +1056,7 @@ class Project:
         mesh.elem_size = self._mesh_size
         mesh.order = 6 if self._element == "tri6" else 15
         mesh.auto_refine = self._auto_refine
+        mesh.rel = self._mesh_rel
         pr.mesh = mesh
         pr.x_min, pr.x_max, pr.y_min, pr.y_max = self._extent()
         if self._water is not None:
@@ -1138,6 +1170,11 @@ class Project:
                 contr_state[si] = c
             if any(c != 0.0 for c in contr_state):
                 ph.struct_contraction = list(contr_state)
+            if self._phase_retension[k]:
+                jack = [0.0] * len(self._structs)
+                for si, pj in self._phase_retension[k].items():
+                    jack[si] = pj
+                ph.struct_retension = jack
             if any(rw_mode) and ph.type in (_core.PhaseType.Plastic, _core.PhaseType.Safety):
                 ph.poly_water = list(rw_mode)
                 ph.poly_water_level = list(rw_level)

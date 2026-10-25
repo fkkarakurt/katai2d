@@ -170,7 +170,12 @@ namespace katai::model {
 // structures. An older build reads no such key and runs the phase without them: the static case,
 // with a factor of safety above the seismic one the file asks for. Written only when set, so every
 // older file is byte-identical below the version line.
-inline constexpr int kProjectFileVersion = 23;
+// v24 (2026-10): RE-TENSIONING AN ANCHOR (`phases[i].sjack`): an anchor already in place is jacked
+// to a new force in a phase and locked again. An older build reads no such key and leaves the
+// anchor at the force it carried: the wall without the re-stressing the file states. And a
+// RELATIVE ELEMENT SIZE (`mesh.rel`), which an older build would ignore and mesh at `elem_size`.
+// Both written only when set, so every older file is byte-identical below the version line.
+inline constexpr int kProjectFileVersion = 24;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -422,6 +427,7 @@ inline void wphase(std::string& o, const char* key, const Phase& ph) {
     if (ph.any_material_change()) warr(o, "pmat", ph.poly_material);
     if (ph.any_plate_change()) warr(o, "smat", ph.struct_material);
     if (ph.any_contraction()) warr(o, "scontr", ph.struct_contraction);
+    if (ph.any_retension()) warr(o, "sjack", ph.struct_retension);
     if (ph.any_region_water()) {
         warr(o, "pwater", ph.poly_water);
         warr(o, "pwlevel", ph.poly_water_level);
@@ -492,6 +498,7 @@ inline Phase rphase(const Json& j) {
     ph.poly_material = j.ints("pmat");
     ph.struct_material = j.ints("smat");
     ph.struct_contraction = j.nums("scontr");
+    ph.struct_retension = j.nums("sjack");
     ph.poly_water = j.ints("pwater");
     ph.poly_water_level = j.nums("pwlevel");
     ph.water_override = j.flag("water_override", ph.water_override);
@@ -536,6 +543,7 @@ inline std::string project_to_json(const Project& p) {
     wfield(o, "elem_size", p.mesh.elem_size);
     wfield(o, "order", (double)p.mesh.order);
     wfield(o, "auto_refine", p.mesh.auto_refine);
+    if (p.mesh.rel > 0.0) wfield(o, "rel", p.mesh.rel);
     closeobj(o); o += ',';
 
     wkey(o, "materials"); o += '[';
@@ -801,6 +809,7 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
         p.mesh.elem_size = mo.num("elem_size", p.mesh.elem_size);
         p.mesh.order = (int)mo.num("order", (double)p.mesh.order);
         p.mesh.auto_refine = mo.flag("auto_refine", p.mesh.auto_refine);
+        p.mesh.rel = mo.num("rel", p.mesh.rel);
     }
 
     if (const Json* arr = root.find("materials"); arr && arr->type == Json::Arr)

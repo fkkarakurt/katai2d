@@ -104,7 +104,8 @@ inline MeshResult mesh_from_project(const model::Project& pr, double max_area,
 inline MeshResult mesh_from_project(const model::Project& pr) {
     MeshOptions opt;
     opt.auto_refine = pr.mesh.auto_refine;
-    return mesh_from_project(pr, 0.5 * pr.mesh.elem_size * pr.mesh.elem_size, pr.mesh.order, opt);
+    const double h = model::element_size(pr);
+    return mesh_from_project(pr, 0.5 * h * h, pr.mesh.order, opt);
 }
 
 } // namespace katai::app

@@ -222,6 +222,13 @@ struct AnchorElement {
     // wall moved four times as far as it should -- with no message. Set by the phase driver for
     // an anchor installed in a static phase.
     bool lock_off = false;
+    // RE-TENSIONED in this phase: the jack is put on an anchor that is already in place and holds
+    // `jack` (per metre, like prestress) instead of the lock-off force it was installed with, and
+    // the anchor is locked again where the wall comes to. N0 stays what it was, so the elongation
+    // committed is the one at which N0 + (EA/L)(U - U_p) is the jack force, and from the next phase
+    // the anchor is a spring from there. Set by the phase driver, with lock_off.
+    bool retension = false;
+    double jack = 0.0;
     int install = -1;   // installation cohort, Structures::install_datum; -1 = the zero datum
     // The global DOFs the ends act on when they are NOT the mesh node's own, [a_x,a_y, b_x,b_y];
     // -1 = the node's DOF. An end drawn on an embedded wall pulls the WALL, whose translations

@@ -561,6 +561,27 @@ void scope_refusals() {
         report(res);
         check(all_ok(res, 2) && !said(res, "K2D-S007"), "the same in plane strain: runs");
     }
+    {   // S008: a re-tension on an anchor installed in the same phase
+        m::Project pr = block();
+        m::AnchorMaterial am; am.name = "Tie"; am.EA = 2e5; am.prestress = 10.0;
+        pr.anchors.push_back(am);
+        m::StructElement a; a.kind = m::StructKind::Anchor; a.name = "Tie"; a.material = 0;
+        a.x1 = 3.0; a.y1 = 2.5; a.x2 = 7.0; a.y2 = 2.5;
+        pr.structs.push_back(a);
+        pr.initial.struct_active = {0};
+        m::Phase install = phase(m::PhaseType::Plastic, "Install"); install.struct_active = {1};
+        install.struct_retension = {15.0};
+        pr.phases.push_back(install);
+        auto res = run(pr);
+        check(refused_with(res, "K2D-S008"), "a re-tension on an anchor installed in the same phase: refused (K2D-S008)");
+        pr.phases[0].struct_retension.clear();
+        m::Phase jack = phase(m::PhaseType::Plastic, "Re-tension"); jack.struct_active = {1};
+        jack.struct_retension = {15.0};
+        pr.phases.push_back(jack);
+        res = run(pr);
+        report(res);
+        check(all_ok(res, 3) && !said(res, "K2D-S008"), "re-tensioned in the phase after: runs");
+    }
 }
 } // namespace
 

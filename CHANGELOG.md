@@ -6,6 +6,33 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A relative element size (.k2d v24)
+
+The mesh can be sized from the model instead of in metres (`mesh.rel`; Python
+`relative_mesh="fine"` or a factor; the Mesh panel's Very coarse ... Very fine): the target element
+edge is the factor times a twentieth of the model's diagonal, so a model drawn wider keeps the
+same density and a first mesh needs no number. Medium is 1, very coarse 2, very fine 0.5. The
+element size is read in one place for the mesher and for the virtual thickness of the interfaces,
+so both follow it. A relative size meshes node for node as the absolute size it stands for
+(test_mesh_relative); a negative factor, or one on a model with no extent, is refused by the
+validator.
+
+### An anchor re-tensioned in a later phase (.k2d v24)
+
+A phase can put the jack back on an anchor installed earlier (`phases[i].sjack`, by structure, kN
+per anchor; Python `retension={anchor: kN}`; the phase editor): the anchor is raised to the new
+force over the phase's steps, holds it while the wall moves, and is locked again where the wall
+comes to -- from the next phase on a spring from that lock. Until this an anchor could only be
+installed at its lock-off force and left there, and re-stressing a row of anchors after an
+excavation stage could not be stated. A re-tension on a structure that is not an anchor carried
+from the phase before, or in a phase that is not a Plastic phase, is refused (K2D-S008).
+
+KV-STR-022 holds it with a path identity on a linear-elastic block: an anchor installed at 300 kN
+and re-tensioned to 500 kN leaves the same displacement field (to 1e-17 m) and, in a later phase
+that loads the block, the same anchor force as one installed at 500 kN; the re-tension phase ends
+with the anchor at exactly the jack force, and a jack above the anchor's capacity leaves it at the
+capacity.
+
 ### A consolidation that ends on a state ends when the model does
 
 A Consolidation phase asked to run until the excess pore pressure is below a value, or until a

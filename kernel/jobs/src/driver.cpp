@@ -1258,7 +1258,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
     // the mesh, not of the elements that happen to lie along the line: refining the mesh at a
     // wall is not a statement about the stiffness of the contact, and with the local size it
     // was one -- halving the elements there doubled kn and ks.
-    const double iface_thickness_base = pr.mesh.elem_size;
+    const double iface_thickness_base = model::element_size(pr);
     const auto eff_unit_weight = [&pr, &io, water, &material_at](double x, double y) {
         const int mat = material_at(x, y);
         if (mat < 0 || mat >= (int)pr.materials.size()) return 0.0;
@@ -2921,6 +2921,52 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             an.lock_off = !carry_plan.carried ||
                           (ai < carry_plan.new_anchor.size() && carry_plan.new_anchor[ai]);
         }
+    // RE-TENSIONING (`sjack`): an anchor already in place is jacked to a new force in this phase
+    // and locked again where the wall comes to (AnchorElement::retension). The ground and the wall
+    // see the difference between that force and the one the anchor carried at the end of the phase
+    // before, raised over the phase's steps (the baseline B below). Only an anchor carried from
+    // the phase before, and only in a Plastic phase: a Safety search, a consolidation and a dynamic
+    // phase do not put a jack on an anchor, and an anchor installed in this phase takes its
+    // lock-off force.
+    if (io.config && io.config->any_retension()) {
+        for (size_t si = 0; si < io.config->struct_retension.size(); ++si) {
+            const double P = io.config->struct_retension[si];
+            if (P == 0.0) continue;   // silent-drop-ok: this structure is not re-tensioned here
+            const katai::core::StructCarryRecord* rec = nullptr;
+            size_t rc = 0;
+            for (size_t c = 0; c < struct_records.size(); ++c)
+                if (struct_records[c].si == (int)si) { rec = &struct_records[c]; rc = c; break; }
+            const bool anchor = si < pr.structs.size() && pr.structs[si].kind == model::StructKind::Anchor;
+            const bool kept = rec && carry_plan.carried && rc < carry_plan.record_installed.size() &&
+                              !carry_plan.record_installed[rc] && rec->anchors[1] > rec->anchors[0];
+            if (!anchor || !kept || io.config->type != model::PhaseType::Plastic) {
+                const std::string who = si < pr.structs.size() ? "\"" + pr.structs[si].name + "\""
+                                                               : "number " + std::to_string(si + 1);
+                refuse(R, "K2D-S008", io.config->name,
+                       "Phase \"" + io.config->name + "\" re-tensions structure " + who + " to " +
+                           dnum(P) + " kN, but " +
+                           (!anchor ? std::string("it is not an anchor")
+                            : io.config->type != model::PhaseType::Plastic
+                                ? std::string("a jack is put on an anchor in a Plastic phase only")
+                                : std::string("it is not an anchor carried from the phase before")) +
+                           ". Re-tensioning puts a jack on an anchor already in place; an anchor "
+                           "installed in this phase takes its lock-off force (the anchor material's "
+                           "prestress).");
+                return R;
+            }
+            const auto& s = pr.structs[si];
+            const double Ls = s.material >= 0 && s.material < (int)pr.anchors.size() &&
+                                      pr.anchors[s.material].Lspacing > 1e-9
+                                  ? pr.anchors[s.material].Lspacing
+                                  : 1.0;
+            for (size_t ai = rec->anchors[0]; ai < rec->anchors[1]; ++ai) {
+                auto& an = structures.anchors[ai];
+                an.lock_off = true;
+                an.retension = true;
+                an.jack = P / Ls;   // per metre of wall, like the lock-off force
+            }
+        }
+    }
     // A wall or interface that was active in the parent and is inactive here leaves its two sides
     // where the joint let them go -- apart, if it slipped or opened -- and ties them for this phase's
     // increments. The ground is fine with that: it carries its stresses, not a displacement datum. A
@@ -4518,6 +4564,11 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 // installation datum is this phase's datum -- except its lock-off force, which is a
                 // constant in its internal force. That force is what this phase applies, so it must
                 // stay out of B, exactly as it did when no structure was carried at all.
+                //
+                // An anchor RE-TENSIONED in this phase is in B with the jack's force, as it is in the
+                // internal force the solve starts from, so residual(0) stays zero and the ramp
+                // f - B carries the change from the force it held to the jack's: the jack is
+                // raised over the phase's steps, not applied at its first.
                 katai::core::Structures without_new_lockoff;
                 const katai::core::Structures* base_structures = &structures;
                 for (size_t ai = 0; ai < structures.anchors.size(); ++ai)

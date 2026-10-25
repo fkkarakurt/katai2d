@@ -22,7 +22,7 @@
 //   oracle:   independent_path
 //   source:   KATAI 2D input contract (docs/k2d-format.md, phases[i].poly / struct / load / disp / hydro / dry / pwater / pwlevel / pmat / smat / scontr: a phase addresses the project's objects by index; regions, layers, interfaces and structures address the material lists by index)
 //   locator:  the table-driven builder in this file, which writes every phase vector from per-object rows and resolves materials by name; it shares no code with katai/model/project.hpp's edit functions
-//   quantity: every per-object phase setting (activation, dry flag, water mode and level, region material, plate section, contraction) and every material reference of the edited project, against the project built without the deleted row
+//   quantity: every per-object phase setting (activation, dry flag, water mode and level, region material, plate section, contraction, anchor re-tension) and every material reference of the edited project, against the project built without the deleted row
 //   expected: identical, setting by setting, for every deletion of every object kind, for a region split into two pieces, and for every material deletion of every list; the old Studio deletion (list erased, phases untouched) differs
 //   band:     exact -- the settings are integers, flags and copied doubles
 
@@ -60,6 +60,7 @@ struct StructRow {
     PerPhase active;
     std::vector<std::string> section;   // plates: phase section, "" = drawn
     std::vector<double> contraction;
+    std::vector<double> retension;
 };
 struct SimpleRow {   // loads, prescribed displacements, wells
     std::string name;
@@ -129,6 +130,7 @@ static m::Project build(const Table& t) {
             ph.struct_active.push_back((char)s.active[(size_t)k]);
             ph.struct_material.push_back(s.kind == m::StructKind::Plate ? find(t.plates, s.section[(size_t)k]) : -1);
             ph.struct_contraction.push_back(s.contraction[(size_t)k]);
+            ph.struct_retension.push_back(s.retension[(size_t)k]);
         }
         for (const auto& l : t.loads) ph.load_active.push_back((char)l.active[(size_t)k]);
         for (const auto& d : t.disps) ph.disp_active.push_back((char)d.active[(size_t)k]);
@@ -176,6 +178,7 @@ static Table make_table() {
             s.active.push_back(pat(i, k, 3) != 1);
             s.section.push_back(s.kind == m::StructKind::Plate && pat(i, k, 3) == 2 ? t.plates[(size_t)(i + k) % t.plates.size()] : "");
             s.contraction.push_back(s.kind == m::StructKind::Plate ? 0.001 * pat(i, k, 4) : 0.0);
+            s.retension.push_back(s.kind == m::StructKind::Anchor ? 50.0 * pat(i, k, 3) : 0.0);
         }
         t.structs.push_back(s);
     }
@@ -244,6 +247,7 @@ static bool same_model(const m::Project& a, const m::Project& b, std::string& wh
             if (pa.active_struct(i) != pb.active_struct(i)) return fail(s + ": activation");
             if (pa.plate_of(i, -1) != pb.plate_of(i, -1)) return fail(s + ": section");
             if (pa.contraction_of(i) != pb.contraction_of(i)) return fail(s + ": contraction");
+            if (pa.retension_of(i) != pb.retension_of(i)) return fail(s + ": re-tension");
         }
         for (size_t i = 0; i < a.loads.size(); ++i)
             if (pa.active_load(i) != pb.active_load(i)) return fail("load " + std::to_string(i) + at);
@@ -317,7 +321,7 @@ int main() {
     {
         m::Project p = build(T);
         for (auto* ph : {&p.initial, &p.phases[0], &p.phases[1], &p.phases[2]}) {
-            ph->struct_active.resize(2); ph->struct_material.resize(1); ph->struct_contraction.clear();
+            ph->struct_active.resize(2); ph->struct_material.resize(1); ph->struct_contraction.clear(); ph->struct_retension.clear();
             ph->poly_dry.resize(1); ph->poly_material.clear();
         }
         m::Project ref = p;

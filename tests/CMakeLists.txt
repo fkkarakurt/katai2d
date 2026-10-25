@@ -60,6 +60,7 @@ katai_add_test(test_design_code katai::analysis)       # EC7 (EN 1997-1) + TBDY 
 katai_add_test(test_geometry2d katai::geometry)     # planar arrangement: geometry lines -> closed regions (clusters)
 katai_add_test(test_model_mesh katai::jobs katai::mesh katai::model)  # project polygon -> FE mesh (katai/jobs/mesh_builder.hpp)
 katai_add_test(test_mesh_multi_region katai::jobs katai::mesh katai::model)  # regions that share, touch or overlap one another mesh as one conforming partition
+katai_add_test(test_mesh_relative katai::jobs katai::mesh katai::model katai::io)  # mesh.rel (.k2d v24): a relative element size meshes node for node as the absolute size it stands for
 katai_add_test(test_region_edit katai::jobs katai::mesh katai::model)  # close a region against existing ones, split regions with a line, keep phase flags aligned
 katai_add_test(test_project_edit katai::model)  # KV-GEO-004: deleting / splitting an object or a material = the project built without it, in every phase setting
 katai_add_test(test_soft_soil_consolidation katai::jobs katai::mesh katai::model katai::analysis)  # KV-CON-005: a Soft Soil clay consolidating under a fill = an independent 1-D finite-difference column
@@ -197,6 +198,7 @@ if(TARGET test_input_corpus)
 endif()
 katai_add_test(test_phase_water katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-CST-003: staged dewatering (.k2d v4 per-phase water) against the effective-stress closed form -- the second capability the anchored-excavation benchmark needed
 katai_add_test(test_anchor_prestress katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-001: the anchor lock-off force (.k2d v3) against an equivalent external-force model -- the first structural case in the matrix, and the input every anchored excavation needs
+katai_add_test(test_anchor_retension katai::jobs katai::mesh katai::model)  # KV-STR-022: re-tensioning an anchor in a later phase (.k2d v24 sjack) = installing it at the jack force, on a linear-elastic block
 katai_add_test(test_plate_joint katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-015: plates meeting at a node are joined rigidly -- a plate drawn in two pieces carries the moments of the plate drawn in one
 katai_add_test(test_driven_structures katai::jobs katai::mesh katai::analysis katai::model)  # KV-STR-009: a plate on a settling support and anchors on driven edges, read from the force report against closed forms -- the anchor report used to drop a driven node's motion
 katai_add_test(test_safety_structures katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-STR-010: a Safety run with its structures, on the sliding block -- the interface reduced with the soil, a plate's weight and an anchor's capacity carried unreduced, each against a closed form

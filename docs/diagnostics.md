@@ -64,6 +64,7 @@ without a material, a phase naming a material the project does not have; `K2D-S�
 | `K2D-S005` | refusal | An **interface (or a wall with interfaces) is activated in a phase other than Plastic**: taking over the ground's stress at its line is done in a staged construction phase. |
 | `K2D-S006` | refusal | A phase **changes the line contraction of a plate that is not carried from the phase before**: a contraction applies to a lining already in place. |
 | `K2D-S007` | refusal | A **pseudo-static acceleration in an axisymmetric model**: the body force acts along fixed directions of the plane, and the x of an axisymmetric model is a radius. |
+| `K2D-S008` | refusal | A **phase re-tensions a structure that cannot take a jack** (`phases[i].sjack`): it is not an anchor, it is not an anchor carried from the phase before (an anchor installed in the phase takes its lock-off force, the material's `prestress`), or the phase is not a Plastic phase -- a Safety search, a consolidation and a dynamic phase do not put a jack on an anchor. |
 
 Codes in the `K2D-M…` family are about a **material parameter** the selected model does not read;
 `K2D-A…` about a limit of the **analysis** that shapes how a result may be read.
