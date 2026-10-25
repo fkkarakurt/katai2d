@@ -6,6 +6,19 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A consolidation that ends on a state ends when the model does
+
+A Consolidation phase asked to run until the excess pore pressure is below a value, or until a
+degree of consolidation (`cstop`), answers with a time, and the time is read in the tail, where
+what is left to dissipate is a small part of the forces its equilibrium tolerance is measured
+against. At the tolerance every consolidation phase iterates to (a third of the phase's) the tail
+dissipated early: an embankment on soft clay consolidated to 1 kPa stopped at 11.254 days, four
+steps of the march before the 11.350 days every tighter run agrees on (-0.85%), and the road
+embankment on peat and clay at 52.015 against 52.353 days. Such a phase now iterates to a tenth of
+its tolerance and lands on the converged time in both, for about 4% of the run; tightening every
+consolidation phase instead cost 67% and moved nothing else. KV-NUM-015 holds it: the phase at its
+default tolerance stops on the step the same phase at 3e-6 stops on.
+
 ### Faster, with the same answers
 
 Where the time went was measured first: `katai solve --timings` prints, per phase, the tangent and

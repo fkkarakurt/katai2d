@@ -4644,6 +4644,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             // 1e-6 -> -2.75%, in 9 / 8 / 16 / 132 / 306 s. A time step moves little, so an error
             // tolerated against the whole force in play is a large part of what the step does;
             // 1e-3 is where the answer has stopped moving and the cost has not yet started to.
+            // A phase that ends on a state takes a tenth (below, where its stop is read).
             cin.newton_tol = std::clamp(tol / 3.0, 1e-6, 1e-3);
             // A change of permeability is read from the void ratio at the stress points, which
             // only the elastoplastic path keeps. Entered where every soil is linear elastic it is
@@ -4668,6 +4669,16 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 cin.stop = to_core_consol_stop(io.config->consol_stop);
                 cin.stop_min_pore = io.config->consol_min_pore;
                 cin.stop_degree = io.config->consol_degree / 100.0;   // file is per cent, engine a ratio
+                // A phase that ends on a state answers with a TIME, read where the excess pore
+                // pressure creeps under its target: the tail, where what is left to dissipate is a
+                // small part of the forces the tolerance is measured against. A third of the phase
+                // tolerance let the tail dissipate early. Measured (KV-NUM-015): an embankment on soft
+                // clay to 1 kPa stopped at 11.254 d against the 11.350 d every tighter run agrees on
+                // (four time steps early, -0.85%), and the road embankment on peat and clay at 52.015
+                // against 52.353 d. A tenth lands on the converged time in both, for +4% of the run;
+                // tightening every consolidation phase instead cost +67% and moved nothing else.
+                if (cin.stop != katai::core::ConsolidationStop::TimeInterval)
+                    cin.newton_tol = std::clamp(tol / 10.0, 1e-6, 1e-3);
                 cin.first_dt = io.config->consol_first_step;
                 cin.max_steps = io.config->consol_max_steps;
             }
