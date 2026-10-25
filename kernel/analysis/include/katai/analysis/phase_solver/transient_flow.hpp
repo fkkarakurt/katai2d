@@ -58,6 +58,8 @@ struct TransientFlowPhase {
     // the Head edges are not listed here: the strategy makes them limits itself where the water
     // can stand below them.
     std::vector<HeadLimit> limits;
+    // Semi-permeable walls and interfaces (LeakySeam), on this solver's own node numbering.
+    std::vector<LeakySeam> seams;
     // The head the phase starts from, node by node: the head the phase before it ended with.
     // Empty = the prescribed heads on their nodes and the fallback elsewhere (the water table).
     std::vector<double> initial_head;
@@ -207,9 +209,13 @@ inline bool solve_transient_flow_phase(const katai::mesh::Mesh& mesh,
     const HeadBoundary hb_ground = [&hb, &touched, &h0](int n, double t) {
         return touched[n] ? hb(n, t) : h0[n];
     };
+    // A seam with a side the phase has excavated joins ground to no ground: left out.
+    std::vector<LeakySeam> seams;
+    for (const LeakySeam& sm : in.seams)
+        if (touched[sm.a0] && touched[sm.a1] && touched[sm.b0] && touched[sm.b1]) seams.push_back(sm);
     const UnsaturatedFlowResult fr = solve_transient_unsaturated_flow(
         fmesh, cperm, poros, ss, ret, is_presc, hb_ground, h0, dt, nsteps, has_flux ? &in.nodal_flux : nullptr,
-        in.solve_factory, 60, 1e-7, limits.empty() ? nullptr : &limits);
+        in.solve_factory, 60, 1e-7, limits.empty() ? nullptr : &limits, seams.empty() ? nullptr : &seams);
     if (!fr.converged || fr.head.empty()) {
         R.message = "Transient flow did not converge (the SWCC may be very steep -- use more, "
                     "smaller time steps).";

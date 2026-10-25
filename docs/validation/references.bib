@@ -222,16 +222,21 @@
 }
 
 @misc{kataik,
+  title = {KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res): a semi-permeable barrier passes q = dh / R per unit area, R = d/k [day]; Darcy's law in series across a strip of width d: the strip of permeability d / (R + d/k) has the resistance of the screen plus that of the soil it replaces},
+  note  = {cited by KV-FLW-011},
+}
+
+@misc{katail,
   title = {KATAI 2D input contract (docs/k2d-format.md, tol) for the tolerated error every criterion is measured against; the deformation convergence criteria as a FAMILY are stated in full in the locator (and in kernel/analysis/include/katai/analysis/nonlinear_solver.hpp, NewtonResult::Convergence, and internal_forces.hpp, LocalErrorProbe). THE SAME STIFFNESS PARAMETER CAN BE WRITTEN AS EITHER OF TWO RECIPROCALS: elastic work over total, or total over elastic. Only total over elastic has the behaviour the parameter exists to show -- exactly unity while the solution is fully elastic, approaching zero at failure -- and supports the uses built on it (a mechanism is suspected below CSP 0.5, collapse below 0.015). The inverted form is >= 1 and GROWS without bound as a mechanism forms, which would make the stiffness-weighted force error loosen towards failure instead of tightening. Implemented as total over elastic, deliberately, and this case is what holds it there},
   note  = {cited by KV-NUM-013},
 }
 
-@misc{katail,
+@misc{kataim,
   title = {KATAI 2D input-safety property (an input may be used differently from the way it was written, but never in silence; docs/diagnostics.md): the independent path is the same model with the condition removed, which must run without the code},
   note  = {cited by KV-DIA-003},
 }
 
-@misc{kataim,
+@misc{katain,
   title = {KATAI 2D input-safety property (no input may be discarded in silence): the independent path is the same problem with the object drawn where the mesh actually takes it, plus global vertical equilibrium of the support reactions},
   note  = {cited by KV-DIA-001},
 }

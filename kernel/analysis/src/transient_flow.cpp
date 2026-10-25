@@ -132,7 +132,7 @@ UnsaturatedFlowResult unsaturated_flow_impl(
     const HeadBoundary& head_bc, const std::vector<double>& initial_head,
     const std::vector<double>* flux, double dt, int nsteps,
     const TransientFlowSolveFactory& solve_factory, int max_picard, double picard_tol,
-    const std::vector<HeadLimit>* limits) {
+    const std::vector<HeadLimit>* limits, const std::vector<LeakySeam>* seams) {
     constexpr int N = E::kNodeCount;
     const int nc = mesh.node_count;
 
@@ -202,6 +202,18 @@ UnsaturatedFlowResult unsaturated_flow_impl(
                 }
             }
         }
+        // Semi-permeable seams: a conductance, no storage, at the relative permeability of the
+        // soil they are drawn in at the segment's mean suction.
+        if (seams)
+            for (const LeakySeam& sm : *seams) {
+                const int mat = sm.material >= 0 && sm.material < (int)retention.size() ? sm.material : 0;
+                const WaterRetention& w = retention[(size_t)mat];
+                const double kr = relative_permeability(w, effective_saturation(w, -seam_pressure_head(sm, mesh, h)));
+                seam_entries(sm, kr, [&](int i, int j, double v) {
+                    Hb.add_entry(i, j, v);
+                    Ab.add_entry(i, j, v);
+                });
+            }
         storage_vec /= dts;
     };
 
@@ -419,12 +431,15 @@ UnsaturatedFlowResult solve_transient_unsaturated_flow(
     const std::vector<WaterRetention>& retention, const std::vector<char>& is_prescribed,
     const HeadBoundary& head_bc, const std::vector<double>& initial_head, double dt, int nsteps,
     const std::vector<double>* flux, const TransientFlowSolveFactory& solve_factory,
-    int max_picard, double picard_tol, const std::vector<HeadLimit>* limits) {
+    int max_picard, double picard_tol, const std::vector<HeadLimit>* limits,
+    const std::vector<LeakySeam>* seams) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::unsaturated_flow_impl<Tri15Element>(mesh, perm, porosity, ss_sat, retention,
-            is_prescribed, head_bc, initial_head, flux, dt, nsteps, solve_factory, max_picard, picard_tol, limits);
+            is_prescribed, head_bc, initial_head, flux, dt, nsteps, solve_factory, max_picard, picard_tol,
+            limits, seams);
     return detail::unsaturated_flow_impl<Tri6Element>(mesh, perm, porosity, ss_sat, retention,
-        is_prescribed, head_bc, initial_head, flux, dt, nsteps, solve_factory, max_picard, picard_tol, limits);
+        is_prescribed, head_bc, initial_head, flux, dt, nsteps, solve_factory, max_picard, picard_tol,
+        limits, seams);
 }
 
 }  // namespace katai::core

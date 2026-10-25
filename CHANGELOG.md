@@ -6,6 +6,20 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A semi-permeable screen in every groundwater flow
+
+A wall or interface with a hydraulic resistance passes water across its line against that
+resistance. The steady flow took one only while the ground stayed saturated, and the transient flow
+and the flow of a staged phase refused it (K2D-S004, now retired): a leaky cut-off could not be
+drawn under a dam with a free surface, in a drawdown or beside an excavation. Every flow now keeps
+the line split and rejoins it by its resistance, segment by segment (a conductance without
+storage), and above the water the screen conducts at the relative permeability of the soil it is
+drawn in. Where a staged phase has excavated one side, the pit's water stands behind the screen
+at the phase's table, so the ground drains into the pit through the screen's resistance rather
+than at the table's head. KV-FLW-011 sets each flow against the same screen drawn as a strip of
+soil of the equivalent permeability: the discharge of the free-surface flow to 0.12%, the heads of
+a two-day drawdown to 0.6% of the drop, the pore pressures of a staged phase to 1.2%.
+
 ### Liquefaction triggering by TBDY 2018 Annex 16B
 
 The simplified method of the code's mandatory Annex 16B, one SPT test at a time: the blow count

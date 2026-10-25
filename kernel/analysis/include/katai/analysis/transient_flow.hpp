@@ -126,7 +126,9 @@ struct UnsaturatedFlowResult {
 // nonlinear). `limits` (optional): seepage faces, drains and wells' h_min (HeadLimit). The
 // storage of a step is taken against the state at the END of the step before, prescribed nodes
 // included, so a head that changes in time stores and releases the water it should. In the
-// saturated limit (psi>=0 everywhere) reduces to W1 (consistent storage).
+// saturated limit (psi>=0 everywhere) reduces to W1 (consistent storage). `seams` (optional):
+// semi-permeable seams (LeakySeam, seepage.hpp), a conductance without storage, scaled by the
+// relative permeability of the soil they are drawn in.
 // Element type from the mesh.
 // Definition in kernel/analysis/src/transient_flow.cpp (section 5.2).
 UnsaturatedFlowResult solve_transient_unsaturated_flow(
@@ -135,6 +137,7 @@ UnsaturatedFlowResult solve_transient_unsaturated_flow(
     const std::vector<WaterRetention>& retention, const std::vector<char>& is_prescribed,
     const HeadBoundary& head_bc, const std::vector<double>& initial_head, double dt, int nsteps,
     const std::vector<double>* flux = nullptr, const TransientFlowSolveFactory& solve_factory = {},
-    int max_picard = 60, double picard_tol = 1e-7, const std::vector<HeadLimit>* limits = nullptr);
+    int max_picard = 60, double picard_tol = 1e-7, const std::vector<HeadLimit>* limits = nullptr,
+    const std::vector<LeakySeam>* seams = nullptr);
 
 }  // namespace katai::core

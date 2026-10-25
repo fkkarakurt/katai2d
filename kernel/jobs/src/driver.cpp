@@ -207,11 +207,18 @@ static double water_table_at(const model::Project& pr, double x, const model::Ph
 // the active ground below the table is held at the table's head above it -- the model's sides and
 // the faces an excavation exposes alike -- a face above the table is a seepage face, the base is
 // closed, and so is a face that lies along an impermeable line. `joined` pairs (twin, original)
-// for every split the water crosses; `closed_lines` are the impermeable segments.
+// for every split the water crosses; `closed_lines` are the impermeable segments. A semi-permeable
+// line (`leaky_lines`, its `seams`) stays split like an impermeable one and is rejoined by its
+// resistance; where the phase has excavated one side of it, that side's twins are held at the
+// water table's head below it, so the water reaches the pit through the screen's resistance, and
+// a face along it is not handed the table's head directly (that would put the screen's water on
+// the ground's side of it).
 static bool phase_flow_head(const model::Project& pr, const katai::mesh::Mesh& mesh,
                             const std::vector<char>& act,
                             const std::vector<std::pair<int, int>>& joined,
                             const std::vector<std::array<double, 4>>& closed_lines,
+                            const std::vector<std::array<double, 4>>& leaky_lines,
+                            const std::vector<katai::core::LeakySeam>& seams,
                             const model::Phase* config, Eigen::VectorXd& head, std::string& msg) {
     const int per = mesh.nodes_per_element;
     const auto on = [&](int e) { return act.empty() || act[e]; };
@@ -320,6 +327,16 @@ static bool phase_flow_head(const model::Project& pr, const katai::mesh::Mesh& m
     double ymin = 1e300;
     for (int n = 0; n < mesh.node_count; ++n) ymin = std::min(ymin, mesh.y[n]);
     const double tol = 1e-6 * (1.0 + std::fabs(ymin));
+    const auto on_line = [](const std::vector<std::array<double, 4>>& lines, double x, double y) {
+        for (const auto& L : lines) {
+            const double ex = L[2] - L[0], ey = L[3] - L[1], l2 = ex * ex + ey * ey;
+            if (l2 < 1e-18) continue;
+            const double t = std::clamp(((x - L[0]) * ex + (y - L[1]) * ey) / l2, 0.0, 1.0);
+            if (std::hypot(x - (L[0] + t * ex), y - (L[1] + t * ey)) < 1e-6 * (1.0 + std::sqrt(l2)))
+                return true;
+        }
+        return false;
+    };
     const auto on_closed_line = [&](double x, double y) {
         for (const auto& L : closed_lines) {
             const double ex = L[2] - L[0], ey = L[3] - L[1], l2 = ex * ex + ey * ey;
@@ -337,7 +354,8 @@ static bool phase_flow_head(const model::Project& pr, const katai::mesh::Mesh& m
         for (int i = 0; i < ed.npe; ++i) {
             const int n = ed.node[i];
             base = base && std::fabs(mesh.y[n] - ymin) <= tol;
-            closed = closed && on_closed_line(mesh.x[n], mesh.y[n]);
+            closed = closed && (on_closed_line(mesh.x[n], mesh.y[n]) ||
+                                on_line(leaky_lines, mesh.x[n], mesh.y[n]));
         }
         if (base || closed) continue;
         const int ea = ed.node[0], eb = ed.node[ed.npe - 1];
@@ -362,10 +380,31 @@ static bool phase_flow_head(const model::Project& pr, const katai::mesh::Mesh& m
         const int dup = mesh.node_count + (int)k, orig = copy_of[k];
         is_fixed[dup] = is_fixed[orig]; fixed_head[dup] = fixed_head[orig]; is_seep[dup] = is_seep[orig];
     }
+    // The seams: both sides in the ground, or one side excavated and held at the water table's
+    // head below it (the pit's water against the screen); a segment above the table there is left
+    // out (air behind the screen).
+    std::vector<double> held(fm.node_count, std::numeric_limits<double>::quiet_NaN());
+    std::vector<katai::core::LeakySeam> fseams;
+    for (katai::core::LeakySeam sm : seams) {
+        sm.a0 = canon[sm.a0]; sm.a1 = canon[sm.a1]; sm.b0 = canon[sm.b0]; sm.b1 = canon[sm.b1];
+        const bool ua = used[sm.a0] && used[sm.a1], ub = used[sm.b0] && used[sm.b1];
+        if (!ua && !ub) continue;   // silent-drop-ok: no ground on either side in this phase
+        if (!ua || !ub) {
+            const int o0 = ua ? sm.b0 : sm.a0, o1 = ua ? sm.b1 : sm.a1;
+            const double w0 = water_table_at(pr, fm.x[o0], config), w1 = water_table_at(pr, fm.x[o1], config);
+            if (fm.y[o0] >= w0 || fm.y[o1] >= w1) continue;   // silent-drop-ok: air behind the screen
+            held[o0] = w0; held[o1] = w1;
+        }
+        fseams.push_back(sm);
+    }
     std::vector<int> fx, seep;
     std::vector<double> fv;
     for (int n = 0; n < fm.node_count; ++n) {
-        if (!used[n]) { fx.push_back(n); fv.push_back(fm.y[n]); continue; }   // outside the flow
+        if (!used[n]) {   // outside the flow -- or the pit's water behind a screen
+            fx.push_back(n);
+            fv.push_back(std::isfinite(held[n]) ? held[n] : fm.y[n]);
+            continue;
+        }
         if (is_fixed[n]) { fx.push_back(n); fv.push_back(fixed_head[n]); }
         else if (is_seep[n]) seep.push_back(n);
     }
@@ -397,6 +436,7 @@ static bool phase_flow_head(const model::Project& pr, const katai::mesh::Mesh& m
     opt.relax = seep.empty() ? 0.15 : 0.05;
     opt.max_iter = 1200;
     opt.tol = 1e-5;
+    opt.seams = std::move(fseams);
     katai::core::UnconfinedResult res;
     try {
         res = katai::core::solve_unconfined_seepage_face(fm, fx, fv, seep, perm, lin, opt);
@@ -2948,6 +2988,48 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
     // by the phase before is solved again here, on this phase's own water: the stages of an
     // excavation each lower it, and taking the stage before's head left the pit at its old level
     // (measured on a staged excavation: the wall's movement 1.5% short in two stages).
+    // THE SEMI-PERMEABLE SEAMS of the phase, as the flow solvers take them (LeakySeam): each
+    // segment between consecutive pairs of the splitter, along the line, with the resistance
+    // drawn for it and the soil its first side lies in (whose relative permeability it takes
+    // above the water).
+    const auto semi_permeable_seams = [&]() {
+        std::vector<katai::core::LeakySeam> out;
+        std::vector<std::vector<int>> elems_of((size_t)mesh.node_count);
+        for (int e = 0; e < mesh.element_count; ++e)
+            for (int k = 0; k < mesh.nodes_per_element; ++k)
+                elems_of[(size_t)mesh.node_of(e, k)].push_back(e);
+        const auto material_of = [&](int a, int b) {
+            for (int e : elems_of[(size_t)a])
+                for (int f : elems_of[(size_t)b])
+                    if (e == f) return mesh.element_material[e];
+            return -1;
+        };
+        struct P { double key; int a, b; };
+        const auto add_chain = [&](std::vector<P> chain, double R) {
+            std::sort(chain.begin(), chain.end(), [](const P& u, const P& v) { return u.key < v.key; });
+            for (size_t i = 0; i + 1 < chain.size(); ++i) {
+                katai::core::LeakySeam ls;
+                ls.a0 = chain[i].a; ls.a1 = chain[i + 1].a; ls.b0 = chain[i].b; ls.b1 = chain[i + 1].b;
+                ls.length = std::hypot(mesh.x[ls.a1] - mesh.x[ls.a0], mesh.y[ls.a1] - mesh.y[ls.a0]);
+                ls.resistance = std::fmax(1e-12, R);
+                ls.material = material_of(ls.a0, ls.a1);
+                if (ls.length > 1e-12) out.push_back(ls);
+            }
+        };
+        for (const auto& w : walls) {
+            if (!w.active || w.flow_barrier != 2) continue;   // silent-drop-ok: not a semi-permeable seam
+            std::vector<P> chain;
+            for (const auto& sp : w.seam) chain.push_back({sp.y, sp.right, sp.left});
+            add_chain(chain, pr.structs[w.si].hydraulic_resistance);
+        }
+        for (const auto& si : soil_ifaces) {
+            if (!si.active || si.flow_barrier != 2) continue;   // silent-drop-ok: not a semi-permeable seam
+            std::vector<P> chain;
+            for (const auto& sg : si.seam) chain.push_back({sg.s, sg.orig, sg.dup});
+            add_chain(chain, pr.structs[si.si].hydraulic_resistance);
+        }
+        return out;
+    };
     const bool prev_flow_head = phase_flow && io.prev && io.prev->flow_head_transient &&
                                 (int)io.prev->flow_head.size() == mesh.node_count;
     if (phase_flow && prev_flow_head) {
@@ -2981,13 +3063,13 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             return R;
         }
         std::vector<std::pair<int, int>> joined;
-        std::vector<std::array<double, 4>> closed_lines;
+        std::vector<std::array<double, 4>> closed_lines, leaky_lines;
         for (const auto& w : walls) {
             const bool closed = w.active && w.flow_barrier == 1;
-            if (w.flow_barrier == 2 && w.active) {
-                refuse(R, "K2D-S004", w.name, "Wall \"" + w.name + "\" is semi-permeable, which the groundwater flow of a "
-                            "staged phase does not take yet: make it permeable or impermeable.");
-                return R;
+            if (w.flow_barrier == 2 && w.active) {   // split, rejoined by its resistance (below)
+                const auto& s = pr.structs[w.si];
+                leaky_lines.push_back({s.x1, s.y1, s.x2, s.y2});
+                continue;   // silent-drop-ok: the screen is carried, as its seams' resistance
             }
             if (closed) {
                 const auto& s = pr.structs[w.si];
@@ -2998,10 +3080,10 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         }
         for (const auto& sp : soil_ifaces) {
             const bool closed = sp.active && sp.flow_barrier == 1;
-            if (sp.flow_barrier == 2 && sp.active) {
-                refuse(R, "K2D-S004", sp.name, "Interface \"" + sp.name + "\" is semi-permeable, which the groundwater flow "
-                            "of a staged phase does not take yet: make it permeable or impermeable.");
-                return R;
+            if (sp.flow_barrier == 2 && sp.active) {   // split, rejoined by its resistance (below)
+                const auto& s = pr.structs[sp.si];
+                leaky_lines.push_back({s.x1, s.y1, s.x2, s.y2});
+                continue;   // silent-drop-ok: the screen is carried, as its seams' resistance
             }
             if (closed) {
                 const auto& s = pr.structs[sp.si];
@@ -3019,7 +3101,8 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 return R;
             }
         std::string fmsg;
-        if (!phase_flow_head(pr, mesh, act, joined, closed_lines, io.config, phase_head, fmsg)) {
+        if (!phase_flow_head(pr, mesh, act, joined, closed_lines, leaky_lines, semi_permeable_seams(),
+                             io.config, phase_head, fmsg)) {
             R.message = fmsg;
             return R;
         }
@@ -4662,15 +4745,9 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             // node by node, so it is handed a mesh in which each tied pair IS one node, and its
             // answer is written back to both. Until 2026-10-22 it was handed the split mesh as it
             // was, and every seam -- permeable or not -- stopped the water. An impermeable seam
-            // stays split; a semi-permeable one is refused, as in the coupled phases.
-            if (semi_permeable) {
-                refuse(R, "K2D-S004", "transient flow", "A semi-permeable wall or interface is active in a transient flow phase, "
-                            "which this build cannot solve with it (its seam passes water against a "
-                            "resistance, which the transient solver has no term for). Declare it "
-                            "impermeable or fully permeable in this phase, or run the flow as a "
-                            "steady calculation, where a confined semi-permeable screen is solved.");
-                return R;
-            }
+            // stays split; a semi-permeable one stays split too and is rejoined by its resistance
+            // (LeakySeam: a conductance, no storage), which until 2026-10-23 was refused here.
+            std::vector<katai::core::LeakySeam> leaky = semi_permeable_seams();
             std::vector<int> to_flow(mesh.node_count);
             int flow_nodes = 0;
             {
@@ -4686,6 +4763,11 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 for (int n = 0; n < mesh.node_count; ++n) to_flow[n] = idx[rep[n]];
             }
             const bool tied = flow_nodes != mesh.node_count;
+            for (auto& sm : leaky) {
+                sm.a0 = to_flow[sm.a0]; sm.a1 = to_flow[sm.a1];
+                sm.b0 = to_flow[sm.b0]; sm.b1 = to_flow[sm.b1];
+            }
+            tin.seams = std::move(leaky);
             katai::mesh::Mesh fmesh;
             if (tied) {
                 fmesh.nodes_per_element = mesh.nodes_per_element;

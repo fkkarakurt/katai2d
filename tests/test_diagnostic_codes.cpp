@@ -483,7 +483,7 @@ void scope_refusals() {
         res = run(pr);
         check(all_ok(res, 2) && !said(res, "K2D-S003"), "without: runs");
     }
-    {   // S004: a semi-permeable interface in the flow of a staged phase
+    {   // S004 (retired): a semi-permeable interface in the flow of a staged phase now runs
         m::Project pr = block();
         add_water(pr, H - 1.0);
         m::StructElement j; j.kind = m::StructKind::Interface; j.name = "Screen";
@@ -492,7 +492,9 @@ void scope_refusals() {
         m::Phase p = phase(m::PhaseType::Plastic, "Flow"); p.pore_from_flow = true;
         pr.phases.push_back(p);
         auto res = run(pr);
-        check(refused_with(res, "K2D-S004"), "a semi-permeable interface in a staged phase's flow: refused (K2D-S004)");
+        report(res);
+        check(all_ok(res, 2) && !said(res, "K2D-S004"),
+              "a semi-permeable interface in a staged phase's flow: runs (K2D-S004 retired)");
         pr.structs[0].flow_barrier = 1;
         // An impermeable free interface ending on the ground surface: the flow's end-node split
         // once left a node with no element, and PARDISO's zero pivot was thrown out of the run.

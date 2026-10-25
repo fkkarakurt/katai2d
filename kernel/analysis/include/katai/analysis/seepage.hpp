@@ -116,6 +116,36 @@ using SeepageLinearSolve =
     std::function<Eigen::VectorXd(const math::CsrMatrix&, const Eigen::VectorXd&)>;
 
 // Unsaturated-zone relative permeability + Picard iteration settings.
+// A SEMI-PERMEABLE SEAM: the two sides of a line the mesh was split along, rejoined by a
+// conductance 1/R per unit area (R = d/k [day], the hydraulic resistance of the screen) over each
+// segment -- the consistent 2-node line matrix L/(6R) [[2,1],[1,2]] between the pair (a0, a1) on
+// one side and (b0, b1) on the other. With a uniform head difference it passes dh L / R, the
+// definition of R read back out. In the unsaturated zone it is scaled by the relative permeability
+// of `material` (the soil the screen is drawn in) at the segment's mean suction, as the ground
+// around it is: a screen above the water passes no more than the ground beside it.
+struct LeakySeam {
+    int a0 = -1, a1 = -1, b0 = -1, b1 = -1;
+    double length = 0.0, resistance = 1.0;
+    int material = -1;
+};
+// The segment's mean pressure head h - y over its four nodes.
+inline double seam_pressure_head(const LeakySeam& s, const mesh::Mesh& mesh, const Eigen::VectorXd& h) {
+    const int nd[4] = {s.a0, s.a1, s.b0, s.b1};
+    double p = 0.0;
+    for (int n : nd) p += h[n] - mesh.y[n];
+    return 0.25 * p;
+}
+// The segment's 4x4 conductance scaled by kr, entry by entry: f(node_i, node_j, value).
+template <class F>
+inline void seam_entries(const LeakySeam& s, double kr, F&& f) {
+    const double c = kr * s.length / (6.0 * s.resistance);
+    const int nd[4] = {s.a0, s.a1, s.b0, s.b1};
+    const double sgn[4] = {1.0, 1.0, -1.0, -1.0};
+    const double m2[2][2] = {{2.0, 1.0}, {1.0, 2.0}};
+    for (int a = 0; a < 4; ++a)
+        for (int b = 0; b < 4; ++b) f(nd[a], nd[b], sgn[a] * sgn[b] * c * m2[a % 2][b % 2]);
+}
+
 struct UnconfinedOptions {
     // Prescribed boundary flux (Neumann), node-indexed and already integrated over the edges
     // (accumulate_boundary_flux above); inflow positive. Empty = every boundary that is not a
@@ -139,6 +169,9 @@ struct UnconfinedOptions {
                               // flip-flop; 0.3+ can get stuck in a limit cycle). For hard
                               // problems (seepage face) drop to 0.05 → the floor drops
                               // ∝ relax × raw amplitude.
+    // Semi-permeable seams (LeakySeam), assembled with the elements in every Picard iteration
+    // and counted in the nodal flux. Empty = none.
+    std::vector<LeakySeam> seams;
 };
 
 struct UnconfinedResult {

@@ -305,6 +305,35 @@ Eigen::VectorXd nodal_flux_krel_impl(const mesh::Mesh& mesh,
     return flux;
 }
 
+// The relative permeability a seam segment conducts with (LeakySeam).
+double seam_kr(const LeakySeam& s, const mesh::Mesh& mesh, const Eigen::VectorXd& head,
+               double k_min, double transition, const std::vector<WaterRetention>* retention) {
+    const double psi = seam_pressure_head(s, mesh, head);
+    if (retention && s.material >= 0 && s.material < (int)retention->size())
+        return relative_permeability_psi((*retention)[(size_t)s.material], -psi);
+    return relative_perm(psi, k_min, transition);
+}
+void assemble_seams(const mesh::Mesh& mesh, const DofMap& dofs, const UnconfinedOptions& o,
+                    const Eigen::VectorXd& head, const std::vector<double>& head_prescribed,
+                    math::SparseMatrixBuilder& builder, Eigen::VectorXd& rhs) {
+    for (const LeakySeam& sm : o.seams)
+        seam_entries(sm, seam_kr(sm, mesh, head, o.k_min, o.transition, o.retention),
+                     [&](int i, int j, double v) {
+                         const int eq_i = dofs.equation(dofs.global_dof(i, 0));
+                         if (eq_i < 0) return;
+                         const int gj = dofs.global_dof(j, 0);
+                         const int eq_j = dofs.equation(gj);
+                         if (eq_j >= 0) builder.add_entry(eq_i, eq_j, v);
+                         else rhs[eq_i] -= v * head_prescribed[gj];
+                     });
+}
+void add_seam_flux(const mesh::Mesh& mesh, const UnconfinedOptions& o, const Eigen::VectorXd& head,
+                   Eigen::VectorXd& flux) {
+    for (const LeakySeam& sm : o.seams)
+        seam_entries(sm, seam_kr(sm, mesh, head, o.k_min, o.transition, o.retention),
+                     [&](int i, int j, double v) { flux[i] += v * head[j]; });
+}
+
 // Expands the 1-DOF free solution to the full nodal field + overlays the Dirichlet nodes.
 Eigen::VectorXd expand_overlay(const mesh::Mesh& mesh, const DofMap& dofs,
                                const Eigen::VectorXd& free_head,
@@ -520,11 +549,13 @@ Eigen::VectorXd compute_nodal_flux(const mesh::Mesh& mesh,
                                    const std::vector<Permeability>& permeability,
                                    const Eigen::VectorXd& head,
                                    const UnconfinedOptions& options) {
-    if (mesh.nodes_per_element == Tri15Element::kNodeCount)
-        return nodal_flux_krel_impl<Tri15Element>(mesh, permeability, head, options.k_min,
-                                                  options.transition, options.retention);
-    return nodal_flux_krel_impl<Tri6Element>(mesh, permeability, head, options.k_min,
-                                             options.transition, options.retention);
+    Eigen::VectorXd q = (mesh.nodes_per_element == Tri15Element::kNodeCount)
+        ? nodal_flux_krel_impl<Tri15Element>(mesh, permeability, head, options.k_min,
+                                             options.transition, options.retention)
+        : nodal_flux_krel_impl<Tri6Element>(mesh, permeability, head, options.k_min,
+                                            options.transition, options.retention);
+    add_seam_flux(mesh, options, head, q);
+    return q;
 }
 
 UnconfinedResult solve_unconfined_seepage_face(
@@ -564,6 +595,7 @@ UnconfinedResult solve_unconfined_seepage_face(
             assemble_krel_impl<Tri6Element>(mesh, dofs, permeability, current, hp,
                                             options.k_min, options.transition, options.retention,
                                             builder, rhs);
+        assemble_seams(mesh, dofs, options, current, hp, builder, rhs);
         add_nodal_flux(mesh, dofs, options.nodal_flux, rhs);
         return expand_overlay(mesh, dofs, linear_solve(builder.build(), rhs), hp);
     };
@@ -594,11 +626,12 @@ UnconfinedResult solve_unconfined_seepage_face(
         // Active-set update: a free face node with ψ>0 → discharging; a discharging node
         // with inward flux (Q>0) → freed (outflow Q<0 = true discharge, see the Neumann
         // sign convention).
-        const Eigen::VectorXd Q = (mesh.nodes_per_element == Tri15Element::kNodeCount)
+        Eigen::VectorXd Q = (mesh.nodes_per_element == Tri15Element::kNodeCount)
             ? nodal_flux_krel_impl<Tri15Element>(mesh, permeability, head, options.k_min,
                                                  options.transition, options.retention)
             : nodal_flux_krel_impl<Tri6Element>(mesh, permeability, head, options.k_min,
                                                 options.transition, options.retention);
+        add_seam_flux(mesh, options, head, Q);
         // Dead band (hysteresis): free→exit only if ψ is clearly positive (>transition);
         // exit→free only if the flux is clearly inward. A node near the exit point is
         // ambiguous at ψ≈0 (mesh-resolution limit) — the dead band keeps it in its current

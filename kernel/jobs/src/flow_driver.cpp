@@ -150,7 +150,7 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
     struct SeamEdge { int r0, r1, l0, l1; double length, resistance; };
     std::vector<SeamEdge> seam_edges;    // semi-permeable coupling, one per seam segment
     std::vector<int> twin_of;            // caller-node -> its twin (or -1), for reporting both sides
-    bool any_barrier = false, any_leaky = false;
+    bool any_barrier = false;
     for (const auto& st : pr.structs) {
         if (st.flow_barrier == 0) continue;
         if (st.kind != model::StructKind::Plate && st.kind != model::StructKind::Interface) continue;
@@ -170,7 +170,6 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
         for (const auto& sp : seam)
             if (sp.orig < (int)twin_of.size()) twin_of[sp.orig] = sp.dup;
         if (st.flow_barrier != 2) continue;   // impermeable: separated DOFs ARE the whole rule
-        any_leaky = true;
         // Semi-permeable: the sides are rejoined by a leaky line passing q_n = dh / R per unit
         // area, R = d/k the hydraulic resistance in units of time. Sorted by
         // arc length, so consecutive entries are the two ends of one seam segment.
@@ -312,6 +311,23 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
     opt.relax = seepage_nodes.empty() ? 0.15 : 0.05;   // seepage face needs the stronger damping
     opt.max_iter = 1200;
     opt.tol = 1e-5;
+    // The semi-permeable seams, for the free-surface solve: the same segments as the confined
+    // path's term below, each with the soil it is drawn in (its conductance follows that soil's
+    // relative permeability above the water).
+    for (const SeamEdge& se : seam_edges) {
+        katai::core::LeakySeam ls;
+        ls.a0 = se.r0; ls.a1 = se.r1; ls.b0 = se.l0; ls.b1 = se.l1;
+        ls.length = se.length; ls.resistance = se.resistance;
+        for (int e = 0; e < mesh.element_count && ls.material < 0; ++e) {
+            bool has0 = false, has1 = false;
+            for (int k = 0; k < mesh.nodes_per_element; ++k) {
+                has0 = has0 || mesh.node_of(e, k) == se.r0;
+                has1 = has1 || mesh.node_of(e, k) == se.r1;
+            }
+            if (has0 && has1) ls.material = mesh.element_material[e];
+        }
+        opt.seams.push_back(ls);
+    }
 
     Eigen::VectorXd head_full;
     int iterations = 0;
@@ -378,18 +394,6 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
         }
         opt.nodal_flux.clear();
         if (with_flux) opt.nodal_flux = flux;   // the boundary flux term q
-        if (!have_head && any_leaky) {
-            // The Picard/active-set solver rebuilds its own system, so the leaky seam would be
-            // dropped from every rebuild -- a semi-permeable wall silently turning into an
-            // impermeable one. Refused by name instead. (An IMPERMEABLE barrier needs no term at
-            // all: it is the split mesh, so it works on this path too.)
-            R.message = "A semi-permeable barrier is only solved in the confined regime in this "
-                        "build: this model has a free surface or a seepage face, where the solver "
-                        "rebuilds its system and the seam's resistance would be dropped. Use an "
-                        "impermeable barrier (which needs no coupling term and works here), or "
-                        "keep the model fully saturated.";
-            return false;
-        }
         if (!have_head) {   // unconfined / seepage-face regime: variable-k_rel Picard + active set
             const auto res = katai::core::solve_unconfined_seepage_face(mesh, fx, fv, seepage_nodes,
                                                                         perm, lin, opt);
