@@ -4,6 +4,7 @@
 #include <katai/math/solve_error.hpp>   // SingularSystem: a refused solve is an answer
 #include <katai/analysis/consolidation.hpp>
 #include <katai/analysis/nonlinear_solver.hpp>   // kStagnationAccept
+#include <katai/analysis/internal_forces.hpp>    // the kinematics policies (PlaneStrainKin, AxisymKin)
 #include <katai/math/thread_pool.hpp>
 
 #include <chrono>
@@ -193,7 +194,12 @@ ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dof
 }  // namespace detail
 
 namespace detail {
-template <class E>
+// Kin: the kinematics (PlaneStrainKin / AxisymKin, internal_forces.hpp) -- the strain operator and
+// its integration weight (r-weighted, per radian, in axisymmetry), the material integration, the
+// stress the element balances and the direction of the pore pressure (with the hoop in
+// axisymmetry). The flow rows of B (dN/dx, dN/dy) and the storage are the same in both, under the
+// same weight.
+template <class E, class Kin = PlaneStrainKin>
 ConsolidationPlasticResult consolidation_plastic_impl(
     const mesh::Mesh& mesh, const DofMap& dofs, const std::vector<MaterialModel>& materials,
     const std::vector<MaterialProfile>& profile,
@@ -203,7 +209,7 @@ ConsolidationPlasticResult consolidation_plastic_impl(
     double dt, int nsteps, const std::vector<char>& active, const Eigen::VectorXd* load_increment,
     const ConsolidationSolveFactory& solve_factory, int max_newton, double newton_tol,
     const math::CsrMatrix* struct_k, const std::vector<int>* pore_tie, bool ramp_load,
-    const Eigen::VectorXd* instant_load) {
+    const Eigen::VectorXd* instant_load, StructureLaws* structure_laws) {
     constexpr int N = E::kNodeCount;
     constexpr int ND = 2 * N;
     const int ndisp = dofs.equation_count();
@@ -219,7 +225,7 @@ ConsolidationPlasticResult consolidation_plastic_impl(
     std::vector<GaussState> trial = committed;
 
     const auto gp = E::gauss_points();
-    const Eigen::Vector3d mvec(1.0, 1.0, 0.0);
+    const typename Kin::Strain mvec = Kin::pore_vector();
 
     // Assemble the coupled system A = [K_T L; Lᵀ −(ΔtH+S)] (full symmetric for the disp/pore couple;
     // K_T itself is NONsymmetric for non-associated plasticity) + internal force f_int(trial), given the
@@ -268,6 +274,11 @@ ConsolidationPlasticResult consolidation_plastic_impl(
         int eqd[ND];
     };
     std::vector<ElemOut> elem_out;
+    // The structures by their own laws read the TOTAL displacement of the phase, v + dv: v is the
+    // committed one (declared below, with the time march), and the increment of the evaluation
+    // the matrix is built from is kept for the matrix.
+    const Eigen::VectorXd* v_phase = nullptr;
+    Eigen::VectorXd struct_dv;
     auto assemble = [&](const Eigen::VectorXd& dv, Eigen::VectorXd& f_int, TangentMode mode,
                         double dt) {
         f_int.setZero(ndisp);
@@ -300,12 +311,12 @@ ConsolidationPlasticResult consolidation_plastic_impl(
             auto& Ke = eo_w.Ke; auto& fe = eo_w.fe; auto& Le = eo_w.Le; auto& He = eo_w.He; auto& Se = eo_w.Se;
             Ke.setZero(); fe.setZero(); Le.setZero(); He.setZero(); Se.setZero();
             for (int g = 0; g < ngp; ++g) {
-                const auto sd = E::strain_displacement(X, gp[g].xi, gp[g].eta);
+                const auto sd = Kin::template gradients<E>(X, gp[g].xi, gp[g].eta);
                 const auto Nsh = E::shape_functions(gp[g].xi, gp[g].eta);
-                const double w = gp[g].weight * sd.det_jacobian;
-                const Eigen::Vector3d deps = sd.B * du_e;
+                const double w = gp[g].weight * sd.weight;
+                const typename Kin::Strain deps = sd.B * du_e;
                 GaussState& tr = trial[(size_t)e * ngp + g];
-                Eigen::Matrix3d Dt;
+                typename Kin::Tangent Dt;
                 // E'(y) / c'(y) at the stress point (uniform() -> the element material, bit-for-bit).
                 const MaterialModel* mp = &mat;
                 MaterialModel mg;
@@ -319,18 +330,18 @@ ConsolidationPlasticResult consolidation_plastic_impl(
                 }
                 // dt: this consolidation time step [day] -- SoftSoilCreep sees the creep +
                 // dissipation interaction through it; the other models do not read the parameter.
-                PointReport rep;
-                Eigen::Vector3d deps_small;
+                typename Kin::Report rep;
+                typename Kin::Strain deps_small;
                 if (read_small) deps_small = sd.B * du_e_small;
-                integrate_point(*mp, committed[(size_t)e * ngp + g], deps, tr, Dt, mode, dt,
-                                (tangent_floor > 0.0 || elastic_matrix) ? &rep : nullptr, 0.0,
-                                read_small ? &deps_small : nullptr);
+                Kin::integrate(*mp, committed[(size_t)e * ngp + g], deps, tr, Dt, mode, dt,
+                               (tangent_floor > 0.0 || elastic_matrix) ? &rep : nullptr, 0.0,
+                               read_small ? &deps_small : nullptr);
                 if (elastic_matrix && rep.plastic) Dt = rep.elastic;
                 else if (tangent_floor > 0.0 && rep.plastic) Dt += tangent_floor * rep.elastic;
                 // The volumetric strain is accumulated here as in every other phase: the void
                 // ratio is read from it (the dilatancy cut-off, the change of permeability), and
                 // a consolidation phase used to leave it where the phase before had left it.
-                tr.eps_vol = committed[(size_t)e * ngp + g].eps_vol + deps(0) + deps(1);
+                tr.eps_vol = committed[(size_t)e * ngp + g].eps_vol + mvec.dot(deps);   // m.deps: with the hoop in axisymmetry
                 // CHANGE OF PERMEABILITY: log10(k / k0) = de / ck, de the change in void ratio
                 // since the initial state. It is read from the COMMITTED state -- the void ratio
                 // at the start of the time step -- so the flow block stays linear within the
@@ -349,7 +360,7 @@ ConsolidationPlasticResult consolidation_plastic_impl(
                                  c0.stress(0), c0.stress(1), c0.stress(2), c0.stress_zz, c0.pp,
                                  deps(0), deps(1), deps(2));
                 }
-                fe.noalias() += w * sd.B.transpose() * tr.stress;
+                fe.noalias() += w * sd.B.transpose() * Kin::stress(tr);
                 Ke.noalias() += w * sd.B.transpose() * Dt * sd.B;
                 Eigen::Matrix<double, 2, N> G;
                 for (int i = 0; i < N; ++i) { G(0, i) = sd.B(0, 2 * i); G(1, i) = sd.B(1, 2 * i + 1); }
@@ -378,6 +389,12 @@ ConsolidationPlasticResult consolidation_plastic_impl(
         // no state, no return mapping. Adding it to BOTH the tangent and the internal force is
         // what makes residual(dv) = 0 hold at the solution rather than approximately.
         if (struct_k) f_int.noalias() += (*struct_k) * dv;
+        // By their own laws: their internal force at the total displacement, from their committed
+        // state -- an anchor or a geogrid at its capacity, a joint or a pile skin slipping.
+        if (structure_laws) {
+            structure_laws->add(*v_phase + dv, f_int, nullptr);
+            struct_dv = dv;
+        }
     };
     // THE MATRIX IS BUILT ONLY WHERE IT IS SOLVED WITH. The balance of an iterate needs the
     // internal force and the coupling blocks, and those blocks -- L, H and the storage -- do
@@ -419,6 +436,10 @@ ConsolidationPlasticResult consolidation_plastic_impl(
             }
         }
         add_structural_block(Ab, struct_k);
+        if (structure_laws) {   // their tangent where the internal force was last evaluated
+            Eigen::VectorXd scratch = Eigen::VectorXd::Zero(ndisp);
+            structure_laws->add(*v_phase + struct_dv, scratch, &Ab);
+        }
         return Ab.build();
     };
     // The coupling blocks of a time step: L (force of the pore pressure), its transpose (volume
@@ -457,6 +478,8 @@ ConsolidationPlasticResult consolidation_plastic_impl(
     };
 
     Eigen::VectorXd v = Eigen::VectorXd::Zero(ndisp);
+    v_phase = &v;
+    struct_dv = Eigen::VectorXd::Zero(ndisp);
     Eigen::VectorXd p = Eigen::VectorXd::Zero(std::max(1, npore));
     if (!initial_pore.empty())   // optional initial excess pore (classic Terzaghi: dissipate u0, no load)
         for (int n = 0; n < mesh.node_count; ++n)
@@ -509,6 +532,11 @@ ConsolidationPlasticResult consolidation_plastic_impl(
                               Eigen::VectorXd& dpv, bool& stagnant) -> bool {
         stagnant = false;
         small_frozen = false;   // each time step starts with the stiffness read from itself
+        if (structure_laws) {   // the excess pore pressure a joint reads beside it: the step's start
+            std::vector<double> pn(mesh.node_count, 0.0);
+            for (int n = 0; n < mesh.node_count; ++n) if (pore_eq[n] >= 0) pn[n] = p(pore_eq[n]);
+            structure_laws->set_soil_pore(pn);
+        }
         Eigen::VectorXd Bbase;
         { Eigen::VectorXd dvz = Eigen::VectorXd::Zero(ndisp);
           assemble(dvz, Bbase, tmode, h); }   // trial == committed -> Bbase = f_int(committed)
@@ -933,6 +961,7 @@ ConsolidationPlasticResult consolidation_plastic_impl(
             v += dv;
             if (npore > 0) p += dpv;
             committed = trial;
+            if (structure_laws) structure_laws->commit();   // their trial state is at the step kept
             oob = oob_next;
             if (stagnant) {
                 ++R.stagnation_accepted;
@@ -1008,16 +1037,27 @@ ConsolidationPlasticResult solve_consolidation_plastic(
     int max_newton, double newton_tol,
     const std::vector<MaterialProfile>& profile, const math::CsrMatrix* struct_k,
     const std::vector<int>* pore_tie, bool ramp_load,
-    const Eigen::VectorXd* instant_load) {
+    const Eigen::VectorXd* instant_load, bool axisymmetric, StructureLaws* structure_laws) {
+    if (axisymmetric) {
+        if (mesh.nodes_per_element == Tri15Element::kNodeCount)
+            return detail::consolidation_plastic_impl<Tri15Element, detail::AxisymKin>(
+                mesh, dofs, materials, profile, perm, gamma_w, kw_over_n, drained_node, initial_state,
+                initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol,
+                struct_k, pore_tie, ramp_load, instant_load, structure_laws);
+        return detail::consolidation_plastic_impl<Tri6Element, detail::AxisymKin>(
+            mesh, dofs, materials, profile, perm, gamma_w, kw_over_n, drained_node, initial_state,
+            initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol,
+            struct_k, pore_tie, ramp_load, instant_load, structure_laws);
+    }
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::consolidation_plastic_impl<Tri15Element>(
             mesh, dofs, materials, profile, perm, gamma_w, kw_over_n, drained_node, initial_state,
             initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol,
-            struct_k, pore_tie, ramp_load, instant_load);
+            struct_k, pore_tie, ramp_load, instant_load, structure_laws);
     return detail::consolidation_plastic_impl<Tri6Element>(
         mesh, dofs, materials, profile, perm, gamma_w, kw_over_n, drained_node, initial_state,
         initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol,
-        struct_k, pore_tie, ramp_load, instant_load);
+        struct_k, pore_tie, ramp_load, instant_load, structure_laws);
 }
 
 }  // namespace katai::core

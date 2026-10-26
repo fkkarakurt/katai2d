@@ -175,7 +175,11 @@ namespace katai::model {
 // anchor at the force it carried: the wall without the re-stressing the file states. And a
 // RELATIVE ELEMENT SIZE (`mesh.rel`), which an older build would ignore and mesh at `elem_size`.
 // Both written only when set, so every older file is byte-identical below the version line.
-inline constexpr int kProjectFileVersion = 24;
+// v25 (2026-10): THE MODIFIED CAM-CLAY MODEL (`materials[i].model` = 7). It reads keys every
+// soft-soil material already writes (`lamstar`, `kapstar`, `nu_ur`, `phi` as the critical-state
+// angle, `ocr`/`pop`), so nothing new is written; the bump is the version gate of v18 -- an older
+// build refuses the file instead of reading model 7 as an unknown model.
+inline constexpr int kProjectFileVersion = 25;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -706,6 +710,8 @@ inline std::string project_to_json(const Project& p) {
         if (s.iface_ks != 0.0) wfield(o, "iface_ks", s.iface_ks);
         if (s.iface_vt != 0.1) wfield(o, "iface_vt", s.iface_vt);
         wfield(o, "conn", (double)s.conn);
+        if (s.hinge1) wfield(o, "hinge1", true);
+        if (s.hinge2) wfield(o, "hinge2", true);
         wfield(o, "flow_barrier", (double)s.flow_barrier);
         wfield(o, "hyd_res", s.hydraulic_resistance);
         wfield(o, "coarseness", s.coarseness);
@@ -979,6 +985,8 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             s.iface_kn = j.num("iface_kn", 0.0);
             s.iface_ks = j.num("iface_ks", 0.0);
             s.iface_vt = j.num("iface_vt", 0.1);
+            s.hinge1 = j.flag("hinge1", false);
+            s.hinge2 = j.flag("hinge2", false);
             // Connection point of an embedded beam. An unknown value must not land on the
             // default quietly: hinged and free are different structures, not different settings.
             const int cnv = (int)j.num("conn", 0);

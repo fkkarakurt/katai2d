@@ -19,18 +19,19 @@
 // permeable, and a real head difference when it is not. An implementation that ignored the flag
 // would produce one of those in both cases, and nothing else in the result would look wrong.
 //
-// The mechanical half comes with the same limit the rest of this phase's structural branch has --
-// the joint is ELASTIC and cannot slip -- and the same treatment: it is measured and reported
-// (K2D-A016) rather than declared, because a joint that cannot slip is stiffer than the real one,
-// so the wall deflects less and attracts more load, which is the unsafe direction.
+// The mechanical half: the joint SLIPS. The phase used to solve its structures as one elastic
+// matrix, so a joint past its Coulomb capacity carried the shear instead and the run reported it
+// (K2D-A016). The structures of a consolidation phase are now evaluated by their own laws at every
+// iterate (StructureLaws), and the weak joint below slips as it does in the Plastic phase -- in the
+// fully-coupled phase too, which takes the same laws; the warning is retired.
 //
 // verify: KV-STR-007
 //   oracle:   independent_path
 //   source:   KATAI 2D input contract (docs/k2d-format.md, structs[i].flow_barrier / hyd_res) for the three cross-permeability cases and what each means (fully permeable, the default: no effect on flow; impermeable: separate pore-pressure degrees of freedom on the two sides; semi-permeable: a hydraulic resistance d/k); and the drained limit of Biot consolidation, as in KV-STR-006 -- once the excess pore pressure is gone the coupled problem IS the drained problem, which this program solves by an independent path (solve_nonlinear, with a real Coulomb return on the joint)
 //   locator:  a permeable joint is ONE pressure: p_left - p_right = 0 identically, because the two nodes share the pore equation. An impermeable joint is two, and a surcharge on one side cannot cross it. Coulomb capacity at a station: tau_max = c_i - sigma_n tan(phi_i), with c_i = R_inter c and tan(phi_i) = R_inter tan(phi)
-//   quantity: the maximum |p_left - p_right| across the seam EARLY in the dissipation (Tv = 0.05) for a permeable and an impermeable joint [kPa]; the settlement and the joint's peak shear at the end of a consolidation phase run to Tv = 4, against the same model as a drained Plastic phase [m, kPa]; the Coulomb demand/capacity the elastic joint reaches; and whether a joint past its capacity is reported
-//   expected: permeable -> 0 (one equation, so the difference is a number minus itself); impermeable -> of the order of the surcharge (measured 12.62 kPa of 50 kPa; 12.83 when the case was first recorded, and the assertion is the order, above 10% of the surcharge). With a joint below its capacity the coupled phase must reach the drained answer in BOTH the settlement and the joint's shear; with one above it (1.19x here) it must not, and the run must say so; semi-permeable must be refused with what it actually is
-//   band:     1e-12 kPa on the permeable seam, measured 0.000e+00 exactly. 5e-4 relative on the drained-limit pair, measured -0.0042% on the settlement and 0.0000% on the joint's shear (53.2745 kPa against 53.2745). Both are asserted on a LINEAR-ELASTIC soil on purpose: with Mohr-Coulomb the same pair comes out at +0.15% and the cause is not the joint but the soil's stress path -- the coupled phase loads it undrained and the Plastic phase drained, and a yield surface remembers the difference. That figure is measured and printed beside the assertion rather than used to widen it, because a band wide enough to hold it would also be wide enough to hide a joint that was not in the system at all
+//   quantity: the maximum |p_left - p_right| across the seam EARLY in the dissipation (Tv = 0.05) for a permeable and an impermeable joint [kPa]; the settlement and the joint's peak shear at the end of a consolidation phase run to Tv = 4, against the same model as a drained Plastic phase [m, kPa], for a joint that holds and for one that slips, in a consolidation and in a fully-coupled phase
+//   expected: permeable -> 0 (one equation, so the difference is a number minus itself); impermeable -> of the order of the surcharge (measured 12.62 kPa of 50 kPa; 12.83 when the case was first recorded, and the assertion is the order, above 10% of the surcharge). With a joint below its capacity the coupled phase must reach the drained answer in BOTH the settlement and the joint's shear; a weak joint slips on every path and ends within the order-of-loading difference of a stick-slip joint; semi-permeable must be refused with what it actually is
+//   band:     1e-12 kPa on the permeable seam, measured 0.000e+00 exactly. 5e-4 relative on the drained-limit pair, measured -0.0042% on the settlement and 0.0000% on the joint's shear (36.2294 kPa against 36.2294). 0.5% for the slipping joint (measured on the shear: the order in which the two paths load a joint that sticks and then slips). Both are asserted on a LINEAR-ELASTIC soil on purpose: with Mohr-Coulomb the same pair comes out at +0.15% and the cause is not the joint but the soil's stress path -- the coupled phase loads it undrained and the Plastic phase drained, and a yield surface remembers the difference. That figure is measured and printed beside the assertion rather than used to widen it, because a band wide enough to hold it would also be wide enough to hide a joint that was not in the system at all
 #include <katai/jobs/driver.hpp>
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/model/project.hpp>
@@ -312,23 +313,46 @@ void test_drained_limit_with_a_joint() {
     check(d_mc.ok && c_mc.ok, "the Mohr-Coulomb pair also solves");
 }
 
-void test_a_joint_that_would_slip_says_so() {
-    std::printf("\n-- (3) a joint that WOULD slip is reported, not quietly held --\n");
+// A fully-coupled phase of the same model: it still solves its structures as one elastic matrix.
+m::Project as_fully_coupled(m::Project pr) {
+    pr.phases[0].name = "Fully coupled";
+    pr.phases[0].type = m::PhaseType::FullyCoupled;
+    return pr;
+}
+
+void test_a_joint_that_slips() {
+    std::printf("\n-- (3) a joint that slips does so in the consolidation phase too --\n");
+    // The weak joint. The consolidation phase solved its structures as one elastic matrix and this
+    // joint carried 1.19 times what it could, which the run reported (K2D-A016). It now runs the
+    // joint's Coulomb return on every iterate, as the Plastic phase does.
     const Answer weak = run(block(0, 0.02, false));
-    check(weak.ok, "the phase with a weak joint still solves");
-    if (!weak.ok) { std::printf("   (%s)\n", weak.msg.c_str()); return; }
-    std::printf("   peak Coulomb demand/capacity = %.2fx\n", weak.util);
-    check(weak.util > 1.0, "the elastic joint carries more shear than it could");
-    check(weak.warned_slip, "K2D-A016: and the run says so, naming the joint and the exceedance");
-    // The reference the reader is sent to: the same stage as a Plastic phase, where the Coulomb
-    // return actually runs. It must give a DIFFERENT answer -- otherwise the warning would be
-    // about nothing.
     const Answer drained_weak = run(block(0, 0.02, true));
-    if (drained_weak.ok)
-        std::printf("   the Plastic phase it points at: |tau|max %.4f vs %.4f kPa in the elastic one\n",
-                    drained_weak.tau, weak.tau);
-    check(drained_weak.ok && drained_weak.tau < weak.tau,
-          "and the Coulomb path really does carry less shear there");
+    check(weak.ok && drained_weak.ok, "the weak joint solves in the consolidation and the Plastic phase");
+    if (!weak.ok || !drained_weak.ok) {
+        std::printf("   (%s | %s)\n", weak.msg.c_str(), drained_weak.msg.c_str());
+        return;
+    }
+    std::printf("   |tau|max consolidation %.4f vs drained %.4f kPa (%+.3f%%), settlement %+.4f%%; slipped: %d / %d\n",
+                weak.tau, drained_weak.tau, 100.0 * (weak.tau / drained_weak.tau - 1.0),
+                100.0 * (weak.settle / drained_weak.settle - 1.0), (int)weak.any_slip, (int)drained_weak.any_slip);
+    check(weak.any_slip && drained_weak.any_slip, "the joint slips on both paths");
+    check(!weak.warned_slip, "and there is no elastic joint left to report (K2D-A016 silent)");
+    // The two paths load the joint in different orders -- undrained first in the coupled phase,
+    // drained throughout in the Plastic one -- and a joint that sticks and then slips remembers
+    // the order. Measured: 0.12% on the shear, 0.0x% on the settlement.
+    check(std::fabs(weak.tau / drained_weak.tau - 1.0) < 5e-3 &&
+              std::fabs(weak.settle / drained_weak.settle - 1.0) < 5e-3,
+          "it ends within 0.5% of the drained phase (the order in which a stick-slip joint was loaded)");
+
+    // THE FULLY-COUPLED PHASE runs the same Coulomb return.
+    const Answer fc = run(as_fully_coupled(block(0, 0.02, false)));
+    check(fc.ok, "the same joint in a fully-coupled phase solves");
+    if (fc.ok) {
+        std::printf("   fully coupled: |tau|max %.4f kPa (%+.3f%% from the drained), slipped %d\n", fc.tau,
+                    100.0 * (fc.tau / drained_weak.tau - 1.0), (int)fc.any_slip);
+        check(fc.any_slip && !fc.warned_slip && std::fabs(fc.tau / drained_weak.tau - 1.0) < 5e-3,
+              "and slips there too, within 0.5% of the drained phase");
+    }
 }
 
 void test_semi_permeable_is_refused() {
@@ -349,7 +373,7 @@ int main() {
     test_cross_permeability_is_read();
     test_unsplit_barrier_is_said();
     test_drained_limit_with_a_joint();
-    test_a_joint_that_would_slip_says_so();
+    test_a_joint_that_slips();
     test_semi_permeable_is_refused();
     if (g_failures == 0) {
         std::printf("\nOK: the joint carries shear, the flag carries the water, and neither is silent\n");

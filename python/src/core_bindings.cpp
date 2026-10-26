@@ -62,6 +62,7 @@ NB_MODULE(_core, m) {
         .value("HSsmall", api::SoilModel::HSsmall)
         .value("SoftSoil", api::SoilModel::SoftSoil)
         .value("SoftSoilCreep", api::SoilModel::SoftSoilCreep)
+        .value("ModifiedCamClay", api::SoilModel::ModifiedCamClay)
         .value("HoekBrown", api::SoilModel::HoekBrown);
     nb::enum_<api::Drainage>(m, "Drainage", nb::is_arithmetic())
         .value("Drained", api::Drainage::Drained)
@@ -285,6 +286,11 @@ NB_MODULE(_core, m) {
                 "interface shear stiffness [kN/m3]; 0 = derived from the adjacent soil")
         .def_rw("iface_vt", &api::StructElement::iface_vt,
                 "virtual thickness factor of the interfaces (x the model element size); 0.1")
+        .def_rw("hinge1", &api::StructElement::hinge1,
+                "plates only: the end at the first point turns on its own -- a hinge to the "
+                "plates and walls that meet it there, a pin at a supported boundary")
+        .def_rw("hinge2", &api::StructElement::hinge2,
+                "plates only: the same at the second point")
         .def_rw("conn", &api::StructElement::conn,
                 "embedded beam only: connection point of the pile top -- 0 hinged (its "
                 "translations are the soil's there; the default), 1 free (coupled through "

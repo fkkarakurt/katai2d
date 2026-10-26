@@ -70,9 +70,12 @@ inline double phreatic_surface_at(const std::vector<double>& wx,
 // (`have_flow_bcs` false) every exposed face of the active ground drains except those that look
 // down (the base of the model): the ground surface, fill surfaces, excavation floors and the sides. Nodes touched only by inactive (excavated)
 // elements carry no pore DOF -> drained.
+// AXISYMMETRIC (`axisymmetric`): the edge on the axis, x = 0, is a line of symmetry and never one
+// of the sides that drain by default -- no water leaves the ground through it.
 inline std::vector<char> flow_drained_nodes(const std::vector<FlowEdge>& edges, bool have_flow_bcs,
                                             const katai::mesh::Mesh& mesh,
-                                            const std::vector<char>& act, double yscale) {
+                                            const std::vector<char>& act, double yscale,
+                                            bool axisymmetric = false) {
     std::vector<char> drained(mesh.node_count, 0);
     if (have_flow_bcs) {
         for (int node : mesh.boundary_nodes) {
@@ -111,8 +114,13 @@ inline std::vector<char> flow_drained_nodes(const std::vector<FlowEdge>& edges, 
         // symmetry, a cut-off -- is closed by declaring the boundaries (a head or a seepage face
         // on the open ones), as before; a face that looks down stays closed.
         (void)yscale;
+        double xspan = 0.0;
+        for (int n = 0; n < mesh.node_count; ++n) xspan = std::fmax(xspan, std::fabs(mesh.x[n]));
         for (const auto& ed : katai::mesh::extract_exposed_edges(mesh, act)) {
             if (ed.ny < -1e-3) continue;
+            bool axis = axisymmetric;
+            for (int i = 0; i < ed.npe; ++i) axis = axis && std::fabs(mesh.x[ed.node[i]]) <= 1e-9 * (1.0 + xspan);
+            if (axis) continue;   // the axis of symmetry: closed
             for (int i = 0; i < ed.npe; ++i) drained[ed.node[i]] = 1;
         }
     }

@@ -39,7 +39,8 @@ struct Permeability {
 void assemble_seepage(const mesh::Mesh& mesh, const DofMap& dofs,
                       const std::vector<Permeability>& permeability,
                       const std::vector<double>& head_prescribed,
-                      math::SparseMatrixBuilder& builder, Eigen::VectorXd& rhs);
+                      math::SparseMatrixBuilder& builder, Eigen::VectorXd& rhs,
+                      bool axisymmetric = false);
 
 // Seepage → deformation coupling: builds the pore-pressure load from the steady-state
 // nodal head field. At each Gauss point the pressure head ψ = h_gp − y_gp is interpolated
@@ -52,10 +53,13 @@ void assemble_seepage(const mesh::Mesh& mesh, const DofMap& dofs,
 // active_element: staged/porosity mask (empty = all) — NonPorous elements receive NO
 // pore-pressure load (a non-porous material has neither initial nor excess pore
 // pressure).
+// In an AXISYMMETRIC model (`axisymmetric`) the integral is per radian and m carries the hoop
+// component, m = [1, 1, 0, 1]: the radial equation of node i takes (dN_i/dr + N_i/r) u r.
 void assemble_pore_load_from_head(const mesh::Mesh& mesh, const DofMap& dofs,
                                   const Eigen::VectorXd& head, double gamma_w,
                                   Eigen::VectorXd& rhs,
-                                  const std::vector<char>& active_element = {});
+                                  const std::vector<char>& active_element = {},
+                                  bool axisymmetric = false);
 
 // Head-based saturation gravity: at each Gauss point γ = (ψ = h−y ≥ 0) ? γ_sat : γ_unsat,
 // with h interpolated by the SAME shape functions as the pore-load kernel (saturation and
@@ -70,7 +74,8 @@ void assemble_gravity_from_head(const mesh::Mesh& mesh, const DofMap& dofs,
                                 const std::vector<double>& gamma_unsat,
                                 const std::vector<double>& gamma_sat,
                                 const Eigen::VectorXd& head, Eigen::VectorXd& rhs,
-                                const std::vector<char>& active_element = {});
+                                const std::vector<char>& active_element = {},
+                                bool axisymmetric = false);
 
 // Consistent nodal flux Q = K·h: each element's He·h_e is scattered to the global nodes.
 // At source-free (free) nodes Q≈0; at prescribed-head (Dirichlet) nodes Q = the boundary
@@ -80,7 +85,7 @@ void assemble_gravity_from_head(const mesh::Mesh& mesh, const DofMap& dofs,
 // picked from mesh.nodes_per_element.
 Eigen::VectorXd compute_nodal_flux(const mesh::Mesh& mesh,
                                    const std::vector<Permeability>& permeability,
-                                   const Eigen::VectorXd& head);
+                                   const Eigen::VectorXd& head, bool axisymmetric = false);
 
 // Prescribed normal flux (Neumann) boundary condition: Q_i += ∫ N_i q_n ds along an edge
 // chain. q_n = specific discharge normal to the boundary (Darcy), inflow POSITIVE (unit:
@@ -90,7 +95,7 @@ Eigen::VectorXd compute_nodal_flux(const mesh::Mesh& mesh,
 // corner,mid,corner,...; tri15: 5 nodes per edge). `dofs` is the 1-DOF (head) map.
 void assemble_seepage_flux(const mesh::Mesh& mesh, const DofMap& dofs,
                            const std::vector<int>& ordered_boundary_nodes,
-                           double q_n, Eigen::VectorXd& rhs);
+                           double q_n, Eigen::VectorXd& rhs, bool axisymmetric = false);
 
 // The same edge integral accumulated NODE-indexed instead of equation-indexed. That is what a
 // caller needs when the equation numbering is not its own to keep: the unconfined solvers
@@ -105,9 +110,10 @@ void assemble_seepage_flux(const mesh::Mesh& mesh, const DofMap& dofs,
 // recharge well -- so q_n > 0 means water entering the soil. Note also what is ruled out
 // elsewhere: the CONSOLIDATION formulation admits no boundary with a non-zero prescribed
 // outflow, so this belongs to the flow problem and is not wired into consolidation.
+// AXISYMMETRIC: the edge is a ring and the integral is per radian, int N_i q_n r ds.
 void accumulate_boundary_flux(const mesh::Mesh& mesh,
                               const std::vector<int>& ordered_boundary_nodes,
-                              double q_n, std::vector<double>& nodal);
+                              double q_n, std::vector<double>& nodal, bool axisymmetric = false);
 
 // --- Unconfined (free-surface) seepage ------------------------------------------
 // SPD linear solve callback (PARDISO); keeps the kernel decoupled from the solver (see
@@ -135,13 +141,22 @@ inline double seam_pressure_head(const LeakySeam& s, const mesh::Mesh& mesh, con
     for (int n : nd) p += h[n] - mesh.y[n];
     return 0.25 * p;
 }
-// The segment's 4x4 conductance scaled by kr, entry by entry: f(node_i, node_j, value).
+// The segment's 4x4 conductance scaled by kr, entry by entry: f(node_i, node_j, value). In an
+// axisymmetric model (`axi_mesh` given) the seam is a ring and the conductance per radian is
+// (kr/R) int N_i N_j r ds over the segment, which for its end radii r0, r1 is
+// kr L / (12 R) [[3 r0 + r1, r0 + r1], [r0 + r1, r0 + 3 r1]] -- the plane one times r where the
+// two radii are equal.
 template <class F>
-inline void seam_entries(const LeakySeam& s, double kr, F&& f) {
-    const double c = kr * s.length / (6.0 * s.resistance);
+inline void seam_entries(const LeakySeam& s, double kr, F&& f, const mesh::Mesh* axi_mesh = nullptr) {
     const int nd[4] = {s.a0, s.a1, s.b0, s.b1};
     const double sgn[4] = {1.0, 1.0, -1.0, -1.0};
-    const double m2[2][2] = {{2.0, 1.0}, {1.0, 2.0}};
+    double m2[2][2] = {{2.0, 1.0}, {1.0, 2.0}};
+    double c = kr * s.length / (6.0 * s.resistance);
+    if (axi_mesh) {
+        const double r0 = axi_mesh->x[s.a0], r1 = axi_mesh->x[s.a1];
+        c = kr * s.length / (12.0 * s.resistance);
+        m2[0][0] = 3.0 * r0 + r1; m2[0][1] = m2[1][0] = r0 + r1; m2[1][1] = r0 + 3.0 * r1;
+    }
     for (int a = 0; a < 4; ++a)
         for (int b = 0; b < 4; ++b) f(nd[a], nd[b], sgn[a] * sgn[b] * c * m2[a % 2][b % 2]);
 }
@@ -172,6 +187,10 @@ struct UnconfinedOptions {
     // Semi-permeable seams (LeakySeam), assembled with the elements in every Picard iteration
     // and counted in the nodal flux. Empty = none.
     std::vector<LeakySeam> seams;
+    // An AXISYMMETRIC model: x is the radius, and every integral of the flow is taken per radian
+    // (weighted by r) -- the conductivity, the nodal flux, the seams. The prescribed boundary
+    // flux in `nodal_flux` is integrated by the caller (accumulate_boundary_flux, same flag).
+    bool axisymmetric = false;
 };
 
 struct UnconfinedResult {

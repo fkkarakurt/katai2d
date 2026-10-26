@@ -29,6 +29,20 @@ HydroResolution resolve_hydros(const model::Project& pr, const katai::mesh::Mesh
                         " node(s), so it would take water from nowhere. Draw it inside the soil.";
             { H_out.ok = false; return H_out; }
         }
+        if (H.kind != model::HydroKind::Drain && pr.axisymmetric) {
+            // A WELL IN AXISYMMETRY. Its discharge is stated per metre out of the plane, which an
+            // axisymmetric model does not have, and the flow there is integrated per radian: on
+            // the axis, where a pumping well stands, that integral is weighted by a radius of
+            // zero and the well would take nothing -- without a word. A well is the inner
+            // boundary of the model instead: the edge at the well's radius, with the head it is
+            // pumped down to, or with the inflow q_n that makes its discharge (Q = 2 pi r_w b q_n).
+            H_out.message = "The well \"" + H.name + "\" is in an axisymmetric model, where a well "
+                            "is the inner boundary at its radius rather than a line: give that edge "
+                            "the head the well is pumped to, or a flux q_n = Q / (2 pi r_w b) out of "
+                            "the soil. A drain (a prescribed head) can be drawn as a line.";
+            H_out.ok = false;
+            return H_out;
+        }
         if (H.kind == model::HydroKind::Drain) {
             H_out.any_drain = true;
             const bool vacuum = H.behaviour == (int)model::DrainBehaviour::Vacuum;
@@ -245,7 +259,7 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
             if (q == 0.0) continue;   // a zero flux IS the natural (closed) condition
             const auto chain = katai::mesh::collect_chain(mesh, P.x[i], P.y[i],
                                                           P.x[(i + 1) % n], P.y[(i + 1) % n]);
-            katai::core::accumulate_boundary_flux(mesh, chain, q, nodal_flux);
+            katai::core::accumulate_boundary_flux(mesh, chain, q, nodal_flux, pr.axisymmetric);
             any_flux = true;
         }
     }
@@ -311,6 +325,7 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
     opt.relax = seepage_nodes.empty() ? 0.15 : 0.05;   // seepage face needs the stronger damping
     opt.max_iter = 1200;
     opt.tol = 1e-5;
+    opt.axisymmetric = pr.axisymmetric;   // x is the radius: every integral per radian
     // The semi-permeable seams, for the free-surface solve: the same segments as the confined
     // path's term below, each with the soil it is drawn in (its conductance follows that soil's
     // relative permeability above the water).
@@ -354,16 +369,21 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
             if (fdofs.equation_count() > 0) {
                 katai::math::SparseMatrixBuilder builder(fdofs.equation_count());
                 Eigen::VectorXd rhs = Eigen::VectorXd::Zero(fdofs.equation_count());
-                katai::core::assemble_seepage(mesh, fdofs, perm, hp, builder, rhs);
+                katai::core::assemble_seepage(mesh, fdofs, perm, hp, builder, rhs, pr.axisymmetric);
                 // Semi-permeable seams: a conductance 1/R between the two sides, integrated over
                 // each seam segment (the consistent 2-node line matrix). With a uniform head
                 // difference this transmits exactly dh L / R, which is the definition of the
                 // hydraulic resistance (d/k = dh/q) read back out.
                 for (const SeamEdge& se : seam_edges) {
-                    const double c = se.length / (6.0 * se.resistance);
+                    double c = se.length / (6.0 * se.resistance);
                     const int nd[4] = {se.r0, se.r1, se.l0, se.l1};
                     const double sgn[4] = {1.0, 1.0, -1.0, -1.0};
-                    const double m2[2][2] = {{2.0, 1.0}, {1.0, 2.0}};
+                    double m2[2][2] = {{2.0, 1.0}, {1.0, 2.0}};
+                    if (pr.axisymmetric) {   // a ring: per radian, as katai::core::seam_entries
+                        const double r0 = mesh.x[se.r0], r1 = mesh.x[se.r1];
+                        c = se.length / (12.0 * se.resistance);
+                        m2[0][0] = 3.0 * r0 + r1; m2[0][1] = m2[1][0] = r0 + r1; m2[1][1] = r0 + 3.0 * r1;
+                    }
                     for (int a = 0; a < 4; ++a) {
                         const int eq_a = fdofs.equation(fdofs.global_dof(nd[a], 0));
                         for (int b = 0; b < 4; ++b) {
@@ -523,9 +543,18 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
         R.pore[n] = kFlowGammaWater * std::fmax(0.0, R.head[n] - mesh_in.y[n]);
 
     R.ok = true;
+    // In an axisymmetric model every integral above is per radian; the discharges are stated for
+    // the whole ring, which is the number a pumping test or a shaft is designed with.
+    if (pr.axisymmetric) {
+        constexpr double kTwoPi = 6.283185307179586;
+        R.discharge *= kTwoPi;
+        R.hydro_discharge *= kTwoPi;
+    }
     char buf[256];
     std::snprintf(buf, sizeof(buf),
-                  "Flow solved: discharge Q = %.4g m3/day/m, %d iterations, mass balance %.2g.",
+                  pr.axisymmetric
+                      ? "Flow solved: discharge Q = %.4g m3/day over the whole ring (axisymmetric), %d iterations, mass balance %.2g."
+                      : "Flow solved: discharge Q = %.4g m3/day/m, %d iterations, mass balance %.2g.",
                   R.discharge, R.iterations, R.balance_err);
     R.message = buf;
     // A wall or interface left FULLY PERMEABLE -- the default cross permeability -- is not a flow

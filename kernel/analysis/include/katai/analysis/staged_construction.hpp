@@ -81,17 +81,63 @@ inline std::vector<SegSeam> split_mesh_at_segment(mesh::Mesh& mesh, double ax, d
     const double nx = ty, ny = -tx;                        // unit normal (right-handed)
     std::vector<int> dup(mesh.node_count, -1);
     std::vector<SegSeam> seam;
+    std::vector<int> on;
+    std::vector<double> on_s;
     for (int i = 0; i < mesh.node_count; ++i) {
         const double rx = mesh.x[i] - ax, ry = mesh.y[i] - ay;
         const double s = rx * tx + ry * ty;       // along-segment parameter
         const double d = rx * nx + ry * ny;       // signed perpendicular distance
-        if (std::fabs(d) < tol && s > s_lo - tol && s < s_hi + tol) {
-            dup[i] = mesh.node_count + static_cast<int>(seam.size());
-            seam.push_back({i, dup[i], mesh.x[i], mesh.y[i], s});
-        }
+        if (std::fabs(d) < tol && s > s_lo - tol && s < s_hi + tol) { on.push_back(i); on_s.push_back(s); }
     }
-    for (const auto& p : seam) { mesh.x.push_back(p.x); mesh.y.push_back(p.y); }
-    mesh.node_count += static_cast<int>(seam.size());
+    // A POINT ANOTHER LINE HAS ALREADY SPLIT, WHERE THIS ONE ENDS, IS NOT SPLIT AGAIN. Where two
+    // split lines end at one point -- the crown of a lining drawn as chords -- the first line left
+    // two nodes there, one for each side, and splitting both again made four: the second line's
+    // seam held the point twice, its wall had a position that belonged to nothing, and the ring
+    // was cut at the crown. Measured on a deep tunnel lined with an interface: the lining carried
+    // 23 kN/m of the 2690 the closed form gives, and its two halves moved apart by 0.55 m. The
+    // two nodes already there ARE the pair: the one whose elements lie on this line's positive
+    // side keeps that side, the other the negative one, and no element is rewired. A point where
+    // two lines CROSS is split as before -- both of its nodes again, four quadrants for four sides.
+    std::vector<int> new_nodes;
+    std::vector<char> paired(on.size(), 0);
+    const auto side_of = [&](int node) {
+        double sum = 0.0;
+        for (int e = 0; e < mesh.element_count; ++e) {
+            bool has = false;
+            double cx = 0.0, cy = 0.0;
+            for (int k = 0; k < mesh.nodes_per_element; ++k) {
+                const int nd = mesh.node_of(e, k);
+                has = has || nd == node;
+                cx += mesh.x[nd]; cy += mesh.y[nd];
+            }
+            if (!has) continue;
+            cx /= mesh.nodes_per_element; cy /= mesh.nodes_per_element;
+            sum += (cx - ax) * nx + (cy - ay) * ny;
+        }
+        return sum;
+    };
+    for (size_t a = 0; a < on.size(); ++a) {
+        if (paired[a]) continue;
+        size_t twin = on.size();
+        int count = 0;
+        for (size_t b = 0; b < on.size(); ++b)
+            if (b != a && std::fabs(mesh.x[on[b]] - mesh.x[on[a]]) < tol &&
+                std::fabs(mesh.y[on[b]] - mesh.y[on[a]]) < tol) { twin = b; ++count; }
+        const int i = on[a];
+        const bool at_end = on_s[a] < tol || on_s[a] > L - tol;
+        if (count == 1 && at_end) {
+            const int j = on[twin];
+            const bool i_positive = side_of(i) >= side_of(j);
+            seam.push_back({i_positive ? i : j, i_positive ? j : i, mesh.x[i], mesh.y[i], on_s[a]});
+            paired[a] = paired[twin] = 1;
+            continue;
+        }
+        dup[i] = mesh.node_count + static_cast<int>(new_nodes.size());
+        new_nodes.push_back(i);
+        seam.push_back({i, dup[i], mesh.x[i], mesh.y[i], on_s[a]});
+    }
+    for (const int i : new_nodes) { mesh.x.push_back(mesh.x[i]); mesh.y.push_back(mesh.y[i]); }
+    mesh.node_count += static_cast<int>(new_nodes.size());
     for (int e = 0; e < mesh.element_count; ++e) {  // re-wire the negative-side elements to the twins
         double cx = 0.0, cy = 0.0;
         for (int k = 0; k < mesh.nodes_per_element; ++k) { cx += mesh.x[mesh.node_of(e, k)]; cy += mesh.y[mesh.node_of(e, k)]; }

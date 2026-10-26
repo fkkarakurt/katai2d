@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 // Fully-coupled flow-deformation phase strategy (Stage B9). The "Fully
 // coupled flow-deformation" phase: Biot consolidation generalized with unsaturated
 // van Genuchten/Mualem retention + Bishop effective stress (chi = S_eff).
@@ -100,14 +101,6 @@ inline bool solve_fully_coupled_phase(
                     "which does read the resistance.";
         return false;
     }
-    if (in.has_embedded_beams) {
-        R.message = "This fully-coupled phase contains an embedded beam (pile row). Its skin and "
-                    "foot resistance follow the EFFECTIVE stress around the pile, which this "
-                    "phase is changing throughout, so the elastic springs it would use are not "
-                    "the pile's behaviour here. Use a Plastic phase for the pile, or remove it "
-                    "from the stage.";
-        return false;
-    }
     const size_t nmat = in.materials.size();
     // Soft Soil Creep x coupled flow-deformation: the same honest refusal as the consolidation
     // strategy (the Biot x creep interaction is unverified -- the consolidation path measured
@@ -196,17 +189,19 @@ inline bool solve_fully_coupled_phase(
                 drained[n] = drained[rep] = 1;
         }
 
-    // The structural elements' elastic stiffness, assembled once with the shared assembler -- the
-    // same function, the same element matrices and the same DOF mapping the static path uses.
-    math::CsrMatrix struct_k_storage;
+    // THE STRUCTURES BY THEIR OWN LAWS, as in the consolidation twin: evaluated at every iterate by
+    // the static solver's assembler from the total displacement and their committed state
+    // (StructureLaws), instead of one elastic matrix -- which let no anchor or geogrid yield, no
+    // geogrid go slack, no joint slip and no plate hinge, and refused an embedded beam.
     const math::CsrMatrix* struct_k = nullptr;
+    std::unique_ptr<StructureLaws> laws;
     if (in.structures && (!in.structures->plates.empty() || !in.structures->plates5.empty() ||
                           !in.structures->anchors.empty() || !in.structures->geogrids.empty() ||
-                          !in.structures->interfaces.empty() || !in.structures->interfaces5.empty())) {
-        math::SparseMatrixBuilder kb(dofs.equation_count());
-        assemble_structural_stiffness(mesh, dofs, *in.structures, kb);
-        struct_k_storage = kb.build();
-        struct_k = &struct_k_storage;
+                          !in.structures->interfaces.empty() || !in.structures->interfaces5.empty() ||
+                          !in.structures->embedded_beams.empty())) {
+        laws = std::make_unique<StructureLaws>(
+            mesh, dofs, models, *in.structures,
+            in.carry_state ? *in.carry_state : StructuralInit{}, in.active, Kinematics::PlaneStrain);
     }
 
     // Time stepping from the phase duration / step count.
@@ -223,14 +218,15 @@ inline bool solve_fully_coupled_phase(
     std::vector<GaussState> committed;
     CoupledFlowResult cfr;
     CoupledFlowPlasticResult cfp;
-    if (nonlinear_soil) {
+    if (nonlinear_soil || laws) {
         // Elastoplastic skeleton: effective stress from the constitutive return mapping; each time
-        // step is a monolithic coupled Newton-Picard. K_T is nonsymmetric for non-associated flow
+        // step is a monolithic coupled Newton-Picard. (Also every soil where there are structures:
+        // their laws are evaluated by iterate.) K_T is nonsymmetric for non-associated flow
         // -> the caller's plastic factory selects the matching solver. The previous phase's
         // committed effective stresses (`init`) seed the state; dF drives it.
         cfp = solve_coupled_flow_deformation_plastic(mesh, dofs, models, cperm, ret,
             poros, kGammaWater, kw_over_n, drained, init, p0, dt, nsteps, in.active, &dF,
-            plastic_factory, 40, 1e-6, profiles, struct_k, in.pore_tie);
+            plastic_factory, 40, 1e-6, profiles, struct_k, in.pore_tie, laws.get());
         if (!cfp.converged || cfp.series.displacement.empty()) {
             R.message = "Fully-coupled flow-deformation did not converge in a time step (the load "
                         "increment may exceed the soil capacity, or the time step is too large -- "
@@ -281,21 +277,21 @@ inline bool solve_fully_coupled_phase(
         Eigen::VectorXd disp_total = series->displacement.back();
         if (in.carry_full && in.carry_full->size() == disp_total.size())
             disp_total += *in.carry_full;
-        report_coupled_structures(*in.structures, in.diagrams, in.iface_diagrams, mesh, dofs,
-                                  disp_total, R, in.carry_state, in.carry_full);
-        // The state the phase hands on: its total displacement, and the plastic state it started
-        // from (a stiffness on top of it adds none). The driver adds what finds each structure.
+        // Reported as the static phase reports them, from the state the phase committed, which is
+        // also the state it hands on.
+        const StructuralInit st = laws ? laws->committed()
+                                       : (in.carry_state ? *in.carry_state : StructuralInit{});
+        report_structures_by_their_laws(*in.structures, in.diagrams, in.iface_diagrams, mesh, dofs,
+                                        disp_total, st, R);
         R.struct_state.full_disp = disp_total;
-        if (in.carry_state) {
-            R.struct_state.anchor_plastic = in.carry_state->anchor_plastic;
-            R.struct_state.geogrid_plastic = in.carry_state->geogrid_plastic;
-            R.struct_state.interface_slip = in.carry_state->interface_slip;
-            R.struct_state.interface5_slip = in.carry_state->interface5_slip;
-            R.struct_state.embedded_skin_slip = in.carry_state->embedded_skin_slip;
-            R.struct_state.embedded_foot_slip = in.carry_state->embedded_foot_slip;
-            R.struct_state.plate_plastic = in.carry_state->plate_plastic;
-            R.struct_state.plate5_plastic = in.carry_state->plate5_plastic;
-        }
+        R.struct_state.anchor_plastic = st.anchor_plastic;
+        R.struct_state.geogrid_plastic = st.geogrid_plastic;
+        R.struct_state.interface_slip = st.interface_slip;
+        R.struct_state.interface5_slip = st.interface5_slip;
+        R.struct_state.embedded_skin_slip = st.embedded_skin_slip;
+        R.struct_state.embedded_foot_slip = st.embedded_foot_slip;
+        R.struct_state.plate_plastic = st.plate_plastic;
+        R.struct_state.plate5_plastic = st.plate5_plastic;
     }
     R.disp = series->displacement.back().head(mesh.node_count * 2);
     R.stress = recover_nodal_stresses_from_gauss(mesh, committed, in.active);

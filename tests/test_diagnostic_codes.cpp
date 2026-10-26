@@ -450,7 +450,7 @@ void scope_refusals() {
         res = run(pr);
         check(all_ok(res, 2) && !said(res, "K2D-S001"), "switched off there: runs");
     }
-    {   // S002: axisymmetry with a plate, and with a consolidation phase
+    {   // S002: axisymmetry with a plate, and with a fully coupled phase
         m::Project pr = block();
         pr.axisymmetric = true;
         pr.polygons[0].edge_bc[3] = (int)m::BCType::HorizontallyFixed;   // the axis
@@ -463,10 +463,10 @@ void scope_refusals() {
         check(refused_with(res, "K2D-S002"), "a plate in axisymmetry: refused (K2D-S002)");
         pr.structs.clear();
         add_water(pr, H);
-        m::Phase c = phase(m::PhaseType::Consolidation, "Consolidation"); c.duration = 1.0; c.time_steps = 2;
+        m::Phase c = phase(m::PhaseType::FullyCoupled, "Coupled"); c.duration = 1.0; c.time_steps = 2;
         pr.phases.push_back(c);
         res = run(pr);
-        check(refused_with(res, "K2D-S002"), "a consolidation phase in axisymmetry: refused (K2D-S002)");
+        check(refused_with(res, "K2D-S002"), "a fully coupled phase in axisymmetry: refused (K2D-S002)");
         pr.phases[0].type = m::PhaseType::Plastic;
         res = run(pr);
         check(all_ok(res, 2) && !said(res, "K2D-S002"), "a Plastic phase in axisymmetry: runs");

@@ -29,6 +29,8 @@
 #include <katai/analysis/post/stress_recovery.hpp>
 #include <katai/analysis/results.hpp>
 #include <katai/analysis/phase_solver/coupled_structures.hpp>  // the shared structural report
+#include <memory>
+
 #include <katai/analysis/structural_dynamics.hpp>   // assemble_structural_stiffness (the shared assembler)
 #include <katai/fem/assembly/dof_map.hpp>
 #include <katai/materials/material_model.hpp>
@@ -81,8 +83,8 @@ struct ConsolidationPhase {
     // which is exactly what this solver's drained-node mask means, so a drain enters here rather
     // than as a new kind of boundary condition.
     std::vector<int> drain_nodes;
-    // Structural elements that sit in this phase's coupled solve. Plates, anchors and geogrids
-    // enter it; interfaces and embedded beams are refused below, and the refusal says why.
+    // Structural elements that sit in this phase's coupled solve: plates, anchors, geogrids,
+    // interfaces and embedded beams, each by its own law (StructureLaws).
     bool has_embedded_beams = false;     // embedded beam rows (skin + foot springs)
     // An interface SPLITS the mesh, so the joint has two node sets at one place and what the water
     // does between them is an INPUT (docs/k2d-format.md, `flow_barrier`): fully permeable = one
@@ -115,6 +117,9 @@ struct ConsolidationPhase {
     double stop_degree = 0.9;     // [-]  DegreeOfConsolidation target, as a PRESSURE ratio (default 90%)
     double first_dt = 0.0;        // [day] first time step; <= 0 = automatic (Vermeer-Verruijt dt_crit)
     int max_steps = 1000;         // safety cap on the march; reaching it REFUSES, it does not report
+    // AXISYMMETRIC: solved per radian with the hoop terms. Always on the elastoplastic path, which
+    // integrates a linear-elastic soil exactly too (its Newton step is one iteration).
+    bool axisymmetric = false;
 };
 
 // Solve the phase. Fills the settlement-time series, the final displacement and
@@ -149,14 +154,6 @@ inline bool solve_consolidation_phase(
                     "of that scale, fully permeable and impermeable. Set the interface to one of "
                     "those for a consolidation phase, or run the stage as a Plastic phase with a "
                     "groundwater-flow field, which does read the resistance.";
-        return false;
-    }
-    if (in.has_embedded_beams) {
-        R.message = "This consolidation phase contains an embedded beam (pile row). Its skin and "
-                    "foot resistance follow the EFFECTIVE stress around the pile, which changes "
-                    "throughout consolidation, so the elastic springs this phase would use are "
-                    "not the pile's behaviour here. Use a Plastic phase for the pile, or remove "
-                    "it from the consolidating stage.";
         return false;
     }
     const size_t nmat = in.materials.size();
@@ -237,7 +234,7 @@ inline bool solve_consolidation_phase(
     // draining boundary say the same thing to this solver, that the excess pore pressure there
     // is zero.)
     std::vector<char> drained =
-        flow_drained_nodes(in.flow_edges, in.have_flow_bcs, mesh, in.active, in.yscale);
+        flow_drained_nodes(in.flow_edges, in.have_flow_bcs, mesh, in.active, in.yscale, in.axisymmetric);
     for (int n : in.drain_nodes)
         if (n >= 0 && n < mesh.node_count) drained[n] = 1;
     // Two nodes that share a pore pressure share its boundary condition too: if either side of a
@@ -251,20 +248,36 @@ inline bool solve_consolidation_phase(
                 drained[n] = drained[rep] = 1;
         }
 
-    // The structural elements' elastic stiffness, assembled ONCE with the shared assembler -- the
-    // same element matrices and DOF mapping solve_nonlinear uses, which is what makes "the wall in
-    // this phase is the wall in the Plastic phase" a fact rather than a hope. It enters the coupled
-    // system as a matrix (katai/analysis/consolidation.hpp), so the core stays structure-agnostic.
-    math::CsrMatrix struct_k_storage;
+    // THE STRUCTURES BY THEIR OWN LAWS. They entered this phase as their elastic stiffness, one
+    // matrix assembled once: no anchor or geogrid yielded, no geogrid went slack in compression,
+    // no joint slipped and no plate hinged, and an embedded beam -- whose skin and base slip by
+    // definition -- was refused. Each of the first three was reported when it was passed (K2D-
+    // A014, A015, A016), with the size of the error measured on the verification fixtures. They
+    // are now evaluated by the static solver's own assembler at every iterate, from the total
+    // displacement and their committed state (StructureLaws), so the phase run to the end of its
+    // dissipation reaches the drained answer WITH the yielding, and the warnings have nothing left
+    // to report (KV-STR-006, KV-STR-007).
     const math::CsrMatrix* struct_k = nullptr;
+    std::unique_ptr<StructureLaws> laws;
     if (in.structures && (!in.structures->plates.empty() || !in.structures->plates5.empty() ||
                           !in.structures->anchors.empty() || !in.structures->geogrids.empty() ||
-                          !in.structures->interfaces.empty() || !in.structures->interfaces5.empty())) {
-        math::SparseMatrixBuilder kb(dofs.equation_count());
-        assemble_structural_stiffness(mesh, dofs, *in.structures, kb);
-        struct_k_storage = kb.build();
-        struct_k = &struct_k_storage;
+                          !in.structures->interfaces.empty() || !in.structures->interfaces5.empty() ||
+                          !in.structures->embedded_beams.empty())) {
+        laws = std::make_unique<StructureLaws>(
+            mesh, dofs, models, *in.structures,
+            in.carry_state ? *in.carry_state : StructuralInit{}, in.active,
+            in.axisymmetric ? Kinematics::Axisymmetric : Kinematics::PlaneStrain);
     }
+    // The equation-space form of the phase's displacement so far (each run of the core starts
+    // from zero; the structures read the total).
+    const auto to_equations = [&](const Eigen::VectorXd& full) {
+        Eigen::VectorXd e = Eigen::VectorXd::Zero(dofs.equation_count());
+        for (int g = 0; g < (int)full.size(); ++g) {
+            const int eq = dofs.equation(g);
+            if (eq >= 0) e(eq) = full(g);
+        }
+        return e;
+    };
 
     // Time stepping. The phase's own interval (the historical path) OR a state criterion below.
     const double duration = in.duration_day > 0.0 ? in.duration_day : 1.0;
@@ -281,11 +294,17 @@ inline bool solve_consolidation_phase(
     struct Chunk {
         ConsolidationResult series;            // times RELATIVE to the chunk start; [0] = its start
         std::vector<GaussState> committed;     // elastoplastic path: state at the chunk END only
+        StructuralInit structures_end;         // the structures' committed state at its end
         bool ok = false;
         int stagnant = 0;                      // time steps kept at a stagnated iterate
         double worst_kept = 0.0;               // ... and the largest share of the forces left open
     };
+    // The path: the elastoplastic core for a soil that can yield, for every soil in an
+    // axisymmetric model (the linear-elastic core is plane strain only) and wherever there are
+    // structures (their laws are evaluated by iterate).
+    const bool plastic_path = nonlinear_soil || in.axisymmetric || laws != nullptr;
     std::vector<double> p_state(mesh.node_count, 0.0);   // excess pore at the chunk start (0 at t=0)
+    Eigen::VectorXd v_total = Eigen::VectorXd::Zero(dofs.total_dofs());   // the phase's displacement
     std::vector<GaussState> state = init;                // committed effective Gauss state
     Eigen::VectorXd placed;   // the phase's own load: the imbalance less what it inherits
     if (in.inherited_pore_force) placed = dF - *in.inherited_pore_force;
@@ -294,15 +313,27 @@ inline bool solve_consolidation_phase(
         const bool split = ramp && with_load && in.inherited_pore_force;
         const Eigen::VectorXd* load = !with_load ? nullptr : (split ? &placed : &dF);
         const Eigen::VectorXd* instant = split ? in.inherited_pore_force : nullptr;
-        if (nonlinear_soil) {
+        if (plastic_path) {
             // Elastoplastic skeleton: effective stress from the constitutive return mapping; each
             // time step is a monolithic coupled Newton. K_T is nonsymmetric for non-associated
             // flow -> the caller's plastic factory selects the matching solver. The previous
             // phase's committed effective stresses (`init`) seed the state; dF drives it.
+            // A run is side-effect free, as the march below requires (a run may be thrown away
+            // and repeated shorter): the structures' state is put back after it, and adopted with
+            // the run when the run is.
+            StructuralInit laws_start;
+            if (laws) {
+                laws_start = laws->committed();
+                laws->set_offset(to_equations(v_total));
+            }
             ConsolidationPlasticResult r = solve_consolidation_plastic(
                 mesh, dofs, models, cperm, kGammaWater, kw_over_n, drained, state, p_state,
                 step_dt, n, in.active, load, plastic_factory, 40, in.newton_tol, profiles, struct_k,
-                in.pore_tie, ramp, instant);
+                in.pore_tie, ramp, instant, in.axisymmetric, laws.get());
+            if (laws) {
+                c.structures_end = laws->committed();
+                laws->reset(laws_start);
+            }
             c.ok = r.converged;
             c.stagnant = r.stagnation_accepted;
             c.worst_kept = r.worst_accepted;
@@ -318,7 +349,7 @@ inline bool solve_consolidation_phase(
         return c;
     };
     const char* const kFailedMessage =
-        nonlinear_soil
+        plastic_path
             ? "Elastoplastic consolidation did not converge in a time step (the load increment may "
               "exceed the soil capacity, or the time step is too large -- use a smaller load "
               "increment or more, smaller steps)."
@@ -328,7 +359,6 @@ inline bool solve_consolidation_phase(
     // and max |excess pore| per recorded step, plus the running PEAK excess pore pressure -- the
     // reference the degree of consolidation is a ratio of.
     double pore_peak = 0.0;
-    Eigen::VectorXd v_total = Eigen::VectorXd::Zero(dofs.total_dofs());
     double t_now = 0.0;
     int steps_done = 0;
     bool load_pending = true;
@@ -366,7 +396,8 @@ inline bool solve_consolidation_phase(
         v_total += c.series.displacement[n];
         for (int nd = 0; nd < mesh.node_count; ++nd) p_state[nd] = c.series.pore[n](nd);
         R.excess_pore = p_state;   // the field itself, not only its maximum (results.hpp)
-        if (nonlinear_soil) state = c.committed;
+        if (plastic_path) state = c.committed;
+        if (laws) laws->reset(c.structures_end);
         t_now += c.series.times[n];
         steps_done += n;
         load_pending = false;
@@ -568,7 +599,7 @@ inline bool solve_consolidation_phase(
     // Final effective Gauss state: from the return mapping (elastoplastic) or recovered from the
     // total displacement of the linear-elastic skeleton (sigma' = init + D B v_final).
     std::vector<GaussState> committed;
-    if (nonlinear_soil) {
+    if (plastic_path) {
         committed = std::move(state);
     } else {
         committed = init;
@@ -589,10 +620,23 @@ inline bool solve_consolidation_phase(
     if (in.structures) {
         Eigen::VectorXd disp_total = v_total;
         if (in.carry_full && in.carry_full->size() == v_total.size()) disp_total += *in.carry_full;
-        report_coupled_structures(*in.structures, in.diagrams, in.iface_diagrams, mesh, dofs,
-                                  disp_total, R, in.carry_state, in.carry_full);
-        // The state the phase hands on: its total displacement, and the plastic state it started
-        // from (a stiffness on top of it adds none). The driver adds what finds each structure.
+        if (laws) {
+            // By their own laws: reported as the static phase reports them, from the state the
+            // phase committed, which is also the state it hands on.
+            const StructuralInit st = laws->committed();
+            report_structures_by_their_laws(*in.structures, in.diagrams, in.iface_diagrams, mesh,
+                                            dofs, disp_total, st, R);
+            R.struct_state.full_disp = disp_total;
+            R.struct_state.anchor_plastic = st.anchor_plastic;
+            R.struct_state.geogrid_plastic = st.geogrid_plastic;
+            R.struct_state.interface_slip = st.interface_slip;
+            R.struct_state.interface5_slip = st.interface5_slip;
+            R.struct_state.embedded_skin_slip = st.embedded_skin_slip;
+            R.struct_state.embedded_foot_slip = st.embedded_foot_slip;
+            R.struct_state.plate_plastic = st.plate_plastic;
+            R.struct_state.plate5_plastic = st.plate5_plastic;
+        } else {
+        // No structure in the phase: the state it started from is the state it hands on.
         R.struct_state.full_disp = disp_total;
         if (in.carry_state) {
             R.struct_state.anchor_plastic = in.carry_state->anchor_plastic;
@@ -603,6 +647,7 @@ inline bool solve_consolidation_phase(
             R.struct_state.embedded_foot_slip = in.carry_state->embedded_foot_slip;
             R.struct_state.plate_plastic = in.carry_state->plate_plastic;
             R.struct_state.plate5_plastic = in.carry_state->plate5_plastic;
+        }
         }
     }
 

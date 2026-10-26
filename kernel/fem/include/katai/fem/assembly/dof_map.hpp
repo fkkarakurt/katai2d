@@ -43,6 +43,14 @@ public:
     // that is inactive in a phase: the split stays (the node numbering is the same in every phase),
     // and the ground across it is continuous.
     void tie(int slave, int master);
+    // Make `a` and `b` the same unknown, whatever either is tied to already (before finalize): the
+    // two groups become one, whose master is a's. Unlike tie() it asks neither which of the two is
+    // free nor which comes first, so a point that two lines share can be tied by both of them, in
+    // either order. Two lines meeting at a point each pair the same two twins there; with tie()
+    // the second pairing either chained a master under a slave -- a cycle, in which finalize
+    // left both DOFs without an equation, i.e. FIXED, and the point did not move at all -- or,
+    // checked first, was silently not made.
+    void join(int a, int b);
     // The DOF `global_dof` is tied to, or -1.
     int master_of(int global_dof) const {
         return global_dof < (int)master_.size() ? master_[global_dof] : -1;
@@ -66,6 +74,7 @@ private:
     std::vector<char> fixed_;     // total_dofs_: 1 = sabit
     std::vector<int> equation_;   // total_dofs_: denklem indeksi ya da -1
     std::vector<int> master_;     // DOFs with a tie: the master they share an equation with, else -1
+    std::vector<int> slaves_;     // per master: how many DOFs are tied to it
     int equation_count_ = 0;
     bool finalized_ = false;
 };

@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **24** · Current `.res` version: **11**
+Current `.k2d` version: **25** · Current `.res` version: **11**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -64,7 +64,11 @@ asks for,
 and **v24** the re-tensioning of an anchor in a phase (`phases[i].sjack`), which an older build
 would ignore and leave the anchor at the force it carried -- the wall without the re-stressing the
 file states -- and a relative element size (`mesh.rel`), which an older build would ignore and mesh
-at `elem_size`.
+at `elem_size`,
+and **v25** the Modified Cam-Clay model (`materials[i].model` = 7), which writes no key of its own
+(it reads the soft-soil keys, with `phi` as the critical-state angle) and is gated for the reason of
+v18: an older build would read model 7 as an unknown model -- and a plate's hinged ends
+(`structs[i].hinge1` / `hinge2`), which an older build would ignore and join rigidly.
 Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
@@ -130,7 +134,7 @@ flagged places differs from the in-memory default of a freshly created object.
 
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
-| `katai2d` | int | — | *required* | Format version; this build writes 12 |
+| `katai2d` | int | — | *required* | Format version; this build writes 25 |
 | `name` | str | — | `"Untitled project"` | Project display name |
 | `axisymmetric` | bool | — | `false` | `false` = plane strain; `true` = axisymmetric (x is the radius, x = 0 the symmetry axis) |
 | `initial_procedure` | int | — | `0` | How the initial phase establishes the in-situ state: 0 K0 procedure, 1 Gravity loading, 2 Safety (φ-c reduction of the gravity state; intended for single-phase runs) |
@@ -171,7 +175,7 @@ flagged places differs from the in-memory default of a freshly created object.
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
 | `name` | str | — | `"New material"` | Data set name |
-| `model` | int | — | `0` | Soil model: 0 Linear elastic, 1 Mohr-Coulomb, 2 Hardening Soil, 3 HS small, 4 Soft Soil, 5 Soft Soil Creep. NOTE: an absent key loads 0, although a freshly created material defaults to 1 |
+| `model` | int | — | `0` | Soil model: 0 Linear elastic, 1 Mohr-Coulomb, 2 Hardening Soil, 3 HS small, 4 Soft Soil, 5 Soft Soil Creep, 6 Hoek-Brown, 7 Modified Cam-Clay (`lamstar`, `kapstar`, `nu_ur`; `phi` is the critical-state angle, M = 6 sin φ/(3 − sin φ); `c` must be 0). NOTE: an absent key loads 0, although a freshly created material defaults to 1 |
 | `drainage` | int | — | `0` | 0 Drained, 1 Undrained (A), 2 Non-porous, 3 Undrained (B), 4 Undrained (C) — the last is a **total stress** analysis: `E`/`nu` are the undrained pair, `c` is s_u with φ = 0, and no pore pressure is generated or carried |
 | `color` | num[] | — | `[0.85,0.78,0.55]` | Display colour, RGB in 0..1 (3 values) |
 | `gamma_unsat` | num | kN/m³ | `17` | Unit weight above the phreatic level |
@@ -342,6 +346,8 @@ A gap wider than the tolerance is real geometry and stays empty.
 | `iface_kn` | num | kN/m³ | `0` | Interface normal stiffness (stress per unit relative normal movement). `0` = derived from the adjacent soil: E_oed,i / t_v with G_i = R_inter² G, ν_i = 0.45 and a virtual thickness t_v of 0.1 × the element length. Written only when set |
 | `iface_ks` | num | kN/m³ | `0` | Interface shear stiffness; `0` = derived, G_i / t_v. Written only when set |
 | `iface_vt` | num | — | `0.1` | Virtual thickness factor of the interfaces: the derived stiffnesses divide by t_v = this factor × the model element size (`mesh.size`). Written only when it is not 0.1 |
+| `hinge1` | bool | — | `false` | **Plate only** — the end at the first point is HINGED: plates and walls that meet at a point are joined rigidly there (one rotation for all of them), and a hinged end keeps its own rotation, so the joint passes force and no moment from it. At a supported boundary where a plate's rotation is held (the standard fixities, a plane of symmetry) a hinged end is not held: it is a pin. Written only when set |
+| `hinge2` | bool | — | `false` | **Plate only** — the same for the end at the second point |
 | `conn` | int | — | `0` | **Embedded beam only** — how the connection point (the pile top: the end with the highest y, or for an exactly horizontal pile the lowest x) is attached. `0` hinged: the beam's top translations *are* the soil's there — the same displacement, with the rotation left free — the setting for a pile top that no other structure shares, and what makes a pile loadable at its head. `1` free: coupled to the soil through the skin springs only, which is the setting for a grout body, so a ground anchor does not shed axial force at the connection. The mesher carries the connection point as a node either way, so switching this changes the physics and not the mesh |
 | `flow_barrier` | int | — | `0` | Cross permeability in a groundwater calculation: 0 fully permeable (no effect on flow), 1 impermeable (the two sides get separate pore-pressure DOFs), 2 semi-permeable (a hydraulic resistance `hyd_res` across the line). Plates and interfaces only |
 | `hyd_res` | num | day | `0` | Hydraulic resistance d/k of a semi-permeable barrier: the head difference divided by the discharge per unit area of wall. Read by every groundwater flow -- steady (with or without a free surface), transient and the flow of a staged phase; above the water the screen conducts at the relative permeability of the soil it is drawn in, and where a staged phase has excavated one side, the water of the pit stands behind it at the phase's table |

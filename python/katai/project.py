@@ -223,6 +223,15 @@ class _Materials:
                          lam_star=lam_star, kap_star=kap_star, mu_star=mu_star, nu_ur=nu_ur,
                          **kw)
 
+    def modified_cam_clay(self, name, *, lam_star, kap_star, phi_cs, nu_ur=0.15, **kw):
+        """Modified Cam-Clay. ``lam_star``/``kap_star`` are the modified compression and
+        swelling indices lambda/(1+e0), kappa/(1+e0) [-]; ``phi_cs`` the critical-state friction
+        angle [deg], from which M = 6 sin(phi_cs)/(3 - sin(phi_cs)); ``nu_ur`` the Poisson's ratio
+        of the elasticity. No cohesion, associated flow; the preconsolidation from ``OCR=`` or
+        ``POP=``. Its undrained analysis is ``drainage="undrained_a"``."""
+        return self._add(name, _core.SoilModel.ModifiedCamClay, c=0.0, phi=phi_cs, psi=0.0,
+                         lam_star=lam_star, kap_star=kap_star, nu_ur=nu_ur, **kw)
+
     def hoek_brown(self, name, *, E, nu, sigma_ci, mi, gsi, D=0.0, psi=0.0,
                    sigma_psi=0.0, **kw):
         """Hoek-Brown rock. There is no c/phi here and that is the point: the strength is
@@ -431,8 +440,13 @@ class _Structures:
     def plate(self, a, b, *, EA, EI, w=0.0, nu=0.0, Mp=0.0, Np=0.0,
               elastoplastic=None, name="Plate", interfaces=None, barrier=None,
               resistance=0.0, coarseness=1.0, iface_material=None, iface_kn=None,
-              iface_ks=None, iface_thickness=None, prevent_punching=False):
+              iface_ks=None, iface_thickness=None, prevent_punching=False,
+              hinge_a=False, hinge_b=False):
         """A wall, lining or slab: EA [kN/m], EI [kN m2/m], self-weight w [kN/m/m].
+
+        ``hinge_a`` / ``hinge_b`` hinge the end at ``a`` / ``b``: plates and walls that
+        meet at a point are joined rigidly, and a hinged end keeps its own rotation
+        there -- force passes, moment does not. At a supported boundary it is a pin.
 
         ``Mp`` / ``Np`` (0 = elastic) make it elastoplastic -- the plastic moment
         and axial force it cannot exceed. ``interfaces='both'`` puts a soil-
@@ -459,11 +473,14 @@ class _Structures:
         M.elastoplastic = (Mp > 0.0 or Np > 0.0) if elastoplastic is None else elastoplastic
         self._prj._plates.append(M)
         try:
-            return self._add(_core.StructKind.Plate, a, b, name, len(self._prj._plates) - 1,
-                             barrier=barrier, resistance=resistance, interfaces=interfaces,
-                             coarseness=coarseness, iface_material=iface_material,
-                             iface_kn=iface_kn, iface_ks=iface_ks,
-                             iface_thickness=iface_thickness)
+            h = self._add(_core.StructKind.Plate, a, b, name, len(self._prj._plates) - 1,
+                          barrier=barrier, resistance=resistance, interfaces=interfaces,
+                          coarseness=coarseness, iface_material=iface_material,
+                          iface_kn=iface_kn, iface_ks=iface_ks,
+                          iface_thickness=iface_thickness)
+            S = self._prj._structs[-1]
+            S.hinge1, S.hinge2 = bool(hinge_a), bool(hinge_b)
+            return h
         except (TypeError, ValueError):
             self._prj._plates.pop()   # a refused plate leaves no orphan material behind
             raise

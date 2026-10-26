@@ -379,6 +379,10 @@ public:
     // from, where the solver has fixed one (see small_freeze there); nullptr reads it from the
     // increment being assembled, which is the formulation itself.
     const Eigen::VectorXd* du_small = nullptr;
+    // THE STRUCTURES ALONE. The soil elements are skipped -- neither integrated nor assembled --
+    // while the active-element mask still says where the ground is, which is what a joint reads
+    // its pore pressure beside (StructureLaws, for a phase that integrates the soil itself).
+    bool structures_only = false;
 
     // Internal-force (and, if build_tangent, consistent-tangent) assembly. Since Δε = B·du_e,
     // f_int is a pure function of du_free (of u_free+du_free for structural elements) given
@@ -466,6 +470,7 @@ public:
         }
         math::parallel_for(mesh.element_count, [&](int e_begin, int e_end) {
         for (int e = e_begin; e < e_end; ++e) {
+            if (structures_only) continue;
             if (!active_element.empty() && !active_element[e]) continue;  // passive (excavated)
             const typename E::NodeCoords& coords = all_coords_[e];
             const std::array<int, E::kDofCount>& edofs = all_edofs_[e];
@@ -655,6 +660,7 @@ public:
         });  // parallel_for (rethrows any exception to the caller)
 
         for (int e = 0; e < mesh.element_count; ++e) {  // sequential scatter (deterministic)
+            if (structures_only) continue;
             if (!active_element.empty() && !active_element[e]) continue;
             if (probe) {  // reduction in element order -> the sums do not depend on the threads
                 const LocalErrorPartial& a = probe_buf_[e];

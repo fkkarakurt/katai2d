@@ -1,6 +1,7 @@
 #include <katai/fem/assembly/dof_map.hpp>
 
 #include <cassert>
+#include <utility>
 
 namespace katai::core {
 
@@ -34,6 +35,25 @@ void DofMap::tie(int slave, int master) {
     if ((int)master_.size() < total_dofs_) master_.resize(total_dofs_, -1);
     assert(master_[slave] < 0 && master_[master] < 0 && "ties do not chain");
     master_[slave] = master;
+    if ((int)slaves_.size() < total_dofs_) slaves_.resize(total_dofs_, 0);
+    ++slaves_[master];
+}
+
+void DofMap::join(int a, int b) {
+    assert(!finalized_ && "join() must be called before finalize");
+    assert(a >= 0 && a < total_dofs_ && b >= 0 && b < total_dofs_);
+    if ((int)master_.size() < total_dofs_) master_.resize(total_dofs_, -1);
+    if ((int)slaves_.size() < total_dofs_) slaves_.resize(total_dofs_, 0);
+    int ra = master_[a] >= 0 ? master_[a] : a;
+    int rb = master_[b] >= 0 ? master_[b] : b;
+    if (ra == rb) return;
+    if (slaves_[rb] > 0 && slaves_[ra] == 0) std::swap(ra, rb);   // move the smaller group
+    if (slaves_[rb] > 0)
+        for (int& m : master_)
+            if (m == rb) { m = ra; ++slaves_[ra]; }
+    slaves_[rb] = 0;
+    master_[rb] = ra;
+    ++slaves_[ra];
 }
 
 void DofMap::finalize() {

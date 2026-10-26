@@ -226,6 +226,49 @@ MaterialModel build_ss(const MaterialParams& p) {
     return mm;
 }
 
+// Modified Cam-Clay (Roscoe & Burland 1968): the Soft Soil core with the von Mises q, the
+// critical-state M of the friction angle (then phi_cs), no cohesion and no Mohr-Coulomb surface
+// (soft_soil.hpp, Params::cam_clay). Its flow is associated: psi is not read. Every path that
+// serves Soft Soil -- the initial preconsolidation, the undrained pore fluid, the dynamic stiffness,
+// the axisymmetric kinematics -- serves it as it is.
+MaterialModel build_mcc(const MaterialParams& p) {
+    MaterialModel mm = common_fields(p);
+    mm.type = MaterialType::SoftSoil;
+    auto& s = mm.ssoil;
+    s.cam_clay = true;
+    s.lam_star = p.lam_star;
+    s.kap_star = p.kap_star;
+    s.nu_ur = p.nu_ur;
+    s.c = 0.0;
+    s.phi = p.phi_rad;
+    s.psi = 0.0;
+    s.K0nc = k0nc_of(p);
+    MaterialParams q = p;
+    q.c = 0.0;   // the undrained pore fluid's reference K' has no cohesion shift either
+    undrained_soft_soil(mm, q);
+    return mm;
+}
+
+std::string validate_mcc(const MaterialParams& p) {
+    if (p.drainage == DrainageClass::UndrainedC)
+        return "Modified Cam-Clay with Undrained (C) is not a supported combination: a total "
+               "stress analysis needs an undrained stiffness, and this model's stiffness is the "
+               "stress-dependent ln law (K = p'/kappa*) written for EFFECTIVE stress. Use "
+               "Undrained (A), which predicts the undrained strength from the effective stress "
+               "path -- the analysis this model is for.";
+    if (p.drainage == DrainageClass::UndrainedB)
+        return "Modified Cam-Clay with Undrained (B) is not a supported combination: that "
+               "drainage type replaces the strength by c = su with phi = 0, and this model's "
+               "strength is the critical-state M of the friction angle. Use Undrained (A).";
+    if (!(p.phi_rad > 0.0))
+        return "Modified Cam-Clay needs a critical-state friction angle above 0: its M = "
+               "6 sin(phi)/(3 - sin(phi)) is the slope of the critical-state line.";
+    // A cohesion is not read (build_mcc), as every model here ignores the fields it does not
+    // know; a project that enters one is refused by the input contract (io/validate.hpp), which
+    // every run passes through, so the value is never dropped in silence.
+    return {};
+}
+
 MaterialModel build_ssc(const MaterialParams& p) {
     // Soft Soil Creep (Vermeer & Neher 1999): SS parameters plus mu*; time enters
     // integration through integrate_point's dt_day tail, tau = 1 day (a fixed
@@ -314,6 +357,7 @@ std::deque<ModelEntry>& table() {
         // it reads NEITHER depth gradient -- E'_inc would contradict "the stiffness of a rock mass
         // is constant", and c'_inc is a Mohr-Coulomb input this model does not have.
         {"HoekBrown", MaterialType::HoekBrown, true, false, false, false, false, validate_hb, build_hb},
+        {"ModifiedCamClay", MaterialType::SoftSoil, true, false, true, false, false, validate_mcc, build_mcc},
     };
     return entries;
 }

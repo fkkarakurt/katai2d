@@ -26,6 +26,8 @@
 
 namespace katai::core {
 
+class StructureLaws;   // nonlinear_solver.hpp
+
 // Oedometer (constrained, 1-D) modulus E_oed = E(1−ν)/((1+ν)(1−2ν)) — the confined stiffness that
 // governs consolidation (c_v = k·E_oed/γ_w). Degenerate (ν→0.5) returns 0.
 inline double oedometer_modulus(double E, double nu) {
@@ -236,6 +238,14 @@ ConsolidationPlasticResult solve_consolidation_plastic(
     const math::CsrMatrix* struct_k = nullptr,
     const std::vector<int>* pore_tie = nullptr,
     bool ramp_load = false,
-    const Eigen::VectorXd* instant_load = nullptr);
+    const Eigen::VectorXd* instant_load = nullptr,
+    // AXISYMMETRIC: x is the radius; the skeleton has the hoop strain and stress, the pore pressure
+    // acts on the hoop too, and every integral -- equilibrium, coupling, flow, storage -- is per
+    // radian (KV-CON-008).
+    bool axisymmetric = false,
+    // THE STRUCTURES BY THEIR OWN LAWS (in place of struct_k): evaluated at every iterate from the
+    // displacement, the excess pore pressure handed to them at the start of each time step, their
+    // state committed with it (StructureLaws, nonlinear_solver.hpp; KV-STR-006).
+    StructureLaws* structure_laws = nullptr);
 
 }  // namespace katai::core

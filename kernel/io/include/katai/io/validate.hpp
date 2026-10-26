@@ -411,7 +411,8 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
                       "zone only, not for the whole mass");
     }
 
-    const bool ss = m.model == SoilModel::SoftSoil || m.model == SoilModel::SoftSoilCreep;
+    const bool ss = m.model == SoilModel::SoftSoil || m.model == SoilModel::SoftSoilCreep ||
+                    m.model == SoilModel::ModifiedCamClay;
 
     if ((le || mc) && !(m.E > 0.0))
         r.add(Severity::Error, path("E"),
@@ -565,6 +566,14 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
             r.add(Severity::Error, path("mustar"),
                   who + "the modified creep index mu* must be positive (got " + num(m.mu_star) +
                       ")");
+        if (m.model == SoilModel::ModifiedCamClay && m.c != 0.0)
+            r.add(Severity::Error, path("c"),
+                  who + "Modified Cam-Clay has no cohesion: its ellipse passes through the origin "
+                        "of the p'-q plane (got c = " + num(m.c) + " kN/m2)");
+        if (m.model == SoilModel::ModifiedCamClay && m.psi != 0.0)
+            r.add(Severity::Warning, path("psi"),
+                  who + "Modified Cam-Clay's flow is associated and the dilatancy angle is not "
+                        "read (got psi = " + num(m.psi) + " degrees)");
     }
 
     // -- Groundwater: the pore fluid's stiffness ------------------------------
@@ -1144,6 +1153,15 @@ inline ValidationReport validate_project(const model::Project& p) {
                   "prescribed displacements active in the initial phase need the gravity-loading "
                   "initial procedure; the K0 procedure and Safety do not solve for them "
                   "(deactivate them initially and activate them in a staged phase)");
+    }
+
+    // -- Hinged ends (`hinge1` / `hinge2`): a plate's -------------------------
+    for (size_t i = 0; i < p.structs.size(); ++i) {
+        const auto& st = p.structs[i];
+        if ((st.hinge1 || st.hinge2) && st.kind != StructKind::Plate)
+            r.add(Severity::Warning, at("structs", i, st.hinge1 ? "hinge1" : "hinge2"),
+                  "\"" + st.name + "\": only a plate has a rotation to hinge; the setting is "
+                  "ignored on this element");
     }
 
     // -- Cross permeability of walls and interfaces (`flow_barrier`) -----------

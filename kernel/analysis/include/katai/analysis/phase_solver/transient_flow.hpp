@@ -84,6 +84,7 @@ struct TransientFlowPhase {
     // of the node count.
     TransientFlowSolveFactory solve_factory;
     double duration_day = 1.0;                     // <= 0 falls back to 1 day
+    bool axisymmetric = false;                     // x is the radius: the flow per radian
     int time_steps = 25;                           // clamped to [1, 2000]
 };
 
@@ -215,7 +216,8 @@ inline bool solve_transient_flow_phase(const katai::mesh::Mesh& mesh,
         if (touched[sm.a0] && touched[sm.a1] && touched[sm.b0] && touched[sm.b1]) seams.push_back(sm);
     const UnsaturatedFlowResult fr = solve_transient_unsaturated_flow(
         fmesh, cperm, poros, ss, ret, is_presc, hb_ground, h0, dt, nsteps, has_flux ? &in.nodal_flux : nullptr,
-        in.solve_factory, 60, 1e-7, limits.empty() ? nullptr : &limits, seams.empty() ? nullptr : &seams);
+        in.solve_factory, 60, 1e-7, limits.empty() ? nullptr : &limits, seams.empty() ? nullptr : &seams,
+        in.axisymmetric);
     if (!fr.converged || fr.head.empty()) {
         R.message = "Transient flow did not converge (the SWCC may be very steep -- use more, "
                     "smaller time steps).";

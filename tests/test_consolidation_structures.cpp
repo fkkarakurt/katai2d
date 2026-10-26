@@ -2,10 +2,9 @@
 // soil-only: any structural element made it refuse, so the one analysis an engineer most often
 // wants -- what the excavation does over the months while the excess pore pressure dissipates --
 // could not be run with the structure that holds it up. Plates, anchors and geogrids now take part
-// in the coupled solve; interfaces and embedded beams are still refused, and for reasons that are
-// not effort (the mesh split leaves the two sides of a joint with separate pore pressures, which
-// would silently make the joint impermeable; a pile's skin resistance follows the effective stress
-// that consolidation is changing).
+// in the coupled solve; interfaces followed (KV-STR-007) and embedded beams (KV-STR-023). Since
+// 2026-10 every structure is evaluated by its own law at every iterate (StructureLaws) -- the
+// static solver's assembler, with the soil left to the coupled core.
 //
 // THE ORACLE IS THE LIMIT THE COUPLED SOLUTION MUST WALK INTO. Consolidation is the transition
 // between two states this program already solves by an independent path: at t = 0+ the load is
@@ -23,22 +22,22 @@
 // the plate, and the two must differ by far more than the band above.
 //
 // The third came out of the measurement rather than into it. The structural branch of this phase
-// is ELASTIC, and for a plate or an anchor that is a limit on the CAPACITY -- they are elastic
-// until they hinge or yield. For a geogrid it is not: tension-only IS its behaviour, so wherever
-// the settlement bowl puts a sheet in compression the elastic branch has it push BACK on the soil
-// instead of going slack. Measured here at -1.57% on the sheet's force, unchanged when the run is
-// taken to Tv = 8, which is how it was told apart from a dissipation residue -- and 0.00000% for
-// the same sheet kept wholly in tension, which is what proves the cause. The run raises K2D-A015
-// naming the stations, because the direction of that error is UNSAFE: it stiffens ground the real
-// sheet would have stopped holding.
+// WAS elastic, and for a geogrid that is not a capacity but its behaviour: tension-only, so wherever
+// the settlement bowl put a sheet in compression the elastic branch had it push BACK on the soil
+// instead of going slack -- measured at -1.57% on the sheet's force, and 0.00000% for the same sheet
+// kept wholly in tension, which proved the cause. The run reported it (K2D-A015), and anchors,
+// geogrids and plates past their capacity (K2D-A014). With the structures by their own laws the
+// wide sheet lands on the drained answer (+0.00000%), an element past its capacity yields as it
+// does in the Plastic phase -- in the fully-coupled phase as well, which takes the same laws --
+// and the three warnings are retired.
 //
 // verify: KV-STR-006
 //   oracle:   independent_path
 //   source:   the drained limit of Biot consolidation -- as the excess pore pressure dissipates the coupled problem BECOMES the drained one, so the verified static path (solve_nonlinear; the plate/anchor/geogrid diagrams of test_struct_gui, KV-STR-002/004/005) is the answer the coupled solve must converge to. Terzaghi (1943) supplies the rate, cv = k Eoed / gamma_w, and with it the time factor at which the comparison is fair
 //   locator:  Tv = cv t / H_dr^2, cv = k Eoed / gamma_w, Eoed = E(1-nu)/((1+nu)(1-2nu)); at Tv = 4 the remaining maximum excess pore pressure is 9.8e-4 kPa of the 50 kPa applied (2e-5), i.e. the drained state to within a ten-thousandth. Tension-only geogrid: the element slackens in compression (N = 0, reversible), kernel/fem/elements/geogrid.hpp
-//   quantity: maximum settlement [m], a plate's |M|max [kNm/m] and an anchor's / geogrid's |N|max [kN] at the end of a consolidation phase run to Tv = 4, each against the SAME model solved as a drained Plastic phase; the same settlement with the structure removed; and the utilisation each element's capacity is reported at
-//   expected: plate, anchor and a geogrid held in pure tension must equal the drained Plastic phase (4.50102187e-02 m vs 4.50113380e-02 m; 21.621032 vs 21.621032 kNm/m; 181.713475 vs 181.714482 kN; 2.406855 vs 2.406855 kN). Removing the plate must move the settlement to 5.295710e-02 m. A geogrid whose ends the settlement bowl puts in COMPRESSION must NOT match -- this phase solves the structural branch elastically and a geogrid is tension-only -- and the size of that difference is the finding
-//   band:     5e-4 relative on every quantity compared to the drained path, measured -0.00249% (settlement), 0.00000% (plate moment), -0.00055% (anchor force) and -0.00000% (geogrid in pure tension). The band is not slack for its own sake: what separates the two answers is the excess pore pressure still in the ground at Tv = 4, which is 2e-5 of the load, and the settlement difference came out at that order; 5e-4 leaves room for another linear backend rounding 120 steps differently. Two differences are deliberately NOT inside it: the plate's own effect on the settlement is 17.66% -- three orders outside, which is what makes the agreement evidence rather than two soft numbers agreeing -- and the wide geogrid comes out -1.57%, asserted as a band of its own (-1.0% to -2.5%) because it is the tension-only cut, proven by its control: the same sheet kept entirely in tension agrees to -0.00000%, and the run raises K2D-A015 naming the 6 of 16 stations that were in compression
+//   quantity: maximum settlement [m], a plate's |M|max [kNm/m] and an anchor's / geogrid's |N|max [kN] at the end of a consolidation phase run to Tv = 4, each against the SAME model solved as a drained Plastic phase -- elastic, and with a capacity below what the element develops; the same settlement with the structure removed; and, in a fully-coupled phase, the utilisation each element's capacity is reported at
+//   expected: plate, anchor and a geogrid held in pure tension must equal the drained Plastic phase (4.50102187e-02 m vs 4.50113380e-02 m; 21.621032 vs 21.621032 kNm/m; 181.713475 vs 181.714482 kN; 2.406855 vs 2.406855 kN). Removing the plate must move the settlement to 5.295710e-02 m. A geogrid whose ends the settlement bowl puts in COMPRESSION matches too, now that it goes slack. An element given a capacity below its force yields and ends at the drained phase's yielded answer
+//   band:     5e-4 relative on every quantity compared to the drained path, measured -0.00249% (settlement), 0.00000% (plate moment), -0.00055% (anchor force) and -0.00000% (geogrid in pure tension). The band is not slack for its own sake: what separates the two answers is the excess pore pressure still in the ground at Tv = 4, which is 2e-5 of the load, and the settlement difference came out at that order; 5e-4 leaves room for another linear backend rounding 120 steps differently. The plate's own effect on the settlement is 17.66% -- three orders outside, which is what makes the agreement evidence rather than two soft numbers agreeing. The wide geogrid agrees to +0.00000% (it was -1.57% on the elastic branch). The yielded elements are held to 0.5%: an element that is elastic and then yields remembers the order its loads came in, and the two paths load it undrained first and drained throughout
 #include <katai/jobs/driver.hpp>
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/model/project.hpp>
@@ -186,23 +185,42 @@ void test_drained_limit() {
 }
 
 void test_elastic_limit_is_not_silent() {
-    std::printf("\n-- (3) the elastic structural branch says so when it is exceeded --\n");
-    // The same raft with a plastic moment far below what the load produces. Nothing in this phase
-    // caps it -- the structural branch of a consolidation phase is elastic -- so the run must SAY
-    // that, name the line and the utilisation, rather than report a moment the plate cannot carry.
-    const Answer big = run(block(/*with_plate=*/true, /*plastic_phase=*/false, /*Mp=*/1.0));
-    check(big.ok, "the phase still solves");
-    if (!big.ok) { std::printf("   (%s)\n", big.msg.c_str()); return; }
-    // Re-run to read the diagnostics (run() keeps only the numbers).
-    const auto pr = block(true, false, 1.0);
-    const auto M = katai::app::mesh_from_project(pr, 1.0, 6);
-    const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
+    std::printf("\n-- (3) a plate past its plastic moment hinges in the consolidation phase --\n");
+    // The same raft with a plastic moment far below what the load produces. The consolidation
+    // phase used to solve it elastically and report the over-capacity line (K2D-A014); it now
+    // hinges, as in the Plastic phase.
+    const Answer dh = run(block(/*with_plate=*/true, /*plastic_phase=*/true, /*Mp=*/1.0));
+    const Answer ch = run(block(/*with_plate=*/true, /*plastic_phase=*/false, /*Mp=*/1.0));
+    check(dh.ok && ch.ok, "the hinged raft solves in both phases");
+    if (!dh.ok || !ch.ok) { std::printf("   (%s | %s)\n", dh.msg.c_str(), ch.msg.c_str()); return; }
+    std::printf("   |M|max consolidation %.6f vs drained %.6f kNm/m; settlement %+.4f%%\n", ch.moment,
+                dh.moment, 100.0 * (ch.settle / dh.settle - 1.0));
+    // The diagram's moment is recovered at the stations from the displacement, and comes out a
+    // few per cent above the plastic moment the hinge holds at the stress points -- in the
+    // Plastic phase as in this one (1.085 there). Elastic, the raft carried 21.6.
+    check(ch.moment < 1.1 && std::fabs(ch.moment / dh.moment - 1.0) < 0.02,
+          "the moment is held at the plastic moment, as in the Plastic phase (2%)");
+    check(std::fabs(ch.settle / dh.settle - 1.0) < 5e-3, "and the settlement is the drained phase's (0.5%)");
+    const auto diag_run = [](const m::Project& pr) {
+        const auto M = katai::app::mesh_from_project(pr, 1.0, 6);
+        return katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
+    };
+    const auto res = diag_run(block(true, false, 1.0));
     bool warned = false;
-    for (const auto& d : res[1].diagnostics)
-        if (d.code == std::string("K2D-A014")) { warned = true; std::printf("   (%s)\n", d.message.c_str()); }
-    check(warned, "K2D-A014: the elastic branch is declared and the over-capacity line is named");
-    check(!res[1].struct_forces.empty() && res[1].struct_forces.front().yielded,
-          "and the line is marked as one that would have yielded");
+    for (const auto& d : res[1].diagnostics) if (d.code == std::string("K2D-A014")) warned = true;
+    check(!warned && !res[1].struct_forces.empty() && res[1].struct_forces.front().yielded,
+          "the line is marked as yielded, and there is no elastic branch to report (K2D-A014 silent)");
+    // The fully-coupled phase hinges it too.
+    m::Project fc = block(true, false, 1.0);
+    fc.phases[0].type = m::PhaseType::FullyCoupled;
+    const auto rf = diag_run(fc);
+    bool fwarned = false;
+    for (const auto& d : rf[1].diagnostics) if (d.code == std::string("K2D-A014")) fwarned = true;
+    const double fm = rf[1].struct_forces.empty() ? 0.0 : rf[1].struct_forces.front().max_M;
+    std::printf("   fully coupled: |M|max %.6f kNm/m%s%s\n", fm, rf[1].ok ? "" : " -- ",
+                rf[1].ok ? "" : rf[1].message.c_str());
+    check(rf[1].ok && !fwarned && fm < 1.1 && !rf[1].struct_forces.empty() && rf[1].struct_forces.front().yielded,
+          "and so does a fully-coupled phase: the raft hinges, marked as yielded");
 }
 
 // The anchor and geogrid branches of the same machinery, with the drained limit as the oracle
@@ -258,25 +276,29 @@ void test_tie_and_geogrid() {
             check(std::fabs(consol.moment_or_n / drained.moment_or_n - 1.0) < 5e-4,
                   "anchor force at the end of consolidation = the drained answer");
         } else {
-            // THE CLAIM. A geogrid is tension-only, and this phase's structural branch is not, so
-            // the wide sheet -- whose ends the settlement bowl puts in compression -- is NOT the
-            // drained problem, and must not be asserted to match it. What is asserted is the
-            // measured SIZE of that difference and, below, its cause.
-            const double gap = 100.0 * (consol.moment_or_n / drained.moment_or_n - 1.0);
-            check(gap < -1.0 && gap > -2.5,
-                  "the wide sheet differs from the drained answer by the tension-only cut (~1.6%)");
-            bool slack_warned = false;
-            {
-                const auto prw = build(false, 0.0);
+            // THE CLAIM. A geogrid is tension-only, and the wide sheet -- whose ends the settlement
+            // bowl puts in compression -- goes slack there in this phase as in the Plastic one, so
+            // it lands on the drained answer. On the elastic branch it came out 1.57% off.
+            check(std::fabs(consol.moment_or_n / drained.moment_or_n - 1.0) < 5e-4,
+                  "the wide sheet, compressed at its ends, = the drained answer: it goes slack there");
+            const auto diagnostics_of = [](const m::Project& prw) {
                 const auto Mw = katai::app::mesh_from_project(prw, 1.0, 6);
-                const auto rw = katai::app::solve_phases(prw, Mw.mesh, InitialPhase::K0Procedure);
-                for (const auto& d : rw[1].diagnostics)
-                    if (d.code == std::string("K2D-A015")) {
-                        slack_warned = true;
-                        std::printf("   (%s)\n", d.message.c_str());
-                    }
-            }
-            check(slack_warned, "K2D-A015: the compressed part of the sheet is REPORTED, not hidden");
+                return katai::app::solve_phases(prw, Mw.mesh, InitialPhase::K0Procedure)[1].diagnostics;
+            };
+            bool slack_warned = false;
+            for (const auto& d : diagnostics_of(build(false, 0.0)))
+                if (d.code == std::string("K2D-A015")) slack_warned = true;
+            check(!slack_warned, "and nothing is reported about an elastic sheet (K2D-A015 silent)");
+            // The fully-coupled phase solves its structures by the same laws.
+            m::Project fcw = build(false, 0.0);
+            fcw.phases[0].type = m::PhaseType::FullyCoupled;
+            const Answer fcg = run(fcw);
+            bool fc_slack = false;
+            for (const auto& d : diagnostics_of(fcw)) if (d.code == std::string("K2D-A015")) fc_slack = true;
+            std::printf("   geogrid, fully coupled: N %.6f vs drained %.6f kN (%+.5f%%)\n", fcg.moment_or_n,
+                        drained.moment_or_n, 100.0 * (fcg.moment_or_n / drained.moment_or_n - 1.0));
+            check(fcg.ok && !fc_slack && std::fabs(fcg.moment_or_n / drained.moment_or_n - 1.0) < 5e-4,
+                  "and so does the fully-coupled phase: the sheet goes slack there too");
 
             // THE CONTROL. The same sheet, kept entirely under the load so that every station is
             // in tension: there the elastic branch IS the geogrid's behaviour, and the two paths
@@ -295,11 +317,50 @@ void test_tie_and_geogrid() {
             }
         }
 
-        // The capacity, set just below what the element developed: the elastic branch cannot
-        // apply it, so the run must say so -- and for the anchor the utilisation must be computed
-        // in the REPORT's units (per anchor), not the solver's (per metre of wall).
+        // The capacity, set at half of what the element developed. The consolidation phase
+        // applies it as the Plastic phase does: the element yields, and the two end together.
         const double cap = 0.5 * std::fabs(drained.moment_or_n);
-        const auto pr = build(false, cap);
+        {
+            const Answer yd = run(build(true, cap));
+            const Answer yc = run(build(false, cap));
+            check(yd.ok && yc.ok, tie ? "anchor at its capacity: both phases solved"
+                                      : "geogrid at its capacity: both phases solved");
+            if (yd.ok && yc.ok) {
+                std::printf("   %s at its capacity %.4f: N consolidation %.6f vs drained %.6f (%+.4f%%),"
+                            " settlement %+.4f%%\n", what, cap, yc.moment_or_n, yd.moment_or_n,
+                            100.0 * (yc.moment_or_n / yd.moment_or_n - 1.0),
+                            100.0 * (yc.settle / yd.settle - 1.0));
+                check(std::fabs(yc.moment_or_n) <= cap * (1.0 + 1e-6),
+                      "the element carries no more than its capacity in the consolidation phase");
+                if (tie) {
+                    check(std::fabs(yc.moment_or_n / yd.moment_or_n - 1.0) < 5e-3 &&
+                              std::fabs(yc.settle / yd.settle - 1.0) < 5e-3,
+                          "and ends at the drained phase's yielded answer (0.5%)");
+                } else {
+                    // THE SHEET HAS A HISTORY. The coupled phase loads the ground undrained first:
+                    // it spreads sideways at constant volume and stretches the sheet past its
+                    // capacity, where it yields; as the ground then consolidates it draws in again
+                    // and the yielded sheet shortens, unloading from its capacity. The drained
+                    // phase never stretched it past, so the two end apart -- and both halves of
+                    // that history are measured here rather than assumed.
+                    const auto early = [&](double c) {
+                        m::Project pe = build(false, c);
+                        pe.phases[0].duration = 0.01 * kH * kH / cv();   // Tv = 0.01
+                        return run(pe);
+                    };
+                    const Answer e0 = early(0.0), ec = early(cap);
+                    std::printf("   geogrid at Tv = 0.01: N %.6f with no capacity, %.6f with it; at Tv = 4 %.6f (capacity %.6f)\n",
+                                e0.moment_or_n, ec.moment_or_n, yc.moment_or_n, cap);
+                    check(e0.ok && ec.ok && e0.moment_or_n > 2.0 * std::fabs(drained.moment_or_n),
+                          "early in the phase the ground loaded undrained stretches the sheet to more than twice its drained force");
+                    check(ec.moment_or_n <= cap * (1.0 + 1e-6) && yc.moment_or_n < ec.moment_or_n,
+                          "and as the ground consolidates the yielded sheet shortens: it unloads from its capacity");
+                }
+            }
+        }
+        // The fully-coupled phase applies it too.
+        m::Project pr = build(false, cap);
+        pr.phases[0].type = m::PhaseType::FullyCoupled;
         const auto M = katai::app::mesh_from_project(pr, 1.0, 6);
         const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
         bool warned = false;
@@ -310,12 +371,14 @@ void test_tie_and_geogrid() {
                 const size_t at = d.message.find(" at ");
                 if (at != std::string::npos) reported = std::atof(d.message.c_str() + at + 4);
             }
-        std::printf("   %s: capacity %.4f kN -> reported utilisation %.0f%% (expected ~200%%)\n",
-                    what, cap, reported);
-        check(warned, tie ? "anchor: K2D-A014 names the over-capacity tie"
-                          : "geogrid: K2D-A014 names the over-capacity sheet");
-        check(reported > 150.0 && reported < 260.0,
-              "and the utilisation is computed in the units the capacity was entered in");
+        (void)reported;
+        const double fcn = res[1].struct_forces.empty() ? 0.0
+                           : (res[1].struct_forces.front().kind == 0 ? res[1].struct_forces.front().max_M
+                                                                     : res[1].struct_forces.front().max_N);
+        std::printf("   %s, fully coupled, capacity %.4f: N %.6f\n", what, cap, fcn);
+        check(res[1].ok && !warned && std::fabs(fcn) <= cap * (1.0 + 1e-6),
+              tie ? "anchor, fully coupled: held at its capacity, and no elastic branch to report"
+                  : "geogrid, fully coupled: held at its capacity, and no elastic branch to report");
     }
 }
 
@@ -327,7 +390,7 @@ void test_tie_and_geogrid() {
 // (KV-STR-007). So what is asserted here now is that the wall RUNS and that its joints are
 // reported -- and what is still refused is the one thing that has not been answered.
 void test_what_is_and_is_not_carried() {
-    std::printf("\n-- (4) a wall with interfaces now runs; the embedded beam still does not --\n");
+    std::printf("\n-- (4) a wall with interfaces runs, and so does an embedded beam --\n");
     m::Project pr = block(/*with_plate=*/true, /*plastic_phase=*/false);
     pr.structs.front().iface_pos = true;    // a plate WITH interfaces is an embedded wall:
     pr.structs.front().iface_neg = true;    // the mesh is split along it
@@ -335,7 +398,9 @@ void test_what_is_and_is_not_carried() {
     check(wall.ok, "a wall (plate + interfaces) in a consolidation phase solves");
     if (!wall.ok) { std::printf("   (%s)\n", wall.msg.c_str()); }
 
-    // The embedded beam is the remaining refusal, and its reason is not effort either.
+    // The embedded beam was the last refusal: its skin and base slip by definition, and a phase
+    // that solved its structures as one elastic matrix could not carry it. It runs now; its
+    // verification is KV-STR-023 (test_consolidation_pile).
     m::Project pb = block(/*with_plate=*/false, /*plastic_phase=*/false);
     m::EmbeddedBeamMaterial em; em.name = "Pile";
     pb.embedded.push_back(em);
@@ -343,13 +408,8 @@ void test_what_is_and_is_not_carried() {
     e.x1 = 10.0; e.y1 = 2.0; e.x2 = 10.0; e.y2 = kH; e.material = 0;
     pb.structs.push_back(e);
     const Answer beam = run(pb);
-    check(!beam.ok, "an embedded beam in a consolidation phase is refused");
-    if (!beam.ok) {
-        std::printf("   (%s)\n", beam.msg.c_str());
-        check(beam.msg.find("EFFECTIVE stress") != std::string::npos,
-              "and the message names the reason: its skin resistance follows the stress "
-              "consolidation is changing");
-    }
+    check(beam.ok, "an embedded beam in a consolidation phase solves (it used to be refused)");
+    if (!beam.ok) std::printf("   (%s)\n", beam.msg.c_str());
 }
 
 }  // namespace

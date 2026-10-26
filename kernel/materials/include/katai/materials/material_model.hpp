@@ -615,6 +615,7 @@ struct SsReturnCore {
     double K, G;                // elastic moduli frozen at the trial mean (tangent assembly)
     bool plastic;               // did cap/MC activate (SSC: MC or meaningful creep accumulated)
     int nsub;                   // substep count the core used (FD pinning)
+    bool unstable = false;      // Cam-Clay: no stress on the softening ellipse (StepResult::unstable)
 };
 // ssc != nullptr → the same spectral/inversion skeleton wraps the Soft Soil CREEP core
 // (the elastic law is IDENTICAL to SS, so the inversion carries over exactly); dt_day is
@@ -636,7 +637,8 @@ SsReturnCore ss_return_core(const softsoil::Params& P,
 void ss_forward(const MaterialModel& m, const GaussState& committed,
                 const Eigen::Vector3d& de, GaussState& trial,
                 bool* plastic_out = nullptr, double* K_out = nullptr,
-                double* G_out = nullptr, int nsub_fixed = 0, int* nsub_out = nullptr);
+                double* G_out = nullptr, int nsub_fixed = 0, int* nsub_out = nullptr,
+                bool* unstable_out = nullptr);
 
 // Soft Soil CREEP FE forward update (PLANE STRAIN): the time-dependent twin of ss_forward —
 // the same frame-independent Voigt trial + spectral skeleton (ss_return_core, ssc branch),

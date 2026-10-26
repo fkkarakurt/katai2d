@@ -12,8 +12,8 @@ driven from the command line or from Python.
 Every capability is pinned to a closed-form solution, an independent
 computation path that shares no code with the solver, or a published benchmark
 — **self-consistency does not count as verification** — and the whole record
-ships with the source: **77 declared verification cases**, **26 benchmark
-`.k2d` input files** anyone can rerun, **214 automated tests**.
+ships with the source: **124 declared verification cases**, **26 benchmark
+`.k2d` input files** anyone can rerun, **276 automated tests**.
 
 **Status: pre-release.** The engine and its validation record are under active
 development; interfaces and the file format may still change. What ships in
@@ -369,13 +369,14 @@ thing to run: every `.k2d` there is a published benchmark the suite pins.
   with compliant-base and free-field boundaries, plus response spectra.
 - **Constitutive models** — Linear Elastic, Mohr–Coulomb with a tension
   cut-off, Hardening Soil, HS-small (with Masing's rule and the Li & Dafalias
-  dilatancy below the phase-transformation line), Soft Soil, Soft Soil Creep
-  and Hoek–Brown for rock (the 2002 criterion, entered as σci, mi, GSI and the
-  disturbance factor rather than as a c′/φ′ fit); drained, undrained (A/B/C)
-  and non-porous drainage types.
-- **Elements** — 6- and 15-node triangles, plane-strain and axisymmetric;
-  plates with elastoplastic Mp/Np hinges, embedded beam rows, node-to-node
-  anchors, geogrids and Coulomb interfaces.
+  dilatancy below the phase-transformation line), Soft Soil, Soft Soil Creep,
+  Modified Cam-Clay and Hoek–Brown for rock (the 2002 criterion, entered as
+  σci, mi, GSI and the disturbance factor rather than as a c′/φ′ fit); drained,
+  undrained (A/B/C) and non-porous drainage types.
+- **Elements** — 6- and 15-node triangles, plane-strain and axisymmetric
+  (groundwater flow and consolidation included); plates with elastoplastic
+  Mp/Np hinges, embedded beam rows, node-to-node anchors, geogrids and Coulomb
+  interfaces, each by its own law in every phase type, consolidation included.
 - **Ground data** — borehole logs (a level per layer boundary and a water head,
   at an x) as the input the layer geometry is generated from, so a reviewer can
   see the logs a model was drawn from and not only the drawing.

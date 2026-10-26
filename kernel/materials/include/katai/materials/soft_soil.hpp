@@ -79,10 +79,19 @@ struct Params {
     double phi = 0.0;        // effective friction angle [rad] (0 FORBIDDEN: c·cotφ undefined)
     double psi = 0.0;        // dilatancy [rad] (SS default 0)
     double K0nc = 0.5;       // normal-consolidation lateral pressure coefficient (→ M)
+    // MODIFIED CAM-CLAY (Roscoe & Burland 1968). The same ln-law elasticity, ellipse and
+    // exponential hardening of p_p, read with the von Mises q -- a circle in the deviatoric plane,
+    // one M in compression and extension -- and with the critical-state M = 6 sin(phi)/(3 - sin(phi))
+    // of the friction angle, which is then the critical-state angle. No cohesion and no
+    // Mohr-Coulomb surface: the top of the ellipse is the critical state, and beyond it, on the dry
+    // side, the soil softens. K0nc is not read.
+    bool cam_clay = false;
 };
 
-// c cot(phi), the shift of the model's stress-dependent laws (0 where phi = 0).
+// c cot(phi), the shift of the model's stress-dependent laws (0 where phi = 0, and for Cam-Clay,
+// which has no cohesion).
 inline double cohesion_shift(const Params& P) {
+    if (P.cam_clay) return 0.0;
     return P.phi > 1e-12 ? P.c * std::cos(P.phi) / std::sin(P.phi) : 0.0;
 }
 
@@ -97,12 +106,27 @@ inline double M_from_K0nc(const Params& P) {
     return 3.0 * std::sqrt(a + b);
 }
 
+// The ellipse's M: Brinkgreve's from K0NC for Soft Soil; the critical-state one for Cam-Clay,
+// M = 6 sin(phi_cs)/(3 - sin(phi_cs)) -- the slope of the critical-state line in triaxial
+// compression.
+inline double M_of(const Params& P) {
+    if (P.cam_clay) {
+        const double s = std::sin(P.phi);
+        return 6.0 * s / (3.0 - s);
+    }
+    return M_from_K0nc(P);
+}
+
 struct StepResult {
     Eigen::Vector3d sig;     // principal stresses (compression-positive)
     double pp;               // new preconsolidation pressure
     bool cap_active = false;
     bool mc_active = false;
     int nsub = 1;            // number of substeps used (reported for FD tangent pinning)
+    // Cam-Clay: a substep found no stress on the softening ellipse -- the material point cannot
+    // follow the strain it is given (the state is left at the closest the search came). Read as
+    // an integration cut short (PointReport::integration_saturated), never as an answer.
+    bool unstable = false;
 };
 
 namespace detail {
@@ -112,6 +136,11 @@ inline double q_tilde(const Eigen::Vector3d& s, double delta) {
     Eigen::Vector3d o = s;
     std::sort(o.data(), o.data() + 3, std::greater<double>());
     return o(0) + (delta - 1.0) * o(1) - delta * o(2);
+}
+// The von Mises q = sqrt(3/2 s:s), Cam-Clay's deviatoric measure.
+inline double q_mises(const Eigen::Vector3d& s) {
+    const Eigen::Vector3d d = s - Eigen::Vector3d::Constant(s.mean());
+    return std::sqrt(1.5 * d.squaredNorm());
 }
 }  // namespace detail
 
@@ -133,12 +162,12 @@ StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c
 // Floor: pp ≥ max(c·cotφ, unit stress) — the threshold ellipse.
 inline double ss_initial_pp(const Params& P, const Eigen::Vector3d& sig_comp_pos,
                             double ocr_eq = 1.0) {
-    const double sphi = std::sin(P.phi), cphi = std::cos(P.phi);
-    const double ccot = P.phi > 1e-12 ? P.c * cphi / sphi : 0.0;
+    const double sphi = std::sin(P.phi);
+    const double ccot = cohesion_shift(P);
     const double delta = (3.0 + sphi) / (3.0 - sphi);
-    const double M = M_from_K0nc(P);
+    const double M = M_of(P);
     const double p = sig_comp_pos.mean();
-    const double qt = detail::q_tilde(sig_comp_pos, delta);
+    const double qt = P.cam_clay ? detail::q_mises(sig_comp_pos) : detail::q_tilde(sig_comp_pos, delta);
     const double fbar = qt * qt / (M * M * std::max(p + ccot, 1e-9)) + p;
     return std::max(fbar * std::max(ocr_eq, 1.0), std::max(ccot, kPmin));
 }

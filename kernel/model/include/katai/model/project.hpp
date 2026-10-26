@@ -14,7 +14,7 @@ namespace katai::model {
 
 // Enum VALUES are file-stable (written as int in the project file) — a new model is appended at the END.
 enum class SoilModel { LinearElastic, MohrCoulomb, HardeningSoil, HSsmall, SoftSoil, SoftSoilCreep,
-                      HoekBrown };   // values are FILE-STABLE: append only
+                      HoekBrown, ModifiedCamClay };   // values are FILE-STABLE: append only
 // Drainage type (material General data). Undrained (A): EFFECTIVE strength c', phi' + the pore-
 // fluid bulk stiffness Kw/n (excess pore pressure generated, effective stress path; su is PREDICTED).
 // Undrained (B): the same Kw/n machinery but the UNDRAINED strength is entered directly -- c = su,
@@ -31,10 +31,11 @@ enum class Drainage { Drained = 0, Undrained = 1, NonPorous = 2, UndrainedB = 3,
 
 inline const char* const* soil_model_names() {
     static const char* n[] = {"Linear elastic", "Mohr-Coulomb", "Hardening Soil", "HS small",
-                              "Soft Soil", "Soft Soil Creep", "Hoek-Brown (rock)"};
+                              "Soft Soil", "Soft Soil Creep", "Hoek-Brown (rock)",
+                              "Modified Cam-Clay"};
     return n;
 }
-inline constexpr int kSoilModelCount = 7;   // combo count — updated together with the enum
+inline constexpr int kSoilModelCount = 8;   // combo count — updated together with the enum
 // BOUNDS-CHECKED display name: the enum int comes from a file (a forward-version project
 // can carry an out-of-range value) — raw `names()[i]` or a `& 3` mask silently prints the
 // WRONG model name (measured: with the 5th model added, `& 3` showed "Linear elastic").
@@ -305,6 +306,13 @@ struct StructElement {
     // A third type, Rigid (rotation coupled too, to a plate), is out of scope and
     // declared in docs/references/embedded-beam-formulation.md sec 8.
     int conn = 0;
+    // PLATES ONLY -- a HINGED END (docs/k2d-format.md, `hinge1` / `hinge2`): the end at the first
+    // (second) point turns on its own. Plates and walls that meet at a point are joined rigidly
+    // there -- one rotation for all of them -- and a hinged end is left out of that: it keeps its
+    // own rotation, so the joint passes force and no moment from it. At a supported boundary,
+    // where a plate's rotation is held (the standard fixities, a plane of symmetry), a hinged end
+    // is not held: it is a pin. false = rigid, which is what every file before these keys means.
+    bool hinge1 = false, hinge2 = false;
 };
 
 enum class LoadKind { Point, Distributed };

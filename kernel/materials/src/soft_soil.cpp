@@ -1,7 +1,108 @@
+#include <cstdio>
 #include <cstdlib>
 #include <katai/materials/soft_soil.hpp>
 
 namespace katai::core::softsoil {
+
+// MODIFIED CAM-CLAY, ONE SUBSTEP. The predictor is Soft Soil's -- the exact exponential mean and
+// the deviatoric part with G at the trial p. The return is BACKWARD EULER: the plastic strain
+// goes along the normal of the ellipse at the RETURNED state, taken back through the ln law for
+// its volumetric part, with p_p hardened exponentially. In the von Mises q the normal is radial
+// in the deviatoric plane, so the deviatoric stress stays along the trial's and the return is a
+// question of two scalars, p and q: s = s_tr (1 - 3 G a L / q_tr), a = df/dq. The normal is found
+// by fixed point -- the return along a given normal, the normal at its result, again -- starting
+// from the normal at the trial. A return along the trial's normal alone (what Soft Soil does)
+// carries a bias that does not vanish on a steady path: on one-dimensional compression the stress
+// ratio it settles at depends on the size of the step, measured +2.66% in K0 at the substep size
+// the finite elements use. With the normal of the returned state it is -0.02% there (what is left
+// is the elastic shear modulus held at the trial's p over the step), and the undrained path,
+// which the trial's normal stopped short of the critical state, reaches it.
+// The multiplier along a given normal is BRACKETED before it is refined. On the dry side of the
+// ellipse the plastic volume change is a dilation, p_p falls with it and the surface shrinks as
+// the stress moves; a Newton step from zero can land beyond the root. Where there is no root at
+// all -- the softening outruns the elastic unloading, a material instability -- the state is left
+// at the closest the search came and flagged.
+StepResult cc_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c,
+                      const Eigen::Vector3d& deps) {
+    const double M = M_of(P), M2 = M * M;
+    const double p_c = sig_c.mean(), dev_v = deps.sum();
+    const double p_tr = mean_after(p_c, dev_v, P.kap_star);
+    const double K_tr = bulk_at(p_tr, P.kap_star);
+    const double G = 1.5 * K_tr * (1.0 - 2.0 * P.nu_ur) / (1.0 + P.nu_ur);
+    const Eigen::Vector3d de = deps - Eigen::Vector3d::Constant(dev_v / 3.0);
+    const Eigen::Vector3d s_tr = (sig_c - Eigen::Vector3d::Constant(p_c)) + 2.0 * G * de;
+    const double q_tr = std::sqrt(1.5 * s_tr.squaredNorm());
+    const double pp0 = std::max(pp_c, kPmin);
+    StepResult out{Eigen::Vector3d::Constant(p_tr) + s_tr, pp0, false, false};
+    const auto f = [&](double p, double q, double pp) { return q * q / (M2 * std::max(p, 1e-9)) + p - pp; };
+    const double f0 = f(p_tr, q_tr, pp0);
+    const double ftol = 1e-11 * std::max(1.0, pp0);
+    if (f0 <= ftol) return out;
+
+    const double hard = P.lam_star - P.kap_star;
+    // The return along a normal (nv = df/dp, the plastic volume per unit multiplier; a = df/dq):
+    // the multiplier that puts the state on the hardened ellipse. False where there is none.
+    const auto along = [&](double nv, double a, double& p, double& q, double& pp) -> bool {
+        const auto state = [&](double L) {
+            p = mean_after(p_tr, -L * nv, P.kap_star);
+            q = std::fabs(q_tr - 3.0 * G * a * L);
+            pp = std::max(pp0 * std::exp(L * nv / hard), kPmin);
+            return f(p, q, pp);
+        };
+        const double dfdl0 = -(K_tr * nv * nv + 3.0 * G * a * a + pp0 * nv / hard);
+        const double L_q = a > 0.0 ? q_tr / (3.0 * G * a) : 1e300;   // beyond: through the axis
+        double lo = 0.0, flo = f0, hi = -1.0, fhi = 0.0;
+        double L = dfdl0 < 0.0 ? std::min(-f0 / dfdl0, L_q) : 1e-6 * std::min(L_q, 1.0);
+        double best_L = 0.0, best_f = f0;
+        for (int k = 0; k < 200 && hi < 0.0; ++k) {
+            const double fl = state(L);
+            if (std::fabs(fl) < std::fabs(best_f)) { best_f = fl; best_L = L; }
+            if (fl <= 0.0) { hi = L; fhi = fl; break; }
+            lo = L; flo = fl;
+            if (L >= L_q) break;
+            L = std::min(2.0 * L, L_q);
+        }
+        if (hi < 0.0) { state(best_L); return false; }
+        // Illinois: regula falsi that halves the stale end, to |f| <= ftol.
+        int side = 0;
+        L = hi;
+        double fl = fhi;
+        for (int it = 0; it < 100 && std::fabs(fl) > ftol && hi - lo > 1e-15 * hi; ++it) {
+            L = (lo * fhi - hi * flo) / (fhi - flo);
+            fl = state(L);
+            if (fl > 0.0) { lo = L; flo = fl; if (side == 1) fhi *= 0.5; side = 1; }
+            else { hi = L; fhi = fl; if (side == -1) flo *= 0.5; side = -1; }
+        }
+        state(L);
+        return true;
+    };
+    const auto normal_at = [&](double p, double q, double& nv, double& a) {
+        const double pb = std::max(p, 1e-9);
+        nv = 1.0 - q * q / (M2 * pb * pb);
+        a = 2.0 * q / (M2 * pb);
+    };
+    double nv, a, p, q, pp;
+    normal_at(p_tr, q_tr, nv, a);
+    bool ok = along(nv, a, p, q, pp);
+    // The normal of the returned state, by fixed point. It contracts at the rate of the step's
+    // size; a fixed point that does not settle keeps the last return that did.
+    for (int it = 0; ok && it < 50; ++it) {
+        double nv2, a2;
+        normal_at(p, q, nv2, a2);
+        if (std::fabs(nv2 - nv) <= 1e-13 * (1.0 + std::fabs(nv)) &&
+            std::fabs(a2 - a) <= 1e-13 * (1.0 + std::fabs(a)))
+            break;
+        double p2, q2, pp2;
+        if (!along(nv2, a2, p2, q2, pp2)) break;
+        nv = nv2; a = a2; p = p2; q = q2; pp = pp2;
+    }
+    if (!ok) out.unstable = true;
+    const double scale = q_tr > 0.0 ? q / q_tr : 0.0;
+    out.sig = Eigen::Vector3d::Constant(p) + scale * s_tr;
+    out.pp = pp;
+    out.cap_active = true;
+    return out;
+}
 
 StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c,
                       const Eigen::Vector3d& deps) {
@@ -89,8 +190,8 @@ StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c
     // Scalar Δλ Newton (secant derivative): f(σ(Δλ), pp(Δλ)) = 0. harden=false → pp constant (MC).
     auto scalar_return = [&](const Eigen::Vector3d& s0, double pp0, auto&& ffun,
                              const Eigen::Vector3d& m, bool harden, Eigen::Vector3d& sL,
-                             double& ppL) {
-        double dl = 0.0;
+                             double& ppL, double dl0) {
+        double dl = dl0;
         auto eval = [&](double L, Eigen::Vector3d& s, double& ppv) {
             s = exp_return(s0, m, L);
             const double devp = L * m.sum();
@@ -168,7 +269,7 @@ StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c
                 return s;
             };
             auto f_tied = [&](const Eigen::Vector3d& s, double ppv) { return ffun(tie(s), ppv); };
-            const double dl = scalar_return(out.sig, out.pp, f_tied, m, harden, sL, ppL);
+            const double dl = scalar_return(out.sig, out.pp, f_tied, m, harden, sL, ppL, 0.0);
             if (dl <= 0.0) {
                 // We were called with f > tol: dl=0 is NOT "inside the surface", it is a
                 // secant failure (under single-sided flow the σ2/σ3 crossing kink makes
@@ -187,6 +288,44 @@ StepResult ss_substep(const Params& P, const Eigen::Vector3d& sig_c, double pp_c
             } else if (tied12) {
                 const double ms = 0.5 * (sL(idx[1]) + sL(idx[2]));
                 sL(idx[1]) = ms; sL(idx[2]) = ms;
+            }
+            // THE CAP'S NORMAL AT THE RETURNED STATE (backward Euler). The return above goes along
+            // the normal at the trial, which on a steady path is not the normal of the state the
+            // path is on: on one-dimensional compression the stress ratio it settled at depended
+            // on the step -- measured +1.2% in K0NC through the finite elements at their substep
+            // size, against -0.016% now at the material point's step and -0.0016% at a tenth of
+            // it (c = 0, where the formula for M is exact; test_soft_soil (e)). The normal is
+            // taken again at the returned state, with the same pairs tied, and the return redone
+            // from the trial along it, from the multiplier it ended at; a redone return that
+            // fails keeps the last one that did not. The ordering is judged on the state this
+            // ends at, so a return whose own normal would cross an edge hands over to the edge
+            // return, as the trial's did: where the two meet, the tied state is the untied one,
+            // and so is its normal.
+            // TWO CORRECTIONS, ALWAYS. The fixed point contracts by about a fifth per pass, so two
+            // leave a twenty-fifth of the trial normal's error -- the bias above falls from +1.2%
+            // to below the step's own -- and a fixed count keeps the update a smooth function of
+            // the strain increment, which the numerical tangent differentiates. Iterated to 1e-13
+            // it took sixteen passes on average and made a consolidation of this soil 7.6 times
+            // slower, for a K0NC that moved in the fifth digit.
+            if (is_cap) {
+                double dl_k = dl;
+                for (int fp = 0; fp < 2; ++fp) {
+                    const Eigen::Vector3d m2 = cap_normal(sL, idx, wa);
+                    Eigen::Vector3d s2; double pp2;
+                    const double dl2 = scalar_return(out.sig, out.pp, f_tied, m2, harden, s2, pp2, dl_k);
+                    if (dl2 <= 0.0) break;
+                    dl_k = dl2;
+                    if (tied01 && tied12) {
+                        s2.setConstant(s2.mean());
+                    } else if (tied01) {
+                        const double ms = 0.5 * (s2(idx[0]) + s2(idx[1]));
+                        s2(idx[0]) = ms; s2(idx[1]) = ms;
+                    } else if (tied12) {
+                        const double ms = 0.5 * (s2(idx[1]) + s2(idx[2]));
+                        s2(idx[1]) = ms; s2(idx[2]) = ms;
+                    }
+                    sL = s2; ppL = pp2;
+                }
             }
             const double slack = 1e-9 * (1.0 + std::fabs(sL(idx[0])));
             const bool bad01 = !tied01 && sL(idx[0]) - sL(idx[1]) < -slack;
@@ -252,11 +391,13 @@ StepResult ss_step(const Params& P, const Eigen::Vector3d& sig_c, double pp_c,
     StepResult out{sig_c, pp_c, false, false, nsub};
     for (int i = 0; i < nsub; ++i) {
         const Eigen::Vector3d dsub = deps * (i + 1 < nsub ? full : last);
-        const StepResult r = ss_substep(P, out.sig, out.pp, dsub);
+        const StepResult r = P.cam_clay ? cc_substep(P, out.sig, out.pp, dsub)
+                                        : ss_substep(P, out.sig, out.pp, dsub);
         out.sig = r.sig;
         out.pp = r.pp;
         out.cap_active = out.cap_active || r.cap_active;
         out.mc_active = out.mc_active || r.mc_active;
+        out.unstable = out.unstable || r.unstable;
     }
     return out;
 }

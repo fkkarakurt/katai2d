@@ -170,6 +170,8 @@ def coverage_project():
     wall.iface_kn = 1.0e5            # and emitted (written only when set)
     wall.iface_ks = 1.0e4
     wall.iface_vt = 0.2
+    wall.hinge1 = True               # hinged ends are written only when set
+    wall.hinge2 = True
     pr.structs = [wall]
 
     strip = core.Load()

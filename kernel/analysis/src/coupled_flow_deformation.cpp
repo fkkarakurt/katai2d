@@ -4,6 +4,12 @@
 #include <katai/math/solve_error.hpp>   // SingularSystem: a refused solve is an answer
 #include <katai/analysis/coupled_flow_deformation.hpp>
 
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <functional>
+#include <katai/analysis/nonlinear_solver.hpp>   // StructureLaws
+
 namespace katai::core {
 
 namespace detail {
@@ -222,7 +228,8 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
     const std::vector<double>& initial_pore, double dt, int nsteps, const std::vector<char>& active,
     const Eigen::VectorXd* load_increment, const ConsolidationSolveFactory& solve_factory,
     int max_newton, double newton_tol,
-    const math::CsrMatrix* struct_k, const std::vector<int>* pore_tie) {
+    const math::CsrMatrix* struct_k, const std::vector<int>* pore_tie,
+    StructureLaws* structure_laws) {
     constexpr int N = E::kNodeCount;
     constexpr int ND = 2 * N;
     const int ndisp = dofs.equation_count();
@@ -240,6 +247,9 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
     const auto gp = E::gauss_points();
     const Eigen::Vector3d mvec(1.0, 1.0, 0.0);
 
+    // The length of the time step being solved: the phase's dt, or a part of it where a step that
+    // did not close is cut (below).
+    double h_step = dt;
     // Assemble A = [K_T L_χ; L_χᵀ −(ΔtH_kr+S_st)] + separate L_χ / H_kr (for residual/RHS) + f_int(trial),
     // given mechanical increment `dv` (drives plasticity) and the FULL nodal pore field `pfull` (drives
     // unsaturated coefficients, Picard-lagged). trial Gauss states are written. Mirrors consolidation_plastic's
@@ -291,7 +301,7 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
                 }
                 // dt: this coupled flow-deformation time step [day] -- SoftSoilCreep sees the
                 // creep + flow interaction through it; the other models do not read the parameter.
-                integrate_point(*mpp, committed[(size_t)e * ngp + g], deps, tr, Dt, mode, dt);
+                integrate_point(*mpp, committed[(size_t)e * ngp + g], deps, tr, Dt, mode, h_step);
                 // Suction psi=+p/gamma_w (TENSION-POSITIVE: p>0 suction=unsaturated; p<=0
                 // saturated S_e=1). Bishop chi=S_eff.
                 double p_gp = 0.0;
@@ -335,7 +345,7 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
                 for (int b = 0; b < N; ++b) {
                     const int pb = pore_eq[mesh.node_of(e, b)];
                     if (pb < 0) continue;
-                    Ab.add_entry(ndisp + pa, ndisp + pb, -(dt * He(a, b) + Se(a, b)));
+                    Ab.add_entry(ndisp + pa, ndisp + pb, -(h_step * He(a, b) + Se(a, b)));
                     Hb.add_entry(pa, pb, He(a, b));
                 }
             }
@@ -381,56 +391,138 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
     // The force a step leaves out of balance is carried into the next one, as in the consolidation
     // twin (see consolidation.cpp): dropped, it is lost once per time step.
     Eigen::VectorXd oob = Eigen::VectorXd::Zero(ndisp), oob_next = Eigen::VectorXd::Zero(ndisp);
-    for (int step = 0; step < nsteps && R.converged; ++step) {
+    // ONE TIME STEP of length h_step carrying the load df, from the committed state; leaves the
+    // trial states at the converged iterate.
+    const auto one_step = [&](const Eigen::VectorXd& df, Eigen::VectorXd& dv, Eigen::VectorXd& dpv) -> bool {
         // Base internal force of the committed (start-of-step) effective state (coefficients
         // evaluated at the committed pore).
         Eigen::VectorXd Bbase;
         { math::SparseMatrixBuilder a0(NT), h0(std::max(1, npore)), l0(ndisp, std::max(1, npore));
           assemble(Eigen::VectorXd::Zero(ndisp), to_full_pore(p), a0, h0, l0, Bbase, tmode); }
-        Eigen::VectorXd dv = Eigen::VectorXd::Zero(ndisp), dpv = Eigen::VectorXd::Zero(std::max(1, npore));
-        Eigen::VectorXd df = Eigen::VectorXd::Zero(ndisp);
-        if (step == 0 && load_increment) df = *load_increment;
-        bool step_ok = false; int it = 0;
-        for (; it < max_newton; ++it) {
+        // The structures by their own laws: the pore pressure a joint reads beside it is the
+        // step's start, in the share the skeleton feels (Bishop chi); their force is in the base.
+        if (structure_laws) {
+            const Eigen::VectorXd pf = to_full_pore(p);
+            structure_laws->set_soil_pore(std::vector<double>(pf.data(), pf.data() + pf.size()),
+                                          [&](int mat, double p_gp) {
+                                              return effective_saturation(retention[(size_t)mat], p_gp / gamma_w);
+                                          });
+            structure_laws->add(v, Bbase, nullptr);
+        }
+        dv = Eigen::VectorXd::Zero(ndisp);
+        dpv = Eigen::VectorXd::Zero(std::max(1, npore));
+        // The balance of an iterate, the matrix at it, and whether it has closed. The trial states
+        // are left at the iterate evaluated last.
+        struct Ev { Eigen::VectorXd r; math::CsrMatrix A; bool conv = false; };
+        const auto evaluate = [&](const Eigen::VectorXd& dv_, const Eigen::VectorXd& dpv_) {
+            Ev ev;
             math::SparseMatrixBuilder Ab(NT), Hb(std::max(1, npore)), Lb(ndisp, std::max(1, npore));
             Ab.reserve((std::size_t)mesh.element_count * (3 * N) * (3 * N));
             Eigen::VectorXd f_int;
-            assemble(dv, to_full_pore(p + dpv), Ab, Hb, Lb, f_int, tmode);   // coefficients at p+dp (Picard lag)
+            assemble(dv_, to_full_pore(p + dpv_), Ab, Hb, Lb, f_int, tmode);   // coefficients at p+dp (Picard lag)
             // Linear structures: their internal force is K_s.dv exactly, so it goes into BOTH the
             // tangent and f_int -- the same argument as the consolidation twin.
             add_structural_block(Ab, struct_k);
-            if (struct_k) f_int.noalias() += (*struct_k) * dv;
-            const math::CsrMatrix A = Ab.build();
-            Eigen::VectorXd r = Eigen::VectorXd::Zero(NT);
-            r.head(ndisp) = df + oob - (f_int - Bbase);
+            if (struct_k) f_int.noalias() += (*struct_k) * dv_;
+            if (structure_laws) structure_laws->add(v + dv_, f_int, &Ab);   // force and tangent at v + dv
+            ev.A = Ab.build();
+            ev.r = Eigen::VectorXd::Zero(NT);
+            ev.r.head(ndisp) = df + oob - (f_int - Bbase);
             if (npore > 0) {
                 const math::CsrMatrix Hc = Hb.build();
                 const math::CsrMatrix Lc = Lb.build();
-                r.head(ndisp).noalias() -= Lc * dpv;                            // − L_χ·Δp
-                Eigen::VectorXd x(NT); x.head(ndisp) = dv; x.tail(npore) = dpv;
-                const Eigen::VectorXd Ax = A * x;
-                r.tail(npore) = dt * (Hc * p) - Ax.tail(npore);                 // ΔtH_kr·p_n − (L_χᵀΔv − S*Δp)
-                const double ref = std::max({df.norm(), (dt * (Hc * p)).norm(), 1e-30});
-                if (r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0)) { step_ok = true; oob_next = r.head(ndisp); break; }
+                ev.r.head(ndisp).noalias() -= Lc * dpv_;                        // − L_χ·Δp
+                Eigen::VectorXd x(NT); x.head(ndisp) = dv_; x.tail(npore) = dpv_;
+                const Eigen::VectorXd Ax = ev.A * x;
+                ev.r.tail(npore) = h_step * (Hc * p) - Ax.tail(npore);         // ΔtH_kr·p_n − (L_χᵀΔv − S*Δp)
+                const double ref = std::max({df.norm(), (h_step * (Hc * p)).norm(), 1e-30});
+                ev.conv = ev.r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0);
             } else {
                 const double ref = std::max(df.norm(), 1e-30);
-                if (r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0)) { step_ok = true; oob_next = r.head(ndisp); break; }
+                ev.conv = ev.r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0);
             }
+            return ev;
+        };
+        bool step_ok = false; int it = 0;
+        Ev cur = evaluate(dv, dpv);
+        std::vector<double> recent{cur.r.norm()};   // the balance at the last few iterates
+        for (; it < max_newton; ++it) {
+            if (cur.conv) { step_ok = true; oob_next = cur.r.head(ndisp); break; }
+            if (std::getenv("KATAI_NL_DEBUG"))
+                std::fprintf(stderr, "    coupled h=%.4g it %d: |r| %.3e (disp %.3e) |Bbase| %.3e |df| %.3e\n", h_step, it,
+                             cur.r.norm(), cur.r.head(ndisp).norm(), Bbase.norm(), df.norm());
             if (!solve_factory) { step_ok = false; break; }
             // A refused solve ends THIS time step, not the process (see consolidation.cpp).
             Eigen::VectorXd d;
             try {
-                const auto solve = solve_factory(A);
-                d = solve(r);
+                const auto solve = solve_factory(cur.A);
+                d = solve(cur.r);
             } catch (const math::SingularSystem&) { step_ok = false; break; }
-            dv += d.head(ndisp);
-            if (npore > 0) dpv += d.tail(npore);
+            // A NON-MONOTONE LINE SEARCH (Grippo, Lampariello & Lucidi 1986, memory four). The full
+            // Newton step is taken where it leaves the balance below the worst of the last four
+            // iterates -- every step of a smooth problem, so such a phase iterates exactly as it did;
+            // otherwise the step is halved until it does. Where no halving does, the full step is
+            // taken after all: a joint slipping in a dissipation step is closed by full steps, and
+            // taking the shortest one instead crawled away from the answer, the balance growing at
+            // every iterate. Measured on a raft under twenty times its plastic moment: with full steps
+            // only, the iterates cycled between two states with the balance at 25% of the load, on
+            // every cut of the time step.
+            const double bar = *std::max_element(recent.begin(), recent.end());
+            double alpha = 1.0;
+            Ev nxt;
+            bool found = false;
+            for (int ls = 0; ls < 8; ++ls) {
+                Eigen::VectorXd dv2 = dv + alpha * d.head(ndisp);
+                Eigen::VectorXd dpv2 = dpv;
+                if (npore > 0) dpv2 += alpha * d.tail(npore);
+                nxt = evaluate(dv2, dpv2);
+                if (nxt.conv || nxt.r.norm() < bar) { found = true; break; }
+                alpha *= 0.5;
+            }
+            if (!found) {   // the full step, evaluated again so the trial states are at it
+                alpha = 1.0;
+                Eigen::VectorXd dv2 = dv + d.head(ndisp);
+                Eigen::VectorXd dpv2 = dpv;
+                if (npore > 0) dpv2 += d.tail(npore);
+                nxt = evaluate(dv2, dpv2);
+            }
+            dv += alpha * d.head(ndisp);
+            if (npore > 0) dpv += alpha * d.tail(npore);
+            cur = std::move(nxt);
+            recent.push_back(cur.r.norm());
+            if (recent.size() > 4) recent.erase(recent.begin());
         }
+        if (!step_ok && cur.conv && it == max_newton) { step_ok = true; oob_next = cur.r.head(ndisp); }
         R.max_newton_iters = std::max(R.max_newton_iters, it);
-        if (!step_ok) { R.converged = false; break; }
-        v += dv; if (npore > 0) p += dpv; committed = trial;
-        oob = oob_next;
-        record((step + 1) * dt);
+        return step_ok;
+    };
+    // A STEP THAT DOES NOT CLOSE IS CUT IN TWO, its load split with it, down to 1/64 of the step,
+    // as the consolidation twin does (consolidation.cpp, `advance`). A plate reaching its plastic
+    // moment, an anchor its capacity or a joint its Coulomb limit makes the tangent jump, and a
+    // whole time step taken across the jump did not converge -- the phase used to stop there.
+    // Every sub-step that converges is committed and recorded; a step that closes at once is
+    // solved and recorded exactly as before.
+    const std::function<bool(double, double, double, const Eigen::VectorXd&, int)> advance =
+        [&](double t0, double h, double t1, const Eigen::VectorXd& df, int depth) -> bool {
+        h_step = h;
+        Eigen::VectorXd dv, dpv;
+        if (one_step(df, dv, dpv)) {
+            v += dv; if (npore > 0) p += dpv; committed = trial;
+            if (structure_laws) structure_laws->commit();   // evaluated last at the converged dv
+            oob = oob_next;
+            record(t1);
+            return true;
+        }
+        trial = committed;
+        if (depth >= 6) return false;
+        const Eigen::VectorXd half = 0.5 * df;
+        return advance(t0, 0.5 * h, t0 + 0.5 * h, half, depth + 1) &&
+               advance(t0 + 0.5 * h, 0.5 * h, t1, half, depth + 1);
+    };
+    for (int step = 0; step < nsteps && R.converged; ++step) {
+        Eigen::VectorXd df = Eigen::VectorXd::Zero(ndisp);
+        if (step == 0 && load_increment) df = *load_increment;
+        if (!advance(step * dt, dt, (step + 1) * dt, df, 0)) R.converged = false;
     }
     R.committed = committed;
     return R;
@@ -447,14 +539,16 @@ CoupledFlowPlasticResult solve_coupled_flow_deformation_plastic(
     const ConsolidationSolveFactory& solve_factory,
     int max_newton, double newton_tol,
     const std::vector<MaterialProfile>& profile, const math::CsrMatrix* struct_k,
-    const std::vector<int>* pore_tie) {
+    const std::vector<int>* pore_tie, StructureLaws* structure_laws) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::coupled_flow_plastic_impl<Tri15Element>(mesh, dofs, materials, profile, perm,
             retention, porosity, gamma_w, kw_over_n, drained_node, initial_state, initial_pore, dt,
-            nsteps, active, load_increment, solve_factory, max_newton, newton_tol, struct_k, pore_tie);
+            nsteps, active, load_increment, solve_factory, max_newton, newton_tol, struct_k, pore_tie,
+            structure_laws);
     return detail::coupled_flow_plastic_impl<Tri6Element>(mesh, dofs, materials, profile, perm,
         retention, porosity, gamma_w, kw_over_n, drained_node, initial_state, initial_pore, dt,
-        nsteps, active, load_increment, solve_factory, max_newton, newton_tol, struct_k, pore_tie);
+        nsteps, active, load_increment, solve_factory, max_newton, newton_tol, struct_k, pore_tie,
+        structure_laws);
 }
 
 }  // namespace katai::core

@@ -453,7 +453,18 @@ std::vector<InterfaceStation> interface_diagram_impl(
                 st.slipping = false;
             } else {
                 const auto ret = iface::coulomb_return(ie.props, du_s, du_n, slip_c, ie.sigma_n0[q]);
-                st.tau = ret.tau; st.sigma_n = ret.sigma_n; st.slipping = (ret.Ds == 0.0);
+                st.tau = ret.tau; st.sigma_n = ret.sigma_n;
+                // AT THE LIMIT IS SLIPPING. The return is re-run here from the committed slip at the
+                // converged displacement, so a point that slipped to its capacity in the solve comes
+                // back with its trial shear EXACTLY at the capacity -- on the elastic side of `<=` --
+                // and was reported bonded, by the last bit of the iterate the solve stopped at
+                // (measured: a weak joint slipping along its whole length in a consolidation phase,
+                // reported as slipping nowhere). A consolidation phase also reads the capacity with
+                // the excess pore pressure at the start of its last step, which this report does not
+                // have; at the end of a dissipation it is a few parts in a million of the capacity,
+                // and a point within 1e-4 of its capacity is counted at it.
+                const double tmax = std::max(0.0, ie.props.c_i - ret.sigma_n * std::tan(ie.props.phi_i));
+                st.slipping = ret.Ds == 0.0 || (tmax > 0.0 && std::fabs(ret.tau) >= tmax * (1.0 - 1e-4));
             }
             out.push_back(st); px = x; py = y; have_prev = true;
         }

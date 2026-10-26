@@ -93,7 +93,8 @@ inline std::string dynamic_step_warning(const model::Phase& ph) {
 // uses Eoed_ref; everything else the constant-E closed form.
 inline double schema_oedometer_modulus(const model::Material& M) {
     const bool hs = M.model == model::SoilModel::HardeningSoil || M.model == model::SoilModel::HSsmall;
-    if (M.model == model::SoilModel::SoftSoil || M.model == model::SoilModel::SoftSoilCreep)
+    if (M.model == model::SoilModel::SoftSoil || M.model == model::SoilModel::SoftSoilCreep ||
+        M.model == model::SoilModel::ModifiedCamClay)
         return 100.0 / std::max(M.lam_star, 1e-6);
     return hs ? M.Eoedref : katai::core::oedometer_modulus(M.E, M.nu);
 }
@@ -216,6 +217,7 @@ inline const char* constitutive_name(model::SoilModel sm) {
         case model::SoilModel::SoftSoil:      return "SoftSoil";
         case model::SoilModel::SoftSoilCreep: return "SoftSoilCreep";
         case model::SoilModel::HoekBrown:     return "HoekBrown";
+        case model::SoilModel::ModifiedCamClay: return "ModifiedCamClay";
     }
     return "";
 }

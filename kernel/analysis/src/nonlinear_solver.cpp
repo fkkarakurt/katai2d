@@ -15,6 +15,7 @@
 
 #include <katai/analysis/excess_pore_force.hpp>
 #include <katai/analysis/internal_forces.hpp>  // SHARED internal-force/tangent assembly (static+dynamic)
+#include <katai/analysis/post/consolidation_recovery.hpp>  // store_excess_pore_pressure
 #include <katai/fem/assembly/assembler.hpp>  // expand_to_full
 #include <katai/fem/elements/axisymmetric.hpp>
 #include <katai/fem/elements/element_traits.hpp>
@@ -1617,6 +1618,7 @@ Eigen::VectorXd structural_f0_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                          TangentMode::kNone, st, no_ramp, nullptr, nullptr);
 }
 
+
 // The excess pore pressure's force (excess_pore_force.hpp). Written beside the internal force it
 // has to agree with: the same Gauss rule and weight (gauss weight x Kin weight), the same B, the same
 // pore direction m, and Kw/n from the stress point's profiled material -- the lines the assembler
@@ -1843,6 +1845,121 @@ NewtonResult solve_nonlinear(const mesh::Mesh& mesh, const DofMap& dofs,
         mesh, dofs, materials, f_ext, linear_solve, options, initial_state,
         active_element, structures, pd, cf, pf, init_struct);
 }
+
+// ---- StructureLaws: the structures alone, by the static solver's assembler -------------------
+struct StructureLaws::Impl {
+    virtual ~Impl() = default;
+    virtual void add(const Eigen::VectorXd& v, Eigen::VectorXd& f, math::SparseMatrixBuilder* K) = 0;
+    virtual void set_soil_pore(const std::vector<double>& nodal_excess,
+                               const std::function<double(int, double)>& share) = 0;
+    virtual void commit() = 0;
+    virtual StructuralInit committed() const = 0;
+    virtual void reset(const StructuralInit& s) = 0;
+    virtual void set_offset(const Eigen::VectorXd& v0) = 0;
+};
+
+namespace {
+template <class E, class Kin>
+struct StructureLawsImpl final : StructureLaws::Impl {
+    using Asm = detail::InternalForceAssembler<E, Kin>;
+    const mesh::Mesh& mesh;
+    std::vector<char> active;               // the soil's: a joint reads the ground beside it
+    std::vector<MaterialProfile> no_profile;
+    Asm fasm;
+    // The soil's stress points, only for the excess pore pressure a joint reads beside it: the
+    // assembler is told to leave the soil alone (structures_only), so nothing else is read.
+    std::vector<GaussState> soil_c, soil_t;
+    std::vector<double> anchor_c, geogrid_c, iface_c, iface5_c, eskin_c, efoot_c, plate_c, plate5_c;
+    std::vector<double> anchor_t, geogrid_t, iface_t, iface5_t, eskin_t, efoot_t, plate_t, plate5_t;
+    Eigen::VectorXd u_datum, offset;
+    typename Asm::State st;
+
+    StructureLawsImpl(const mesh::Mesh& m, const DofMap& dofs,
+                      const std::vector<MaterialModel>& materials, const Structures& structures,
+                      const StructuralInit& init, const std::vector<char>& act)
+        : mesh(m), active(act), fasm(m, dofs, materials, active, structures, no_profile) {
+        fasm.structures_only = true;
+        const int neq = dofs.equation_count();
+        u_datum = init.u_datum.size() == neq ? init.u_datum : Eigen::VectorXd::Zero(neq);
+        offset = Eigen::VectorXd::Zero(neq);
+        soil_c.assign(static_cast<size_t>(m.element_count) * E::kGaussCount, GaussState{});
+        soil_t = soil_c;
+        seed_structural_state(structures, init, anchor_c, geogrid_c, iface_c, iface5_c, eskin_c,
+                              efoot_c, plate_c, plate5_c);
+        anchor_t = anchor_c; geogrid_t = geogrid_c; iface_t = iface_c; iface5_t = iface5_c;
+        eskin_t = eskin_c; efoot_t = efoot_c; plate_t = plate_c; plate5_t = plate5_c;
+        st.committed = &soil_c;    st.trial = &soil_t;
+        st.anchor_c = &anchor_c;   st.anchor_t = &anchor_t;
+        st.geogrid_c = &geogrid_c; st.geogrid_t = &geogrid_t;
+        st.iface_c = &iface_c;     st.iface_t = &iface_t;
+        st.iface5_c = &iface5_c;   st.iface5_t = &iface5_t;
+        st.eskin_c = &eskin_c;     st.eskin_t = &eskin_t;
+        st.efoot_c = &efoot_c;     st.efoot_t = &efoot_t;
+        st.plate_c = &plate_c;     st.plate_t = &plate_t;
+        st.plate5_c = &plate5_c;   st.plate5_t = &plate5_t;
+    }
+    void add(const Eigen::VectorXd& v, Eigen::VectorXd& f, math::SparseMatrixBuilder* K) override {
+        const typename Asm::Ramp no_ramp;
+        const Eigen::VectorXd u = u_datum + offset + v;
+        f += fasm.assemble(u, Eigen::VectorXd::Zero(u.size()), /*build_tangent=*/K != nullptr,
+                           TangentMode::kContinuum, st, no_ramp, K, nullptr);
+    }
+    void set_soil_pore(const std::vector<double>& nodal_excess,
+                       const std::function<double(int, double)>& share) override {
+        store_excess_pore_pressure(mesh, nodal_excess, active, share, soil_c);
+    }
+    void commit() override {
+        anchor_c = anchor_t; geogrid_c = geogrid_t; iface_c = iface_t; iface5_c = iface5_t;
+        eskin_c = eskin_t; efoot_c = efoot_t; plate_c = plate_t; plate5_c = plate5_t;
+    }
+    StructuralInit committed() const override {
+        StructuralInit s;
+        s.u_datum = u_datum;
+        s.anchor_plastic = anchor_c; s.geogrid_plastic = geogrid_c;
+        s.interface_slip = iface_c; s.interface5_slip = iface5_c;
+        s.embedded_skin_slip = eskin_c; s.embedded_foot_slip = efoot_c;
+        s.plate_plastic = plate_c; s.plate5_plastic = plate5_c;
+        return s;
+    }
+    void reset(const StructuralInit& s) override {
+        anchor_c = s.anchor_plastic; geogrid_c = s.geogrid_plastic;
+        iface_c = s.interface_slip; iface5_c = s.interface5_slip;
+        eskin_c = s.embedded_skin_slip; efoot_c = s.embedded_foot_slip;
+        plate_c = s.plate_plastic; plate5_c = s.plate5_plastic;
+        anchor_t = anchor_c; geogrid_t = geogrid_c; iface_t = iface_c; iface5_t = iface5_c;
+        eskin_t = eskin_c; efoot_t = efoot_c; plate_t = plate_c; plate5_t = plate5_c;
+    }
+    void set_offset(const Eigen::VectorXd& v0) override {
+        if (v0.size() == offset.size()) offset = v0;
+    }
+};
+}  // namespace
+
+StructureLaws::StructureLaws(const mesh::Mesh& mesh, const DofMap& dofs,
+                             const std::vector<MaterialModel>& materials,
+                             const Structures& structures, const StructuralInit& init,
+                             const std::vector<char>& active, Kinematics kinematics) {
+    const bool axi = kinematics == Kinematics::Axisymmetric;
+    if (mesh.nodes_per_element == Tri15Element::kNodeCount) {
+        if (axi) impl_ = std::make_unique<StructureLawsImpl<Tri15Element, detail::AxisymKin>>(mesh, dofs, materials, structures, init, active);
+        else impl_ = std::make_unique<StructureLawsImpl<Tri15Element, detail::PlaneStrainKin>>(mesh, dofs, materials, structures, init, active);
+    } else {
+        if (axi) impl_ = std::make_unique<StructureLawsImpl<Tri6Element, detail::AxisymKin>>(mesh, dofs, materials, structures, init, active);
+        else impl_ = std::make_unique<StructureLawsImpl<Tri6Element, detail::PlaneStrainKin>>(mesh, dofs, materials, structures, init, active);
+    }
+}
+StructureLaws::~StructureLaws() = default;
+void StructureLaws::add(const Eigen::VectorXd& v, Eigen::VectorXd& f, math::SparseMatrixBuilder* K) {
+    impl_->add(v, f, K);
+}
+void StructureLaws::set_soil_pore(const std::vector<double>& nodal_excess,
+                                  const std::function<double(int, double)>& share) {
+    impl_->set_soil_pore(nodal_excess, share);
+}
+void StructureLaws::commit() { impl_->commit(); }
+StructuralInit StructureLaws::committed() const { return impl_->committed(); }
+void StructureLaws::reset(const StructuralInit& state) { impl_->reset(state); }
+void StructureLaws::set_offset(const Eigen::VectorXd& v0) { impl_->set_offset(v0); }
 
 } // namespace katai::core
 

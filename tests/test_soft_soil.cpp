@@ -143,6 +143,25 @@ void test_oedometer_k0nc() {
     check(sig(0) > 4 * p0, "the oedometer really loaded far into primary compression (teeth)");
     check(std::fabs(K0 - P.K0nc) < 0.02 * P.K0nc,
           "primary 1D compression develops K0NC within 2% (M(K0NC) behavioural pin)");
+    // THE PIN ITSELF, WHERE THE FORMULA IS EXACT. M(K0NC) is derived for a soil without cohesion;
+    // with c > 0 the ellipse and the elastic law are written in p + c cot(phi), and at a finite
+    // stress the ratio sits below K0NC by about the shift's share of p -- -0.71% above, converged
+    // in the step (-0.7061% at a hundredth of it), vanishing as the stress grows (-0.0016% at
+    // 1e7 kPa). The cap's return is backward Euler; along the trial's normal it settled at +0.09%
+    // here, its own step bias cancelling the cohesion's, and at +1.2% through the finite elements.
+    Params Q = P;
+    Q.c = 0.0;
+    Eigen::Vector3d s0 = Eigen::Vector3d::Constant(p0);
+    double q0 = p0;
+    for (int i = 0; i < n; ++i) {
+        const auto r = ss_step(Q, s0, q0, Eigen::Vector3d(d, 0.0, 0.0));
+        s0 = r.sig; q0 = r.pp;
+    }
+    const double K0c = s0(1) / s0(0);
+    std::printf("   without cohesion: K0 = %.6f (K0NC %.6f, err %+.4f%%)\n", K0c, Q.K0nc,
+                100.0 * (K0c / Q.K0nc - 1.0));
+    check(std::fabs(K0c / Q.K0nc - 1.0) < 5e-4,
+          "without cohesion, primary 1D compression develops K0NC to 0.05% (the M formula, exactly)");
 }
 
 void test_triaxial_mc_failure() {

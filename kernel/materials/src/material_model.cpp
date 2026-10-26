@@ -368,6 +368,7 @@ SsReturnCore ss_return_core(const softsoil::Params& P,
     double ret_pp;
     bool ret_plastic;
     int ret_nsub;
+    bool ret_unstable = false;
     if (ssc) {
         const softsoilcreep::StepResult rc =
             softsoilcreep::ssc_step(*ssc, sig_n_cp, pp_n, deps_p, dt_day, nsub_fixed);
@@ -381,6 +382,7 @@ SsReturnCore ss_return_core(const softsoil::Params& P,
         ret_pp = ret.pp;
         ret_plastic = ret.cap_active || ret.mc_active;
         ret_nsub = ret.nsub;
+        ret_unstable = ret.unstable;
     }
     double r[3] = {-ret_sig(2), -ret_sig(1), -ret_sig(0)};   // tension-positive, by position
     // Tension cut-off (sigma_i <= sigma_t); see the Hardening Soil branch. K_tr and G are this
@@ -414,13 +416,14 @@ SsReturnCore ss_return_core(const softsoil::Params& P,
     out.G = G;
     out.plastic = ret_plastic || ss_capped;
     out.nsub = ret_nsub;
+    out.unstable = ret_unstable;
     return out;
 }
 
 void ss_forward(const MaterialModel& m, const GaussState& committed,
                 const Eigen::Vector3d& de, GaussState& trial,
                 bool* plastic_out, double* K_out,
-                double* G_out, int nsub_fixed, int* nsub_out) {
+                double* G_out, int nsub_fixed, int* nsub_out, bool* unstable_out) {
     Eigen::Vector4d de4;
     de4 << de(0), de(1), de(2), 0.0;
     const SsReturnCore c = ss_return_core(m.ssoil, committed.stress, committed.stress_zz, de4,
@@ -436,6 +439,7 @@ void ss_forward(const MaterialModel& m, const GaussState& committed,
     if (K_out) *K_out = c.K;
     if (G_out) *G_out = c.G;
     if (nsub_out) *nsub_out = c.nsub;
+    if (unstable_out) *unstable_out = c.unstable;
 }
 
 void ssc_forward(const MaterialModel& m, const GaussState& committed,
@@ -611,15 +615,16 @@ void integrate_point(const MaterialModel& m, const GaussState& committed,
             break;
         }
         case MaterialType::SoftSoil: {
-            bool plastic = false;
+            bool plastic = false, unstable = false;
             double K = 0.0, G = 0.0;
             int nsub = 0;
-            ss_forward(m, committed, strain_increment, trial, &plastic, &K, &G, 0, &nsub);
+            ss_forward(m, committed, strain_increment, trial, &plastic, &K, &G, 0, &nsub, &unstable);
             tangent = elastic_plane_strain_kg(K, G);
             if (report) {
                 report->plastic = plastic;
                 report->stress_dependent = true;
                 report->elastic = tangent;
+                report->integration_saturated = unstable;   // Cam-Clay past a material instability
             }
             // Plastic step + tangent wanted → NUMERICAL (forward-difference) tangent —
             // unlike HS, in BOTH modes (kContinuum/kConsistent): SS has no "cheap
@@ -896,6 +901,7 @@ void integrate_point_axisym(const MaterialModel& m,
                 report->plastic = c.plastic;
                 report->stress_dependent = true;
                 report->elastic = tangent;
+                report->integration_saturated = c.unstable;   // Cam-Clay past a material instability
             }
             if (c.plastic && mode != TangentMode::kNone) {
                 for (int j = 0; j < 4; ++j) {

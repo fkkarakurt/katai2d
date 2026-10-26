@@ -13,7 +13,7 @@ TransientFlowResult transient_flow_impl(
     const std::vector<double>& specific_storage, const std::vector<char>& is_prescribed,
     const HeadBoundary& head_bc, const std::vector<double>& initial_head,
     const std::vector<double>* flux, double dt, int nsteps,
-    const TransientFlowSolveFactory& solve_factory) {
+    const TransientFlowSolveFactory& solve_factory, bool axi) {
     constexpr int N = E::kNodeCount;
     const int nc = mesh.node_count;
 
@@ -39,7 +39,10 @@ TransientFlowResult transient_flow_impl(
         for (int g = 0; g < E::kGaussCount; ++g) {
             const auto sd = E::strain_displacement(X, gp[g].xi, gp[g].eta);
             const auto Nsh = E::shape_functions(gp[g].xi, gp[g].eta);
-            const double w = gp[g].weight * sd.det_jacobian;
+            // AXISYMMETRIC: x is the radius and the integral is per radian -- weighted by r.
+            double rw = 1.0;
+            if (axi) { rw = 0.0; for (int i = 0; i < N; ++i) rw += Nsh(i) * X(i, 0); }
+            const double w = gp[g].weight * sd.det_jacobian * rw;
             Eigen::Matrix<double, 1, N> gx, gy;
             for (int i = 0; i < N; ++i) { gx(0, i) = sd.B(0, 2 * i); gy(0, i) = sd.B(1, 2 * i + 1); }
             He.noalias() += w * (pm.kx * gx.transpose() * gx + pm.ky * gy.transpose() * gy);
@@ -115,12 +118,14 @@ TransientFlowResult solve_transient_flow(
     const std::vector<double>& specific_storage, const std::vector<char>& is_prescribed,
     const HeadBoundary& head_bc, const std::vector<double>& initial_head, double dt, int nsteps,
     const std::vector<double>* flux,
-    const TransientFlowSolveFactory& solve_factory) {
+    const TransientFlowSolveFactory& solve_factory, bool axisymmetric) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::transient_flow_impl<Tri15Element>(mesh, perm, specific_storage, is_prescribed,
-                                                         head_bc, initial_head, flux, dt, nsteps, solve_factory);
+                                                         head_bc, initial_head, flux, dt, nsteps, solve_factory,
+                                                         axisymmetric);
     return detail::transient_flow_impl<Tri6Element>(mesh, perm, specific_storage, is_prescribed,
-                                                    head_bc, initial_head, flux, dt, nsteps, solve_factory);
+                                                    head_bc, initial_head, flux, dt, nsteps, solve_factory,
+                                                    axisymmetric);
 }
 
 namespace detail {
@@ -132,7 +137,7 @@ UnsaturatedFlowResult unsaturated_flow_impl(
     const HeadBoundary& head_bc, const std::vector<double>& initial_head,
     const std::vector<double>* flux, double dt, int nsteps,
     const TransientFlowSolveFactory& solve_factory, int max_picard, double picard_tol,
-    const std::vector<HeadLimit>* limits, const std::vector<LeakySeam>* seams) {
+    const std::vector<HeadLimit>* limits, const std::vector<LeakySeam>* seams, bool axi) {
     constexpr int N = E::kNodeCount;
     const int nc = mesh.node_count;
 
@@ -175,7 +180,9 @@ UnsaturatedFlowResult unsaturated_flow_impl(
             for (int g = 0; g < E::kGaussCount; ++g) {
                 const auto sd = E::strain_displacement(X, gp[g].xi, gp[g].eta);
                 const auto Nsh = E::shape_functions(gp[g].xi, gp[g].eta);
-                const double wdet = gp[g].weight * sd.det_jacobian;
+                double rw = 1.0;   // AXISYMMETRIC: per radian, weighted by r
+                if (axi) { rw = 0.0; for (int i = 0; i < N; ++i) rw += Nsh(i) * X(i, 0); }
+                const double wdet = gp[g].weight * sd.det_jacobian * rw;
                 double h_gp = 0.0, hp_gp = 0.0, y_gp = 0.0;
                 for (int i = 0; i < N; ++i) { h_gp += Nsh(i) * he(i); hp_gp += Nsh(i) * hpe(i); y_gp += Nsh(i) * X(i, 1); }
                 const double psi = y_gp - h_gp, psip = y_gp - hp_gp;       // emme (current / prev)
@@ -212,7 +219,7 @@ UnsaturatedFlowResult unsaturated_flow_impl(
                 seam_entries(sm, kr, [&](int i, int j, double v) {
                     Hb.add_entry(i, j, v);
                     Ab.add_entry(i, j, v);
-                });
+                }, axi ? &mesh : nullptr);
             }
         storage_vec /= dts;
     };
@@ -432,14 +439,14 @@ UnsaturatedFlowResult solve_transient_unsaturated_flow(
     const HeadBoundary& head_bc, const std::vector<double>& initial_head, double dt, int nsteps,
     const std::vector<double>* flux, const TransientFlowSolveFactory& solve_factory,
     int max_picard, double picard_tol, const std::vector<HeadLimit>* limits,
-    const std::vector<LeakySeam>* seams) {
+    const std::vector<LeakySeam>* seams, bool axisymmetric) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::unsaturated_flow_impl<Tri15Element>(mesh, perm, porosity, ss_sat, retention,
             is_prescribed, head_bc, initial_head, flux, dt, nsteps, solve_factory, max_picard, picard_tol,
-            limits, seams);
+            limits, seams, axisymmetric);
     return detail::unsaturated_flow_impl<Tri6Element>(mesh, perm, porosity, ss_sat, retention,
         is_prescribed, head_bc, initial_head, flux, dt, nsteps, solve_factory, max_picard, picard_tol,
-        limits, seams);
+        limits, seams, axisymmetric);
 }
 
 }  // namespace katai::core

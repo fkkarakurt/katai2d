@@ -6,6 +6,182 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### A load drawn on a plate with an interface is carried by the plate
+
+A plate with an interface is a wall: the mesh is split along it, and on that side the plate meets
+the ground only through the interface. A point load drawn on such a plate was already carried by
+the plate; a distributed load was assembled on the mesh nodes of its line -- the ground on one side
+of the split. A raft on the ground with an interface beneath it, loaded along its line, carried
+nothing: no moment, no contact pressure, the load went into the ground directly, with nothing said
+(0 kNm/m where the bonded raft bends 7.88). Its nodal forces now go to the wall where the line is a
+wall's. KV-STR-026 holds the raft to its equilibrium: the interface's contact force is the load,
+-780.9 kN/m of -800 -- the rest passes through the raft's toe, the end it shares with the ground
+as every wall does, where there is no interface -- and the raft bends as the bonded one (+2.1%).
+
+### A plate's end may be hinged
+
+Plates and walls that meet at a point are joined rigidly there -- one rotation for all of them --
+which is a cast-in-place joint. A segment joint of a lining, a strut seated on a wall or a slab on a
+ledge passes force and no moment, and could not be drawn. A plate's end may now be hinged
+(`structs[i].hinge1` / `hinge2`, read by this build under .k2d v25; an older build would join it
+rigidly): it keeps its own rotation, nothing is tied to it, and at a supported boundary, where a
+plate's end is clamped (the standard fixities, a plane of symmetry), it is a pin. Plates and walls
+with interfaces alike. In the Studio, the plate's Ends section; in Python, `hinge_a` / `hinge_b`.
+
+KV-STR-025 holds a hinge to the moment it cannot carry: a slab on the ground in two pieces under a
+load at their joint carries 73.4 kNm/m through it rigid and none hinged, a wall on the fixed base
+13.6 clamped and none pinned, two walls with interfaces 14.2 rigid and none hinged. A force station
+reports the moment recovered from the element's field rather than the end's own equation, so a
+hinge reads zero to the element's accuracy -- 3.6% of the rigid joint's at 1 m elements -- and that
+residue falls three times at every halving of the element size (2.62, 0.88, 0.28 kNm/m), which is
+what a moment passed through would not do. A rotational spring between the ends is not yet offered.
+
+### Two walls that end at one point are one joint
+
+A plate with an interface is a wall: the mesh is split along it, and the plate meets the ground
+only through its interfaces. Where two walls ended at one point from below -- the crown of a
+lining drawn as the chords of a circle -- the second split again the two nodes the first had left
+there: four nodes, a wall position that belonged to no element, and a ring cut at its crown.
+Measured on a deep tunnel lined as it is dug, with an interface: the lining carried 23 kN/m of the
+2690 the ring-ground compatibility gives, its two halves moved 0.55 m apart at the crown and the
+interface opened and slipped all round, with nothing said. A point another line has already split
+is no longer split again where this line ends there: its two nodes are the pair, each on the side
+its elements are on. Where two lines cross, the point is split as before, into four.
+
+The twins at such a point are tied by both lines when the walls are not yet built, and a tie in
+the order the second line asked for chained a master under a slave -- a cycle, which left the
+point without an equation, fixed: the crown of the tunnel did not move when it was dug. Ties are
+now made by joining the two groups (DofMap::join), in either order, and the joint of two wall
+ends, which until now was silently not made when neither end was free, is made the same way.
+
+Where the deeper ends of two walls meet -- the invert of the same ring -- each hung from the node it
+shares with the ground, so the ring was welded to the ground at that point and had no interface
+there. The point is now split along the earlier wall's line and taken by both as a wall that
+continues another: at the invert the interface closes as it does around the ring (0.380 mm against
+a mean of 0.390), where it did not move at all.
+
+KV-STR-024 holds the lining to its closed forms: unlined, the tunnel wall moves in by
+p0 R (1 + nu) / E (Kirsch, -0.79%); lined as it is dug, the ring carries
+N = p0 R a / (a + 1/kn + R^2/EA), a = R (1 + nu) / E (-0.49% bonded, +0.14% with an interface);
+the two chords at the crown move as one point; the interface closes at the invert as around the
+ring; and a ring built after the dig takes nothing and moves nothing. A lining drawn as a half ring on a symmetry axis has no such point, and a tunnel
+modelled that way is unchanged to every digit.
+
+### Soft Soil's cap returns along the normal of the returned state
+
+The cap of the Soft Soil model was returned along its normal at the elastic trial, which on a
+steady path is not the normal of the state the path is on: in one-dimensional compression the
+stress ratio it settled at depended on the size of the step -- +1.2% in K0NC through the finite
+elements at their substep size, +1.4% on a column. The normal is now taken at the returned state
+(backward Euler), with the pairs of an edge return tied as before, and the return corrected
+along it twice from the step's own start; the ordering is judged on the state that ends, so the
+surface and the edge returns still meet without a jump (test (h): 3.26 against 5). Two corrections
+land within the fifth digit of the settled return, and a fixed count keeps the update a smooth
+function of the increment, as the numerical tangent needs; iterated to 1e-13 it took sixteen passes
+and made a consolidation 7.6 times slower, and with two the Soft Soil tests run as fast as before. Without cohesion, where the formula
+for M is exact, K0NC is reproduced to -0.016% at the material point's step and -0.0016% at a tenth
+of it. With the clay's 1 kPa of cohesion the ratio sits 0.71% below K0NC at 200 kPa -- the
+cohesion's share of p' + c cot(phi), converged in the step and vanishing as the stress grows -- and
+the +0.09% the old return gave there was its step bias cancelling that share.
+
+### A fully coupled time step that does not close is cut, and searched
+
+The fully coupled phase took plain Newton steps and stopped the phase at the first time step that
+did not close in forty of them. A step that does not close is now cut in two with its load, down
+to 1/64, as a consolidation step is; and the Newton iteration is searched non-monotonically (the
+full step wherever it leaves the balance below the worst of the last four iterates, halved
+otherwise, and taken whole where no halving helps). On a raft under twenty times its plastic
+moment the full steps cycled between two states with the balance at 25% of the load; a joint
+slipping in a dissipation step, on the other hand, closes with full steps, and a monotone search
+that took the shortest step where none helped crawled away from it, the balance growing at every
+iterate.
+
+### The structures of a coupled phase follow their own laws; a pile row may consolidate
+
+A consolidation phase -- and a fully-coupled one -- solved its structural elements as one elastic
+matrix. No anchor or geogrid
+yielded, no geogrid went slack in compression, no joint slipped, no plate hinged -- each reported
+when it was passed (K2D-A014, A015, A016) -- and an embedded beam, whose skin and base slip by
+definition, was refused in both. The structures are now evaluated at every iterate by the static solver's
+own assembler, from the total displacement and their committed state, with the soil left to the
+coupled core (StructureLaws); a joint reads the excess pore pressure of the ground beside it at
+the start of each time step. A run of the core stays free of side effects, as the march that
+stops on a state requires: the structures' state is put back after a run and adopted with it.
+
+What this changes, measured on the verification fixtures (KV-STR-006, KV-STR-007): a geogrid whose
+ends the settlement bowl compresses lands on the drained answer (+0.00000%; it was -1.57% on the
+elastic branch); an anchor at its capacity ends at the drained phase's yielded force (+0.0000%); a
+weak joint slips and ends 0.11% from the drained phase, and a raft past its plastic moment hinges
+and ends 1.1% from it -- the order in which the two paths load an element that holds and then
+yields. A yielded geogrid shows that order in full: the ground loaded undrained spreads and
+stretches the sheet to its capacity, and as it consolidates the sheet shortens and unloads. The
+fully-coupled phase takes the same laws (its Newton step evaluates them; a joint reads the share of
+the pore pressure the skeleton feels, Bishop's chi), and the three warnings are retired. KV-STR-023
+holds an embedded pile row slipping in a consolidation phase: where its shaft slips the axial force
+falls by exactly the skin capacity per metre (9e-13 of the load); with an unlimited skin it lands
+on the drained answer to 0.0014%.
+
+An interface point at its Coulomb capacity is reported as slipping. The report re-runs the return
+from the committed slip at the converged displacement, and a point that slipped to its capacity
+came back with its trial shear exactly at it, on the elastic side of the comparison: a weak joint
+slipping along its whole length was reported as slipping nowhere.
+
+### The Modified Cam-Clay model (.k2d v25)
+
+A new soil model, Modified Cam-Clay (Roscoe & Burland 1968): the critical-state model of clay,
+with an elliptical yield surface in p'-q, associated flow, and a preconsolidation pressure that
+hardens with the plastic volume change. Its inputs are the modified compression and swelling
+indices lambda* and kappa*, the Poisson's ratio of the elasticity, and the critical-state friction
+angle, from which M = 6 sin(phi_cs)/(3 - sin(phi_cs)); the stress history is OCR or POP as for the
+other soft-soil models. It has no cohesion and no Mohr-Coulomb surface: the top of the ellipse is
+the critical state, and on its dry side the soil softens. Its undrained analysis is Undrained (A),
+where the undrained strength is a prediction of the model rather than an input. It is available
+in Studio, in the Python API (`prj.materials.modified_cam_clay`) and in the project file as model
+7, which is why the file version moves to 25: an older build refuses the file instead of reading
+an unknown model.
+
+KV-CST-023 holds it against its own closed forms. In undrained triaxial compression at OCR 1, 1.5
+and 8 the preconsolidation pressure follows the volume constraint to 3e-14, the stress stays on
+the ellipse to 2e-9, and the path ends at the critical state the model predicts, su = (M/2) p0
+(OCR/2)^Lambda, to the fourth digit; the axial strain against the integral of the model's shear
+strain is within 0.23%, and the drained path within 0.14%. The finite-element integration is the
+material point's to 1e-8, and a confined column through the whole program compresses at the
+model's one-dimensional K0, 0.72313 against the closed-form 0.72331.
+
+The return is backward Euler -- the plastic strain along the normal of the returned state. Built
+first on Soft Soil's return along the normal of the trial, the column came out at K0 = 0.74252
+(+2.66%) and the undrained path stopped short of the critical state; the bias does not vanish on
+a steady path, and the substeps of a finite-element solve are large enough to show it.
+
+
+
+**The groundwater-flow calculation did not know a model was axisymmetric.** Asked for the flow of
+an axisymmetric model, it solved the plane flow through a slab: a straight head profile where a
+well draws a logarithmic one, and a discharge that is not the well's -- with no word. On a well
+between 0.5 and 50 m the head at 5 m came out 2.06 m off the radial profile. Every integral of the
+flow is now taken per radian -- the conductivity, the nodal flux, a prescribed boundary flux, the
+semi-permeable seams -- and the discharge is stated for the whole ring [m3/day]. KV-FLW-012 holds it
+against Thiem: heads to 0.04% of the difference, the discharge to +0.005%, and with the discharge
+prescribed at the well its drawdown to 0.01%. A well drawn as a line is refused in axisymmetry,
+with how to model it (the inner boundary at its radius, given its head or q_n = Q / (2 pi r_w b)):
+on the axis the ring integral would weigh it by a radius of zero.
+
+What axisymmetry refused before (K2D-S002) it now solves: the pore pressures a phase takes from a
+groundwater flow and region water (the loads per radian, the pore load with its hoop component --
+KV-FLW-013: the same displacement as the phreatic line to 1e-15 m on a level table); a
+transient-flow phase (KV-FLW-014: a well pumped from a confined aquifer, against Theis, within
+0.42% at 10 and 30 m from 0.005 to 0.02 day); and a consolidation phase, on the elastoplastic core
+under the axisymmetric kinematics -- the hoop strain and stress, the pore pressure on the hoop, every
+integral per radian (KV-CON-008: a column to Terzaghi within the 0.2% of its time march and the
+plane-strain column's to 0.001%; the unit cell of a vertical drain to Barron's equal-strain rate,
++1.3% at U = 0.5 and -0.6% at 0.9). Fully coupled and dynamic phases stay refused.
+
+The axis is a line of symmetry, and two rules now say so: the flow of a staged phase no longer
+holds it at the water table's head as it holds a model side (with the table at 6 m on the axis and
+8 m outside, the steady head is 8 m everywhere -- it was 6 m at the axis), and with no flow
+boundary declared a consolidation no longer drains through it (the histories parted by 1.6 mm on a
+column).
+
 ### A relative element size (.k2d v24)
 
 The mesh can be sized from the model instead of in metres (`mesh.rel`; Python

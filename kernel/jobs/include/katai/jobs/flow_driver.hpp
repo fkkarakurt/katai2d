@@ -27,7 +27,8 @@ struct FlowResult {
     Eigen::VectorXd head;        // nodal hydraulic head h [m] (size node_count)
     std::vector<double> pore;    // nodal pore pressure u = gamma_w * max(0, h - y) [kPa]
     double discharge = 0.0;      // TOTAL inflow into the domain [m3/day per m]: through
-                                 // prescribed-head boundaries and prescribed-flux edges alike
+                                 // prescribed-head boundaries and prescribed-flux edges alike.
+                                 // AXISYMMETRIC: [m3/day] over the whole ring (2 pi x per radian)
     double balance_err = 0.0;    // |sum of all nodal fluxes| / inflow (mass conservation, ~0)
     // What the hydraulic conditions took OUT of the ground [m3/day per m], and how many well
     // nodes are held at h_min. A well limited by h_min extracts what the ground can give at that

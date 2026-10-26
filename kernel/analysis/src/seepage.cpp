@@ -39,11 +39,22 @@ void edge_shape(int n, double s, double* N, double* dN) {
     }
 }
 
+// The weight an integral of the flow carries at a point: 1 in plane strain; in an AXISYMMETRIC
+// model, where x is the radius, the radius itself -- every integral is per radian.
+template <class E>
+double radial_weight(const typename E::NodeCoords& coords, const typename E::ShapeValues& N,
+                     bool axi) {
+    if (!axi) return 1.0;
+    double r = 0.0;
+    for (int i = 0; i < E::kNodeCount; ++i) r += N(i) * coords(i, 0);
+    return r;
+}
+
 // Element conductivity He = ∫ Gᵀ diag(kx,ky) G detJ (n×n). The G rows come from the
 // existing strain_displacement B: G(0,i)=dN_i/dx=B(0,2i), G(1,i)=dN_i/dy=B(1,2i+1).
 template <class E>
 Eigen::Matrix<double, E::kNodeCount, E::kNodeCount> element_conductivity(
-    const typename E::NodeCoords& coords, const Permeability& k) {
+    const typename E::NodeCoords& coords, const Permeability& k, bool axi = false) {
     Eigen::Matrix<double, E::kNodeCount, E::kNodeCount> he =
         Eigen::Matrix<double, E::kNodeCount, E::kNodeCount>::Zero();
     for (const auto& gp : E::gauss_points()) {
@@ -53,7 +64,8 @@ Eigen::Matrix<double, E::kNodeCount, E::kNodeCount> element_conductivity(
             gx(0, i) = g.B(0, 2 * i);
             gy(0, i) = g.B(1, 2 * i + 1);
         }
-        const double w = gp.weight * g.det_jacobian;
+        const double w = gp.weight * g.det_jacobian *
+                         radial_weight<E>(coords, E::shape_functions(gp.xi, gp.eta), axi);
         he.noalias() += w * (k.kx * gx.transpose() * gx + k.ky * gy.transpose() * gy);
     }
     return he;
@@ -64,7 +76,7 @@ void assemble_seepage_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                            const std::vector<Permeability>& perm,
                            const std::vector<double>& head_prescribed,
                            math::SparseMatrixBuilder& builder,
-                           Eigen::VectorXd& rhs) {
+                           Eigen::VectorXd& rhs, bool axi) {
     typename E::NodeCoords coords;
     std::array<int, E::kNodeCount> nodes;
 
@@ -77,7 +89,7 @@ void assemble_seepage_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             coords(i, 1) = mesh.y[n];
         }
         const Eigen::Matrix<double, E::kNodeCount, E::kNodeCount> he =
-            element_conductivity<E>(coords, k);
+            element_conductivity<E>(coords, k, axi);
 
         // Scatter: free-free → builder; free-fixed → Dirichlet lift (rhs).
         for (int a = 0; a < E::kNodeCount; ++a) {
@@ -99,7 +111,7 @@ template <class E>
 void assemble_pore_from_head_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                                   const Eigen::VectorXd& head, double gamma_w,
                                   Eigen::VectorXd& rhs,
-                                  const std::vector<char>& active_element) {
+                                  const std::vector<char>& active_element, bool axi) {
     typename E::NodeCoords coords;
     std::array<int, E::kDofCount> element_dofs;       // mechanical 2-DOF
     std::array<double, E::kNodeCount> hnode;          // nodal head
@@ -123,12 +135,15 @@ void assemble_pore_from_head_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             }
             const double u = gamma_w * std::max(0.0, h_gp - y_gp);  // suction cut-off
             if (u == 0.0) continue;
-            const double w = gp.weight * g.det_jacobian * u;
-            // Bᵀ m (m=[1,1,0]): node i → [dN/dx, dN/dy] = [B(0,2i), B(1,2i+1)].
+            const double w0 = gp.weight * g.det_jacobian * u;
+            const double w = w0 * radial_weight<E>(coords, N, axi);
+            // Bᵀ m (m=[1,1,0]): node i → [dN/dx, dN/dy] = [B(0,2i), B(1,2i+1)]. In axisymmetry
+            // m also has the hoop component, whose row in B is N_i / r on the radial DOF: times
+            // the weight r, that is N_i u without the radius.
             for (int i = 0; i < E::kNodeCount; ++i) {
                 const int ex = dofs.equation(element_dofs[2 * i]);
                 const int ey = dofs.equation(element_dofs[2 * i + 1]);
-                if (ex >= 0) rhs[ex] += w * g.B(0, 2 * i);
+                if (ex >= 0) rhs[ex] += w * g.B(0, 2 * i) + (axi ? w0 * N(i) : 0.0);
                 if (ey >= 0) rhs[ey] += w * g.B(1, 2 * i + 1);
             }
         }
@@ -144,7 +159,7 @@ void assemble_gravity_from_head_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                                      const std::vector<double>& gamma_unsat,
                                      const std::vector<double>& gamma_sat,
                                      const Eigen::VectorXd& head, Eigen::VectorXd& rhs,
-                                     const std::vector<char>& active_element) {
+                                     const std::vector<char>& active_element, bool axi) {
     typename E::NodeCoords coords;
     std::array<int, E::kDofCount> element_dofs;
     std::array<double, E::kNodeCount> hnode;
@@ -165,7 +180,7 @@ void assemble_gravity_from_head_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             const typename E::ShapeValues N = E::shape_functions(gp.xi, gp.eta);
             const auto dn = E::shape_derivatives_natural(gp.xi, gp.eta);
             const Eigen::Matrix2d jac = dn.transpose() * coords;
-            const double w_det = gp.weight * jac.determinant();
+            const double w_det = gp.weight * jac.determinant() * radial_weight<E>(coords, N, axi);
             double h_gp = 0.0, y_gp = 0.0;
             for (int i = 0; i < E::kNodeCount; ++i) {
                 h_gp += N(i) * hnode[i];
@@ -184,7 +199,7 @@ void assemble_gravity_from_head_impl(const mesh::Mesh& mesh, const DofMap& dofs,
 template <class E>
 Eigen::VectorXd nodal_flux_impl(const mesh::Mesh& mesh,
                                 const std::vector<Permeability>& perm,
-                                const Eigen::VectorXd& head) {
+                                const Eigen::VectorXd& head, bool axi) {
     Eigen::VectorXd flux = Eigen::VectorXd::Zero(mesh.node_count);
     typename E::NodeCoords coords;
     std::array<int, E::kNodeCount> nodes;
@@ -200,7 +215,7 @@ Eigen::VectorXd nodal_flux_impl(const mesh::Mesh& mesh,
         }
         // Q_e = He·h_e; scatter to nodes. (Sum ≈ 0 at free nodes; discharge at Dirichlet.)
         const Eigen::Matrix<double, E::kNodeCount, 1> qe =
-            element_conductivity<E>(coords, k) * h_e;
+            element_conductivity<E>(coords, k, axi) * h_e;
         for (int i = 0; i < E::kNodeCount; ++i) flux(nodes[i]) += qe(i);
     }
     return flux;
@@ -215,7 +230,7 @@ template <class E>
 Eigen::Matrix<double, E::kNodeCount, E::kNodeCount> element_conductivity_krel(
     const typename E::NodeCoords& coords,
     const Eigen::Matrix<double, E::kNodeCount, 1>& h_e, const Permeability& k,
-    double k_min, double transition, const WaterRetention* wr) {
+    double k_min, double transition, const WaterRetention* wr, bool axi) {
     Eigen::Matrix<double, E::kNodeCount, E::kNodeCount> he =
         Eigen::Matrix<double, E::kNodeCount, E::kNodeCount>::Zero();
     for (const auto& gp : E::gauss_points()) {
@@ -233,7 +248,7 @@ Eigen::Matrix<double, E::kNodeCount, E::kNodeCount> element_conductivity_krel(
             gx(0, i) = g.B(0, 2 * i);
             gy(0, i) = g.B(1, 2 * i + 1);
         }
-        const double w = gp.weight * g.det_jacobian * kr;
+        const double w = gp.weight * g.det_jacobian * kr * radial_weight<E>(coords, N, axi);
         he.noalias() += w * (k.kx * gx.transpose() * gx + k.ky * gy.transpose() * gy);
     }
     return he;
@@ -245,7 +260,7 @@ void assemble_krel_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                         const Eigen::VectorXd& head,
                         const std::vector<double>& head_prescribed, double k_min,
                         double transition, const std::vector<WaterRetention>* retention,
-                        math::SparseMatrixBuilder& builder, Eigen::VectorXd& rhs) {
+                        math::SparseMatrixBuilder& builder, Eigen::VectorXd& rhs, bool axi) {
     typename E::NodeCoords coords;
     std::array<int, E::kNodeCount> nodes;
     Eigen::Matrix<double, E::kNodeCount, 1> h_e;
@@ -261,7 +276,7 @@ void assemble_krel_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             h_e(i) = head[n];
         }
         const Eigen::Matrix<double, E::kNodeCount, E::kNodeCount> he =
-            element_conductivity_krel<E>(coords, h_e, k, k_min, transition, wr);
+            element_conductivity_krel<E>(coords, h_e, k, k_min, transition, wr, axi);
         for (int a = 0; a < E::kNodeCount; ++a) {
             const int eq_a = dofs.equation(dofs.global_dof(nodes[a], 0));
             if (eq_a < 0) continue;
@@ -282,7 +297,7 @@ Eigen::VectorXd nodal_flux_krel_impl(const mesh::Mesh& mesh,
                                      const std::vector<Permeability>& perm,
                                      const Eigen::VectorXd& head, double k_min,
                                      double transition,
-                                     const std::vector<WaterRetention>* retention) {
+                                     const std::vector<WaterRetention>* retention, bool axi) {
     Eigen::VectorXd flux = Eigen::VectorXd::Zero(mesh.node_count);
     typename E::NodeCoords coords;
     std::array<int, E::kNodeCount> nodes;
@@ -299,7 +314,7 @@ Eigen::VectorXd nodal_flux_krel_impl(const mesh::Mesh& mesh,
             h_e(i) = head[n];
         }
         const Eigen::Matrix<double, E::kNodeCount, 1> qe =
-            element_conductivity_krel<E>(coords, h_e, k, k_min, transition, wr) * h_e;
+            element_conductivity_krel<E>(coords, h_e, k, k_min, transition, wr, axi) * h_e;
         for (int i = 0; i < E::kNodeCount; ++i) flux(nodes[i]) += qe(i);
     }
     return flux;
@@ -325,13 +340,15 @@ void assemble_seams(const mesh::Mesh& mesh, const DofMap& dofs, const Unconfined
                          const int eq_j = dofs.equation(gj);
                          if (eq_j >= 0) builder.add_entry(eq_i, eq_j, v);
                          else rhs[eq_i] -= v * head_prescribed[gj];
-                     });
+                     },
+                     o.axisymmetric ? &mesh : nullptr);
 }
 void add_seam_flux(const mesh::Mesh& mesh, const UnconfinedOptions& o, const Eigen::VectorXd& head,
                    Eigen::VectorXd& flux) {
     for (const LeakySeam& sm : o.seams)
         seam_entries(sm, seam_kr(sm, mesh, head, o.k_min, o.transition, o.retention),
-                     [&](int i, int j, double v) { flux[i] += v * head[j]; });
+                     [&](int i, int j, double v) { flux[i] += v * head[j]; },
+                     o.axisymmetric ? &mesh : nullptr);
 }
 
 // Expands the 1-DOF free solution to the full nodal field + overlays the Dirichlet nodes.
@@ -349,44 +366,47 @@ Eigen::VectorXd expand_overlay(const mesh::Mesh& mesh, const DofMap& dofs,
 void assemble_seepage(const mesh::Mesh& mesh, const DofMap& dofs,
                       const std::vector<Permeability>& permeability,
                       const std::vector<double>& head_prescribed,
-                      math::SparseMatrixBuilder& builder, Eigen::VectorXd& rhs) {
+                      math::SparseMatrixBuilder& builder, Eigen::VectorXd& rhs,
+                      bool axisymmetric) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         assemble_seepage_impl<Tri15Element>(mesh, dofs, permeability,
-                                            head_prescribed, builder, rhs);
+                                            head_prescribed, builder, rhs, axisymmetric);
     else
         assemble_seepage_impl<Tri6Element>(mesh, dofs, permeability,
-                                           head_prescribed, builder, rhs);
+                                           head_prescribed, builder, rhs, axisymmetric);
 }
 
 void assemble_pore_load_from_head(const mesh::Mesh& mesh, const DofMap& dofs,
                                   const Eigen::VectorXd& head, double gamma_w,
                                   Eigen::VectorXd& rhs,
-                                  const std::vector<char>& active_element) {
+                                  const std::vector<char>& active_element, bool axisymmetric) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
-        assemble_pore_from_head_impl<Tri15Element>(mesh, dofs, head, gamma_w, rhs, active_element);
+        assemble_pore_from_head_impl<Tri15Element>(mesh, dofs, head, gamma_w, rhs, active_element,
+                                                   axisymmetric);
     else
-        assemble_pore_from_head_impl<Tri6Element>(mesh, dofs, head, gamma_w, rhs, active_element);
+        assemble_pore_from_head_impl<Tri6Element>(mesh, dofs, head, gamma_w, rhs, active_element,
+                                                  axisymmetric);
 }
 
 void assemble_gravity_from_head(const mesh::Mesh& mesh, const DofMap& dofs,
                                 const std::vector<double>& gamma_unsat,
                                 const std::vector<double>& gamma_sat,
                                 const Eigen::VectorXd& head, Eigen::VectorXd& rhs,
-                                const std::vector<char>& active_element) {
+                                const std::vector<char>& active_element, bool axisymmetric) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         assemble_gravity_from_head_impl<Tri15Element>(mesh, dofs, gamma_unsat, gamma_sat, head, rhs,
-                                                      active_element);
+                                                      active_element, axisymmetric);
     else
         assemble_gravity_from_head_impl<Tri6Element>(mesh, dofs, gamma_unsat, gamma_sat, head, rhs,
-                                                     active_element);
+                                                     active_element, axisymmetric);
 }
 
 Eigen::VectorXd compute_nodal_flux(const mesh::Mesh& mesh,
                                    const std::vector<Permeability>& permeability,
-                                   const Eigen::VectorXd& head) {
+                                   const Eigen::VectorXd& head, bool axisymmetric) {
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
-        return nodal_flux_impl<Tri15Element>(mesh, permeability, head);
-    return nodal_flux_impl<Tri6Element>(mesh, permeability, head);
+        return nodal_flux_impl<Tri15Element>(mesh, permeability, head, axisymmetric);
+    return nodal_flux_impl<Tri6Element>(mesh, permeability, head, axisymmetric);
 }
 
 // The edge integral itself, scattered node-indexed. assemble_seepage_flux below is the same
@@ -394,7 +414,7 @@ Eigen::VectorXd compute_nodal_flux(const mesh::Mesh& mesh,
 // can never drift apart.
 void accumulate_boundary_flux(const mesh::Mesh& mesh,
                               const std::vector<int>& ordered_boundary_nodes,
-                              double q_n, std::vector<double>& nodal) {
+                              double q_n, std::vector<double>& nodal, bool axisymmetric) {
     const int npe = mesh.nodes_per_element == 15 ? 5 : 3;
     const int chain = static_cast<int>(ordered_boundary_nodes.size());
     if (chain < npe || (chain - 1) % (npe - 1) != 0) return;  // incompatible chain
@@ -412,13 +432,14 @@ void accumulate_boundary_flux(const mesh::Mesh& mesh,
         std::array<double, 5> integral_n{};  // ∫ N_i ds
         for (int q = 0; q < 4; ++q) {
             edge_shape(npe, point[q], N.data(), dN.data());
-            double dxdt = 0.0, dydt = 0.0;
+            double dxdt = 0.0, dydt = 0.0, r = 0.0;
             for (int i = 0; i < npe; ++i) {
                 const int ni = ordered_boundary_nodes[base + i];
                 dxdt += dN[i] * mesh.x[ni];
                 dydt += dN[i] * mesh.y[ni];
+                r += N[i] * mesh.x[ni];
             }
-            const double ds = std::sqrt(dxdt * dxdt + dydt * dydt);
+            const double ds = std::sqrt(dxdt * dxdt + dydt * dydt) * (axisymmetric ? r : 1.0);
             for (int i = 0; i < npe; ++i) integral_n[i] += weight[q] * ds * N[i];
         }
         for (int i = 0; i < npe; ++i)
@@ -443,7 +464,7 @@ inline void add_nodal_flux(const mesh::Mesh& mesh, const DofMap& dofs,
 
 void assemble_seepage_flux(const mesh::Mesh& mesh, const DofMap& dofs,
                            const std::vector<int>& ordered_boundary_nodes,
-                           double q_n, Eigen::VectorXd& rhs) {
+                           double q_n, Eigen::VectorXd& rhs, bool axisymmetric) {
     // Nodes per edge: tri6 → 3 (quadratic), tri15 → 5 (quartic). 4-point 1D Gauss (degree 7
     // — more than exact for the quartic edge). Same rule as assemble_surface_traction.
     const int npe = mesh.nodes_per_element == 15 ? 5 : 3;
@@ -462,13 +483,14 @@ void assemble_seepage_flux(const mesh::Mesh& mesh, const DofMap& dofs,
         std::array<double, 5> integral_n{};  // ∫ N_i ds
         for (int q = 0; q < 4; ++q) {
             edge_shape(npe, point[q], N.data(), dN.data());
-            double dxdt = 0.0, dydt = 0.0;
+            double dxdt = 0.0, dydt = 0.0, r = 0.0;
             for (int i = 0; i < npe; ++i) {
                 const int ni = ordered_boundary_nodes[base + i];
                 dxdt += dN[i] * mesh.x[ni];
                 dydt += dN[i] * mesh.y[ni];
+                r += N[i] * mesh.x[ni];
             }
-            const double ds = std::sqrt(dxdt * dxdt + dydt * dydt);
+            const double ds = std::sqrt(dxdt * dxdt + dydt * dydt) * (axisymmetric ? r : 1.0);
             for (int i = 0; i < npe; ++i) integral_n[i] += weight[q] * ds * N[i];
         }
         for (int i = 0; i < npe; ++i) {
@@ -494,11 +516,13 @@ UnconfinedResult solve_unconfined_seepage(
         if (tri15)
             assemble_krel_impl<Tri15Element>(mesh, dofs, permeability, current,
                                              head_prescribed, options.k_min,
-                                             options.transition, options.retention, builder, rhs);
+                                             options.transition, options.retention, builder, rhs,
+                                             options.axisymmetric);
         else
             assemble_krel_impl<Tri6Element>(mesh, dofs, permeability, current,
                                             head_prescribed, options.k_min,
-                                            options.transition, options.retention, builder, rhs);
+                                            options.transition, options.retention, builder, rhs,
+                                            options.axisymmetric);
         add_nodal_flux(mesh, dofs, options.nodal_flux, rhs);
         return expand_overlay(mesh, dofs, linear_solve(builder.build(), rhs),
                               head_prescribed);
@@ -509,7 +533,8 @@ UnconfinedResult solve_unconfined_seepage(
     {
         math::SparseMatrixBuilder builder(neq);
         Eigen::VectorXd rhs = Eigen::VectorXd::Zero(neq);
-        assemble_seepage(mesh, dofs, permeability, head_prescribed, builder, rhs);
+        assemble_seepage(mesh, dofs, permeability, head_prescribed, builder, rhs,
+                         options.axisymmetric);
         add_nodal_flux(mesh, dofs, options.nodal_flux, rhs);
         head = expand_overlay(mesh, dofs, linear_solve(builder.build(), rhs),
                               head_prescribed);
@@ -551,9 +576,11 @@ Eigen::VectorXd compute_nodal_flux(const mesh::Mesh& mesh,
                                    const UnconfinedOptions& options) {
     Eigen::VectorXd q = (mesh.nodes_per_element == Tri15Element::kNodeCount)
         ? nodal_flux_krel_impl<Tri15Element>(mesh, permeability, head, options.k_min,
-                                             options.transition, options.retention)
+                                             options.transition, options.retention,
+                                             options.axisymmetric)
         : nodal_flux_krel_impl<Tri6Element>(mesh, permeability, head, options.k_min,
-                                            options.transition, options.retention);
+                                            options.transition, options.retention,
+                                            options.axisymmetric);
     add_seam_flux(mesh, options, head, q);
     return q;
 }
@@ -590,11 +617,11 @@ UnconfinedResult solve_unconfined_seepage_face(
         if (tri15)
             assemble_krel_impl<Tri15Element>(mesh, dofs, permeability, current, hp,
                                              options.k_min, options.transition, options.retention,
-                                             builder, rhs);
+                                             builder, rhs, options.axisymmetric);
         else
             assemble_krel_impl<Tri6Element>(mesh, dofs, permeability, current, hp,
                                             options.k_min, options.transition, options.retention,
-                                            builder, rhs);
+                                            builder, rhs, options.axisymmetric);
         assemble_seams(mesh, dofs, options, current, hp, builder, rhs);
         add_nodal_flux(mesh, dofs, options.nodal_flux, rhs);
         return expand_overlay(mesh, dofs, linear_solve(builder.build(), rhs), hp);
@@ -628,9 +655,11 @@ UnconfinedResult solve_unconfined_seepage_face(
         // sign convention).
         Eigen::VectorXd Q = (mesh.nodes_per_element == Tri15Element::kNodeCount)
             ? nodal_flux_krel_impl<Tri15Element>(mesh, permeability, head, options.k_min,
-                                                 options.transition, options.retention)
+                                                 options.transition, options.retention,
+                                                 options.axisymmetric)
             : nodal_flux_krel_impl<Tri6Element>(mesh, permeability, head, options.k_min,
-                                                options.transition, options.retention);
+                                                options.transition, options.retention,
+                                                options.axisymmetric);
         add_seam_flux(mesh, options, head, Q);
         // Dead band (hysteresis): free→exit only if ψ is clearly positive (>transition);
         // exit→free only if the flux is clearly inward. A node near the exit point is

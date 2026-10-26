@@ -15,6 +15,7 @@
 
 #include <array>
 #include <functional>
+#include <memory>
 #include <vector>
 
 #include <Eigen/Core>
@@ -400,6 +401,42 @@ Eigen::VectorXd structural_internal_force(const mesh::Mesh& mesh, const DofMap& 
                                           const Structures& structures,
                                           const StructuralInit& init_struct,
                                           Kinematics kinematics = Kinematics::PlaneStrain);
+
+// THE STRUCTURES ALONE, BY THEIR OWN LAWS. A phase that integrates the soil itself -- a
+// consolidation -- needs the structural elements as the static solver has them: an anchor or a
+// geogrid that yields, a geogrid that goes slack in compression, a joint or a pile skin that
+// slips, a pile base that lifts off, a plate that hinges. This evaluates them with the shared
+// assembler and the soil switched off, at the total displacement u = u_datum + v from the
+// committed plastic state, and keeps the state an evaluation reached when it is committed. The
+// excess pore pressure a joint's Coulomb law reads beside it is the soil's, handed over node by
+// node (set_soil_pore) in the sign the phases store it with (GaussState::pw_carried).
+class StructureLaws {
+public:
+    StructureLaws(const mesh::Mesh& mesh, const DofMap& dofs,
+                  const std::vector<MaterialModel>& materials, const Structures& structures,
+                  const StructuralInit& init, const std::vector<char>& active,
+                  Kinematics kinematics = Kinematics::PlaneStrain);
+    ~StructureLaws();
+    StructureLaws(const StructureLaws&) = delete;
+    StructureLaws& operator=(const StructureLaws&) = delete;
+    // f += the structures' internal force at u_datum + v (equation space); K, when given, += their
+    // tangent there. The trial state is the one this evaluation reached.
+    void add(const Eigen::VectorXd& v, Eigen::VectorXd& f, math::SparseMatrixBuilder* K);
+    // `share` (material, pressure) -> the part of a pressure the skeleton feels (Bishop chi above
+    // the water table, as store_excess_pore_pressure takes it); empty = all of it.
+    void set_soil_pore(const std::vector<double>& nodal_excess,
+                       const std::function<double(int, double)>& share = {});
+    void commit();                       // the trial state of the last add() is kept
+    StructuralInit committed() const;    // u_datum and the committed plastic state
+    // The committed plastic state set back to one it had (a run that is not kept), u_datum aside.
+    void reset(const StructuralInit& state);
+    // What v is counted from: the displacement the phase has already made (equation space), for
+    // a phase that is solved as a sequence of runs each starting from zero.
+    void set_offset(const Eigen::VectorXd& v0);
+    struct Impl;
+private:
+    std::unique_ptr<Impl> impl_;
+};
 
 struct NewtonResult {
     Eigen::VectorXd displacement;            // total_dofs (fixed DOFs = 0)

@@ -41,6 +41,8 @@
 
 namespace katai::core {
 
+class StructureLaws;   // nonlinear_solver.hpp
+
 struct CoupledFlowResult {
     ConsolidationResult series;                 // times / displacement / pore (consolidation-compatible)
     std::vector<Eigen::VectorXd> saturation;    // nodal degree of saturation per step, S = S_res+(1-S_res).S_e
@@ -122,6 +124,9 @@ CoupledFlowPlasticResult solve_coupled_flow_deformation_plastic(
     int max_newton = 40, double newton_tol = 1e-6,
     const std::vector<MaterialProfile>& profile = {},
     const math::CsrMatrix* struct_k = nullptr,
-    const std::vector<int>* pore_tie = nullptr);
+    const std::vector<int>* pore_tie = nullptr,
+    // THE STRUCTURES BY THEIR OWN LAWS, in place of struct_k (StructureLaws; the consolidation
+    // twin, consolidation.hpp).
+    StructureLaws* structure_laws = nullptr);
 
 }  // namespace katai::core

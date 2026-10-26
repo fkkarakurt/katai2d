@@ -59,7 +59,7 @@ TransientFlowResult solve_transient_flow(
     const std::vector<double>& specific_storage, const std::vector<char>& is_prescribed,
     const HeadBoundary& head_bc, const std::vector<double>& initial_head, double dt, int nsteps,
     const std::vector<double>* flux = nullptr,
-    const TransientFlowSolveFactory& solve_factory = {});
+    const TransientFlowSolveFactory& solve_factory = {}, bool axisymmetric = false);
 
 // --- W2: TRANSIENT UNSATURATED (RICHARDS) FLOW -- mass-conservative modified Picard (Celia 1990)
 // Richards (head form, mixed/mass-conservative):  dtheta/dt + S_s.S_e.dh/dt = div[k_rel(psi).k.grad h] + q,
@@ -138,6 +138,8 @@ UnsaturatedFlowResult solve_transient_unsaturated_flow(
     const HeadBoundary& head_bc, const std::vector<double>& initial_head, double dt, int nsteps,
     const std::vector<double>* flux = nullptr, const TransientFlowSolveFactory& solve_factory = {},
     int max_picard = 60, double picard_tol = 1e-7, const std::vector<HeadLimit>* limits = nullptr,
-    const std::vector<LeakySeam>* seams = nullptr);
+    const std::vector<LeakySeam>* seams = nullptr,
+    // AXISYMMETRIC: x is the radius, every integral per radian (conductivity, storage, seams).
+    bool axisymmetric = false);
 
 }  // namespace katai::core

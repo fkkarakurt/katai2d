@@ -24,6 +24,9 @@ katai_add_test(test_predicates katai::mesh)        # robust geometric predicates
 katai_add_test(test_delaunay katai::mesh)          # incremental Delaunay (P1.4b)
 katai_add_test(test_mohr_coulomb katai::materials)      # MC constitutive kernels (P1.2a)
 katai_add_test(test_flux_boundary katai::jobs katai::mesh katai::analysis katai::model katai::io)  # KV-FLW-002: the prescribed boundary flux (positive into the soil, flow problem only) against Darcy's straight head profile, with the discharge closing through the base
+katai_add_test(test_axisym_flow katai::jobs katai::mesh katai::model)  # KV-FLW-012: steady radial flow to a well in an axisymmetric model = Thiem (heads, discharge, drawdown); a plane-strain slab is straight; a well line is refused
+katai_add_test(test_axisym_flow_pore katai::jobs katai::mesh katai::model)  # KV-FLW-013: a phase's pore pressures from a flow and region water in axisymmetry = the phreatic line on a level table; the axis is closed to flow
+katai_add_test(test_axisym_transient_flow katai::jobs katai::mesh katai::model)  # KV-FLW-014: a well pumped from a confined aquifer, axisymmetric transient flow = Theis at two radii and three times
 katai_add_test(test_dilatancy_cutoff katai::materials)  # KV-CST-004: the dilatancy cut-off -- dilation stops at the critical void ratio, the flow is isochoric afterwards, and the switch is inert until it acts
 katai_add_test(test_hardening_soil katai::materials)    # HS stiffness laws + triaxial hyperbola (P2.3a)
 katai_add_test(test_hs_shear katai::materials)          # HS shear return mapping, triaxial (P2.3d-1)
@@ -142,6 +145,12 @@ katai_add_test(test_semipermeable_flow katai::jobs katai::mesh katai::analysis k
 katai_add_test(test_consolidation_gui katai::jobs katai::mesh katai::analysis katai::model) # Consolidation GUI path (PhaseType::Consolidation): 1D Terzaghi U-Tv + final settlement
 katai_add_test(test_consolidation_stop katai::jobs katai::mesh katai::analysis katai::model katai::linsolve) # Consolidation stop criteria (phases[i].cstop, docs/k2d-format.md): restart identity + the PRESSURE-ratio degree of consolidation against Terzaghi
 katai_add_test(test_consolidation_stop_tolerance katai::jobs katai::mesh katai::model) # KV-NUM-015: a state-stop consolidation phase ends when the converged run does, at the default tolerance
+katai_add_test(test_axisym_consolidation katai::jobs katai::mesh katai::model)  # KV-CON-008: consolidation in axisymmetry -- a column = Terzaghi and the plane-strain column; a drain's unit cell = Barron; the axis is closed by default
+katai_add_test(test_modified_cam_clay katai::jobs katai::mesh katai::model katai::materials)  # KV-CST-023: Modified Cam-Clay -- undrained/drained triaxial against the closed forms, the FE wrapper against the point, a column at the model's K0
+katai_add_test(test_consolidation_pile katai::jobs katai::mesh katai::model)  # KV-STR-023: an embedded pile row slipping in a consolidation phase -- the shaft's closed-form force, the drained limit, the control
+katai_add_test(test_tunnel_ring katai::jobs katai::mesh katai::model)  # KV-STR-024: a lining drawn as chords around a deep tunnel -- Kirsch, the ring-ground compatibility with and without an interface, the joint at the crown
+katai_add_test(test_plate_hinge katai::jobs katai::mesh katai::model)  # KV-STR-025: a hinged plate end passes no moment -- a slab joint, a pinned base, a joint of two walls with interfaces
+katai_add_test(test_load_on_wall katai::jobs katai::mesh katai::model)  # KV-STR-026: a distributed load drawn on a plate with an interface is carried by the plate -- the raft's equilibrium
 katai_add_test(test_consolidation_structures katai::jobs katai::mesh katai::analysis katai::model) # Plates/anchors/geogrids INSIDE a consolidation phase: the drained limit is the oracle (KV-STR-006)
 katai_add_test(test_consolidation_layers katai::jobs katai::mesh katai::analysis katai::model)  # KV-CON-004: the storage term n/Kw per material -- each layer's undrained pressure, the same answer whatever order the materials are listed in, and the settlement history against an independent finite-volume column
 katai_add_test(test_consolidation_interface katai::jobs katai::mesh katai::analysis katai::model)  # Interfaces in a consolidation phase: cross permeability ties/separates the pore field, elastic joint reported (KV-STR-007)
