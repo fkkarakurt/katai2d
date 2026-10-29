@@ -131,6 +131,9 @@ int main() {
     // that runs in minutes. The mesh dependence this case measures is a property of the method,
     // not of the absolute density, so a cheaper family measures the same thing.
     pr.mesh.elem_size = 2.2;
+    // The family the locator names (142 / 568 / 2272 elements): no corner refinement at the toe
+    // and crest, the .k2d v28 mesh. Refined there, the base is another family and another study.
+    pr.mesh.corner_refine = false;
     const auto M0 = katai::app::mesh_from_project(pr);
     check(M0.ok, "base mesh built from the case file");
     if (!M0.ok) { std::printf("      (%s)\n", M0.message.c_str()); return 1; }

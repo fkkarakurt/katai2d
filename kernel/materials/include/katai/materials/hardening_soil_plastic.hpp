@@ -282,26 +282,22 @@ struct HsSubstepPlan {
 // the integration accuracy it was computed with. Until that plumbing lands it is a build-time
 // default with an environment override, so the tolerance can be SWEPT -- which is the whole
 // point of having one.
-// The guard ceiling on one increment's subdivision, and the measurement that set it. On the
-// corpus oedometer (KV-CST-002, range 100->200 kPa, STOL 1e-5) the ceiling costs and buys:
-//     100 -> -0.9539%, 24 s | 200 -> -0.9861%, 32 s | 500 -> -1.0689%, 67 s | 2000 -> -1.0554%, 67 s
-// Nearly all of the extra work goes into TRIAL iterates far from equilibrium, whose stresses are
-// discarded; the answer moves by about a tenth of a percentage point across a twentyfold ceiling,
-// which is this fixture's path indeterminacy, not integration error. 200 is the cheapest setting
-// on that plateau. Saturation is reported (`HsIntegrated::saturated`) so a run that hit it
-// is never mistaken for one that met its tolerance.
-// Re-measured 2026-10 on boundary-value runs, because the ceiling is where the time goes -- run
-// time is nearly proportional to it (a strip on undrained clay 38 / 15 / 8 / 5 s at 200 / 50 / 20
-// / 8, a fill on a soft base 92 / 40 / 22 / 14 s) and those two answers do not move. The
-// oedometer does: at 50 the boundary-value run leaves the constitutive routine by up to 1.09
-// percentage points (KV-NUM-009; 0.001 at 200), because with large load increments the points
-// really need more than 50. The ceiling is an accuracy guard and stays where it is.
+// The guard ceiling on one increment's subdivision: the place of Sloan's minimum step dT_min (the
+// tolerance decides the count; this only stops a walk that would never meet it, and such a walk is
+// reported, HsIntegrated::saturated). It was 200 while the count was an estimate with a margin of
+// about sqrt(n) and the warning meant "clipped" -- and 200 was too few for what the tolerance asks
+// once it has one meaning (2026-10-29): sand at 20 kPa in a staged excavation needs about 1000
+// equal substeps to bring every substep's R under 1e-6, and the graded walk from the stress-free
+// state takes about 350 at its coarsest. 10 000 is dT_min = 1e-4.
+// History: with the old estimate, run time was nearly proportional to the ceiling (a strip on
+// undrained clay 38 / 15 / 8 / 5 s at 200 / 50 / 20 / 8), because the estimate sent trial iterates
+// far from equilibrium to it; the measured count does not.  [timings of this default: see below]
 // TEMPORARY measurement seam (scaffold): the environment override, so the ceiling stays swept.
 inline int hs_max_substeps() {
     static const int v = [] {
         const char* e = std::getenv("KATAI_HS_MAXSUB");
-        const int d = e ? std::atoi(e) : 200;
-        return d > 0 ? d : 200;
+        const int d = e ? std::atoi(e) : 10000;
+        return d > 0 ? d : 10000;
     }();
     return v;
 }

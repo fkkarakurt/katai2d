@@ -47,6 +47,22 @@ kc::MaterialParams every_field() {
     p.lam_star = 0.1; p.kap_star = 0.02; p.mu_star = 0.005;
     p.sig_ci = 5.0e4; p.mi = 10.0; p.gsi = 50.0; p.hb_D = 0.0; p.sig_psi = 0.0;
     p.k0nc_auto = true;
+    p.adp_suP = 0.4; p.adp_suDSS = 0.7; p.adp_gfC = 0.02; p.adp_gfE = 0.06; p.adp_gfDSS = 0.04;
+    return p;
+}
+
+// The block in the drainage a model is solved in. One model is a total-stress model and refuses
+// any other (NGI-ADP: its strengths are undrained shear strengths); every other takes the block
+// drained.
+kc::MaterialParams every_field_for(std::string_view name) {
+    kc::MaterialParams p = every_field();
+    if (name == "NgiAdp") { p.drainage = kc::DrainageClass::UndrainedC; p.nu = 0.495; }
+    if (name == "JointedRock") {   // anisotropic, two sets: the whole of the model walks
+        p.drainage = kc::DrainageClass::Drained;
+        p.jr_aniso = true; p.jr_E2 = 0.5 * p.E; p.jr_nu2 = 0.2; p.jr_G2 = 0.3 * p.E;
+        p.jr_sets = 2; p.jr_alpha[0] = 0.4; p.jr_alpha[1] = -0.9;
+        p.jr_c[1] = 5.0; p.jr_phi[1] = 0.5; p.jr_psi[1] = 0.1;
+    }
     return p;
 }
 
@@ -87,12 +103,12 @@ int main() {
             check(false, std::string(name) + ": registered but not resolvable");
             continue;   // silent-drop-ok: the failed check above IS the report
         }
-        const std::string why = entry->validate(every_field());
+        const std::string why = entry->validate(every_field_for(name));
         if (!why.empty()) {
             check(false, std::string(name) + ": refuses the universal parameter block -- " + why);
             continue;   // silent-drop-ok: reported by the failed check above
         }
-        const kc::MaterialModel m = entry->build(every_field());
+        const kc::MaterialModel m = entry->build(every_field_for(name));
 
         // POISON FIRST. A branch that never runs cannot then be mistaken for one that ran and
         // happened to return the previous stress -- which is exactly how the missing

@@ -47,6 +47,13 @@ struct HardeningSoilParams {
     // ratio of the pre-consolidation state the initial hardening variables are seeded from
     // (hs_seed_from_history). 0 = not given, Jaky's 1 - sin phi is used.
     double K0nc = 0.0;
+    // The TENSION CUT-OFF the integrator returns to together with its own surfaces: sigma_i <=
+    // sigma_t on every principal stress (tension positive, in the solver's sign; the integrator's
+    // compression-positive stress reads it as s_i >= -sigma_t). Three additional yield functions
+    // with an associated flow rule, corners treated per Koiter -- one multi-surface return, not a
+    // cap applied after it. 1e300 = no cut-off. Set by the material wrapper from the material's
+    // tension cut-off; not a model parameter of its own.
+    double sigma_t = 1e300;
 
     // Elastic bulk modulus K_e = Eur/(3(1−2ν)) (at σ3).
     double bulk(double sigma3) const {

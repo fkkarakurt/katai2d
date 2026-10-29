@@ -147,6 +147,24 @@ void interface_in_rock() {
     check(all_ok(res, 1) && !said(res, "K2D-G014"), "joint naming a Mohr-Coulomb material: runs, not refused");
 }
 
+void spring_with_nothing_to_turn_against() {
+    std::printf("-- K2D-G018: a rotation spring on a hinged end with nothing to turn against --\n");
+    m::Project pr = block();
+    m::PlateMaterial pm; pm.name = "Slab"; pm.EA = 5.0e6; pm.EI = 5.0e4;
+    pr.plates.push_back(pm);
+    m::StructElement s; s.kind = m::StructKind::Plate; s.name = "Slab"; s.material = 0;
+    s.x1 = 2.0; s.y1 = 3.0; s.x2 = 8.0; s.y2 = 3.0;   // inside the ground, nothing at either end
+    s.hinge1 = true; s.rot_k1 = 1.0e4;
+    pr.structs.push_back(s);
+    auto res = run(pr);
+    report(res);
+    check(all_ok(res, 1) && said(res, "K2D-G018"), "a spring on a free end inside the ground: said (K2D-G018)");
+    pr.structs[0].x1 = 0.0;   // the end on the left side, which the roller supports
+    res = run(pr);
+    report(res);
+    check(all_ok(res, 1) && !said(res, "K2D-G018"), "the same spring on a supported end: turns against the ground");
+}
+
 void wall_toe_outside_the_soil() {
     std::printf("-- K2D-G010: a wall whose toe is drawn below the soil --\n");
     m::Project pr = block();
@@ -450,23 +468,66 @@ void scope_refusals() {
         res = run(pr);
         check(all_ok(res, 2) && !said(res, "K2D-S001"), "switched off there: runs");
     }
-    {   // S002: axisymmetry with a plate, and with a fully coupled phase
+    {   // S002: axisymmetry with an embedded beam (a row of piles: a plane-strain idealisation),
+        // and with a dynamic phase; a fully coupled phase runs (KV-CON-009). An anchor is a row of bars round a circle and runs
+        // (KV-STR-032); an elastic plate is a shell of revolution and runs (KV-STR-029/030); one
+        // with an M-N capacity has no hoop hinge and is refused.
         m::Project pr = block();
         pr.axisymmetric = true;
         pr.polygons[0].edge_bc[3] = (int)m::BCType::HorizontallyFixed;   // the axis
+        m::EmbeddedBeamMaterial em; em.name = "Pile";
+        pr.embedded.push_back(em);
+        m::StructElement pb; pb.kind = m::StructKind::EmbeddedBeam; pb.name = "Pile"; pb.material = 0;
+        pb.x1 = 5.0; pb.y1 = H; pb.x2 = 5.0; pb.y2 = H - 3.0;
+        pr.structs.push_back(pb);
+        auto res = run(pr);
+        check(refused_with(res, "K2D-S002"), "an embedded beam in axisymmetry: refused (K2D-S002)");
+        pr.structs.clear();
+        m::AnchorMaterial am; am.name = "Strut";
+        pr.anchors.push_back(am);
+        m::StructElement a; a.kind = m::StructKind::Anchor; a.name = "Strut"; a.material = 0;
+        a.x1 = 2.0; a.y1 = H - 1.0; a.x2 = 5.0; a.y2 = H - 1.0;
+        pr.structs.push_back(a);
+        res = run(pr);
+        check(all_ok(res, 1) && !said(res, "K2D-S002"), "an anchor in axisymmetry: runs, a row of bars round a circle");
+        a.x1 = 0.0;   // its first end on the axis: no anchors on a circle of zero radius
+        pr.structs[0] = a;
+        res = run(pr);
+        check(refused_with(res, "K2D-S002"), "an anchor ending on the axis: refused (K2D-S002)");
+        pr.structs.clear();
+        m::GeogridMaterial gm; gm.name = "Grid";
+        pr.geogrids.push_back(gm);
+        m::StructElement g; g.kind = m::StructKind::Geogrid; g.name = "Grid"; g.material = 0;
+        g.x1 = 0.0; g.y1 = H - 1.0; g.x2 = 6.0; g.y2 = H - 1.0;
+        pr.structs.push_back(g);
+        res = run(pr);
+        check(all_ok(res, 1) && !said(res, "K2D-S002"), "a geogrid in axisymmetry: runs, a membrane of revolution");
+        pr.geogrids[0].elastoplastic = true; pr.geogrids[0].Np = 50.0;
+        res = run(pr);
+        check(refused_with(res, "K2D-S002"), "a geogrid with a capacity in axisymmetry: refused (K2D-S002)");
+        pr.structs.clear();
         m::PlateMaterial pm; pm.name = "Wall";
         pr.plates.push_back(pm);
         m::StructElement w; w.kind = m::StructKind::Plate; w.name = "Wall"; w.material = 0;
         w.x1 = 5.0; w.y1 = H; w.x2 = 5.0; w.y2 = 2.0;
         pr.structs.push_back(w);
-        auto res = run(pr);
-        check(refused_with(res, "K2D-S002"), "a plate in axisymmetry: refused (K2D-S002)");
+        res = run(pr);
+        check(all_ok(res, 1) && !said(res, "K2D-S002"), "an elastic plate in axisymmetry: runs, a shell of revolution");
+        pr.plates[0].elastoplastic = true; pr.plates[0].Mp = 50.0; pr.plates[0].Np = 500.0;
+        res = run(pr);
+        check(refused_with(res, "K2D-S002"), "an elastoplastic plate in axisymmetry: refused (K2D-S002)");
         pr.structs.clear();
         add_water(pr, H);
         m::Phase c = phase(m::PhaseType::FullyCoupled, "Coupled"); c.duration = 1.0; c.time_steps = 2;
         pr.phases.push_back(c);
         res = run(pr);
-        check(refused_with(res, "K2D-S002"), "a fully coupled phase in axisymmetry: refused (K2D-S002)");
+        check(all_ok(res, 2) && !said(res, "K2D-S002"), "a fully coupled phase in axisymmetry: runs (KV-CON-009)");
+        m::Phase d = phase(m::PhaseType::Dynamic, "Dynamic");
+        d.seismic_wave = m::SeismicWave::Harmonic; d.seismic_amp = 0.1; d.seismic_freq = 2.0;
+        d.duration = 0.2; d.time_steps = 20;
+        pr.phases[0] = d;
+        res = run(pr);
+        check(refused_with(res, "K2D-S002"), "a dynamic phase in axisymmetry: refused (K2D-S002)");
         pr.phases[0].type = m::PhaseType::Plastic;
         res = run(pr);
         check(all_ok(res, 2) && !said(res, "K2D-S002"), "a Plastic phase in axisymmetry: runs");
@@ -591,6 +652,7 @@ int main() {
     undrained_hardening_soil();
     interface_in_rock();
     wall_toe_outside_the_soil();
+    spring_with_nothing_to_turn_against();
     embedded_beam_without_a_section();
     pile_head_between_nodes();
     capped_small_strain_stiffness();

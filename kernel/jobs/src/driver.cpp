@@ -839,6 +839,23 @@ katai::core::MaterialParams to_material_params(const model::Material& m) {
     p.gsi = m.gsi;
     p.hb_D = m.hb_D;
     p.sig_psi = m.sig_psi;
+    p.adp_suP = m.adp_suP;
+    p.adp_suDSS = m.adp_suDSS;
+    p.adp_gfC = m.adp_gfC / 100.0;     // entered in percent
+    p.adp_gfE = m.adp_gfE / 100.0;
+    p.adp_gfDSS = m.adp_gfDSS / 100.0;
+    p.jr_aniso = m.jr_aniso;
+    p.jr_E2 = m.jr_E2;
+    p.jr_nu2 = m.jr_nu2;
+    p.jr_G2 = m.jr_G2;
+    p.jr_sets = m.jr_sets;
+    for (int i = 0; i < 3; ++i) {
+        p.jr_alpha[i] = m.jr_alpha[i] * kPi / 180.0;
+        p.jr_c[i] = m.jr_c[i];
+        p.jr_phi[i] = m.jr_phi[i] * kPi / 180.0;
+        p.jr_psi[i] = m.jr_psi[i] * kPi / 180.0;
+        p.jr_sigt[i] = m.jr_sigt[i];
+    }
     p.tension_cutoff = m.tension_cutoff;
     p.dilatancy_cutoff = m.dilatancy_cutoff;
     p.e_init = m.e_init;
@@ -989,6 +1006,12 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             return R;
         }
         models.push_back(entry->build(to_material_params(m)));
+        // A transversely isotropic rock is assembled with its own operator on the linear paths too.
+        if (models.back().type == katai::core::MaterialType::JointedRock && models.back().jr.aniso) {
+            mats.back().anisotropic = true;
+            mats.back().anisotropic_D = katai::core::jr::elastic(models.back().jr_at_point());
+            mats.back().anisotropic_E = m.E;
+        }
         // "Ignore undrained behaviour" (`ignoreund`): this phase treats Undrained (A)/(B) soil as
         // drained -- no excess pore pressure is generated and the water adds no stiffness. The
         // strength parameters stay exactly as the material declares them, so an Undrained (B) soil
@@ -1033,18 +1056,10 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         // CLOSED 2026-08-13: these models now read the cut-off (the Rankine condition
         // sigma_i - sigma_t <= 0 on each principal stress, tension positive, applied to the
         // principal stresses their own return produced -- materials/mohr_coulomb.hpp,
-        // apply_rankine_cap). What remains is a formulation boundary worth stating, and only
-        // where it can actually bite: the cap is applied SEQUENTIALLY after the model's own
-        // surfaces rather than as one coupled multi-surface solve. The correction is compressive,
-        // so it moves away from every tensile surface; the one surface it can in principle
-        // disturb is the Hardening Soil family's CAP, and that is not iterated back.
-        if (m.tension_cutoff && entry->hardening_family)
-            note(R, "K2D-M001", m.name,
-                 "Material \"" + m.name + "\" (" + constitutive_name(m.model) +
-                     ") applies the tension cut-off at sigma_t = " + dnum(m.tensile_strength) +
-                     " kPa after its own return, not as one coupled multi-surface solve. Where "
-                     "the cut-off and the volumetric cap are active at the same point, the cap "
-                     "is not re-checked against the capped stress.");
+        // apply_rankine_cap). Since 2026-10-29 the Hardening Soil family returns to the cut-off
+        // TOGETHER with its own surfaces -- three more planes in the same multi-surface return
+        // (hardening_soil_plastic.cpp, HardeningSoilParams::sigma_t) -- so K2D-M001, which said it
+        // was applied after that return, is retired (docs/diagnostics.md).
         // AN INCREMENT WITH DEPTH THE MODEL DOES NOT READ is said, not dropped. The stiffness
         // increment belongs to the models whose stiffness is a Young's modulus, the cohesion
         // increment to those whose cohesion is read at the stress point; entered on another
@@ -1063,6 +1078,28 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         // engine, so the run is the model's as defined rather than a stiffer one -- and it is
         // said out loud, because a G0 that is quietly reduced describes a different soil from
         // the one the file asks for.
+        // JOINTS THAT SLIP WITHOUT DILATING AS FAR AS THEY RUB ARE NOT VERIFIED IN A BOUNDARY
+        // VALUE PROBLEM. The point is (KV-CST-025: Jaeger, simple shear with rotating axes, the
+        // tangent, at psi = 0, 5 and 30 degrees), and so is the associated model through the program
+        // (KV-CST-026: a slope's factor of safety on a daylighting set equals the closed form). But
+        // a slope on cohesionless joints with psi < phi was measured to stall at a few percent of
+        // its self-weight (psi = 0, any mesh), or to depend on the mesh (psi = 5: a factor of 1.22
+        // on 6-noded 2 m elements against the closed form's 1.43, no equilibrium at all on 15-noded
+        // 1 m). The reason is measured at the point (KV-CST-025 (h)): with psi < phi the acoustic
+        // tensor of a slipping point is negative for some band -- ellipticity is lost at the onset
+        // of slip -- where with psi = phi it stays neutral. Said, not refused.
+        if (m.model == model::SoilModel::JointedRock) {
+            bool nonassoc = m.psi < m.phi;
+            for (int s = 1; s < std::clamp(m.jr_sets, 1, 3); ++s) nonassoc = nonassoc || m.jr_psi[s] < m.jr_phi[s];
+            if (nonassoc)
+                warn(R, "K2D-M008", m.name,
+                     "Material \"" + m.name + "\" is jointed rock with a dilatancy angle below its "
+                     "friction angle on at least one joint set. The model is verified at the stress "
+                     "point for any dilatancy, and through whole problems with psi = phi; with psi < "
+                     "phi a slope on such joints was measured to stall early or to depend on the mesh. "
+                     "Treat a stalled phase as a numerical result, not a collapse, and compare with "
+                     "psi = phi (which, on cohesionless joints, gives the same sliding factor).");
+        }
         if (m.model == model::SoilModel::HSsmall && m.G0ref > 0.0) {
             const double Gur_ref = m.Eurref / (2.0 * (1.0 + m.nu_ur));
             const double cap = katai::core::HardeningSoilParams::kMaxG0Ratio * Gur_ref;
@@ -1171,12 +1208,14 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         // their cap -- and an entered value is the one the initial stresses must be on too: read
         // from Jaky whatever was entered, a soil with K0nc = 0.65 started at 0.5 with a cap built
         // for 0.65, an initial state the model itself calls overconsolidated in shear. A model
-        // with no friction angle to read (linear elastic, Hoek-Brown) takes 0.5.
+        // with no friction angle to read (linear elastic, Hoek-Brown) takes 0.5, and so does
+        // jointed rock: its phi is a joint's, and Jaky's formula is about a soil's skeleton.
         const bool k0nc_model =
             m.model == model::SoilModel::HardeningSoil || m.model == model::SoilModel::HSsmall ||
             m.model == model::SoilModel::SoftSoil || m.model == model::SoilModel::SoftSoilCreep;
         const bool no_phi = m.model == model::SoilModel::LinearElastic ||
-                            m.model == model::SoilModel::HoekBrown;
+                            m.model == model::SoilModel::HoekBrown ||
+                            m.model == model::SoilModel::JointedRock;
         const double k0_base = no_phi ? 0.5
                                : (k0nc_model && !m.k0nc_auto) ? m.k0nc
                                : (1.0 - std::sin(m.phi * kPi / 180.0));
@@ -1197,11 +1236,14 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         // rock: a competent mass is often taken as lithostatic (K0 = 1), a jointed or relaxed one
         // can be far lower. This is the one place in the run that can say so.
         // Said where the K0 is used: the initial K0 procedure. A gravity-loading start never reads it.
-        if (m.model == model::SoilModel::HoekBrown && m.k0_auto && !io.chained &&
-            phase == InitialPhase::K0Procedure)
+        if ((m.model == model::SoilModel::HoekBrown || m.model == model::SoilModel::JointedRock) &&
+            m.k0_auto && !io.chained && phase == InitialPhase::K0Procedure)
             warn(R, "K2D-A017", m.name,
-                 "\"" + m.name + "\" uses the Hoek-Brown model, which has no phi' for the "
-                 "automatic K0 to be computed from: K0 = " + dnum(k0) +
+                 "\"" + m.name + "\" uses the " +
+                     std::string(m.model == model::SoilModel::HoekBrown
+                                     ? "Hoek-Brown model, which has no phi'"
+                                     : "jointed rock model, whose phi is a joint's and not a phi'") +
+                     " for the automatic K0 to be computed from: K0 = " + dnum(k0) +
                      " is used, a convention and not a measurement of anything. A competent rock "
                      "mass is often taken as lithostatic (K0 = 1), but a jointed or relaxed one "
                      "can be far lower -- switch the automatic K0 off and enter the value your "
@@ -1358,9 +1400,56 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         // Which sides carry an interface, in the builder's frame: "right" is the side the unit
         // normal (nx, ny) points into, "left" the twin side. A side without one is bonded.
         bool iface_right = true, iface_left = true;
+        double top_x = 0.0, top_y = 0.0;   // the other end
+        bool free_top = false;             // it ends in the ground, no other wall there: its copies are tied
     };
     std::vector<WallSpec> walls;
     std::vector<char> plate_is_wall(pr.structs.size(), 0);
+    // The directions [rad] in which the OTHER walls leave a point: one ray where a wall ends there,
+    // two where it passes through. A split classifies the elements round its end by the sectors
+    // these rays cut (staged_construction.hpp, sector_side). A wall drawn on the same line is the
+    // same seam and leaves no ray.
+    const auto rays_at = [&pr](double px, double py, size_t self) {
+        std::vector<double> rays;
+        const auto& s = pr.structs[self];
+        for (size_t j = 0; j < pr.structs.size(); ++j) {
+            const auto& o = pr.structs[j];
+            if (j == self || o.kind != model::StructKind::Plate || !(o.iface_pos || o.iface_neg)) continue;
+            const double ox = o.x2 - o.x1, oy = o.y2 - o.y1, ol = std::hypot(ox, oy);
+            // silent-drop-ok: a zero-length line is refused by the input contract
+            if (ol < 1e-9) continue;
+            const double tol = 1e-6 * (1.0 + ol);
+            const bool same_line = (std::hypot(o.x1 - s.x1, o.y1 - s.y1) < tol && std::hypot(o.x2 - s.x2, o.y2 - s.y2) < tol) ||
+                                   (std::hypot(o.x1 - s.x2, o.y1 - s.y2) < tol && std::hypot(o.x2 - s.x1, o.y2 - s.y1) < tol);
+            if (same_line) continue;
+            const double t = ((px - o.x1) * ox + (py - o.y1) * oy) / (ol * ol);
+            // silent-drop-ok: nothing is dropped -- the loop looks for the walls that reach the
+            // point; a wall that does not is passed over (it is built by its own entry)
+            if (t < -1e-9 || t > 1.0 + 1e-9) continue;
+            // silent-drop-ok: as above, a wall whose line passes beside the point
+            if (std::hypot(o.x1 + t * ox - px, o.y1 + t * oy - py) > tol) continue;
+            if (t > 1e-9) rays.push_back(std::atan2(-oy, -ox));        // toward its first point
+            if (t < 1.0 - 1e-9) rays.push_back(std::atan2(oy, ox));     // toward its second point
+        }
+        return rays;
+    };
+    // Whether the ground closes round a point: the angles of the elements that meet there add up
+    // to a full turn (an interior point), not a half (a point of the surface).
+    const auto ground_round = [&mesh](double px, double py) {
+        double sum = 0.0;
+        for (int e = 0; e < mesh.element_count; ++e)
+            for (int k = 0; k < 3; ++k) {
+                const int n0 = mesh.node_of(e, k);
+                if (std::hypot(mesh.x[n0] - px, mesh.y[n0] - py) > 1e-6) continue;
+                const int n1 = mesh.node_of(e, (k + 1) % 3), n2 = mesh.node_of(e, (k + 2) % 3);
+                const double a1 = std::atan2(mesh.y[n1] - py, mesh.x[n1] - px);
+                const double a2 = std::atan2(mesh.y[n2] - py, mesh.x[n2] - px);
+                double d = std::fabs(a1 - a2);
+                if (d > 3.14159265358979323846) d = 2.0 * 3.14159265358979323846 - d;
+                sum += d;
+            }
+        return sum > 1.5 * 3.14159265358979323846;
+    };
     constexpr bool kEnableEmbeddedWall = true;
     if (kEnableEmbeddedWall) {
         const int order = mesh.nodes_per_element;
@@ -1410,11 +1499,22 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                                    std::fabs(os.x2 - s.x1) < tol && std::fabs(os.y2 - s.y1) < tol);
                 if (same) { same_line = &ow; break; }
             }
+            // A WALL WHOSE TOP ENDS IN THE GROUND IS NOT A CUT BEYOND IT. Its top is split like
+            // every point of its line, and the two copies there are two sides of the ground beyond
+            // the end, which nothing was drawn between: the mesh opened along an edge past the tip
+            // (measured on a wall whose top is buried, a slab inside the ground and a slab ending
+            // on a wall: one edge each). Where no other wall leaves the top and the ground closes
+            // round it, its two copies are tied in every phase -- the wall's top still meets the
+            // ground through its interfaces, on both sides, at one point of the ground.
+            w.top_x = ux; w.top_y = uy;
+            const std::vector<double> top_rays = rays_at(ux, uy, si);
+            w.free_top = top_rays.empty() && ground_round(ux, uy);
             if (same_line) {
                 w.seam = same_line->seam;
             } else if (std::fabs(dx) <= 1e-6 * len) {                 // VERTICAL: validated x-column split
                 w.seam = katai::core::split_mesh_at_wall(mesh, 0.5 * (s.x1 + s.x2),
-                                                         std::min(s.y1, s.y2), std::max(s.y1, s.y2));
+                                                         std::min(s.y1, s.y2), std::max(s.y1, s.y2),
+                                                         1e-6, top_rays);
             } else {                                           // GENERAL: split along the segment, key by s
                 // Split up to the drawn end and no further. The window ran to len + 1 m, harmless
                 // where a wall ends at the ground surface and wrong everywhere else: a wall, a
@@ -1422,8 +1522,54 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 // interfaces -- a metre past its end (measured: a wall drawn from x = 3 to 9 m
                 // reported forces to x = 9.75 m).
                 const auto seg = katai::core::split_mesh_at_segment(mesh, tx, ty, ux, uy, 1e-3,
-                                                                    len * (1.0 + 1e-6));
+                                                                    len * (1.0 + 1e-6), 1e-6, {}, top_rays);
                 for (const auto& p : seg) w.seam.push_back({p.orig, p.dup, p.s});
+                // A LEVEL WALL ON THE GROUND HAS NO TOE. A wall hangs from its deeper end, the node
+                // it shares with the ground -- the tip of a sheet pile, which the ground wraps
+                // round. A raft has no deeper end: the toe rule took its left end, and there the
+                // raft was welded to the ground, with no interface (measured on a raft with an
+                // interface beneath: the contact carried 2.4% less than the load, the left end's
+                // share passing through the weld). Where the ground lies on one side of the line
+                // only, the point is split along the raft's own line and becomes the first
+                // position of its seam, as the invert of a ring is: both ends then meet the ground
+                // through the interface. Not a slab inside the ground: split there, its end would
+                // open a slit into the ground beyond it, and the ground does wrap round it. Nor
+                // where another wall's line reaches the point -- a slab seated on a wall, two
+                // slabs in a row: that point is a joint, and the joint rule takes it.
+                bool one_sided = std::fabs(dy) <= 1e-9;
+                if (one_sided) {
+                    const double nnx = (uy - ty) / len, nny = -(ux - tx) / len;
+                    bool pos = false, neg = false;
+                    for (int e = 0; e < mesh.element_count; ++e) {
+                        bool has = false;
+                        double cx = 0.0, cy = 0.0;
+                        for (int k = 0; k < mesh.nodes_per_element; ++k) {
+                            const int nd = mesh.node_of(e, k);
+                            has = has || (std::fabs(mesh.x[nd] - tx) < 1e-6 && std::fabs(mesh.y[nd] - ty) < 1e-6);
+                            cx += mesh.x[nd]; cy += mesh.y[nd];
+                        }
+                        if (!has) continue;
+                        const double d = (cx / mesh.nodes_per_element - tx) * nnx + (cy / mesh.nodes_per_element - ty) * nny;
+                        (d >= 0.0 ? pos : neg) = true;
+                    }
+                    one_sided = !(pos && neg);
+                }
+                if (one_sided) {
+                    bool joint = false;
+                    for (size_t sj = 0; sj < pr.structs.size() && !joint; ++sj) {
+                        const auto& o = pr.structs[sj];
+                        if (sj == si || o.kind != model::StructKind::Plate || !(o.iface_pos || o.iface_neg)) continue;
+                        const double ox = o.x2 - o.x1, oy = o.y2 - o.y1, ol2 = ox * ox + oy * oy;
+                        // silent-drop-ok: a zero-length line is refused by the input contract
+                        if (ol2 < 1e-18) continue;
+                        const double t = std::clamp(((tx - o.x1) * ox + (ty - o.y1) * oy) / ol2, 0.0, 1.0);
+                        joint = std::hypot(o.x1 + t * ox - tx, o.y1 + t * oy - ty) < 1e-6 * (1.0 + len);
+                    }
+                    if (!joint) {
+                        const auto tip = katai::core::split_mesh_at_segment(mesh, tx, ty, ux, uy, 0.0, 0.0);
+                        for (const auto& p : tip) w.seam.insert(w.seam.begin(), {p.orig, p.dup, 0.0});
+                    }
+                }
             }
             // TWO WALLS WHOSE DEEPER ENDS MEET ARE A JOINT. Each wall hangs from its toe, the node
             // it leaves whole and shares with the ground -- and where the toes of two walls are one
@@ -1446,7 +1592,8 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                                                 std::hypot(os.x2 - ow.toe_x, os.y2 - ow.toe_y);
                     const double oux = o_first_is_toe ? os.x2 : os.x1, ouy = o_first_is_toe ? os.y2 : os.y1;
                     const bool o_vertical = std::fabs(os.x2 - os.x1) <= 1e-6 * std::hypot(os.x2 - os.x1, os.y2 - os.y1);
-                    const auto tip = katai::core::split_mesh_at_segment(mesh, ow.toe_x, ow.toe_y, oux, ouy, 0.0, 0.0);
+                    const auto tip = katai::core::split_mesh_at_segment(mesh, ow.toe_x, ow.toe_y, oux, ouy, 0.0, 0.0,
+                                                                        1e-6, rays_at(ow.toe_x, ow.toe_y, ow.si));
                     for (const auto& p : tip)
                         ow.seam.insert(ow.seam.begin(), {p.orig, p.dup, o_vertical ? ow.toe_y : 0.0});
                     break;
@@ -1780,6 +1927,11 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
     // A HINGED END keeps its own rotation (StructElement::hinge1/hinge2): it is not tied into the
     // joint, nothing is tied to it, and a supported boundary does not hold it. Its rotation DOFs.
     std::unordered_set<int> hinged_rotation;
+    // Rotation springs asked for on hinged ends: the end's own rotation, where it is, and its
+    // stiffness. What it turns against -- the joint, or the ground -- is known only once every
+    // plate and wall is built, and is resolved with the supports (below).
+    struct SpringReq { int own; double x, y, k; size_t plate; bool five; std::string name; };
+    std::vector<SpringReq> spring_reqs;
     for (size_t si = 0; si < pr.structs.size(); ++si) {
         const auto& s = pr.structs[si];
         if (s.kind != model::StructKind::Plate || plate_is_wall[si]) continue;   // walls built below
@@ -1837,6 +1989,13 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             else dofs.tie(rot[i], it->second);
         }
         const size_t p0 = structures.plates.size();
+        {
+            const double k_front = forward ? s.rot_k1 : s.rot_k2, k_back = forward ? s.rot_k2 : s.rot_k1;
+            if (hinge_front && k_front > 0.0)
+                spring_reqs.push_back({rot.front(), mesh.x[chain.front()], mesh.y[chain.front()], k_front, p0, false, s.name});
+            if (hinge_back && k_back > 0.0)
+                spring_reqs.push_back({rot.back(), mesh.x[chain.back()], mesh.y[chain.back()], k_back, p0, false, s.name});
+        }
         for (size_t e = 0; 2 * e + 2 < chain.size(); ++e) {
             const int A = chain[2 * e], B = chain[2 * e + 2], M = chain[2 * e + 1];
             structures.plates.push_back(katai::core::PlateElement{
@@ -1880,10 +2039,31 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             gp.EA = gm.EA;
             gp.Np = (gm.elastoplastic && gm.Np > 0.0) ? gm.Np : -1.0;   // <=0 => unlimited
         }
+        // In axisymmetry a geogrid is a membrane of revolution (GeogridProps::axisym): a hoop force
+        // beside the meridional one. Its hoop has no plastic state, so a capacity is refused rather
+        // than applied to one direction of the grid and not the other.
+        gp.axisym = axi;
+        if (axi && gp.Np > 0.0) {
+            refuse(R, "K2D-S002", gsub,
+                   "Geogrid \"" + s.name + "\" has a tensile capacity Np, which is not supported in "
+                   "axisymmetric mode yet: a grid of revolution also stretches round its "
+                   "circumference, and that hoop force has no yield state. Give the geogrid material "
+                   "no capacity (elastic, tension only), or model it in plane strain.");
+            return R;
+        }
         const size_t g0 = structures.geogrids.size();
-        for (size_t e = 0; 2 * e + 2 < chain.size(); ++e)
-            structures.geogrids.push_back(katai::core::GeogridElement{
-                {chain[2 * e], chain[2 * e + 2], chain[2 * e + 1]}, gp});
+        // On a 15-noded mesh the grid is the quartic element over each whole edge (geogrid.hpp,
+        // "the element of either order"): the chain is corner, quarter, mid, quarter, corner, ...
+        if (mesh.nodes_per_element == 15 && chain.size() % 4 == 1) {
+            for (size_t e = 0; 4 * e + 4 < chain.size(); ++e) {
+                katai::core::GeogridElement ge{{chain[4 * e], chain[4 * e + 4], chain[4 * e + 2]}, gp};
+                ge.quarter = {chain[4 * e + 1], chain[4 * e + 3]};
+                structures.geogrids.push_back(ge);
+            }
+        } else
+            for (size_t e = 0; 2 * e + 2 < chain.size(); ++e)
+                structures.geogrids.push_back(katai::core::GeogridElement{
+                    {chain[2 * e], chain[2 * e + 2], chain[2 * e + 1]}, gp});
         if (structures.geogrids.size() > g0)
             diag_specs.push_back({2, s.name, g0, structures.geogrids.size()});
         record(si, snap0);
@@ -1966,6 +2146,27 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 return R;
             }
             an.node_b = -1; an.fixed_point = {fx, fy};
+        }
+        // A ROW OF ANCHORS ROUND A CIRCLE. In axisymmetry the anchor is not a ring but discrete bars
+        // at the spacing Ls, measured round the circumference at the anchor's soil end (a node-to-
+        // node anchor: its first end), radius r.
+        // Each bar lies in a meridional plane and its ends move in it, so a bar's elongation is the
+        // plane one; there are r / Ls bars per radian, against 1 / Ls per metre in plane strain.
+        // Stiffness, lock-off force and capacities are scaled by r, and the reported force, per
+        // anchor, divides by r again (DiagSpec::anchor_spacing).
+        if (axi) {
+            const double r = mesh.x[an.node_a];
+            if (!(r > 1e-9)) {
+                refuse(R, "K2D-S002", asub,
+                       "Anchor \"" + s.name + "\" ends on the axis of symmetry (r = 0) in an axisymmetric "
+                       "model: a row of anchors round a circle of zero radius has no anchors. Attach "
+                       "its first end off the axis.");
+                return R;
+            }
+            an.EA *= r; an.prestress *= r;
+            if (an.Fmax_tens > 0.0) an.Fmax_tens *= r;
+            if (an.Fmax_comp > 0.0) an.Fmax_comp *= r;
+            Ls /= r;
         }
         // An anchor end attaches to the NEAREST node, exactly like a point load, so the same
         // discretisation question applies: a strut whose head moved a third of an element is
@@ -2052,17 +2253,26 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         const bool toe_is_first = std::hypot(w.toe_x - s.x1, w.toe_y - s.y1) <= std::hypot(w.toe_x - s.x2, w.toe_y - s.y2);
         return std::array<bool, 2>{toe_is_first ? s.hinge1 : s.hinge2, toe_is_first ? s.hinge2 : s.hinge1};
     };
+    const auto wall_springs = [&](const WallSpec& w) {
+        const auto& s = pr.structs[w.si];
+        const bool toe_is_first = std::hypot(w.toe_x - s.x1, w.toe_y - s.y1) <= std::hypot(w.toe_x - s.x2, w.toe_y - s.y2);
+        return std::array<double, 2>{toe_is_first ? s.rot_k1 : s.rot_k2, toe_is_first ? s.rot_k2 : s.rot_k1};
+    };
     // `hinge` = whether the wall's toe ([0]) and top ([1]) ends are hinged: such an end shares the
-    // joint's translations and keeps its own rotation.
+    // joint's translations and keeps its own rotation; `spring` its rotation spring, if any.
     const auto join_wall_ends = [&](const std::vector<int>& node_r, const std::vector<int>& dx,
                                     const std::vector<int>& dy, const std::vector<int>& dphi,
-                                    std::array<bool, 2> hinge) {
+                                    std::array<bool, 2> hinge, std::array<double, 2> spring,
+                                    bool five, const std::string& name) {
         if (node_r.empty()) return;
         for (size_t k : {size_t(0), node_r.size() - 1}) {
             const double x = mesh.x[node_r[k]], y = mesh.y[node_r[k]];
             const double tol = 1e-6 * (1.0 + std::fabs(x) + std::fabs(y));
             const bool hinged = hinge[k == 0 ? 0 : 1];
             if (hinged && dphi[k] >= 0) hinged_rotation.insert(dphi[k]);
+            if (hinged && dphi[k] >= 0 && spring[k == 0 ? 0 : 1] > 0.0)
+                spring_reqs.push_back({dphi[k], x, y, spring[k == 0 ? 0 : 1],
+                                       five ? structures.plates5.size() : structures.plates.size(), five, name});
             for (const auto& e : wall_ends)
                 if (std::fabs(e.x - x) <= tol && std::fabs(e.y - y) <= tol) {
                     join_dofs(dx[k], e.dof[0]);
@@ -2210,6 +2420,13 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         // installed in a later phase takes the ground's stress at its line then (below), and one
         // carried from the phase before keeps the stress it was installed with (structural_carry.hpp,
         // KV-STR-021) -- whatever this phase's geometry would make of the formula.
+        // A top that ends in the ground: its two copies are one point of the ground (above).
+        if (w.free_top)
+            for (const auto& sp : seam)
+                if (std::fabs(mesh.x[sp.right] - w.top_x) < 1e-6 && std::fabs(mesh.y[sp.right] - w.top_y) < 1e-6) {
+                    tie_twins(sp.left, sp.right);
+                    break;
+                }
         const auto wall_k0_factor = [&k0_by_mat](const WallSpec& ws, int mat) {
             const double k0 = (mat >= 0 && mat < (int)k0_by_mat.size()) ? k0_by_mat[(size_t)mat] : 0.5;
             return k0 * ws.nx * ws.nx + ws.ny * ws.ny;
@@ -2218,7 +2435,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             katai::core::WallBuild5 wb = katai::core::build_embedded_wall5(mesh, seam, toe, dofs, w.pp, w.ip,
                                                                            w.iface_right, w.iface_left, toe_left);
             attach_to_wall(wb.node_r, wb.node_l, wb.dof_x, wb.dof_y);
-            join_wall_ends(wb.node_r, wb.dof_x, wb.dof_y, wb.dof_phi, wall_hinges(w));
+            join_wall_ends(wb.node_r, wb.dof_x, wb.dof_y, wb.dof_phi, wall_hinges(w), wall_springs(w), true, w.name);
             const auto ncp = katai::core::iface::nc_points5();
             const size_t p0 = structures.plates5.size();
             for (const auto& pe : wb.plates) structures.plates5.push_back(pe);
@@ -2245,7 +2462,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             katai::core::WallBuild wb = katai::core::build_embedded_wall(mesh, seam, toe, dofs, w.pp, w.ip,
                                                                          w.iface_right, w.iface_left, toe_left);
             attach_to_wall(wb.node_r, wb.node_l, wb.dof_x, wb.dof_y);
-            join_wall_ends(wb.node_r, wb.dof_x, wb.dof_y, wb.dof_phi, wall_hinges(w));
+            join_wall_ends(wb.node_r, wb.dof_x, wb.dof_y, wb.dof_phi, wall_hinges(w), wall_springs(w), false, w.name);
             const auto ncp = katai::core::iface::nc_points();
             const size_t p0 = structures.plates.size();
             for (const auto& pe : wb.plates) structures.plates.push_back(pe);
@@ -2345,12 +2562,18 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             if (on_wall(an.node_a)) { an.end_dof[0] = wall_dof_at[(size_t)an.node_a][0]; an.end_dof[1] = wall_dof_at[(size_t)an.node_a][1]; }
             if (on_wall(an.node_b)) { an.end_dof[2] = wall_dof_at[(size_t)an.node_b][0]; an.end_dof[3] = wall_dof_at[(size_t)an.node_b][1]; }
         }
-        for (auto& ge : structures.geogrids)
+        for (auto& ge : structures.geogrids) {
             for (int k = 0; k < 3; ++k)
                 if (on_wall(ge.nodes[k])) {
                     ge.trans_dof[2 * k + 0] = wall_dof_at[(size_t)ge.nodes[k]][0];
                     ge.trans_dof[2 * k + 1] = wall_dof_at[(size_t)ge.nodes[k]][1];
                 }
+            for (int k = 0; k < 2; ++k)   // the quartic element's quarter-point nodes
+                if (on_wall(ge.quarter[k])) {
+                    ge.trans_dof_q[2 * k + 0] = wall_dof_at[(size_t)ge.quarter[k]][0];
+                    ge.trans_dof_q[2 * k + 1] = wall_dof_at[(size_t)ge.quarter[k]][1];
+                }
+        }
         // A plain plate meeting the wall (a strut, a slab) shares its translation there -- a
         // hinged connection, which is what two plates meeting at a node are everywhere else.
         for (size_t pi = 0; pi < plain_plate_count; ++pi) {
@@ -2657,6 +2880,35 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         };
         for (const auto& pe : structures.plates) hold(pe.nodes, pe.rot_dof, pe.trans_dof);
         for (const auto& pe : structures.plates5) hold(pe.nodes, pe.rot_dof, pe.trans_dof);
+        // THE SPRINGS TURN AGAINST WHAT THE HINGE LEFT. A hinged end keeps its own rotation; its
+        // spring ties it to the rotation of the joint it is hinged at -- a plate or wall that
+        // carries on through the point -- or, where nothing carries on and the point is
+        // supported, to the ground. Where neither, there is nothing for it to turn against, and
+        // the end is the free hinge it would be without the spring: said, not dropped.
+        for (const auto& rq : spring_reqs) {
+            int partner = -1;
+            bool supported = false;
+            for (int n = 0; n < mesh.node_count; ++n) {
+                if (std::fabs(mesh.x[n] - rq.x) > 1e-6 || std::fabs(mesh.y[n] - rq.y) > 1e-6) continue;
+                if (held(n, 0) || held(n, 1)) supported = true;
+                const auto it = plate_rotation_at.find(n);
+                if (partner < 0 && it != plate_rotation_at.end() && it->second != rq.own) partner = it->second;
+            }
+            for (const auto& e : wall_ends)
+                if (partner < 0 && e.dof[2] >= 0 && e.dof[2] != rq.own &&
+                    std::fabs(e.x - rq.x) <= 1e-6 && std::fabs(e.y - rq.y) <= 1e-6)
+                    partner = e.dof[2];
+            if (partner >= 0 || supported) {
+                // per radian in axial symmetry: the spring's k is per metre of the hoop, at radius r
+                structures.rot_springs.push_back({rq.own, partner, rq.k * (axi ? rq.x : 1.0), rq.plate, rq.five});
+            } else {
+                warn(R, "K2D-G018", rq.name.empty() ? "plate" : rq.name,
+                     "The rotation spring at the hinged end of \"" + rq.name + "\" at (" + dnum(rq.x) +
+                         ", " + dnum(rq.y) + ") has nothing to turn against: no other plate or wall "
+                         "carries on through that point and it is not on a supported boundary. The "
+                         "end is a free hinge there.");
+            }
+        }
     }
     // Line prescribed displacements (schema v2): every mesh node ON an active line gets the
     // set components FIXED here and their target values ramped 0 -> u by the static solver
@@ -2823,7 +3075,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         std::vector<int> struct_nodes;
         for (const auto& p : structures.plates) for (int n : p.nodes) struct_nodes.push_back(n);
         for (const auto& p : structures.plates5) for (int n : p.nodes) struct_nodes.push_back(n);
-        for (const auto& g : structures.geogrids) for (int n : g.nodes) struct_nodes.push_back(n);
+        for (const auto& g : structures.geogrids) for (int k = 0; k < g.node_count(); ++k) struct_nodes.push_back(g.node(k));
         for (const auto& a : structures.anchors) {
             struct_nodes.push_back(a.node_a);
             if (a.node_b >= 0) struct_nodes.push_back(a.node_b);
@@ -3027,6 +3279,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                 an.lock_off = true;
                 an.retension = true;
                 an.jack = P / Ls;   // per metre of wall, like the lock-off force
+                if (axi) an.jack *= mesh.x[an.node_a];   // per radian: r / Ls anchors (see the build)
             }
         }
     }
@@ -3056,7 +3309,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             for (size_t i = r.anchors[0]; i < r.anchors[1] && !hit; ++i)
                 hit = on_offset(structures.anchors[i].node_a) || on_offset(structures.anchors[i].node_b);
             for (size_t i = r.geogrids[0]; i < r.geogrids[1] && !hit; ++i)
-                for (int n : structures.geogrids[i].nodes) hit = hit || on_offset(n);
+                for (int k = 0; k < structures.geogrids[i].node_count(); ++k) hit = hit || on_offset(structures.geogrids[i].node(k));
             for (size_t i = r.interfaces[0]; i < r.interfaces[1] && !hit; ++i)
                 for (int n : structures.interfaces[i].soil_nodes) hit = hit || on_offset(n);
             for (size_t i = r.interfaces5[0]; i < r.interfaces5[1] && !hit; ++i)
@@ -3090,21 +3343,62 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
         // a ring, and each Newton-Cotes point weighs its radius (KV-STR-016: a cylinder pulled
         // through a cohesive joint carries c_i a H per radian). So soil-to-soil interfaces --
         // the shaft and the base of a pile modelled as a volume, the joint under a tank -- are
-        // built and weighted. A plate is a shell with a HOOP membrane force and an anchor is a
-        // ring, so they are different elements rather than the same ones integrated
-        // differently, and they are still refused rather than approximated.
+        // built and weighted.
+        // A PLATE IS A SHELL OF REVOLUTION here (plate.hpp, PlateProps::axisym): the hoop strain
+        // u_r / r and the hoop curvature, per radian, KV-STR-029 -- a tank wall, a shaft lining, a
+        // circular raft. Elastic only: the M-N hinge has no hoop counterpart. A GEOGRID is a
+        // membrane of revolution with a hoop force (GeogridProps::axisym, KV-STR-031) and an
+        // ANCHOR a row of bars round a circle, r / Ls per radian (the anchor build above). An
+        // embedded beam is a row of piles whose interaction with the ground between them is a
+        // plane-strain idealisation: refused.
         for (auto& ie : structures.interfaces) ie.axisymmetric = true;
         for (auto& ie : structures.interfaces5) ie.axisymmetric = true;
-        const bool has_structs =
-            !structures.plates.empty() || !structures.plates5.empty() || !structures.anchors.empty() ||
-            !structures.geogrids.empty() || !structures.embedded_beams.empty();
-        if (has_structs) { refuse(R, "K2D-S002", "axisymmetric", "Plates, anchors, geogrids and embedded beams are not supported in "
-                                       "axisymmetric mode yet. A plate in axisymmetry is a shell with a HOOP "
-                                       "membrane force and an anchor is a ring, so they are different "
-                                       "elements rather than the same ones integrated differently -- "
-                                       "which is why this is refused instead of approximated. A pile is "
-                                       "modelled as a soil region with interfaces along its shaft and base; "
-                                       "use plane strain for walls, anchors and plates."); return R; }
+        if (!structures.embedded_beams.empty()) {
+            refuse(R, "K2D-S002", "axisymmetric", "Embedded beams are not supported in axisymmetric mode: an "
+                   "embedded beam is a row of piles with the ground flowing between them, a plane-strain "
+                   "idealisation with no counterpart round a circle. A single pile on the axis is "
+                   "modelled as a soil region with interfaces along its shaft and base; plates, "
+                   "geogrids and anchors are supported.");
+            return R;
+        }
+        bool plastic_plate = false, on_axis = false;
+        const auto shell = [&](auto& plates) {
+            for (auto& pe : plates) {
+                pe.props.axisym = true;
+                plastic_plate = plastic_plate || pe.props.plastic();
+                bool all0 = true;
+                for (int n : pe.nodes) all0 = all0 && std::fabs(mesh.x[n]) < 1e-9;
+                on_axis = on_axis || all0;
+            }
+        };
+        shell(structures.plates);
+        shell(structures.plates5);
+        if (plastic_plate) { refuse(R, "K2D-S002", "axisymmetric", "An elastoplastic plate (Mp / Np) is not supported in "
+                                       "axisymmetric mode yet: the M-N hinge has no hoop counterpart, and a shell of "
+                                       "revolution yields in its hoop direction too. Give the plate no capacity "
+                                       "(elastic), or model it in plane strain."); return R; }
+        if (on_axis) { refuse(R, "K2D-S002", "axisymmetric", "A plate lies on the axis of symmetry (r = 0): a shell of "
+                                 "revolution of zero radius has no hoop and is not a structure. Draw it off the axis."); return R; }
+        // THE SLOPE OF A SHELL ON THE AXIS IS ZERO, BY SYMMETRY: a circular raft's centre does not
+        // turn. The hoop curvature cos(beta) phi / r would otherwise make the rotation there an
+        // energy of order phi^2 ln(r) that the quadrature only approximates; it is held by a spring
+        // to the ground a million times the plate's own bending stiffness.
+        {
+            std::vector<int> held_rot;
+            const auto hold_axis = [&](const auto& plates) {
+                for (size_t i = 0; i < plates.size(); ++i)
+                    for (size_t k = 0; k < plates[i].nodes.size(); ++k)
+                        if (std::fabs(mesh.x[plates[i].nodes[k]]) < 1e-9 &&
+                            std::find(held_rot.begin(), held_rot.end(), plates[i].rot_dof[k]) == held_rot.end()) {
+                            held_rot.push_back(plates[i].rot_dof[k]);
+                            structures.rot_springs.push_back(
+                                {plates[i].rot_dof[k], -1, 1.0e6 * std::max(plates[i].props.EI, 1.0), i,
+                                 plates[i].nodes.size() == 5});
+                        }
+            };
+            hold_axis(structures.plates);
+            hold_axis(structures.plates5);
+        }
     }
 
     // Staged-phase scope guards: the static path below is axisymmetric-aware end to end
@@ -3116,15 +3410,17 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
     // elastic excavation). Until 2026-10-22 activation changes were refused here, on the
     // ground that the masks were not passed; two calls did not pass them. What is NOT plumbed
     // for axisymmetry is refused honestly rather than silently integrated as plane strain. A
-    // transient groundwater flow (KV-FLW-014) and a consolidation (KV-CON-008) are solved per
-    // radian; the fully coupled and dynamic phase inputs carry no kinematics flag yet.
+    // transient groundwater flow (KV-FLW-014), a consolidation (KV-CON-008) and a fully coupled
+    // flow-deformation (KV-CON-009) are solved per radian; the dynamic phase input carries no
+    // kinematics flag yet.
     if (io.config && axi) {
         if (io.config->type != model::PhaseType::Plastic && io.config->type != model::PhaseType::Safety &&
             io.config->type != model::PhaseType::TransientFlow &&
-            io.config->type != model::PhaseType::Consolidation) {
-            refuse(R, "K2D-S002", "axisymmetric", "Plastic, Safety, consolidation and transient-flow phases are "
-                        "available in axisymmetric mode; fully coupled and dynamic phases are "
-                        "plane-strain only yet.");
+            io.config->type != model::PhaseType::Consolidation &&
+            io.config->type != model::PhaseType::FullyCoupled) {
+            refuse(R, "K2D-S002", "axisymmetric", "Plastic, Safety, consolidation, fully coupled and transient-flow "
+                        "phases are available in axisymmetric mode; dynamic phases are plane-strain "
+                        "only yet.");
             return R;
         }
         // THE 6-NODED TRIANGLE IN AXISYMMETRY OVERESTIMATES A COLLAPSE LOAD. Plastic flow at
@@ -3443,12 +3739,34 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                     in = !in;
             return in;
         };
+        // THE FACE OF A WALL'S SEAM is the ground behind the wall, held by the wall's joint. With the
+        // ground of the other side dug away the mesh sees it as exposed, but the water standing there
+        // is in front of the WALL: it presses the wall, at the water level of that side (the level
+        // the dug region states for itself, or else the phase's water table, read just across the
+        // face), and nothing where the region is kept dry. Applied on the ground face, it went past
+        // the wall into the ground -- and where the side was pumped dry the ground's own pore pressure
+        // was taken for free water there, deleting the wall's difference of water pressure.
+        // wall_dof: the structure's degrees of freedom across each ground node of an active joint
+        // against a structure (its own extra DOFs; a joint between two bodies of ground has none).
+        const int n_mesh_dof = 2 * mesh.node_count;
+        std::vector<std::array<int, 2>> wall_dof((size_t)mesh.node_count, {-1, -1});
+        const auto mark_wall = [&](const auto& ie, int npe) {
+            if (!ie.active) return;
+            for (int k = 0; k < npe; ++k)
+                if (ie.struct_dof[2 * k] >= n_mesh_dof)
+                    wall_dof[(size_t)ie.soil_nodes[k]] = {ie.struct_dof[2 * k], ie.struct_dof[2 * k + 1]};
+        };
+        for (const auto& ie : structures.interfaces) mark_wall(ie, 3);
+        for (const auto& ie : structures.interfaces5) mark_wall(ie, 5);
+        Eigen::VectorXd f_face;
         for (const auto& ed : katai::mesh::extract_exposed_edges(mesh, act)) {
+            bool seam = true;
+            for (int i = 0; i < ed.npe && seam; ++i) seam = wall_dof[(size_t)ed.node[i]][0] >= 0;
+            const int a = ed.node[0], b = ed.node[ed.npe - 1];
+            const double len = std::hypot(mesh.x[b] - mesh.x[a], mesh.y[b] - mesh.y[a]);
+            const double qx = 0.5 * (mesh.x[a] + mesh.x[b]) + 1e-3 * len * ed.nx;
+            const double qy = 0.5 * (mesh.y[a] + mesh.y[b]) + 1e-3 * len * ed.ny;
             if (!dry_regions.empty()) {
-                const int a = ed.node[0], b = ed.node[ed.npe - 1];
-                const double len = std::hypot(mesh.x[b] - mesh.x[a], mesh.y[b] - mesh.y[a]);
-                const double qx = 0.5 * (mesh.x[a] + mesh.x[b]) + 1e-3 * len * ed.nx;
-                const double qy = 0.5 * (mesh.y[a] + mesh.y[b]) + 1e-3 * len * ed.ny;
                 bool dry_face = false;
                 for (size_t i : dry_regions) dry_face = dry_face || in_polygon(i, qx, qy);
                 if (dry_face) continue;
@@ -3456,20 +3774,105 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             const int comp = std::fabs(ed.nx) >= std::fabs(ed.ny) ? 0 : 1;
             const bool held = dofs.equation(dofs.global_dof(ed.node[0], comp)) < 0 &&
                               dofs.equation(dofs.global_dof(ed.node[ed.npe - 1], comp)) < 0;
-            if (held) continue;
+            if (held && !seam) continue;
+            double level = 0.0;
+            if (seam) {
+                level = water_table_at(pr, qx, io.config);
+                if (io.config)
+                    for (size_t i = 0; i < pr.polygons.size(); ++i)
+                        if (in_polygon(i, qx, qy) && io.config->water_mode(i) == model::Phase::kRegionWaterLevel)
+                            level = io.config->water_level(i);
+            }
             std::vector<int> chain(ed.node.begin(), ed.node.begin() + ed.npe);
             std::vector<double> tx(ed.npe), ty(ed.npe);
             bool wet = false;
             for (int i = 0; i < ed.npe; ++i) {
-                const double pw = pore_at_node(chain[i]);
+                const double pw = seam ? kGammaWater * std::fmax(0.0, level - mesh.y[chain[i]])
+                                       : pore_at_node(chain[i]);
                 wet = wet || pw > 0.0;
                 tx[i] = -pw * ed.nx;
                 ty[i] = -pw * ed.ny;
             }
             if (!wet) continue;
-            if (axi) katai::core::assemble_axisym_traction_varying(mesh, dofs, chain, tx, ty, f);
-            else katai::core::assemble_surface_traction_varying(mesh, dofs, chain, tx, ty, f);
+            if (!seam) {
+                if (axi) katai::core::assemble_axisym_traction_varying(mesh, dofs, chain, tx, ty, f);
+                else katai::core::assemble_surface_traction_varying(mesh, dofs, chain, tx, ty, f);
+                continue;
+            }
+            // the face's nodal forces, moved from the ground's nodes to the wall's across them
+            f_face.setZero(dofs.equation_count());
+            if (axi) katai::core::assemble_axisym_traction_varying(mesh, dofs, chain, tx, ty, f_face);
+            else katai::core::assemble_surface_traction_varying(mesh, dofs, chain, tx, ty, f_face);
+            for (int n : chain)
+                for (int cpt = 0; cpt < 2; ++cpt) {
+                    const int es = dofs.equation(dofs.global_dof(n, cpt));
+                    const int ew = dofs.equation(wall_dof[(size_t)n][cpt]);
+                    if (es >= 0 && ew >= 0) f(ew) += f_face(es);
+                    if (es >= 0) f_face(es) = 0.0;
+                }
         }
+        // THE WATER AT A JOINT. The pore load leaves the term p n on each face of a split seam, as on
+        // any boundary of the ground, and the joint is what stands against that face. Its law is a
+        // law of the soil skeleton -- friction on the EFFECTIVE normal stress -- so the pore water's
+        // share goes across it here, as a pair of equal and opposite forces: p back onto the ground
+        // face, p onto what stands across it (the wall, or the other body of ground). A wall in water
+        // then carries no water force from two wet sides and the full difference from one wet side
+        // against a dry pit (the free water of a dug side is put on the wall above).
+        // Until 2026-10-29 the joint took the steady pore pressure into its own normal stress: it
+        // was installed carrying the effective stress only, came to the total stress by closing by
+        // p / k_n -- a movement of the ground at every wall installed below the water table -- and
+        // then rubbed with the total stress, so a joint 5 m below the water table held three times
+        // the friction its effective stress allows.
+        // The water of a side is that side's own: its flow head at its own seam node, or the water
+        // table read a little way into the side's element -- not at the seam's coordinate, where a
+        // table drawn with a step at the wall is at neither of its two levels.
+        const auto joint_water = [&](const auto& ie, const auto& ncp, auto frame_of, int npt, auto coords) {
+            if (!ie.active) return;
+            const int side_elem = ie.soil_elem;
+            double cx = 0.0;
+            const bool known_side = side_elem >= 0 && side_elem < mesh.element_count;
+            if (known_side) {
+                const int per = mesh.nodes_per_element;
+                for (int k = 0; k < per; ++k) cx += mesh.x[mesh.connectivity[(size_t)side_elem * per + k]];
+                cx /= per;
+            }
+            const auto Xe = coords(ie);
+            for (int q = 0; q < npt; ++q) {
+                const int nd = ncp[q].node;
+                const int sn = ie.soil_nodes[nd];
+                const double xs = known_side ? mesh.x[sn] + 0.05 * (cx - mesh.x[sn]) : mesh.x[sn];
+                const double p = flow ? pore_at_node(sn)
+                                      : kGammaWater * std::fmax(0.0, water_table_at(pr, xs, io.config) - mesh.y[sn]);
+                if (!(p > 0.0)) continue;
+                const auto fr = frame_of(Xe, ncp[q].xi);
+                const double c = fr.c, s = fr.s;
+                const double wJ = ncp[q].w * fr.J * (ie.axisymmetric ? Xe(nd, 0) : 1.0);
+                const int gdx[4] = {dofs.global_dof(sn, 0), dofs.global_dof(sn, 1),
+                                    ie.struct_dof[2 * nd + 0], ie.struct_dof[2 * nd + 1]};
+                const double bn[4] = {s, -c, -s, c};   // d(du_n)/d(dof), as the joint's own force
+                for (int i = 0; i < 4; ++i) {
+                    if (gdx[i] < 0) continue;
+                    const int eq = dofs.equation(gdx[i]);
+                    if (eq >= 0) f(eq) += wJ * bn[i] * p;
+                }
+            }
+        };
+        const auto ncp3 = katai::core::iface::nc_points();
+        const auto ncp5 = katai::core::iface::nc_points5();
+        for (const auto& ie : structures.interfaces)
+            joint_water(ie, ncp3, [](const auto& X, double xi) { return katai::core::iface::edge_frame(X, xi); },
+                        katai::core::iface::kPointCount, [&](const auto& e) {
+                            katai::core::iface::NodeCoords X;
+                            for (int k = 0; k < 3; ++k) { X(k, 0) = mesh.x[e.soil_nodes[k]]; X(k, 1) = mesh.y[e.soil_nodes[k]]; }
+                            return X;
+                        });
+        for (const auto& ie : structures.interfaces5)
+            joint_water(ie, ncp5, [](const auto& X, double xi) { return katai::core::iface::edge_frame5(X, xi); },
+                        katai::core::iface::kPointCount5, [&](const auto& e) {
+                            katai::core::iface::NodeCoords5 X;
+                            for (int k = 0; k < 5; ++k) { X(k, 0) = mesh.x[e.soil_nodes[k]]; X(k, 1) = mesh.y[e.soil_nodes[k]]; }
+                            return X;
+                        });
     }
     // External point loads (kept separate too: for the embedded-wall K0 baseline only loads ramp,
     // while self-weight is carried by the seeded geostatic state).
@@ -3820,6 +4223,8 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                         gs.gamma_hist = 0.0;
                         gs.hs_hist.setZero();
                         gs.hs_g_mono = 0.0;
+                        // NGI-ADP takes the stress it finds as its initial state (ngi_adp.hpp).
+                        gs.adp_set = false;
                     }
                 }
                 for (size_t i = 0; i < pr.polygons.size(); ++i)
@@ -4547,8 +4952,25 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
                         structures.interfaces5.size() * (size_t)katai::core::iface::kPointCount5, 0.0);
                 // The stress at one joint node: the soil side's, averaged with the other side's when
                 // that side is ground too (its structure-side DOF is a mesh node's).
+                //
+                // A JOINT WITH NO GROUND ACROSS IT STARTS AS A NEW CONTACT. The other side's node
+                // can be a mesh node in no active element: the bonded side of a lining the phase
+                // digs out (or dug out before), held only by the wall. Averaged with that node's
+                // stress -- nil, it carries no element -- the joint began at half the ground's, a
+                // side effect; seeded with the ground's alone, it pressed the lining with the whole
+                // in-situ stress before the ground had moved (a ring loaded beyond a bonded one).
+                // There is nothing across such a seam to have held the ground, so the joint takes
+                // nothing over: sigma_n0 = 0 and no slip offset, and the dig's release reaches the
+                // lining through the joint's own stiffness -- the ring-ground compatibility.
+                const std::vector<char> na_now =
+                    act.empty() ? std::vector<char>() : katai::core::active_nodes(mesh, act);
+                const auto no_ground_across = [&](int struct_gdof) {
+                    return !na_now.empty() && struct_gdof >= 0 && struct_gdof < 2 * nn &&
+                           !na_now[(size_t)(struct_gdof / 2)];
+                };
                 const auto node_stress = [&](int soil_node, int struct_gdof) {
                     Eigen::Vector3d sig = rec.stress[(size_t)soil_node];
+                    if (no_ground_across(struct_gdof)) return Eigen::Vector3d(Eigen::Vector3d::Zero());
                     if (struct_gdof >= 0 && struct_gdof < 2 * nn)
                         sig = 0.5 * (sig + rec.stress[(size_t)(struct_gdof / 2)]);
                     return sig;
@@ -4883,6 +5305,7 @@ SolveResult solve_gravity_le(const model::Project& pr_drawn, const katai::mesh::
             fin.have_flow_bcs = any_flow_bc_declared(pr);
             bool well_in_fc = false;
             fin.drain_nodes = phase_drain_nodes(pr, mesh, io, well_in_fc);
+            fin.axisymmetric = axi;   // per radian, with the hoop (KV-CON-009)
             warn_no_flow_barrier(pr, barrier_unread, R);
             if (well_in_fc)
                 warn(R, "K2D-A009", "wells",

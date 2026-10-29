@@ -132,6 +132,15 @@ set_tests_properties(test_python_flow_pore PROPERTIES
   LABELS "python;api"
   ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
 
+# The water at a wall's joint: a wall installed below the water table moves nothing, its joint holds
+# and rubs with the effective normal stress, and a pit dug below the water table bends it as the dry
+# ground of buoyant weight does.
+add_test(NAME test_python_joint_water
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/joint_water.py)
+set_tests_properties(test_python_joint_water PROPERTIES
+  LABELS "python;api"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
 # Region water: a region's pore pressure from a level of its own or interpolated between the regions
 # above and below it, against closed forms; the dug soil's weight leaving the floor on the
 # head-field path as on the phreatic one.

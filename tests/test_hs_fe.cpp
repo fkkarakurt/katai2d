@@ -169,7 +169,14 @@ void test_tension_cutoff_tangent() {
         GaussState g;
         g.stress = Eigen::Vector3d(-3.0, -4.0, 0.3);   // tension positive: a shallow point
         g.stress_zz = -8.0;
-        const Eigen::Vector3d sc(8.0, 4.0, 3.0);
+        // The history the hardening is seeded from must CONTAIN the present stress, or the start is
+        // illegal (outside its own shear surface; Sloan, Abbo & Sheng 2001, Sec. 3.4, step 4). It
+        // was (8, 4, 3) until 2026-10-29: a deviator of 5.0 against the present 5.06, so the check
+        // passed on the integrator pulling that start back -- which it no longer does: it raises a
+        // lagging hardening to the stress, and from ON the surface the walk hardens over the whole
+        // increment, which the continuum tangent of its last substep does not differentiate
+        // (3.5e-3 against the 1e-3 asked). (10, 4, 3) puts the start inside, as the check intends.
+        const Eigen::Vector3d sc(10.0, 4.0, 3.0);
         g.pp = katai::core::hs_initial_pp(m.hs, sc);
         g.gamma_p = katai::core::hs_initial_gamma_p(m.hs, sc);
         GaussState t;

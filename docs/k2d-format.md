@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **25** · Current `.res` version: **11**
+Current `.k2d` version: **29** · Current `.res` version: **11**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -68,7 +68,17 @@ at `elem_size`,
 and **v25** the Modified Cam-Clay model (`materials[i].model` = 7), which writes no key of its own
 (it reads the soft-soil keys, with `phi` as the critical-state angle) and is gated for the reason of
 v18: an older build would read model 7 as an unknown model -- and a plate's hinged ends
-(`structs[i].hinge1` / `hinge2`), which an older build would ignore and join rigidly.
+(`structs[i].hinge1` / `hinge2`), which an older build would ignore and join rigidly,
+and **v26** the NGI-ADP model (`materials[i].model` = 8, with `adpsuP`, `adpsuDSS`, `adpgfC`,
+`adpgfE`, `adpgfDSS`), gated for the same reason,
+and **v27** rotation springs on hinged plate ends (`structs[i].rotk1` / `rotk2`), which an older
+build would ignore and solve as free hinges,
+and **v28** the jointed rock model (`materials[i].model` = 9, with the `jr*` keys), gated as v18,
+and **v29** local mesh density as it is seen: the `coarseness` an object carries is the factor
+applied (structures, loads and prescribed displacements default to 0.25), no longer halved again
+under `mesh.auto_refine`, and the size grows away from a refined object by `mesh.grading` -- an
+older build would halve the factors and grade at 0.5, a different mesh. A file older than v29 is
+read with the factors it meant and its old grading, so it meshes as before.
 Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
@@ -134,7 +144,7 @@ flagged places differs from the in-memory default of a freshly created object.
 
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
-| `katai2d` | int | — | *required* | Format version; this build writes 25 |
+| `katai2d` | int | — | *required* | Format version; this build writes 29 |
 | `name` | str | — | `"Untitled project"` | Project display name |
 | `axisymmetric` | bool | — | `false` | `false` = plane strain; `true` = axisymmetric (x is the radius, x = 0 the symmetry axis) |
 | `initial_procedure` | int | — | `0` | How the initial phase establishes the in-situ state: 0 K0 procedure, 1 Gravity loading, 2 Safety (φ-c reduction of the gravity state; intended for single-phase runs) |
@@ -167,7 +177,9 @@ flagged places differs from the in-memory default of a freshly created object.
 |---|---|---|---|---|
 | `elem_size` | num | m | `2` | Target element edge length; the mesher's target triangle area is 0.5 · elem_size² |
 | `order` | int | — | `6` | Element type: 6 = quadratic tri6, 15 = quartic tri15 |
-| `auto_refine` | bool | — | `true` | Automatic ~2× refinement near structural elements and loads |
+| `auto_refine` | bool | — | `true` | The local `coarseness` factors of structures, loads, prescribed displacements and hydraulic lines apply; `false` meshes those objects at the size of the region they lie in |
+| `grading` | num | — | `0.15` | Growth of the element size per metre away from a refined object, h(d) = h_object + grading · d, until it meets the size around it. Written only when not the default (files older than v29 are read with 0.5) |
+| `corner_refine` | bool | — | `true` | Enhanced refinement at corners: where geometry lines meet at an angle that is not a multiple of 90°, the size there is the element size times a factor of the sharpest angle between them (1 at 90/180/270°, 0.5 at 45° and 135°, 0.1 at a sliver). Written only when `false` (files older than v29 are read with `false`) |
 | `rel` | num | — | `0` | Relative element size: `0` = `elem_size` is the size; above 0 the target element edge is this factor times a twentieth of the model's diagonal (from `x_min`..`x_max`, `y_min`..`y_max`), so a model drawn wider keeps the same density; 2 / 1.33 / 1 / 0.67 / 0.5 are very coarse … very fine. It also sets the virtual thickness of the interfaces, which `elem_size` sets otherwise. Written only when set |
 
 #### Soil material object (`materials[i]`)
@@ -175,7 +187,7 @@ flagged places differs from the in-memory default of a freshly created object.
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
 | `name` | str | — | `"New material"` | Data set name |
-| `model` | int | — | `0` | Soil model: 0 Linear elastic, 1 Mohr-Coulomb, 2 Hardening Soil, 3 HS small, 4 Soft Soil, 5 Soft Soil Creep, 6 Hoek-Brown, 7 Modified Cam-Clay (`lamstar`, `kapstar`, `nu_ur`; `phi` is the critical-state angle, M = 6 sin φ/(3 − sin φ); `c` must be 0). NOTE: an absent key loads 0, although a freshly created material defaults to 1 |
+| `model` | int | — | `0` | Soil model: 0 Linear elastic, 1 Mohr-Coulomb, 2 Hardening Soil, 3 HS small, 4 Soft Soil, 5 Soft Soil Creep, 6 Hoek-Brown, 7 Modified Cam-Clay (`lamstar`, `kapstar`, `nu_ur`; `phi` is the critical-state angle, M = 6 sin φ/(3 − sin φ); `c` must be 0), 8 NGI-ADP (anisotropic undrained shear strength in total stress, `drainage` 4 only: `c` is the plane strain active strength suA, with `c_inc` / `y_ref`; `E` / `nu` the undrained elastic pair; the `adp*` keys below; docs/references/ngi-adp-formulation.md), 9 Jointed rock (elastic rock, isotropic or transversely isotropic, failing only on up to three joint sets; `drainage` 0 or 2 only; `E` / `nu` are E1 / nu1, and the first set's strength is `c`, `phi`, `psi` and `tension_cutoff` / `tensile_strength`; the `jr*` keys below; docs/references/jointed-rock-formulation.md). NOTE: an absent key loads 0, although a freshly created material defaults to 1 |
 | `drainage` | int | — | `0` | 0 Drained, 1 Undrained (A), 2 Non-porous, 3 Undrained (B), 4 Undrained (C) — the last is a **total stress** analysis: `E`/`nu` are the undrained pair, `c` is s_u with φ = 0, and no pore pressure is generated or carried |
 | `color` | num[] | — | `[0.85,0.78,0.55]` | Display colour, RGB in 0..1 (3 values) |
 | `gamma_unsat` | num | kN/m³ | `17` | Unit weight above the phreatic level |
@@ -212,6 +224,27 @@ flagged places differs from the in-memory default of a freshly created object.
 | `gsi` | num | — | `50` | Hoek-Brown: Geological Strength Index, 0–100 (100 = intact rock). Written only by a Hoek-Brown material |
 | `hbD` | num | — | `0` | Hoek-Brown: disturbance factor, 0–1 (0 undisturbed, 1 heavily blasted). Written only by a Hoek-Brown material |
 | `sigpsi` | num | kPa | `0` | Hoek-Brown: the confining stress at which dilatancy has died out: the mobilised dilatancy angle falls linearly from `psi` at σ′₃ = 0 to zero at a confinement of `sigpsi` (0 = no decay). The dilatancy angle itself is the shared `psi`, its value at σ′₃ = 0. Written only by a Hoek-Brown material |
+| `adpsuP` | num | — | `0.4` | NGI-ADP: plane strain passive strength over suA (`c`), > 0. Written only by an NGI-ADP material |
+| `adpsuDSS` | num | — | `0.7` | NGI-ADP: direct simple shear strength over suA, > 0. Written only by an NGI-ADP material |
+| `adpgfC` | num | % | `2` | NGI-ADP: total shear strain at failure in undrained triaxial compression, 3/2 ε₁; must exceed the test's elastic strain suC,TX/G. Written only by an NGI-ADP material |
+| `adpgfE` | num | % | `6` | NGI-ADP: total shear strain at failure in undrained triaxial extension. Written only by an NGI-ADP material |
+| `adpgfDSS` | num | % | `4` | NGI-ADP: total shear strain at failure in direct simple shear. Written only by an NGI-ADP material |
+| `jrsets` | int | — | `1` | Jointed rock: number of joint sets, 1..3. Written only by a jointed rock material, as are all `jr*` keys |
+| `jralpha1` | num | ° | `0` | Jointed rock: dip of the first set in the model plane, from the x axis, anticlockwise positive; it also orients the anisotropy |
+| `jralpha2` | num | ° | `60` | Jointed rock: dip of the second set |
+| `jralpha3` | num | ° | `-60` | Jointed rock: dip of the third set |
+| `jrc2` | num | kN/m² | `10` | Jointed rock: cohesion of the second set, ≥ 0 |
+| `jrc3` | num | kN/m² | `10` | Jointed rock: cohesion of the third set, ≥ 0 |
+| `jrphi2` | num | ° | `30` | Jointed rock: friction angle of the second set, [0, 90) |
+| `jrphi3` | num | ° | `30` | Jointed rock: friction angle of the third set, [0, 90) |
+| `jrpsi2` | num | ° | `0` | Jointed rock: dilatancy angle of the second set, 0 ≤ ψ ≤ φ |
+| `jrpsi3` | num | ° | `0` | Jointed rock: dilatancy angle of the third set, 0 ≤ ψ ≤ φ |
+| `jrsigt2` | num | kN/m² | `0` | Jointed rock: tensile strength of the second set (the `tension_cutoff` switch applies to every set) |
+| `jrsigt3` | num | kN/m² | `0` | Jointed rock: tensile strength of the third set |
+| `jraniso` | bool | — | `false` | Jointed rock: transversely isotropic elasticity about the normal to the first set |
+| `jrE2` | num | kN/m² | `1e4` | Jointed rock (`jraniso`): Young's modulus normal to the first set |
+| `jrnu2` | num | — | `0.3` | Jointed rock (`jraniso`): Poisson's ratio between the plane of isotropy and its normal; 1 − ν1 − 2ν2²E1/E2 > 0 |
+| `jrG2` | num | kN/m² | `4e3` | Jointed rock (`jraniso`): shear modulus on planes normal to the first set |
 | `kx` | num | m/day | `1` | Horizontal permeability |
 | `ky` | num | m/day | `1` | Vertical permeability |
 | `ck` | num | — | `0` | Change of permeability with void ratio in a consolidation phase: log₁₀(k/k₀) = Δe/`ck`, Δe the change in void ratio since the initial state (`e_init`). `0` = constant permeability; written only when set. Of the order of the compression index |
@@ -313,7 +346,7 @@ way past, because a geometry with two sources of truth is a geometry that can di
 | Key | Type | Unit | Default | Meaning |
 |---|---|---|---|---|
 | `material` | int | — | `-1` | Index into `materials` (−1 = unassigned; the validator rejects it) |
-| `coarseness` | num | — | `1` | Local mesh density factor (1 = global, 0.5 = twice as fine) |
+| `coarseness` | num | — | `1` | Local mesh density factor: the element size there is the global size times it (1 = global, 0.5 = twice as fine); 0.03125 … 8 |
 | `x` | num[] | m | `[]` | Polygon vertex x-coordinates (implicitly closed; ≥ 3) |
 | `y` | num[] | m | `[]` | Polygon vertex y-coordinates |
 | `edge_bc` | int[] | — | `[]` | Per-edge deformation BC (edge j runs vertex j → j+1): 0 Free, 1 Normally fixed, 2 Horizontally fixed, 3 Vertically fixed, 4 Fully fixed. Empty or one per vertex |
@@ -348,12 +381,14 @@ A gap wider than the tolerance is real geometry and stays empty.
 | `iface_vt` | num | — | `0.1` | Virtual thickness factor of the interfaces: the derived stiffnesses divide by t_v = this factor × the model element size (`mesh.size`). Written only when it is not 0.1 |
 | `hinge1` | bool | — | `false` | **Plate only** — the end at the first point is HINGED: plates and walls that meet at a point are joined rigidly there (one rotation for all of them), and a hinged end keeps its own rotation, so the joint passes force and no moment from it. At a supported boundary where a plate's rotation is held (the standard fixities, a plane of symmetry) a hinged end is not held: it is a pin. Written only when set |
 | `hinge2` | bool | — | `false` | **Plate only** — the same for the end at the second point |
+| `rotk1` | num | kNm/rad/m | `0` | **Hinged plate end only** — a rotation spring on the end at the first point: a moment k (φ_end − φ_joint) between the end's own rotation and the joint's -- the rotation of a plate or wall that carries on through the point, or the ground where the end stands on a supported boundary and nothing carries on (`K2D-G018` where neither). 0 = a free hinge. Written only when set |
+| `rotk2` | num | kNm/rad/m | `0` | **Hinged plate end only** — the same for the end at the second point |
 | `conn` | int | — | `0` | **Embedded beam only** — how the connection point (the pile top: the end with the highest y, or for an exactly horizontal pile the lowest x) is attached. `0` hinged: the beam's top translations *are* the soil's there — the same displacement, with the rotation left free — the setting for a pile top that no other structure shares, and what makes a pile loadable at its head. `1` free: coupled to the soil through the skin springs only, which is the setting for a grout body, so a ground anchor does not shed axial force at the connection. The mesher carries the connection point as a node either way, so switching this changes the physics and not the mesh |
 | `flow_barrier` | int | — | `0` | Cross permeability in a groundwater calculation: 0 fully permeable (no effect on flow), 1 impermeable (the two sides get separate pore-pressure DOFs), 2 semi-permeable (a hydraulic resistance `hyd_res` across the line). Plates and interfaces only |
 | `hyd_res` | num | day | `0` | Hydraulic resistance d/k of a semi-permeable barrier: the head difference divided by the discharge per unit area of wall. Read by every groundwater flow -- steady (with or without a free surface), transient and the flow of a staged phase; above the water the screen conducts at the relative permeability of the soil it is drawn in, and where a staged phase has excavated one side, the water of the pit stands behind it at the phase's table |
 
 with `name` (default `"Element"`), `material` (index into the kind's material list, default `-1`)
-and `coarseness` (default `1`) as above. An Interface element takes its strength from the adjacent
+and `coarseness` (default `0.25`: a structure is meshed at a quarter of the element size; an anchor at its two ends) as above. An Interface element takes its strength from the adjacent
 soil (or `iface_material`), as that material is solved: c_i = R_inter c′ and tan φ_i = R_inter tan φ′,
 or c_i = R_inter s_u with φ_i = 0 beside an Undrained (B) or (C) Mohr-Coulomb material. A phase with a
 material-factored design approach (`design` 2 or 4) factors it as it factors that material. Its
@@ -369,7 +404,7 @@ material-factored design approach (`design` 2 or 4) factors it as it factors tha
 | `qy2` | num | kN/m | `0` | y-component at the end. Same reader-default note as `qy1` |
 
 with `kind` (0 Point at (x1, y1) in kN; 1 Distributed along (x1, y1)–(x2, y2) in kN/m, default
-`0`), `name` (default `"Load"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
+`0`), `name` (default `"Load"`), `x1`/`y1`/`x2`/`y2` and `coarseness` (default `0.25`) as above.
 
 #### Prescribed-displacement object (`disps[i]`)
 
@@ -388,7 +423,7 @@ rigid footing whose force is read from the reactions.
 | `set_uy` | bool | — | `true` | The vertical component is prescribed |
 | `uy` | num | m | `0` | Vertical displacement (when `set_uy`) |
 
-with `name` (default `"Displacement"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
+with `name` (default `"Displacement"`), `x1`/`y1`/`x2`/`y2` and `coarseness` (default `0.25`) as above.
 
 #### Hydraulic-condition object (`hydros[i]`)
 

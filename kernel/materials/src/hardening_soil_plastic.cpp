@@ -1,8 +1,11 @@
 #include <cstdlib>
 #include <string>
 #include <katai/materials/hardening_soil_plastic.hpp>
+#include <katai/materials/mohr_coulomb.hpp>   // apply_rankine_cap: the tension cut-off's own return
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -422,7 +425,16 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
     // plateau after almost no hardening, where they flipped between plateau and hardening and held
     // the equilibrium iteration at 1e-3.) Only the stress-free point itself needs guarding, where
     // q/q_a is 0/0: q_a is kept above its value at a thousandth of the floor.
-    const double qf_min = 2.0 * (law_cc + 1e-3 * plim * law_s) / (1.0 - law_s);
+    //
+    // AND ONLY WHERE IT IS 0/0: without cohesion. With c > 0 the strength at zero stress is
+    // 2 c cos(phi)/(1 - sin(phi)) and nothing divides by zero until the apex, -c cot(phi); the
+    // guard, read at sigma3 = p_limit/1000 regardless, was a kink in the flow there (q_a and its
+    // slope switched at sigma3 = 0.01 kPa) that no substep of a walk across it could resolve --
+    // measured on a point pulled to the tension cut-off with c = 10 kPa, the one part of its walk
+    // that crossed 0.01 kPa held R at 1.2e-5 at every refinement, and the walk to the ceiling.
+    // There it stands a hair above the apex, where the flow is on the failure branch anyway.
+    const double qf_min = law_cc > 0.0 ? 2.0e-9 * law_cc / (1.0 - law_s)
+                                       : 2.0 * (1e-3 * plim * law_s) / (1.0 - law_s);
     auto stiff_compute = [&](const Eigen::Vector3d& s) {
         Stiff k;
         k.s3raw = s.minCoeff();
@@ -457,7 +469,16 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
     };
     const Stiff k_n = stiff_at(sigma_n);   // the committed state, for the elastic default
     const bool cap_on = p.cap_beta > 0.0;
-    const double ev_n = cap_on ? p.cap_ev_from_pc(pp_n) : 0.0;
+    // THE TENSION CUT-OFF (HardeningSoilParams::sigma_t), in this compression-positive frame
+    // s_i >= -ten: three planes more for the same return -- the Rankine planes sigma_i - sigma_t <= 0
+    // with an associated flow rule and sharp corners per Koiter, as the Mohr-Coulomb return of this
+    // tree takes them (mohr_coulomb.hpp). Until 2026-10-29 the wrapper applied it after this return, and
+    // with c = 0 the capped state lay OUTSIDE the shear cone -- the minor stress cut to zero, the
+    // major not -- so the next increment started from an inadmissible state: measured on a staged
+    // excavation, 147 such points near the apex took 466 million substep evaluations of 537.
+    const bool ten_on = p.sigma_t < 1e299;
+    const double ten = ten_on ? p.sigma_t : 0.0;
+    double ev_n = cap_on ? p.cap_ev_from_pc(pp_n) : 0.0;
 
     // WHICH COMPONENT IS WHICH PRINCIPAL STRESS is decided by the stress being evaluated, every
     // time. The vector this integrator walks keeps the positions its caller gave it -- one per
@@ -490,8 +511,19 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
         const Order o = order_of(s);
         return s(o.a) + (delta - 1.0) * s(o.b) - delta * s(o.c);
     };
+    // THE CAP CLOSES THE COMPRESSIVE SIDE. It is the second yield surface of the model because the
+    // shear surfaces leave the elastic region open along the p axis for compaction (Schanz, Vermeer &
+    // Bonnier 1999); on the tensile side the region is closed by the Mohr-Coulomb cone and, where it
+    // is switched on, the tension cut-off. The ellipse written out is symmetric in p, and read as a
+    // yield surface at p <= 0 it made every stress in tension a cap state as soon as p_p was small:
+    // with p_p = 0 -- the ground surface, fresh fill -- a point pulled a ten-thousandth of a kPa into
+    // tension flowed on a "cap" there, its pair of evaluations disagreeing by the whole step at any
+    // substep size (measured on a strip footing on c = 5 kPa sand: 709 walks near the tip at
+    // 7 300 substeps each, 5.2 million of the run's 8.2 million, and a third more equilibrium
+    // iterations; 68 s -> 8 s without it). At p <= 0 it is no yield surface: inside, whatever q~.
     auto fcap = [&](const Eigen::Vector3d& s, double ppv) {
         const double qt = qtilde(s), pm = mean(s);
+        if (pm <= 0.0) return -(1.0 + ppv * ppv);
         return qt * qt / (alpha * alpha) + pm * pm - ppv * ppv;
     };
     // Where the stress sits relative to the corners of the hexagon. 0: a face (sigma1 > sigma2 >
@@ -551,6 +583,29 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
         return std::max((fbar(std::min(qq, ks.qf), ks) - gpv) / (1.0 + std::fabs(gpv)), excess);
     };
     auto pc_of = [&](double evv) { return cap_on ? p.cap_pc_from_ev(evv) : pp_n; };
+    // AN INADMISSIBLE START IS SEEDED, NOT RETURNED. A committed state whose hardening variables lag
+    // its own stress -- a cluster given this material in a later phase keeps its stress and starts
+    // with gamma_p = 0, a stress field entered by hand, a history seeded elsewhere -- lies outside
+    // its shear surface or its cap before any strain is applied. Walked from there, the first
+    // evaluation of a pair pulled the STRESS back to the stale surface and the second did not, by
+    // the same amount at every substep size: the error estimate never fell and every such call ran
+    // to the ceiling (measured: every call of the HSsmall tangent check, 2000 random states with
+    // gamma_p = 0, R 1e-2 at 10 000 substeps), and the stress it returned had moved with no strain.
+    // The hardening variables are raised to the stress instead, as the initial state is seeded
+    // (hs_seed_from_history: the shear hardening that puts the present stress on its surface, the
+    // cap at least the present cap measure): continuous in the state, and nothing for a state that
+    // is already inside.
+    {
+        const Stiff ks = stiff_at(sigma_n);
+        const double qn = sigma_n.maxCoeff() - sigma_n.minCoeff();
+        if (ks.qf > 0.0 && qn > 0.0) gamma_p_n = std::max(gamma_p_n, fbar(std::min(qn, ks.qf), ks));
+        const double pm = mean(sigma_n);
+        if (cap_on && pm > 0.0) {
+            const double qt = qtilde(sigma_n);
+            const double pc_req = std::sqrt(qt * qt / (alpha * alpha) + pm * pm);
+            if (pc_req > pp_n) { pp_n = pc_req; ev_n = p.cap_ev_from_pc(pp_n); }
+        }
+    }
     // The Mohr-Coulomb failure function of the plane (i, j), i the larger: f = s_i - s_j - q_f(s_j),
     // q_f(s) = (c cot phi + s) 2 sin phi/(1 - sin phi). Its gradient carries the dependence of the
     // strength on the smaller stress; the (1, 0, -1) this used to be written with does not, so
@@ -569,8 +624,10 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
     // gamma_p instead of -sin psi_m -- 27% short at psi_m = 5.5 degrees -- and a plastic strain
     // along the intermediate stress on every face, where the potential has none.
     struct Plane { Eigen::Vector3d n, m; };
+    // `floor_side` (16 above, 32 below, 0 as the stress has it): which side of the stiffness floor the
+    // gradient is read on, for a stress ON the floor (see the floor event in substep()).
     auto plane = [&](const Eigen::Vector3d& s, int i, int j, double spm, bool at_fail,
-                     const Stiff& k) {
+                     const Stiff& k, int floor_side = 0) {
         Plane pl;
         pl.n = Eigen::Vector3d::Zero();
         pl.n(i) = 0.5 * (1.0 - spm);
@@ -599,8 +656,9 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
                 // linear in sigma3; fbar = A - 2q/E_ur with A = (2/E_i) q/(1 - q/q_a). Below the
                 // floor the stiffness no longer moves with sigma3; q_a does, down to its guard.
                 const double sphi = std::sin(p.friction);
-                const double r = s3 > plim ? p.m * sphi / (p.cohesion * std::cos(p.friction) + s3 * sphi)
-                                           : 0.0;
+                const bool above = floor_side == 16 || (floor_side != 32 && s3 > plim);
+                const double r = above ? p.m * sphi / (p.cohesion * std::cos(p.friction) + s3 * sphi)
+                                       : 0.0;
                 const double dqa = k.qf > qf_min ? 2.0 * sphi / ((1.0 - sphi) * p.Rf) : 0.0;
                 const double w = 1.0 - qij / k.qa;
                 const double A = (2.0 / k.Ei) * qij / w;
@@ -630,15 +688,22 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
         bool as = false;       // shear active (after Koiter drops)
         bool ac = false;       // cap active
         bool at_fail = false;  // on the perfectly-plastic MC plateau
+        bool at = false;       // a tension cut-off plane active
         int corner = kFace;    // which part of the hexagon the step flowed on
+        int floor_side = 0;    // the side of the stiffness floor the step read (allow bits 16/32)
         // At a corner, the two principal DIRECTIONS whose stresses are equal (-1: on a face). The
         // corner TYPE only means something relative to the ordering it was found in; the pair is
         // what carries over to a state whose ordering has changed.
         int tie_i = -1, tie_j = -1;
     };
+    // `allow` (bit 0 the shear planes, bit 1 the cap, bit 2 a corner of them, bit 3 the tension
+    // cut-off) names what this step may activate; a step held to fewer is how the walk finds where
+    // the flow meets the rest. Bits 4 and 5 (16, 32) read the shear planes' gradient above or below
+    // the stiffness floor, for a step that starts on it.
     auto increment_core = [&](const Eigen::Vector3d& s_in, double gp_in, double ev_in,
-                              const Eigen::Vector3d& de_in) -> Inc {
+                              const Eigen::Vector3d& de_in, int allow = 15) -> Inc {
         Inc r;
+        r.floor_side = allow & 48;
         const Stiff k = stiff_at(s_in);   // the stiffness and strength THIS substep starts from
         const Eigen::Matrix3d& De = k.De;
         r.dsig = De * de_in;
@@ -647,9 +712,10 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
         const Eigen::Vector3d sig_tr = s_in + De * de_in;
         // A trial at or past the failure deviator is a shear trial, whatever the hyperbola says:
         // past q_a it changes sign, and a trial that far out used to be read as inside.
-        const bool as0 = fshear_at(sig_tr, gp_in) > 1e-12;
-        const bool ac0 = cap_on && fcap(sig_tr, pp) > 1e-10 * (1.0 + pp * pp);
-        if (!as0 && !ac0) return r;
+        const bool as0 = (allow & 1) && fshear_at(sig_tr, gp_in) > 1e-12;
+        const bool ac0 = (allow & 2) && cap_on && fcap(sig_tr, pp) > 1e-10 * (1.0 + pp * pp);
+        const bool at0 = (allow & 8) && ten_on && -sig_tr.minCoeff() - ten > 0.0;
+        if (!as0 && !ac0 && !at0) return r;
         r.plastic = true;
 
         // Equal values carry no direction, so a tie is broken by the elastic trial: the stress an
@@ -682,10 +748,30 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
         // Solve the active set for one corner hypothesis; returns false if nothing is active.
         struct Sol {
             Eigen::Vector3d dsig; double dgp = 0.0, dev = 0.0;
-            Eigen::Matrix3d tangent; bool as = false, ac = false;
+            Eigen::Matrix3d tangent; bool as = false, ac = false, at = false;
+            bool face = false;   // a corner hypothesis solved as its face (the cut-off holds the edge)
         };
         auto solve = [&](int corner, Sol& sol) {
             bool as = as0, ac = ac0;
+            // The cut-off planes the trial violates, one per principal direction. All three: the
+            // stress is the cut-off's hydrostatic apex, which holds no deviator, so the shear planes
+            // and the cap have nothing to add (and through that point they would make the system
+            // singular).
+            std::array<char, 3> ton{};
+            for (int i = 0; i < 3; ++i) ton[i] = at0 && -sig_tr(i) - ten > 0.0;
+            // A COMPRESSION CORNER WHOSE TWO SMALLER STRESSES ARE BOTH ON THE CUT-OFF is held there by
+            // the cut-off: the second shear face and the second cap face only restate it, and with
+            // them the system is five surfaces in a three-dimensional stress space -- singular. The
+            // fall-back for a singular system then set the shear planes and the cap aside, and a
+            // major stress still hardening on both responded elastically instead: the first
+            // evaluation of a pair hardened, the second (from the same edge, a hair further) did not,
+            // by the whole of the step at every step size (measured: a strip load on c = 1 kPa sand,
+            // walks from rest at the ceiling of 10 000 substeps, R 1e-5 on 0.2 kPa states). It is
+            // solved as the face, which with the two cut-off planes keeps the edge, and it is the face
+            // the step reports having flowed on (Sol::face): the pair's second evaluation is held to
+            // what the first one did.
+            const bool pinned = corner == kCompression && ton[o.b] && ton[o.c];
+            sol.face = pinned;
             // The planes a corner hypothesis brings: the face (a, c), and at a corner the second
             // face meeting it.
             // At most two planes and the cap: fixed-capacity storage on the stack. This runs
@@ -695,7 +781,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
             std::array<double, 2> fp{};   // each plane's yield function where the substep starts
             int nplanes = 0;
             auto add = [&](int i, int j) {
-                planes[nplanes] = plane(s_in, i, j, spm, at_fail, k);
+                planes[nplanes] = plane(s_in, i, j, spm, at_fail, k, r.floor_side);
                 const double qij = s_in(i) - s_in(j);
                 // The same failure strength as the plateau test, the drift correction and the
                 // Mohr-Coulomb bound use (Stiff::qf, the minor stress itself). They must agree: when
@@ -708,7 +794,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
             add(o.a, o.c);
             if (corner == kCompression) add(o.a, o.b);
             if (corner == kExtension) add(o.b, o.c);
-            std::array<char, 2> on{1, 1};
+            std::array<char, 2> on{1, (char)(pinned ? 0 : 1)};
             // THE CAP AT A CORNER IS TWO FACES TOO. q~ is piecewise linear in the ordered
             // principals, so the cap has an edge wherever two of them are equal, exactly as the
             // shear hexagon does, and it is treated the same way: each face with its own gradient
@@ -739,12 +825,13 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
                 (cap_on && corner != kFace) ? cap_grad(s_in, o, corner) : nc;
             const double fc_in = cap_on ? fcap_o(o) : 0.0;
             const double fc_b = (cap_on && corner != kFace) ? fcap_o(o_b) : 0.0;
-            bool ac_b = ac && corner != kFace;
+            bool ac_b = ac && corner != kFace && !pinned;
+            if (ton[0] && ton[1] && ton[2]) { as = false; ac = ac_b = false; }
             // Koiter: a surface with a negative multiplier is dropped and the rest re-solved.
-            for (int pass = 0; pass < 8; ++pass) {
-                std::array<Eigen::Vector3d, 4> ns, ms;
-                std::array<double, 4> f0s{};
-                std::array<int, 4> kind{};   // 0 = shear plane, 1 = cap
+            for (int pass = 0; pass < 12; ++pass) {
+                std::array<Eigen::Vector3d, 7> ns, ms;
+                std::array<double, 7> f0s{};
+                std::array<int, 7> kind{};   // 0 = shear plane, 1 = cap, 2 = tension cut-off
                 int na = 0;
                 if (as)
                     for (int i = 0; i < nplanes; ++i)
@@ -763,9 +850,14 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
                     if (ac) { ns[na] = nc; ms[na] = nc; f0s[na] = fc_in; kind[na] = 1; ++na; }
                     if (ac_b) { ns[na] = nc_b; ms[na] = nc_b; f0s[na] = fc_b; kind[na] = 1; ++na; }
                 }
-                if (na == 0) { sol.dsig = De * de_in; sol.tangent = De; sol.as = sol.ac = false; return false; }
-                using SmallMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 4, 4>;
-                using SmallVec = Eigen::Matrix<double, Eigen::Dynamic, 1, 0, 4, 1>;
+                for (int i = 0; i < 3; ++i)
+                    if (ton[i]) {
+                        ns[na] = -Eigen::Vector3d::Unit(i); ms[na] = ns[na];
+                        f0s[na] = -s_in(i) - ten; kind[na] = 2; ++na;
+                    }
+                if (na == 0) { sol.dsig = De * de_in; sol.tangent = De; sol.as = sol.ac = sol.at = false; return false; }
+                using SmallMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 7, 7>;
+                using SmallVec = Eigen::Matrix<double, Eigen::Dynamic, 1, 0, 7, 1>;
                 SmallMat A(na, na);
                 SmallVec b(na);
                 for (int i = 0; i < na; ++i) {
@@ -785,6 +877,13 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
                     }
                 }
                 const Eigen::FullPivLU<SmallMat> lu(A);
+                // More surfaces than the stress space has room for, through one point -- a cut-off
+                // plane through the shear cone's own apex (c = 0, sigma_t = 0): the cut-off is the
+                // tighter set there, so it is kept and the cone and cap are set aside.
+                if (lu.rank() < na && (ton[0] || ton[1] || ton[2]) && (as || ac || ac_b)) {
+                    as = false; ac = ac_b = false;
+                    continue;
+                }
                 const SmallVec dl = lu.solve(b);
                 bool dropped = false;
                 int idx = 0;
@@ -798,6 +897,8 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
                     if (ac) { if (dl(idx) < 0.0) { ac = false; dropped = true; } ++idx; }
                     if (ac_b) { if (dl(idx) < 0.0) { ac_b = false; dropped = true; } ++idx; }
                 }
+                for (int i = 0; i < 3; ++i)
+                    if (ton[i]) { if (dl(idx) < 0.0) { ton[i] = 0; dropped = true; } ++idx; }
                 if (dropped) {
                     bool any = false;
                     for (int i = 0; i < nplanes; ++i) any = any || on[i];
@@ -806,13 +907,13 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
                 }
                 Eigen::Vector3d ep = Eigen::Vector3d::Zero();
                 double dgp = 0.0, dev = 0.0;
-                Eigen::Matrix<double, 3, Eigen::Dynamic, 0, 3, 4> N(3, na), M(3, na);
+                Eigen::Matrix<double, 3, Eigen::Dynamic, 0, 3, 7> N(3, na), M(3, na);
                 for (int i = 0; i < na; ++i) {
                     ep += dl(i) * ns[i];
                     N.col(i) = ns[i];
                     M.col(i) = ms[i];
                     if (kind[i] == 0) dgp += H * dl(i);
-                    else dev += hi * dl(i) * 2.0 * pmean;
+                    else if (kind[i] == 1) dev += hi * dl(i) * 2.0 * pmean;   // the cut-off hardens nothing
                 }
                 sol.dsig = De * (de_in - ep);
                 sol.dgp = dgp;
@@ -820,9 +921,10 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
                 sol.tangent = De - De * N * lu.solve(M.transpose() * De);
                 sol.as = as;
                 sol.ac = ac || ac_b;
+                sol.at = ton[0] || ton[1] || ton[2];
                 return true;
             }
-            sol.dsig = De * de_in; sol.tangent = De; sol.as = sol.ac = false;
+            sol.dsig = De * de_in; sol.tangent = De; sol.as = sol.ac = sol.at = false;
             return false;
         };
 
@@ -841,7 +943,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
         Sol sol;
         int corner = kFace;
         solve(kFace, sol);
-        {
+        if (allow & 4) {
             const Eigen::Vector3d s1 = s_in + sol.dsig;
             const bool past_c = s1(o.c) > s1(o.b), past_b = s1(o.b) > s1(o.a);
             if (past_c && !past_b) {
@@ -871,35 +973,36 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
         r.tangent = sol.tangent;
         r.as = sol.as;
         r.ac = sol.ac;
+        r.at = sol.at;
+        if (sol.face) corner = kFace;
         r.corner = corner;
         if (corner == kCompression) { r.tie_i = o.b; r.tie_j = o.c; }
         if (corner == kExtension) { r.tie_i = o.a; r.tie_j = o.b; }
-        r.plastic = sol.as || sol.ac;
+        r.plastic = sol.as || sol.ac || sol.at;
         return r;
     };
 
-    // A substep that STARTS INSIDE the yield surfaces and whose elastic trial ends outside is
-    // split where it meets them (Sloan, Abbo & Sheng 2001): the part before the surface is
-    // elastic, only the rest flows. Without the split the multiplier is computed from the whole
-    // strain increment as if the start were on the surface, so the response jumps -- from
-    // elastic to a finite plastic step -- where the trial crosses the surface; a Newton iteration
-    // whose points sit there (every point of a column that the cap correction left just inside
-    // its cap) then flips points between the two answers and stalls.
-    auto increment = [&](const Eigen::Vector3d& s_in, double gp_in, double ev_in,
-                         const Eigen::Vector3d& de_in) -> Inc {
+    // WHERE THE ELASTIC TRIAL OF A STEP MEETS THE SURFACES: the fraction alpha of the strain
+    // increment that is elastic, for a step that STARTS INSIDE both surfaces and whose elastic trial
+    // ends outside one of them (Sloan, Abbo & Sheng 2001, Sec. 3.1; Illinois regula falsi, of the
+    // same family as their Pegasus scheme, on the larger of the two surfaces each in its own units
+    // -- continuous in the stress, zero where the path first meets either one). -1 when the step
+    // does not cross.
+    // `met`, when given, is told which surface the trial meets first (1 the shear planes, 2 the cap,
+    // 3 the tension cut-off).
+    auto elastic_fraction = [&](const Eigen::Vector3d& s_in, double gp_in, double ev_in,
+                                const Eigen::Vector3d& de_in, int* met = nullptr) -> double {
         const Stiff k = stiff_at(s_in);
         const double pp = pc_of(ev_in);
-        // The larger of the two surfaces, each scaled to its own units: continuous in the stress,
-        // and zero where the path first meets either one.
         auto f_at = [&](const Eigen::Vector3d& s) {
             const double fs = fshear_at(s, gp_in);
             const double fc = cap_on ? fcap(s, pp) / (1.0 + pp * pp) : -1.0;
-            return std::max(fs, fc);
+            const double ft = ten_on ? (-s.minCoeff() - ten) / pr : -1.0;
+            return std::max(std::max(fs, fc), ft);
         };
         const Eigen::Vector3d dse = k.De * de_in;
         const double f0 = f_at(s_in), f1 = f_at(s_in + dse);
-        if (!(f0 < 0.0 && f1 > 0.0)) return increment_core(s_in, gp_in, ev_in, de_in);
-        // Illinois regula falsi on the elastic fraction.
+        if (!(f0 < 0.0 && f1 > 0.0)) return -1.0;
         double a0 = 0.0, a1 = 1.0, g0 = f0, g1 = f1, alpha = 0.0;
         for (int it = 0; it < 60; ++it) {
             alpha = a1 - g1 * (a1 - a0) / (g1 - g0);
@@ -908,9 +1011,43 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
             if ((ga > 0.0) == (g1 > 0.0)) { a1 = alpha; g1 = ga; g0 *= 0.5; }
             else { a0 = alpha; g0 = ga; g1 *= 0.5; }
         }
-        Inc r = increment_core(s_in + alpha * dse, gp_in, ev_in, (1.0 - alpha) * de_in);
+        if (met) {
+            const Eigen::Vector3d sa = s_in + alpha * dse;
+            const double fc = cap_on ? fcap(sa, pp) / (1.0 + pp * pp) : -1.0;
+            const double ft = ten_on ? (-sa.minCoeff() - ten) / pr : -1.0;
+            const double fs = fshear_at(sa, gp_in);
+            *met = ft >= fs && ft >= fc ? 3 : (fs >= fc ? 1 : 2);
+        }
+        return alpha;
+    };
+    // One evaluation of a step that may cross: the part before the surface is elastic, only the
+    // rest flows. Without the split the multiplier is computed from the whole strain increment as
+    // if the start were on the surface, so the response jumps -- from elastic to a finite plastic
+    // step -- where the trial crosses the surface; a Newton iteration whose points sit there (every
+    // point of a column that the cap correction left just inside its cap) then flips points
+    // between the two answers and stalls. The walks below split their SUBSTEPS there as well (see
+    // substep()), so that this inner split only meets what is left of a crossing.
+    auto increment = [&](const Eigen::Vector3d& s_in, double gp_in, double ev_in,
+                         const Eigen::Vector3d& de_in, int allow = 15) -> Inc {
+        const double alpha = elastic_fraction(s_in, gp_in, ev_in, de_in);
+        if (alpha < 0.0) return increment_core(s_in, gp_in, ev_in, de_in, allow);
+        const Eigen::Vector3d dse = stiff_at(s_in).De * de_in;
+        Inc r = increment_core(s_in + alpha * dse, gp_in, ev_in, (1.0 - alpha) * de_in, allow);
         r.dsig += alpha * dse;
         return r;
+    };
+    // THE SECOND EVALUATION OF A PAIR FLOWS ON WHAT THE FIRST DID. In Sloan's scheme it is the
+    // elastoplastic matrix AT the Euler end point times the substep's strain (his algorithm step 8)
+    // -- a rate, not a second finite step with a crossing of its own. Taken as a finite step from
+    // the end point, it looked a whole substep further ahead and switched on a surface, or the
+    // corner, that the substep never reached: a substep ending just inside the cap was elastic in
+    // its first evaluation and plastic in its second (measured: R 3.7e-5 at 400 substeps, rising
+    // as they shrank). Every crossing inside a substep is located before its pair (substep()), so
+    // the second evaluation is held to the surfaces, and the corner, the first one found active;
+    // it may still drop one (Koiter), as unloading must.
+    auto activated = [&](const Inc& k) {
+        return (k.as ? 1 : 0) | (k.ac ? 2 : 0) | (k.plastic && k.corner != kFace ? 4 : 0) | (k.at ? 8 : 0) |
+               k.floor_side;
     };
 
     // --- DRIFT CORRECTION, applied to an ACCEPTED substep ------------------------------------
@@ -935,7 +1072,14 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
         return (int)kFace;
     };
     auto correct_drift = [&](Eigen::Vector3d& s, double& gp_io, double& ev_io,
-                             bool as_act, bool ac_act, bool at_fail, int tie_i, int tie_j) -> bool {
+                             bool as_act, bool ac_act, bool at_fail, int tie_i, int tie_j,
+                             bool as_both = false, bool ac_both = false) -> bool {
+        // BOTH WAYS for a surface the substep flowed on throughout (Sloan, Abbo & Sheng 2001,
+        // Sec. 3.3: the correction is made when |f| > FTOL). The pair's mean leaves the stress off the
+        // surface by O(R) either way; left INSIDE, the next substep read the surface as one not yet
+        // met and located it as an event every substep of a path that stays on it (a normally
+        // consolidated load: 2.3 million such events in a staged excavation). Only where both
+        // evaluations flowed on it -- a substep that turned to unloading inside is left inside.
         for (int it = 0; it < 5; ++it) {
             const Stiff k = stiff_at(s);   // the correction moves sigma3, so it moves these too
             const Order o = order_of(s);
@@ -946,7 +1090,8 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
             const double fs = fail_here ? (qd - k.qf) : (fbar(qd, k) - gp_io);
             const double fcp = cap_on ? fcap(s, ppc) : -1.0;
             bool corr = false;
-            if (as_act && fs > 1e-9 * (1.0 + std::fabs(gp_io) + std::fabs(k.qf))) {
+            const double tol_s = 1e-9 * (1.0 + std::fabs(gp_io) + std::fabs(k.qf));
+            if (as_act && (fs > tol_s || (as_both && fs < -tol_s))) {
                 const double spm = spm_of(qd, k);
                 const Plane main = plane(s, o.a, o.c, spm, fail_here, k);
                 Eigen::Vector3d n = main.n;
@@ -965,7 +1110,8 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
             // state that had ended inside the cap back OUT onto it -- at constant pp, along a
             // gradient whose volumetric part is always compressive -- and that raised the mean
             // effective stress of an undrained psi = 0 path, where it cannot rise.
-            if (ac_act && fcp > 1e-8 * (1.0 + ppc * ppc)) {
+            const double tol_c = 1e-8 * (1.0 + ppc * ppc);
+            if (ac_act && (fcp > tol_c || (ac_both && fcp < -tol_c))) {
                 const Eigen::Vector3d g = cap_grad(s, o, corner);
                 const Eigen::Vector3d Deg = k.De * g;
                 const double pm = mean(s);
@@ -976,6 +1122,18 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
                 corr = true;
             }
             if (!corr) break;
+        }
+        // THE TENSION CUT-OFF, by its own associated return (the Rankine planes, with the elastic
+        // constants at this state): whatever the integration left past sigma_t is brought back to
+        // it, and the Mohr-Coulomb bound below then reads the minor stress the cut-off allows.
+        if (ten_on && -s.minCoeff() - ten > 1e-12 * (1.0 + std::fabs(ten) + s.cwiseAbs().maxCoeff())) {
+            const double E = stiff_at(s).Eur * p.elastic_scale;
+            const double lam = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu)), mu = E / (2.0 * (1.0 + nu));
+            int perm[3] = {0, 1, 2};
+            std::sort(perm, perm + 3, [&](int a, int b) { return s(a) < s(b); });   // most tensile first
+            double r[3] = {-s(perm[0]), -s(perm[1]), -s(perm[2])};                 // tension positive, descending
+            apply_rankine_cap(r, ten, lam, mu, nullptr);
+            for (int i = 0; i < 3; ++i) s(perm[i]) = -r[i];
         }
         // MC failure bound (shear): q <= q_f, the last line. With the failure gradient above the
         // drift loop lands on the surface itself; this only removes what is left of the
@@ -1014,8 +1172,6 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
         return false;
     };
 
-    Eigen::Vector3d sig = sigma_n;
-    double gp = gamma_p_n, ev = ev_n;
     bool any_plastic = false;
     // ON THE TIP AND NEAR IT. A stress-free point that has never been loaded -- freshly placed
     // fill -- stands at the tip of its cap: p = p_p = 0, where the cap's gradient is zero. An
@@ -1026,103 +1182,12 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
     // 15-noded elements: every stress point of the fill at the ceiling of 200 substeps, the
     // balance held at 9e-3 of its scale for sixty iterations of seven seconds each, the step
     // halved, and the same again. Three cases are told apart below.
-    // NEAR THE TIP: a point that has left the tip by half a kPa and is asked for an
-    // increment of ten is in the same position: its surfaces grow many times over within the
-    // increment, and equal substeps run to the ceiling. Whenever the elastic trial of the
-    // increment is more than four times the size of the state (the larger of its stress and its
-    // cap pressure), each substep is a tenth of what the state then amounts to -- its own size
-    // counted as distance already covered.
+    // NEAR THE TIP: a point that has left the tip by half a kPa and is asked for an increment of
+    // ten is in the same position: its surfaces grow many times over within the increment. Both
+    // are walked in graded substeps (below) whenever the elastic trial is more than four times the
+    // size of the state (the larger of its stress and its cap pressure).
     Eigen::Vector3d s0 = sigma_n, dstrain_w = dstrain;
     double gp0 = gamma_p_n, ev0 = ev_n;
-    bool from_tip = false;
-    {
-        const double tiny = 1e-9 * pr;
-        const Eigen::Vector3d ds_tr = k_n.De * dstrain;
-        const double size0 = std::max(pp_n, sigma_n.cwiseAbs().maxCoeff());
-        const double step = ds_tr.cwiseAbs().maxCoeff();
-        // On the tip: no stress and no cap pressure (whatever the shear hardening stands at).
-        const bool on_tip = size0 <= tiny;
-        // PUSHED FROM THE TIP ITSELF, the walk is the uniform one at its full count, with no
-        // measurement of the error to choose it: from the tip every size of step reads the same
-        // error, and what the uniform walk does there is find the self-similar path of primary
-        // loading within its first few substeps, each of which is as large as everything before
-        // it. A walk in small proportional substeps keeps the direction of its first one instead:
-        // tried, it left an oedometer path from rest off that path, and the deviation from the
-        // closed form, which is the same at every stress level on it (-0.07%), spread by 0.74
-        // points (KV-NUM-009).
-        if (cap_on && step > 0.0 && on_tip && mean(ds_tr) > 0.0) from_tip = true;
-        if (cap_on && step > 0.0 && !from_tip && (on_tip || size0 < 0.25 * step)) {
-            // PULLED, IT STAYS ON THE TIP. With p_p = 0 the cap admits the stress-free state and
-            // nothing else, and it hardens only by compaction: an increment whose elastic trial
-            // has a tensile mean stress compacts nothing, so the point stays where it is and
-            // its stress does not depend on the strain. (The walk gave the same answer to five
-            // figures of a kPa, at the ceiling of substeps every time.)
-            if (on_tip && mean(ds_tr) <= 0.0) {
-                HsIntegrated tip;
-                tip.stress = sigma_n;
-                tip.gamma_p = gamma_p_n;
-                tip.pp = pp_n;
-                tip.tangent.setZero();
-                tip.plastic = true;
-                tip.nsub = 0;
-                tip.saturated = 0;
-                if (plan_out) plan_out->clear();
-                return tip;
-            }
-            constexpr double kLead = 1.0e-3;
-            // A fiftieth of the distance covered per substep. At a tenth the walk was within 0.7%
-            // of the stress (measured as a spread of 0.74 points between stress levels on an
-            // oedometer path from rest, KV-NUM-009, where the scheme changes with the level).
-            constexpr double kGrow = 0.02;
-            Eigen::Vector3d s_lead = sigma_n;
-            double gp_l = gamma_p_n, ev_l = ev_n;
-            double done = 0.0;
-            // The state, as distance walked. Never nothing: a substep is a tenth of this plus
-            // what has been walked, and from nothing it would never start.
-            const double covered = std::max(size0 / step, kLead);
-            Eigen::Matrix3d lead_tangent = k_n.De;
-            int walked = 0;
-            bool lead_ok = s_lead.allFinite() && std::isfinite(gp_l) && std::isfinite(ev_l);
-            while (lead_ok && done < 1.0 - 1e-12 && walked < 4000) {
-                const double dT = std::min(kGrow * (covered + done), 1.0 - done);
-                const Eigen::Vector3d de = dT * dstrain;
-                const Inc k1 = increment(s_lead, gp_l, ev_l, de);
-                const Inc k2 = increment(s_lead + k1.dsig, gp_l + k1.dgp, ev_l + k1.dev, de);
-                s_lead += 0.5 * (k1.dsig + k2.dsig);
-                gp_l += 0.5 * (k1.dgp + k2.dgp);
-                ev_l += 0.5 * (k1.dev + k2.dev);
-                if (k1.plastic || k2.plastic) {
-                    any_plastic = true;
-                    lead_tangent = k2.plastic ? k2.tangent : k1.tangent;
-                    if (correct_drift(s_lead, gp_l, ev_l, k1.as || k2.as, k1.ac || k2.ac,
-                                      k1.at_fail || k2.at_fail, k2.plastic ? k2.tie_i : k1.tie_i,
-                                      k2.plastic ? k2.tie_j : k1.tie_j))
-                        lead_tangent.setZero();
-                } else {
-                    lead_tangent = stiff_at(s_lead).De;
-                }
-                done += dT;
-                ++walked;
-                lead_ok = s_lead.allFinite() && std::isfinite(gp_l) && std::isfinite(ev_l);
-            }
-            if (lead_ok && done >= 1.0 - 1e-12) {
-                HsIntegrated led;
-                led.stress = s_lead;
-                led.gamma_p = gp_l;
-                led.pp = p.cap_pc_from_ev(ev_l);
-                led.tangent = lead_tangent;
-                led.plastic = any_plastic;
-                led.nsub = walked;
-                led.saturated = 0;
-                if (plan_out) plan_out->clear();
-                return led;
-            }
-            any_plastic = false;   // the walk failed: the increment is integrated the usual way
-        }
-    }
-    // The committed state's elastic matrix, until a plastic substep replaces it with its own
-    // continuum tangent (an elastic increment returns this one).
-    Eigen::Matrix3d tangent = k_n.De;
 
     // The environment override is for a RUN's tolerance. The calibration integrates at its own
     // (kHsCalibrationTol), which the override must not reach: alpha and beta are properties of the
@@ -1131,64 +1196,469 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
     const double env_tol = stol == kHsCalibrationTol ? 0.0 : hs_env_substep_tol();
     const double tol = env_tol > 0.0 ? env_tol
                                      : (stol > 0.0 ? stol : hs_default_substep_tol());
-    // Ceiling on the measured subdivision. It is a GUARD, not a policy: an increment that asks
-    // for more than this is an increment the load stepping should have cut, and the counter below
-    // records every time it fires so a saturated integration is never silently reported as one
-    // that met its tolerance.
+    // Ceiling on the subdivision. A GUARD, the place of Sloan's minimum step dT_min, not a policy:
+    // the tolerance decides the count, and a walk the ceiling stopped short of it is reported.
     const int kMaxSubsteps = hs_max_substeps();
+    // The relative local error of one substep (Sloan, Abbo & Sheng 2001, Eqn 24, the stress part;
+    // see WHAT THE TOLERANCE MEANS below). The denominator has a FLOOR: at a point that carries next
+    // to nothing -- fresh fill, the ground surface -- a relative tolerance is an absolute one of
+    // nothing, and resolving stresses of a thousandth of a kPa asked for the ceiling. p_ref / 20
+    // ties it to the stiffness law's own stress level (measured: a fill on a soft base 141 s ->
+    // 97 s at p_ref / 200 -> p_ref / 20, same answer).
+    auto rel_error = [&](const Eigen::Vector3d& d1, const Eigen::Vector3d& d2, const Eigen::Vector3d& s_hat) {
+        return 0.5 * (d2 - d1).norm() / std::max(s_hat.norm(), pr / 20.0);
+    };
+    // A walk is refined until its largest R is under 0.81 STOL -- Sloan's 0.9 on the step (his
+    // Eqn 27), squared onto R -- by at most this many walks.
+    constexpr double kAim = 0.81;
+    constexpr int kMaxWalks = 8;
+    // ONE SUBSTEP OF A WALK, split where its elastic trial meets a surface -- Sloan's order
+    // (Sloan, Abbo & Sheng 2001, algorithm steps 3-5): the intersection first, the elastic part by
+    // the elastic law alone, and the modified-Euler pair only over the plastic rest, from the
+    // surface. With the split inside ONE evaluation instead, the pair straddled the kink: the
+    // first evaluation was elastic up to the surface and the second, from its end on the surface,
+    // plastic throughout, so the two differed by (D_ep - D_e) times the elastic strain to the
+    // surface -- an amount that does not shrink with the substep -- and their mean left the stress
+    // inside by half that distance, which the next substep halved again. Measured on a staged
+    // excavation in sand: the largest R of a walk stayed at 2.05e-5 from 50 to 400 substeps,
+    // halving substep by substep, and walks were refined to thousands of substeps for it.
+    // The elastic part uses the stress-dependent E_ur at both ends (the elastic law is nonlinear
+    // here) and its own R is measured with the rest. `whole`, when given, is the pair already
+    // evaluated over this substep from this state, used if no split is needed.
+    auto substep = [&](Eigen::Vector3d& sg, double& g, double& e, const Eigen::Vector3d& de,
+                       Eigen::Matrix3d& tang, bool& plastic, double& r_max, bool elastic_tangent_at_end,
+                       const Inc* whole1, const Inc* whole2) {
+        Eigen::Vector3d de_p = de;
+        int met = 0;   // the surface the elastic part ends on, when there is one
+        const double alpha = elastic_fraction(sg, g, e, de, &met);
+        if (alpha >= 0.0) {
+            const Eigen::Vector3d de_e = alpha * de;
+            const Eigen::Vector3d d1 = stiff_at(sg).De * de_e;
+            const Eigen::Vector3d d2 = stiff_at(sg + d1).De * de_e;
+            sg += 0.5 * (d1 + d2);
+            r_max = std::max(r_max, rel_error(d1, d2, sg));
+            de_p = (1.0 - alpha) * de;
+            whole1 = whole2 = nullptr;
+        }
+        // THE EVENTS OF THE PLASTIC PART. On the surfaces it has met, the flow can still change what
+        // it flows on within the substep: meet the OTHER surface -- the cap and the shear planes
+        // meet near the normally consolidated state, where much of a loaded ground lies -- or close
+        // two principal stresses onto an EDGE of the hexagon, from where it flows on both faces (a
+        // K0 state loaded in compression closes on its compression corner). Taken inside one
+        // evaluation, each of these is the kink again: the first evaluation of the pair on the old
+        // set, the second from its end on the new, the two apart by an amount that does not shrink
+        // with the substep, and their mean leaving the stress short of the new set by half of it.
+        // Measured on the staged excavation: walks refined to thousands of substeps at R constant
+        // from 3 to 412 of them -- inside both surfaces by 1e-6 .. 1e-3 of their scale, or two
+        // stresses 0.018 kPa from equal.
+        //
+        // So the plastic part is walked from event to event, as the elastic part is ended at the
+        // surface: from the set active where the piece starts (the surfaces it is on, the edge if
+        // it is on one), the flow HELD to that set is followed over the rest of the substep; where
+        // it would meet another surface, or make two stresses equal, the fraction beta of the strain
+        // at which it does is found (Illinois regula falsi, as for the surface), the earliest one
+        // is taken, the pair is taken over that piece held to the set, and the rest starts again
+        // from the new state. This is Sloan's intersection (Sloan, Abbo & Sheng 2001, Sec. 3.1)
+        // carried to the other events of a model with two surfaces and corners; his models have one
+        // smooth surface.
+        // The held step over the rest of the substep, when the loop ends on it without an event: it
+        // IS the first evaluation of the final pair, and the better one -- the unrestricted step would
+        // switch on, through its linearised consistency, a surface the flow does not reach.
+        Inc k1_held;
+        bool k1_ready = false;
+        for (int piece = 0; piece < 4 && !whole1; ++piece) {
+            const double pp0 = pc_of(e);
+            const double fs0 = fshear_at(sg, g);
+            const double fc0 = cap_on ? fcap(sg, pp0) / (1.0 + pp0 * pp0) : -1.0;
+            int held = 0;
+            // ON a surface, or an edge, is a start close enough that the kink it can open is under a
+            // tenth of the tolerance: a start at stress distance d from where a set changes opens a
+            // kink of at most R = d / (2 |sigma|) (the elastic strain to it, through D_e - D_ep), so
+            // d <= 0.2 STOL |sigma| is on it. The distance is read along the substep's elastic trial,
+            // by the secant of the surface's value. Read stricter (to the drift correction's own
+            // 1e-9), the walk on both surfaces of an oedometer -- which the pair leaves inside one or
+            // the other by O(R) every substep, and the correction pulls back only from outside --
+            // opened an event piece in half of 1.4 million substeps, at 2 million root evaluations.
+            const double scale = std::max(sg.norm(), pr / 20.0);
+            const double near = 0.2 * tol * scale;
+            const Eigen::Vector3d ds_e = stiff_at(sg).De * de_p;
+            auto distance = [&](double v0, double v1) {
+                if (!(v0 < 0.0)) return 0.0;
+                if (!(v1 > v0)) return 1e300;   // moving away from it
+                return -v0 / (v1 - v0) * ds_e.norm();
+            };
+            const double fs1 = fshear_at(sg + ds_e, g);
+            const double fc1 = cap_on ? fcap(sg + ds_e, pp0) / (1.0 + pp0 * pp0) : -1.0;
+            const double ft0 = ten_on ? -sg.minCoeff() - ten : -1e300;
+            const double ft1 = ten_on ? -(sg + ds_e).minCoeff() - ten : -1e300;
+            if (distance(fs0, fs1) <= near || met == 1) held |= 1;
+            if ((cap_on && distance(fc0, fc1) <= near) || met == 2) held |= 2;
+            if ((ten_on && distance(ft0, ft1) <= near) || met == 3) held |= 8;
+            // The cut-off is THREE planes, one per principal direction, and the ones the stress is
+            // on are its smallest values: nt_on of them. The next one to meet it is an event of its
+            // own (below) -- held to "the cut-off", the step would switch it on unannounced.
+            int nt_on = 0;
+            if (held & 8) {
+                for (int i = 0; i < 3; ++i)
+                    if (distance(-sg(i) - ten, -(sg + ds_e)(i) - ten) <= near) ++nt_on;
+                nt_on = std::max(nt_on, 1);
+            }
+            met = 0;
+            if (!held) break;   // inside both: nothing to flow on, and no crossing (see above)
+            const Order oc = order_of(sg);
+            auto gaps = [&](const Eigen::Vector3d& x) {
+                return Eigen::Vector2d(x(oc.b) - x(oc.c), x(oc.a) - x(oc.b));
+            };
+            const Eigen::Vector2d gap0 = gaps(sg);
+            if (gap0(0) <= near || gap0(1) <= near) held |= 4;
+            // ON THE STIFFNESS FLOOR (within the same distance): the gradient is read on the side the
+            // flow is going to, in both evaluations, as a start on a surface flows on it.
+            const double s3_0 = sg.minCoeff();
+            if ((held & 1) && std::fabs(s3_0 - plim) <= near) {
+                const Inc probe = increment_core(sg, g, e, de_p, held);
+                held |= (sg + probe.dsig).minCoeff() > s3_0 ? 16 : 32;
+            }
+            const Inc whole_held = increment_core(sg, g, e, de_p, held);
+            if (!whole_held.plastic) { k1_held = whole_held; k1_ready = true; break; }
+            // The (k+1)-th smallest principal stress: the next one to meet the cut-off when k are on it.
+            auto nth = [](const Eigen::Vector3d& x, int k) {
+                double v[3] = {x(0), x(1), x(2)};
+                std::sort(v, v + 3);
+                return v[k];
+            };
+            // THE STIFFNESS FLOOR is where the shear planes' gradient jumps: below p_limit E_i, E_ur
+            // no longer move with sigma3 and the dfbar/dsigma3 term of the flow (plane()) is zero, at
+            // it that term is finite. The stress the laws read is continuous there, the direction the
+            // flow takes is not -- the same first-order kink as a surface met inside a substep
+            // (measured: a walk from rest refined to the ceiling of 10 000 substeps by the one
+            // substep that crossed sigma3 = p_limit, R 9.2e-5 -> 3.2e-5 for substeps 3.3 times
+            // shorter). Which way the minor stress crosses it is read from where it starts.
+            const double floor_sign = s3_0 < plim ? 1.0 : -1.0;
+            // The event functions: negative before the event, positive after it.
+            auto event = [&](int kind, const Inc& k) {
+                const Eigen::Vector3d x = sg + k.dsig;
+                if (kind == 0) return fshear_at(x, g + k.dgp);
+                if (kind == 1) {
+                    const double ppk = pc_of(e + k.dev);
+                    return fcap(x, ppk) / (1.0 + ppk * ppk);
+                }
+                if (kind == 4) return (x(oc.a) - x(oc.c)) - stiff_at(x).qf;   // the failure plateau
+                if (kind == 5) return -nth(x, nt_on) - ten;                  // the next cut-off plane
+                if (kind == 6) return floor_sign * (x.minCoeff() - plim);    // the stiffness floor
+                return -gaps(x)(kind - 2);   // kind 2: the compression edge, 3: the extension edge
+            };
+            double beta = 2.0;
+            // THE PLATEAU is an event too: hardening on the shear planes (H > 0) ends where q reaches
+            // q_f and the flow is perfectly plastic from there (H = 0, the failure gradient).
+            const double qf0 = stiff_at(sg).qf;
+            const double plateau0 = (sg(oc.a) - sg(oc.c)) - qf0;
+            const bool hardening = (held & 1) && plateau0 < -1e-9 * (1.0 + std::fabs(qf0));
+            for (int kind = 0; kind < 7; ++kind) {
+                if (kind == 0 && (held & 1)) continue;
+                if (kind == 1 && (!cap_on || (held & 2))) continue;
+                if ((kind == 2 || kind == 3) && (held & 4)) continue;
+                if (kind == 4 && !hardening) continue;
+                if (kind == 5 && (!ten_on || nt_on >= 3)) continue;
+                if (kind == 6 && (!hardening || (held & 48))) continue;
+                const double q_start = kind == 0 ? fs0 : kind == 1 ? fc0 : kind == 4 ? plateau0
+                                     : kind == 5 ? -nth(sg, nt_on) - ten
+                                     : kind == 6 ? floor_sign * (s3_0 - plim) : -gap0(kind - 2);
+                const double q_end = event(kind, whole_held);
+                if (!(q_start < 0.0 && q_end > 0.0)) continue;
+                double b0 = 0.0, b1 = 1.0, q0 = q_start, q1 = q_end, b = 0.0;
+                for (int it = 0; it < 4; ++it) {
+                    b = b1 - q1 * (b1 - b0) / (q1 - q0);
+                    const double qb = event(kind, increment_core(sg, g, e, b * de_p, held));
+                    // To 1e-3 of the event function's range, in a few evaluations: what an error in
+                    // beta leaves is a kink of that fraction of the jump, at the start of the next
+                    // piece -- whose own R is measured and refined like any other, so the location
+                    // need not be exact, only close. NOT CLOSER: the event function is read through
+                    // the held step, whose active set can change inside the bracket, and iterated to
+                    // round-off (tried 2026-10-29) the location converged onto that switch, where a
+                    // perturbation of the strain moves it discontinuously -- a step of 1e-6 kPa in
+                    // the stress over 1e-11 of strain, read by a central difference as a slope of
+                    // 1e4 (the tension cut-off tangent check, 6e-9 -> 0.43).
+                    if (std::fabs(qb) <= 1e-3 * std::max(-q_start, q_end) || b1 - b0 < 1e-6) break;
+                    if ((qb > 0.0) == (q1 > 0.0)) { b1 = b; q1 = qb; q0 *= 0.5; }
+                    else { b0 = b; q0 = qb; q1 *= 0.5; }
+                }
+                beta = std::min(beta, b);
+            }
+            if (beta > 1.0) { k1_held = whole_held; k1_ready = true; break; }   // no event in the substep
+            // The piece up to the event is as long as the event is far, whatever the substep: Sloan's
+            // own local rule refines it (his Sec. 3.4), into m equal parts of a real count, m grown by
+            // (R / 0.81 STOL)^(1/2) while its largest R is above that -- continuous, as the walks are.
+            const Eigen::Vector3d de_b = beta * de_p;
+            const Eigen::Vector3d sg_b = sg;
+            const double g_b = g, e_b = e;
+            double m = 1.0, r_piece = 0.0;
+            for (int tries = 0; tries < 4; ++tries) {
+                sg = sg_b; g = g_b; e = e_b;
+                r_piece = 0.0;
+                const double dm = 1.0 / m;
+                int parts = 0;
+                for (double T = 0.0; T < 1.0 - 1e-12 && parts < (int)std::ceil(m - 1e-9) + 1; ++parts) {
+                    const Eigen::Vector3d dep = std::min(dm, 1.0 - T) * de_b;
+                    const Inc h_1 = increment_core(sg, g, e, dep, held);
+                    const Inc h_2 = increment_core(sg + h_1.dsig, g + h_1.dgp, e + h_1.dev, dep, held & activated(h_1));
+                    sg += 0.5 * (h_1.dsig + h_2.dsig);
+                    g += 0.5 * (h_1.dgp + h_2.dgp);
+                    e += 0.5 * (h_1.dev + h_2.dev);
+                    r_piece = std::max(r_piece, rel_error(h_1.dsig, h_2.dsig, sg));
+                    if (h_1.plastic || h_2.plastic) {
+                        plastic = true;
+                        tang = h_2.plastic ? h_2.tangent : h_1.tangent;
+                        if (correct_drift(sg, g, e, h_1.as || h_2.as, h_1.ac || h_2.ac,
+                                          h_1.at_fail || h_2.at_fail, h_2.plastic ? h_2.tie_i : h_1.tie_i,
+                                          h_2.plastic ? h_2.tie_j : h_1.tie_j,
+                                          h_1.as && h_2.as, h_1.ac && h_2.ac))
+                            tang.setZero();
+                    }
+                    T += std::min(dm, 1.0 - T);
+                }
+                if (!(r_piece > kAim * tol) || m >= 256.0) break;
+                m = std::min(m * std::sqrt(r_piece / (kAim * tol)), 256.0);
+            }
+            r_max = std::max(r_max, r_piece);
+            de_p = (1.0 - beta) * de_p;
+        }
+        const Inc k1 = whole1 ? *whole1 : (k1_ready ? k1_held : increment(sg, g, e, de_p));
+        const Inc k2 = whole2 ? *whole2 : increment_core(sg + k1.dsig, g + k1.dgp, e + k1.dev, de_p, activated(k1));
+        sg += 0.5 * (k1.dsig + k2.dsig);
+        g += 0.5 * (k1.dgp + k2.dgp);
+        e += 0.5 * (k1.dev + k2.dev);
+        // Measured before the drift correction, as Sloan's steps 10 and 13 are ordered.
+        r_max = std::max(r_max, rel_error(k1.dsig, k2.dsig, sg));
+        if (k1.plastic || k2.plastic) {
+            plastic = true;
+            tang = k2.plastic ? k2.tangent : k1.tangent;
+            // A state returned to the apex does not depend on the strain at all: its derivative is
+            // zero (the solver's vertex floor keeps such a point from making K_T singular).
+            if (correct_drift(sg, g, e, k1.as || k2.as, k1.ac || k2.ac, k1.at_fail || k2.at_fail,
+                              k2.plastic ? k2.tie_i : k1.tie_i, k2.plastic ? k2.tie_j : k1.tie_j,
+                              k1.as && k2.as, k1.ac && k2.ac))
+                tang.setZero();
+        } else if (elastic_tangent_at_end) {
+            tang = stiff_at(sg).De;
+        }
+    };
+    {
+        const double tiny = 1e-9 * pr;
+        const Eigen::Vector3d ds_tr = k_n.De * dstrain;
+        const double size0 = std::max(pp_n, sigma_n.cwiseAbs().maxCoeff());
+        const double step = ds_tr.cwiseAbs().maxCoeff();
+        // On the tip: no stress and no cap pressure (whatever the shear hardening stands at).
+        const bool on_tip = size0 <= tiny;
+        // AT THE APEX OF A CONE WITHOUT COHESION, PULLED, IT STAYS THERE. With c = 0 a stress-free
+        // point has no strength (q_f = 0) whatever its cap pressure, so an increment whose elastic
+        // trial is not compressive leaves it at the apex: its stress does not depend on the strain,
+        // it is on the failure plateau (where gamma_p does not grow, H = 0) and it compacts nothing
+        // (so p_p does not either) -- the cap tip's own rule below, for a cap that is not at its tip.
+        // Walked instead, each substep returned to the apex but the last one's elastic part stayed,
+        // so the stress went as 1/n (6.63 / 0.663 / 0.0663 kPa at 10 / 100 / 1000 substeps), the error
+        // measure never settled, and such points -- the floor of an excavation -- ran every walk to the
+        // ceiling: 203 of the staged excavation's 11 600 costliest calls, and nearly all of its time.
+        if (law_cc <= 0.0 && sigma_n.cwiseAbs().maxCoeff() <= tiny && step > 0.0 && mean(ds_tr) <= 0.0) {
+            HsIntegrated apex;
+            apex.stress = sigma_n;
+            apex.gamma_p = gamma_p_n;
+            apex.pp = pp_n;
+            apex.tangent.setZero();
+            apex.plastic = true;
+            apex.nsub = 0;
+            apex.saturated = 0;
+            if (plan_out) plan_out->clear();
+            return apex;
+        }
+        // Only a COMPRESSIVE trial walks from the tip in graded substeps: the cap closes the
+        // compressive side only, so a trial with a tensile mean stress has no cap to grow and no
+        // singular first step -- with c = 0 it stays at the apex (the rule above), with c > 0 it
+        // is carried elastically up to the cone, walked the usual way. (Until 2026-10-29 such a
+        // trial from the tip stayed on it, read as "a cap of size zero admits nothing", and with
+        // c > 0 a stress-free point could not carry the tension its cohesion allows.)
+        if (cap_on && step > 0.0 && (on_tip || size0 < 0.25 * step) && mean(ds_tr) > 0.0) {
+            // PUSHED FROM THE TIP, OR FAR PAST WHAT THE STATE AMOUNTS TO: A GRADED WALK. Each
+            // substep is a fraction g of the distance covered, the state's own size counted as
+            // covered (never less than kLead of the increment, or from nothing it would never
+            // start), so the substeps grow geometrically from a very small first one.
+            //
+            // THE FIRST SUBSTEP DECIDES THE PATH. With c = 0 the strength is zero at the tip while
+            // the stiffness keeps its floor, and the elastic oedometric ratio nu/(1-nu) lies below
+            // the active ratio (1-sin phi)/(1+sin phi): the exact path from rest is ON the failure
+            // line from its first infinitesimal step. A coarse first substep reads the tip's zero
+            // cap gradient, steps elastically, never meets the line, and walks a different path to
+            // the end. Measured at the stress point (the corpus oedometer's sand, one increment from
+            // rest): 200 equal substeps -- the walk used here until 2026-10-29 -- gave
+            // sigma_3/sigma_1 = 0.483 and p_p 8-10% low wherever the increment exceeded 1.6e-4 of
+            // strain (the count needed grows with the increment), against 0.271 (= the active
+            // ratio) and the 25 600-substep answer to 1e-7 for this walk. On the oedometer from
+            // rest (KV-NUM-009) the 200-400 kPa range sat 0.35 points off the other two; with this
+            // walk the three agree to every printed digit.
+            //
+            // Its error is measured and refined like the uniform walk's below: the largest R of its
+            // substeps, and g shrunk by (0.81 STOL / R)^(1/p) until R is under 0.81 STOL -- the
+            // factor is 1 at that threshold, so the walk is a continuous function of the strain.
+            constexpr double kLead = 1.0e-3;
+            // FROM THE TIP ITSELF the walk starts at an isotropic, normally consolidated state of
+            // vanishing size -- p = p_p = delta, q = 0, on both surfaces -- of which the stress-free
+            // state is the limit: delta a millionth of the elastic trial, never below 1e-9 p_ref (at
+            // 1e-8 of a trial of 0.03 kPa the seed fell under the round-off of the walk's own tests and
+            // the failure line was taken again). Measured on one oedometric increment from rest: the
+            // seeds 1e-4, 1e-6 and 1e-8 of the trial give the same branch at every increment size and
+            // tolerance, and the last two the same stress to 4e-6.
+            constexpr double kSeed = 1.0e-6;
+            const bool seeded = on_tip;
+            const double delta = seeded ? std::max(kSeed * step, 1e-9 * pr) : 0.0;
+            const Eigen::Vector3d s_start = seeded ? Eigen::Vector3d::Constant(delta) : sigma_n;
+            const double ev_start = seeded ? p.cap_ev_from_pc(delta) : ev_n;
+            // The substeps a growth g takes to cover the increment: done = covered ((1+g)^k - 1).
+            auto span_of = [](double cov) { return std::log((1.0 + cov) / cov); };
+            struct Lead {
+                Eigen::Vector3d sig;
+                double gp = 0.0, ev = 0.0;
+                Eigen::Matrix3d tangent;
+                bool plastic = false, ok = false;
+                int walked = 0;
+                double r_max = 0.0;
+                double r_first = 0.0, r_rest = 0.0;   // R of the first substep, and of the others
+            };
+            auto lead_walk = [&](double g, double covered) {
+                Lead l;
+                l.sig = s_start; l.gp = gamma_p_n; l.ev = ev_start; l.tangent = k_n.De;
+                double done = 0.0;
+                const int budget = (int)std::ceil(span_of(covered) / std::log1p(g)) + 2;
+                bool fine = l.sig.allFinite() && std::isfinite(l.gp) && std::isfinite(l.ev);
+                while (fine && done < 1.0 - 1e-12 && l.walked < budget) {
+                    const double dT = std::min(g * (covered + done), 1.0 - done);
+                    const Eigen::Vector3d de = dT * dstrain;
+                    double r_one = 0.0;
+                    substep(l.sig, l.gp, l.ev, de, l.tangent, l.plastic, r_one, true, nullptr, nullptr);
+                    l.r_max = std::max(l.r_max, r_one);
+                    (l.walked == 0 ? l.r_first : l.r_rest) = std::max(l.walked == 0 ? l.r_first : l.r_rest, r_one);
+                    done += dT;
+                    ++l.walked;
+                    fine = l.sig.allFinite() && std::isfinite(l.gp) && std::isfinite(l.ev);
+                }
+                l.ok = fine && done >= 1.0 - 1e-12;
+                return l;
+            };
+            // TWO THINGS ARE REFINED, EACH BY ITS OWN ERROR. The first substep leaves the tip itself,
+            // where nothing is self-similar -- the cap's gradient is zero there and the pair disagree
+            // by the whole of what the substep does -- so its R is FIRST order in its own size,
+            // g covered, and falls only as that does. Every later substep starts from a state the
+            // size of what it covers and is the usual second order in g. Refining g alone for the
+            // first one made every substep of the walk smaller for the sake of one (measured: 8 341
+            // substeps where 1 100 met the tolerance once the first was shrunk instead); shrinking
+            // the lead costs only ln(1/f)/g substeps more. So the lead is shrunk by the first
+            // substep's R (first order), and g by the rest's (the order measured, as below).
+            // The lead starts at the state's own size (never less than kLead of the increment, or
+            // from nothing the walk would never start); a lead shrunk below the state's size only
+            // makes the first substeps smaller.
+            const double cov_min = 1e-12;
+            double covered = seeded ? delta / step : std::max(size0 / step, kLead);
+            // A fiftieth of the distance covered to start with (at a tenth the walk was 0.7% off
+            // on the oedometer from rest), and never finer than the ceiling allows.
+            auto g_min_of = [&](double cov) { return std::expm1(span_of(cov) / kMaxSubsteps); };
+            double g = std::max(0.02, g_min_of(covered));
+            Lead l = lead_walk(g, covered);
+            bool lead_met = false;
+            double g_prev = 0.0, r_prev = 0.0;
+            for (int it = 0; it < kMaxWalks && l.ok && l.r_max > kAim * tol; ++it) {
+                bool refined = false;
+                if (l.r_first > kAim * tol && covered > cov_min) {
+                    covered = std::max(covered * (kAim * tol / l.r_first), cov_min);
+                    refined = true;
+                }
+                const double g_min = g_min_of(covered);
+                if (l.r_rest > kAim * tol && g > g_min) {
+                    double order = 2.0;   // Euler's local error, R ~ (g covered)^2
+                    if (g_prev > 0.0 && r_prev > l.r_rest)
+                        order = std::clamp(std::log(r_prev / l.r_rest) / std::log(g_prev / g), 1.0, 2.0);
+                    else if (g_prev > 0.0)
+                        order = 1.0;
+                    g_prev = g;
+                    r_prev = l.r_rest;
+                    g = std::max(g * std::pow(kAim * tol / l.r_rest, 1.0 / order), g_min);
+                    refined = true;
+                }
+                g = std::max(g, g_min);
+                if (!refined) break;
+                const Lead l_prev = l;
+                l = lead_walk(g, covered);
+                // Two successive walks that agree to the tolerance have met it (see the uniform
+                // walk below, THE ANSWER IS WHAT THE TOLERANCE IS FOR).
+                if (l.ok && l_prev.ok && l.r_max > kAim * tol) {
+                    const double scale = std::max(l.sig.norm(), pr / 20.0);
+                    if ((l.sig - l_prev.sig).norm() <= kAim * tol * scale &&
+                        std::fabs(l.gp - l_prev.gp) <= kAim * tol * std::max(std::fabs(l.gp), 1e-12) &&
+                        std::fabs(l.ev - l_prev.ev) <= kAim * tol * std::max(std::fabs(l.ev), 1e-12)) {
+                        lead_met = true;
+                        break;
+                    }
+                }
+            }
+            if (l.ok) {
+                HsIntegrated led;
+                led.stress = l.sig;
+                led.gamma_p = l.gp;
+                led.pp = p.cap_pc_from_ev(l.ev);
+                led.tangent = l.tangent;
+                led.plastic = l.plastic;
+                led.nsub = l.walked;
+                led.saturated = l.r_max > tol && !lead_met ? 1 : 0;
+                if (plan_out) plan_out->clear();
+                return led;
+            }
+            // The graded walk failed (a non-finite state): the increment is walked the usual way.
+        }
+    }
+    // The committed state's elastic matrix, until a plastic substep replaces it with its own
+    // continuum tangent (an elastic increment returns this one).
+    Eigen::Matrix3d tangent = k_n.De;
+
     if (plan_out) plan_out->clear();
 
     const bool replaying = plan_in && plan_in->n > 0 && plan_in->dT > 0.0;
 
-    // --- HOW MANY SUBSTEPS: measured from the error, and CONTINUOUS in the strain increment ---
+    // --- WHAT THE TOLERANCE MEANS, AND HOW MANY SUBSTEPS MEET IT ------------------------------
     //
-    // Two decisions, both forced by measurement rather than taste.
+    // THE TOLERANCE IS SLOAN'S (Sloan, Abbo & Sheng 2001, Engineering Computations 18:121-154,
+    // Sec. 3.4): every substep's relative local error, half the difference of its Euler and
+    // modified-Euler increments over the stress it ends at (their Eqn 24, the stress part), is at
+    // most STOL. That is what a substep is accepted on there, and what they measure the stress
+    // error against (Tables II-V: below STOL in every case). Until 2026-10-28 the tolerance had no
+    // one meaning here: the count was estimated as sqrt(STOL dT^3 / e) -- about sqrt(n) more
+    // substeps than this law asks, as a margin for substeps that cross a surface, a corner or the
+    // plateau -- and the warning said "ran out" whenever the ceiling clipped that estimate, without
+    // measuring anything. Measured on a staged excavation in undrained clay over sand (14491
+    // clipped calls, 604 replayed against 40 000 substeps): the modified-Euler result met the
+    // tolerance at 200 substeps in 590, while almost every one failed the per-substep test.
     //
-    // (1) The subdivision is chosen ONCE for the increment, from a real error estimate, and then
-    //     used as-is. The textbook accept/reject form of Sloan, Abbo & Sheng (2001) re-subdivides
-    //     as it goes, which makes the subdivision a discontinuous function of the strain
-    //     increment: two neighbouring Newton iterates integrate along different subdivisions, the
-    //     internal force stops being a smooth function of the displacement, and the global
-    //     iteration cannot converge below the integration noise. MEASURED on the corpus
-    //     oedometer, 2026-08-20: with accept/reject the residual fell to a relative 1.2e-3 and
-    //     then wandered, the line search halving to 2.4e-4 without finding descent.
+    // Two departures from the paper are kept, both forced by measurement.
+    // (1) The substeps are EQUAL and their count is chosen for the whole increment, not grown and
+    //     shrunk substep by substep with rejections. Accept/reject makes the subdivision a
+    //     discontinuous function of the strain increment: neighbouring Newton iterates integrate
+    //     along different subdivisions and the global iteration cannot converge below that noise
+    //     (measured on the corpus oedometer, 2026-08-20: the residual stalled at 1.2e-3, the line
+    //     search halving to 2.4e-4 without descent).
+    // (2) The count is a REAL number, with a partial last substep. With ceil() the answer jumps
+    //     where the count does (the same oedometer stalled at 5.7e-6); with a real count it is a
+    //     CONTINUOUS function of the strain increment.
+    // Sloan's own rule is therefore applied to the walk as a whole: walk, measure the largest R
+    // of the substeps taken, and if it is above 0.81 STOL -- the 0.9 of his Eqn 27 on the step,
+    // squared onto R -- walk again with n (R / 0.81 STOL)^(1/p). The order p is his 2 (Euler's
+    // local error ~ dT^2) for the first refinement and the one the two walks measured after it,
+    // held to [1, 2]: a substep that meets a corner or the plateau is first order, which is what
+    // Sloan's smoothed surfaces never meet and what the old margin was guessing at. At the
+    // threshold the factor is 1, so neither the count nor the answer jumps there.
     //
-    // (2) The count is a REAL number, not an integer. With ceil() the map still jumps -- the same
-    //     measurement, one step further: the residual reached 5.7e-6 and stalled there, because
-    //     an iterate that changes n from 4 to 5 changes the answer by the difference between two
-    //     subdivisions. Taking n substeps of 1/n_real with a partial last one makes the answer a
-    //     CONTINUOUS function of the strain increment, which is what a Newton iteration needs to
-    //     converge to the tolerance a phase asks for.
-    //
-    // The estimate itself: a modified-Euler pair over a trial substep measures the local error of
-    // that substep. The scheme is second order, so the local error of a substep of pseudo-time dT
-    // is ~C.dT^3 and the error accumulated over the 1/dT of them is ~C.dT^2; the largest dT
-    // meeting the tolerance is sqrt(STOL.dT^3/e). Read at dT=1 that is the familiar
-    // sqrt(err_full/STOL) -- but a whole increment is often far outside the asymptotic regime
-    // that law assumes, so the estimate is taken TWICE: once over the full increment, then again
-    // over the substep the first pass proposed, where the law does hold. Both passes are
-    // continuous functions of the strain increment; no branch chooses between them.
-    //
-    // KEEP IT. On 2026-09-30 it was replaced by the textbook per-substep rule dT sqrt(STOL/e)
-    // (Sloan, Abbo & Sheng 2001), on the argument that e is the Euler step's error and falls with
-    // dT^2, so this rule over-subdivides. It does -- by about sqrt(n) -- and the over-subdivision is
-    // what this walk needs: it is first order where a surface, a corner or the plateau is met
-    // inside a substep, and the per-substep rule, blind to that, let the error through. Measured on
-    // a strip footing pushed into sand: the per-substep rule at STOL 1e-5 gave 291.5 kPa, 4% above
-    // the 279.8 kPa the same run converges to at 1e-6 (this rule at 1e-5: 280.3) -- faster, and
-    // unsafe. The walk has to become second order at its events before this can change.
     // A FOURTH-ORDER STEP WAS TRIED HERE AND TAKEN OUT (2026-10). The classical four-stage step
-    // with a step-doubling estimate of its own error, n = (STOL dT^5 / e)^(1/4), needs a tenth of
-    // the substeps and ran the boundary-value benches twice as fast with the same answers (a fill
-    // on a soft base 143.7 / 143.8 mm, the settlement under a strip on undrained clay 11.96 /
-    // 11.97 mm). It failed where the second-order pair does not: on the oedometer path from rest
-    // (KV-NUM-009) the deviation from the idealised law, which the power law's self-similarity
-    // makes the same at every stress level, is constant to 1e-4 of a percentage point with the
-    // pair and varied by 0.74 points with the four stages. The stages of one step fall on
-    // different branches wherever the active set changes inside it (the cap and the shear surface
-    // at their corner, the stiffness floor), the order is lost there, and an estimate taken once
-    // at the start of the increment does not see it. A higher order is worth having only together
-    // with a walk that stops at those events.
+    // with a step-doubling estimate of its own error needs a tenth of the substeps and ran the
+    // boundary-value benches twice as fast with the same answers, but on the oedometer path from
+    // rest (KV-NUM-009) the deviation from the idealised law, which the power law's
+    // self-similarity makes the same at every stress level, varied by 0.74 points with it against
+    // 1e-4 with the pair: the stages of one step fall on different branches wherever the active
+    // set changes inside it, and the order is lost there.
     double nreal = 1.0;
     // The estimate's first pass over the whole increment is the walk's own step when the
     // increment needs no subdivision -- the same two evaluations at the same state, strain and
@@ -1199,78 +1669,114 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
     if (replaying) {
         // Replay: the subdivision is uniform, so its one step size reproduces it exactly.
         nreal = 1.0 / plan_in->dT;
-    } else if (from_tip) {
-        nreal = (double)kMaxSubsteps;   // the tip's own rule, not a measurement that ran out
     } else if (dstrain_w.squaredNorm() > 0.0) {
+        // The first estimate, from the first substep only: Sloan's step law, twice -- over the
+        // whole increment, then over the substep that proposed, where R ~ dT^2 holds better.
+        // No plasticity gate: E_ur moves with sigma3, so even an elastic step has an error.
         for (int pass = 0; pass < 2; ++pass) {
             const double dT = 1.0 / nreal;
             const Eigen::Vector3d de = dT * dstrain_w;
-            const Inc f1 = increment(s0, gp0, ev0, de);
-            const Inc f2 = increment(s0 + f1.dsig, gp0 + f1.dgp, ev0 + f1.dev, de);
-            if (pass == 0 && dT == 1.0) { whole_k1 = f1; whole_k2 = f2; have_whole = true; }
-            // No plasticity gate on the estimate. An elastic step is not error-free here: E_ur
-            // moves with sigma3, so the elastic response is nonlinear and its own error is what
-            // the pair measures. Where the stiffness really is constant the two evaluations
-            // agree, the estimate is zero, and the step is taken whole -- a gate would only hide
-            // the case where it is not.
-            const Eigen::Vector3d s_end = s0 + 0.5 * (f1.dsig + f2.dsig);
-            // The denominator needs a FLOOR. A purely relative measure against ||sigma|| is
-            // degenerate where a run starts from (near) zero stress -- a weightless column, a
-            // surface layer, the first increment of any seating phase. The floor is p_ref/200:
-            // tied to the reference pressure of the stress-dependent stiffness law, so it scales
-            // with the material's own stress level rather than with the units.
-            // The error is measured against the stress, but not against less than p_ref / 20:
-            // at a point that carries next to nothing -- fresh fill, the ground surface -- a
-            // relative tolerance is an absolute one of nothing, and the estimate asked for the
-            // ceiling of substeps to resolve stresses of a thousandth of a kPa. The floor was
-            // p_ref / 200. Measured: a fill on a soft base 141 s -> 97 s with the same answer
-            // (143.7 / 143.6 mm), a strip on clay and an embankment's factor of safety unchanged
-            // in time and answer (11.96 mm; 1.40157 / 1.40161).
-            const double dn = std::max(s_end.norm(), pr / 20.0);
-            const double e_step = 0.5 * (f2.dsig - f1.dsig).norm() / dn;
-            if (!(e_step > 0.0)) break;             // exact on this step: nothing to subdivide
-            const double dT_ok = std::sqrt(tol * dT * dT * dT / e_step);
-            nreal = std::min(std::max(1.0, 1.0 / dT_ok), (double)kMaxSubsteps);
-            if (nreal <= 1.0) break;
+            double r = 0.0;
+            if (elastic_fraction(s0, gp0, ev0, de) < 0.0) {
+                const Inc f1 = increment(s0, gp0, ev0, de);
+                const Inc f2 = increment_core(s0 + f1.dsig, gp0 + f1.dgp, ev0 + f1.dev, de, activated(f1));
+                // Only an ELASTIC pair is kept: a plastic one was evaluated without the walk's own
+                // treatment of the events inside the substep (substep()), so the call would be
+                // integrated one way and its replays -- the consistent tangent's perturbed runs,
+                // which have no estimate -- another, and their difference divided by the
+                // perturbation.
+                if (pass == 0 && dT == 1.0 && !f1.plastic && !f2.plastic) {
+                    whole_k1 = f1; whole_k2 = f2; have_whole = true;
+                }
+                r = rel_error(f1.dsig, f2.dsig, s0 + 0.5 * (f1.dsig + f2.dsig));
+            } else {   // the first substep crosses a surface: measured as the walk will take it
+                Eigen::Vector3d sc = s0;
+                double gc = gp0, ec = ev0;
+                Eigen::Matrix3d tc = tangent;
+                bool pc = false;
+                substep(sc, gc, ec, de, tc, pc, r, false, nullptr, nullptr);
+            }
+            if (!(r > tol)) break;
+            nreal = std::min(nreal * std::sqrt(r / tol), (double)kMaxSubsteps);
         }
     }
 
-    const double dT_full = 1.0 / nreal;
-    int taken = 0;
-    if (plan_out) { plan_out->clear(); plan_out->dT = dT_full; }
-    for (double T = 0.0; T < 1.0 - 1e-12 && taken < kMaxSubsteps + 2; ++taken) {
-        const double dT = std::min(dT_full, 1.0 - T);
-        const Eigen::Vector3d de = dT * dstrain_w;
-        const bool whole = have_whole && taken == 0 && dT == 1.0 && sig == s0 && gp == gp0 && ev == ev0;
-        const Inc k1 = whole ? whole_k1 : increment(sig, gp, ev, de);
-        const Inc k2 = whole ? whole_k2 : increment(sig + k1.dsig, gp + k1.dgp, ev + k1.dev, de);
-        sig += 0.5 * (k1.dsig + k2.dsig);
-        gp += 0.5 * (k1.dgp + k2.dgp);
-        ev += 0.5 * (k1.dev + k2.dev);
-        if (k1.plastic || k2.plastic) {
-            any_plastic = true;
-            tangent = k2.plastic ? k2.tangent : k1.tangent;
-            // A state returned to the apex does not depend on the strain at all: its derivative is
-            // zero (the solver's vertex floor is what keeps such a point from making K_T singular).
-            if (correct_drift(sig, gp, ev, k1.as || k2.as, k1.ac || k2.ac,
-                          k1.at_fail || k2.at_fail, k2.plastic ? k2.tie_i : k1.tie_i,
-                          k2.plastic ? k2.tie_j : k1.tie_j))
-                tangent.setZero();
+    struct Walk {
+        Eigen::Vector3d sig;
+        double gp = 0.0, ev = 0.0;
+        Eigen::Matrix3d tangent;
+        bool plastic = false;
+        int taken = 0;
+        double r_max = 0.0;   // the largest local error of the substeps taken
+    };
+    auto walk = [&](double n) {
+        Walk w;
+        w.sig = s0; w.gp = gp0; w.ev = ev0; w.tangent = tangent;
+        const double dT_full = 1.0 / n;
+        if (plan_out) { plan_out->clear(); plan_out->dT = dT_full; }
+        // The walk's own count bounds the loop, never the ceiling: a walk planned past the ceiling
+        // and stopped at it would return the integral of part of the strain, silently.
+        const int planned = (int)std::ceil(n - 1e-9) + 1;
+        for (double T = 0.0; T < 1.0 - 1e-12 && w.taken < planned; ++w.taken) {
+            const double dT = std::min(dT_full, 1.0 - T);
+            const Eigen::Vector3d de = dT * dstrain_w;
+            const bool whole = have_whole && w.taken == 0 && dT == 1.0;
+            substep(w.sig, w.gp, w.ev, de, w.tangent, w.plastic, w.r_max, false,
+                    whole ? &whole_k1 : nullptr, whole ? &whole_k2 : nullptr);
+            if (plan_out) ++plan_out->n;
+            T += dT;
         }
-        if (plan_out) ++plan_out->n;
-        T += dT;
+        return w;
+    };
+
+    Walk w = walk(nreal);
+    bool answer_met = false;   // two successive walks agreed (see below)
+    if (!replaying) {
+        double n_prev = 0.0, r_prev = 0.0;
+        for (int it = 0; it < kMaxWalks && w.r_max > kAim * tol && nreal < (double)kMaxSubsteps; ++it) {
+            double order = 2.0;
+            if (n_prev > 0.0 && r_prev > w.r_max && nreal > n_prev)
+                order = std::clamp(std::log(r_prev / w.r_max) / std::log(nreal / n_prev), 1.0, 2.0);
+            else if (n_prev > 0.0)
+                order = 1.0;   // the error did not fall with the count: refine as for first order
+            n_prev = nreal;
+            r_prev = w.r_max;
+            nreal = std::min(nreal * std::pow(w.r_max / (kAim * tol), 1.0 / order), (double)kMaxSubsteps);
+            const Walk w_prev = w;
+            w = walk(nreal);
+            // THE ANSWER IS WHAT THE TOLERANCE IS FOR. R bounds the local error of each substep's
+            // Euler step (Sloan's test, conservative by design); the walk's own result, refined, is
+            // the error that is handed on. Where the flow slides along a surface it is neutral to --
+            // the shear planes held at a zero multiplier while the cap does the work -- the two
+            // evaluations of a pair read the two sides of that zero, R falls only as 1/n while the
+            // mean is already the sliding rate: measured on the Berlin Sand triaxial at STOL 1e-8,
+            // the answer at 13 substeps within 2.5e-10 of the one at 1600, R 1.9e-5 there and still
+            // 5e-8 at the ceiling of 10 000 (the test 33 s -> 50 min). So two successive walks
+            // whose answers -- stress and both hardening variables -- agree to the tolerance in the
+            // same measure R uses have met it, R notwithstanding, and the finer one is kept.
+            if (w.r_max > kAim * tol) {
+                const double scale = std::max(w.sig.norm(), pr / 20.0);
+                const bool same =
+                    (w.sig - w_prev.sig).norm() <= kAim * tol * scale &&
+                    std::fabs(w.gp - w_prev.gp) <= kAim * tol * std::max(std::fabs(w.gp), 1e-12) &&
+                    std::fabs(w.ev - w_prev.ev) <= kAim * tol * std::max(std::fabs(w.ev), 1e-12);
+                if (same) { answer_met = true; break; }
+            }
+        }
     }
-    // Saturation is REPORTED, never absorbed: if the ceiling clipped the subdivision the
-    // integration did not meet its tolerance, and the caller is told so rather than handed a
-    // number that looks like every other one.
-    const int accepted = taken, clipped = (!from_tip && nreal >= (double)kMaxSubsteps) ? 1 : 0;
+    any_plastic = any_plastic || w.plastic;
+    // Saturation is REPORTED, never absorbed: a walk that left a substep above the tolerance --
+    // because the ceiling or the walk budget stopped the refinement -- did not meet it, and the
+    // caller is told so rather than handed a number that looks like every other one. A replay
+    // measures nothing and reports nothing.
+    const int clipped = (!replaying && w.r_max > tol && !answer_met) ? 1 : 0;
     HsIntegrated out;
-    out.stress = sig;
-    out.gamma_p = gp;
-    out.pp = cap_on ? p.cap_pc_from_ev(ev) : pp_n;
-    out.tangent = tangent;
+    out.stress = w.sig;
+    out.gamma_p = w.gp;
+    out.pp = cap_on ? p.cap_pc_from_ev(w.ev) : pp_n;
+    out.tangent = w.tangent;
     out.plastic = any_plastic;
-    out.nsub = accepted;
+    out.nsub = w.taken;
     out.saturated = clipped;
     return out;
 }
@@ -1359,7 +1865,9 @@ void hs_calibrate_cap(HardeningSoilParams& p, double K0_NC) {
     // size check is there so that a member added to the struct is added here as well.
     // cap_cc is not a parameter but the integrator's copy of c.cot(phi), derived from two that are
     // keyed (and NaN on every set of parameters that reaches this function), so it is not keyed.
-    static_assert(sizeof(HardeningSoilParams) == 19 * sizeof(double),
+    // sigma_t is not keyed either: the material wrapper sets it on its own copy for each call, and
+    // the calibration walks a compressive oedometer path the cut-off never reaches.
+    static_assert(sizeof(HardeningSoilParams) == 20 * sizeof(double),
                   "a member was added to HardeningSoilParams: add it to the calibration key");
     using Key = std::array<double, 16>;
     const Key key{p.E50_ref, p.Eur_ref, p.Eoed_ref, p.m, p.p_ref, p.cohesion, p.friction,

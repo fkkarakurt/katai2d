@@ -68,6 +68,7 @@ m::Project embankment(double tol) {
     pr.polygons = {S, F1, F2};
     pr.has_water = true; pr.wx = {0, 30}; pr.wy = {-1, -1};
     pr.mesh.elem_size = 2.0; pr.mesh.order = 6;
+    pr.mesh.corner_refine = false;   // the mesh the locator names (the .k2d v28 one at the fill's slopes)
     pr.initial.poly_active = {1, 0, 0};
 
     m::Phase p1; p1.name = "Fill 1 (1 d)"; p1.type = m::PhaseType::Consolidation;

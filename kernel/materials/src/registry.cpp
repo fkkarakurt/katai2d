@@ -343,6 +343,101 @@ std::string validate_hb(const MaterialParams& p) {
     return {};
 }
 
+MaterialModel build_adp(const MaterialParams& p) {
+    // NGI-ADP: the strength is the plane strain active su in c (the Tresca substitution of
+    // Undrained (C) that common_fields makes leaves it there), the elasticity E and nu, and the
+    // anisotropy is the ratios and the three failure strains.
+    MaterialModel mm = common_fields(p);
+    mm.type = MaterialType::NgiAdp;
+    mm.adp_suP = p.adp_suP;
+    mm.adp_suDSS = p.adp_suDSS;
+    mm.adp_gfC = p.adp_gfC;
+    mm.adp_gfE = p.adp_gfE;
+    mm.adp_gfDSS = p.adp_gfDSS;
+    return mm;
+}
+
+std::string validate_adp(const MaterialParams& p) {
+    // A TOTAL stress model. Its strengths are undrained shear strengths and its stiffness an
+    // undrained one; it has no effective-stress envelope for a pore pressure to act on.
+    if (p.drainage != DrainageClass::UndrainedC)
+        return "NGI-ADP is an undrained total-stress model: its strengths are undrained shear "
+               "strengths. Set the drainage type to Undrained (C), with the undrained Poisson's "
+               "ratio (0.495) in nu.";
+    if (!(p.c > 0.0)) return "NGI-ADP needs the plane strain active shear strength suA (c) > 0";
+    if (!(p.E > 0.0)) return "NGI-ADP needs a shear modulus: E > 0 (G = E / (2 (1 + nu)))";
+    if (!(p.nu > 0.0 && p.nu < 0.5)) return "NGI-ADP needs an undrained Poisson's ratio between 0 and 0.5 (0.495)";
+    if (!(p.adp_suP > 0.0)) return "NGI-ADP needs suP / suA > 0";
+    if (!(p.adp_suDSS > 0.0)) return "NGI-ADP needs suDSS / suA > 0";
+    // Each failure strain is a TOTAL strain, and the elastic part of its own test -- the
+    // strength over the shear modulus -- has to leave room for the hardening to reach it.
+    const double G = p.E / (2.0 * (1.0 + p.nu));
+    adp::Params P;
+    P.G = G; P.nu = p.nu; P.suA = p.c; P.suP = p.adp_suP * p.c; P.suDSS = p.adp_suDSS * p.c;
+    const adp::Derived d = adp::derive(P);
+    const auto room = [&](double gf, double su, const char* test) -> std::string {
+        if (gf > su / G) return {};
+        return std::string("NGI-ADP: the shear strain at failure in ") + test + " (" +
+               std::to_string(100.0 * gf) + " %) is not above the elastic strain of the same test, " +
+               "su / G = " + std::to_string(100.0 * su / G) + " %: the failure strains are total "
+               "strains, and the hardening needs a plastic part to reach the strength. Raise the "
+               "strain or the stiffness.";
+    };
+    if (auto r = room(p.adp_gfC, d.suC_tx, "triaxial compression"); !r.empty()) return r;
+    if (auto r = room(p.adp_gfE, d.suE_tx, "triaxial extension"); !r.empty()) return r;
+    if (auto r = room(p.adp_gfDSS, P.suDSS, "direct simple shear"); !r.empty()) return r;
+    return {};
+}
+
+MaterialModel build_jr(const MaterialParams& p) {
+    // Jointed rock: the first set rides on the shared strength fields (common_fields put them
+    // there), its dip and the other sets in jr. The tension cut-off is one switch for every set.
+    MaterialModel mm = common_fields(p);
+    mm.type = MaterialType::JointedRock;
+    auto& j = mm.jr;
+    j.E1 = p.E; j.nu1 = p.nu;
+    j.aniso = p.jr_aniso;
+    j.E2 = p.jr_E2; j.nu2 = p.jr_nu2; j.G2 = p.jr_G2;
+    j.n = std::clamp(p.jr_sets, 1, 3);
+    for (int i = 0; i < 3; ++i) {
+        j.p[i].alpha = p.jr_alpha[i];
+        j.p[i].c = i == 0 ? p.c : p.jr_c[i];
+        j.p[i].phi = i == 0 ? p.phi_rad : p.jr_phi[i];
+        j.p[i].psi = i == 0 ? p.psi_rad : p.jr_psi[i];
+        j.p[i].tcut = p.tension_cutoff;
+        j.p[i].sigt = std::max(0.0, i == 0 ? p.tensile_strength : p.jr_sigt[i]);
+    }
+    mm.jr_E1_ref = p.E;
+    return mm;
+}
+
+std::string validate_jr(const MaterialParams& p) {
+    // The pore fluid's stiffness is derived from an isotropic skeleton (MaterialModel::kw_over_n);
+    // for a transversely isotropic one that derivation does not hold, and an undrained strength
+    // has no place in a model whose strength is its joints'. A rock mass is drained or non-porous.
+    if (p.drainage == DrainageClass::UndrainedA || p.drainage == DrainageClass::UndrainedB ||
+        p.drainage == DrainageClass::UndrainedC)
+        return "Jointed rock is drained or non-porous: its strength is that of its joints, which "
+               "an undrained shear strength cannot stand for, and the pore fluid's stiffness of "
+               "Undrained (A) is derived for an isotropic skeleton. Set the drainage type to "
+               "Drained or Non-porous.";
+    jr::Params P;
+    P.E1 = p.E; P.nu1 = p.nu; P.aniso = p.jr_aniso; P.E2 = p.jr_E2; P.nu2 = p.jr_nu2; P.G2 = p.jr_G2;
+    if (const char* why = jr::elastic_admissible(P)) return std::string("Jointed rock: ") + why;
+    if (p.jr_sets < 1 || p.jr_sets > 3) return "Jointed rock has one, two or three joint sets";
+    for (int i = 0; i < p.jr_sets; ++i) {
+        const double c = i == 0 ? p.c : p.jr_c[i];
+        const double phi = i == 0 ? p.phi_rad : p.jr_phi[i];
+        const double psi = i == 0 ? p.psi_rad : p.jr_psi[i];
+        const std::string set = "Jointed rock, joint set " + std::to_string(i + 1) + ": ";
+        if (c < 0.0) return set + "the cohesion cannot be negative";
+        if (phi < 0.0 || phi >= 1.5707963267948966) return set + "the friction angle must lie in [0, 90) degrees";
+        if (psi < 0.0 || psi > phi) return set + "the dilatancy angle must lie between 0 and the friction angle";
+        if (!(c > 0.0) && !(phi > 0.0)) return set + "a joint with neither cohesion nor friction carries no shear at all";
+    }
+    return {};
+}
+
 // A deque so registration never moves an existing entry: find_model hands out
 // pointers, and they stay valid for the life of the process.
 std::deque<ModelEntry>& table() {
@@ -358,6 +453,12 @@ std::deque<ModelEntry>& table() {
         // is constant", and c'_inc is a Mohr-Coulomb input this model does not have.
         {"HoekBrown", MaterialType::HoekBrown, true, false, false, false, false, validate_hb, build_hb},
         {"ModifiedCamClay", MaterialType::SoftSoil, true, false, true, false, false, validate_mcc, build_mcc},
+        // NGI-ADP: both gradients -- the strength su(y) is the cohesion's, the stiffness E(y) the
+        // elastic pair's.
+        {"NgiAdp", MaterialType::NgiAdp, true, false, false, true, true, validate_adp, build_adp},
+        // Jointed rock: E(y) scales the whole elastic operator (E2 and G2 with E1), c(y) is the
+        // first set's cohesion.
+        {"JointedRock", MaterialType::JointedRock, true, false, false, true, true, validate_jr, build_jr},
     };
     return entries;
 }

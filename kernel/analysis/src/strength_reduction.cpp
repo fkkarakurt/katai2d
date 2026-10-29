@@ -44,6 +44,17 @@ static void factor_strength(MaterialModel& m, double srf) {
     // the same way (the criterion's own apex does not move under the reduction), and the
     // dilatancy is held within the reduced friction of the tangent at zero confinement, as psi
     // is held within phi above.
+    // Jointed rock: the first set is the shared fields above; the other sets are strengths the
+    // same way, set for set.
+    if (m.type == MaterialType::JointedRock) {
+        for (int i = 1; i < 3; ++i) {
+            auto& q = m.jr.p[i];
+            q.c /= srf;
+            q.phi = std::atan(std::tan(q.phi) / srf);
+            if (q.psi > q.phi) q.psi = q.phi;
+            q.sigt /= srf;
+        }
+    }
     if (m.type == MaterialType::HoekBrown) {
         m.hb.msf *= srf;
         m.hb.sigt_user /= srf;

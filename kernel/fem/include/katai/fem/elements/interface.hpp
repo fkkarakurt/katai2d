@@ -114,10 +114,14 @@ struct Return { double tau, sigma_n, Ds, Dn, slip_p_new; };
 // friction acts on the EFFECTIVE normal stress, sigma_n - pw. With pw left out, a clay unloaded
 // undrained behind a wall, whose pore water goes into suction, had the suction counted as a loss
 // of contact stress and its joint slipped at a strength the ground beside it did not have.
+// The gap opens on the same stress: when the skeleton's contact, sigma_n - pw, reaches the tensile
+// strength. The pore water's share stays across it -- a suction beside the joint still holds the two
+// faces together -- so an opened joint transmits sigma_t + pw. Cut off on sigma_n alone, a joint
+// beside clay in suction opened while its skeleton was still pressed, and lost its friction early.
 inline Return coulomb_return(const InterfaceProps& p, double du_s, double du_n, double slip_p_c,
                              double sigma_n0 = 0.0, double pw = 0.0) {
     double sigma_n = sigma_n0 + p.kn * du_n, Dn = p.kn;
-    if (sigma_n > p.sigma_t) { sigma_n = p.sigma_t; Dn = 0.0; }  // tension cut-off (separation)
+    if (sigma_n - pw > p.sigma_t) { sigma_n = p.sigma_t + pw; Dn = 0.0; }  // tension cut-off (separation)
     const double tau_tr = p.ks * (du_s - slip_p_c);
     const double tau_max = std::max(0.0, p.c_i - (sigma_n - pw) * std::tan(p.phi_i));
     if (std::fabs(tau_tr) <= tau_max)

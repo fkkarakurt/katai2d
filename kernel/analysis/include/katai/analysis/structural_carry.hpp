@@ -21,7 +21,7 @@
 #include <katai/analysis/nonlinear_solver.hpp>  // Structures, StructuralInit
 #include <katai/analysis/results.hpp>           // StructCarryState
 #include <katai/fem/assembly/dof_map.hpp>
-#include <katai/fem/elements/geogrid.hpp>       // geogrid::kGaussCount
+#include <katai/fem/elements/geogrid.hpp>       // geogrid::kStateStride
 #include <katai/fem/elements/interface.hpp>     // iface::kPointCount(5)
 #include <katai/fem/elements/plate.hpp>         // plate::kPlasticStateSize(5)
 
@@ -48,7 +48,7 @@ inline bool build_structural_init(const StructCarryState& ps, const Structures& 
     if (ps.full_disp.size() != (Eigen::Index)dofs.total_dofs() ||
         ps.anchor_plastic.size() != structures.anchors.size() ||
         ps.geogrid_plastic.size() !=
-            structures.geogrids.size() * (size_t)geogrid::kGaussCount ||
+            structures.geogrids.size() * (size_t)geogrid::kStateStride ||
         ps.interface_slip.size() !=
             structures.interfaces.size() * (size_t)iface::kPointCount ||
         ps.interface5_slip.size() !=
@@ -208,7 +208,7 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
     size_t skin_total = 0;
     for (const auto& eb : structures.embedded_beams) skin_total += eb.skin.size();
     out.anchor_plastic.assign(structures.anchors.size(), 0.0);
-    out.geogrid_plastic.assign(structures.geogrids.size() * (size_t)geogrid::kGaussCount, 0.0);
+    out.geogrid_plastic.assign(structures.geogrids.size() * (size_t)geogrid::kStateStride, 0.0);
     out.interface_slip.assign(structures.interfaces.size() * (size_t)iface::kPointCount, 0.0);
     out.interface5_slip.assign(structures.interfaces5.size() * (size_t)iface::kPointCount5, 0.0);
     out.embedded_skin_slip.assign(skin_total, 0.0);
@@ -234,7 +234,7 @@ inline StructuralCarry build_structural_carry(const StructCarryState& ps,
         if (p) {
             copy_slice(ps.anchor_plastic, p->anchors, out.anchor_plastic, cr.anchors, 1);
             copy_slice(ps.geogrid_plastic, p->geogrids, out.geogrid_plastic, cr.geogrids,
-                       (size_t)geogrid::kGaussCount);
+                       (size_t)geogrid::kStateStride);
             copy_slice(ps.interface_slip, p->interfaces, out.interface_slip, cr.interfaces,
                        (size_t)iface::kPointCount);
             copy_slice(ps.interface5_slip, p->interfaces5, out.interface5_slip, cr.interfaces5,

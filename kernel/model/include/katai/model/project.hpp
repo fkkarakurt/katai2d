@@ -14,7 +14,7 @@ namespace katai::model {
 
 // Enum VALUES are file-stable (written as int in the project file) — a new model is appended at the END.
 enum class SoilModel { LinearElastic, MohrCoulomb, HardeningSoil, HSsmall, SoftSoil, SoftSoilCreep,
-                      HoekBrown, ModifiedCamClay };   // values are FILE-STABLE: append only
+                      HoekBrown, ModifiedCamClay, NgiAdp, JointedRock };   // values are FILE-STABLE: append only
 // Drainage type (material General data). Undrained (A): EFFECTIVE strength c', phi' + the pore-
 // fluid bulk stiffness Kw/n (excess pore pressure generated, effective stress path; su is PREDICTED).
 // Undrained (B): the same Kw/n machinery but the UNDRAINED strength is entered directly -- c = su,
@@ -32,10 +32,11 @@ enum class Drainage { Drained = 0, Undrained = 1, NonPorous = 2, UndrainedB = 3,
 inline const char* const* soil_model_names() {
     static const char* n[] = {"Linear elastic", "Mohr-Coulomb", "Hardening Soil", "HS small",
                               "Soft Soil", "Soft Soil Creep", "Hoek-Brown (rock)",
-                              "Modified Cam-Clay"};
+                              "Modified Cam-Clay", "NGI-ADP (anisotropic su)",
+                              "Jointed rock (anisotropic)"};
     return n;
 }
-inline constexpr int kSoilModelCount = 8;   // combo count — updated together with the enum
+inline constexpr int kSoilModelCount = 10;   // combo count — updated together with the enum
 // BOUNDS-CHECKED display name: the enum int comes from a file (a forward-version project
 // can carry an out-of-range value) — raw `names()[i]` or a `& 3` mask silently prints the
 // WRONG model name (measured: with the 5th model added, `& 3` showed "Linear elastic").
@@ -148,6 +149,39 @@ struct Material {
     double hb_D = 0.0;
     double sig_psi = 0.0;
 
+    // NGI-ADP (Grimstad, Andresen & Jostad 2012): an anisotropic undrained shear strength model in
+    // total stress (drainage Undrained (C)). The plane strain ACTIVE strength suA is the shared c
+    // (with c_inc / y_ref its increase with depth), the elastic pair the shared E / nu (the
+    // undrained nu, 0.495; E = 2 (1 + nu) G_ur, which the Studio derives from G_ur / suA). These
+    // are the other two strengths as ratios of suA and the TOTAL shear strains at failure in the
+    // three tests, in percent as they are reported:
+    //   adp_suP    plane strain passive strength / suA       [-]   (typically 0.2 - 0.5)
+    //   adp_suDSS  direct simple shear strength / suA        [-]   (typically 0.3 - 0.8)
+    //   adp_gfC    shear strain at failure, triaxial compression, 3/2 eps1  [%]
+    //   adp_gfE    shear strain at failure, triaxial extension              [%]
+    //   adp_gfDSS  shear strain at failure, direct simple shear             [%]
+    double adp_suP = 0.4, adp_suDSS = 0.7;
+    double adp_gfC = 2.0, adp_gfE = 6.0, adp_gfDSS = 4.0;
+
+    // Jointed rock: elastic rock that fails only on up to three sets of joints, each a family of
+    // parallel planes normal to the model plane (jointed_rock.hpp). E / nu are the rock's -- in the
+    // plane of isotropy, E1 / nu1, when it is transversely isotropic about the normal to the first
+    // set. The FIRST set's strength is the shared c, phi, psi and tension cut-off / tensile
+    // strength (so c_inc, Rinter and the Safety reduction reach it as for any material); the
+    // tension cut-off switch applies to every set. Index 0 of the arrays below is the first set
+    // (only its dip is read there), 1 and 2 the second and third.
+    //   jr_sets       number of joint sets, 1..3
+    //   jr_alpha[i]   dip of set i in the model plane from the x axis, anticlockwise positive [deg]
+    //   jr_c/phi/psi  cohesion [kPa], friction and dilatancy angles [deg] of sets 2 and 3
+    //   jr_sigt       their tensile strengths [kPa]
+    //   jr_aniso      transversely isotropic elasticity: E2, nu2, G2 normal to the first set
+    int jr_sets = 1;
+    double jr_alpha[3] = {0.0, 60.0, -60.0};
+    double jr_c[3] = {0.0, 10.0, 10.0}, jr_phi[3] = {0.0, 30.0, 30.0}, jr_psi[3] = {0.0, 0.0, 0.0};
+    double jr_sigt[3] = {0.0, 0.0, 0.0};
+    bool jr_aniso = false;
+    double jr_E2 = 1.0e4, jr_nu2 = 0.3, jr_G2 = 4.0e3;
+
     // Groundwater — permeability (Groundwater tab; used by seepage/consolidation/flow).
     // Default ≈ a fine-medium sand, ~1 m/day ≈ 1.2e-5 m/s (Das, Principles of Geotech. Eng., Table 7.1).
     double kx = 1.0, ky = 1.0;   // [m/day]
@@ -257,9 +291,11 @@ struct StructElement {
     std::string name = "Element";
     double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
     int material = -1;
-    // Local mesh density (coarseness factor): target element size near this line is
-    // multiplied by it (1 = global, 0.5 = twice as fine, ...). Refine/coarsen halve/double it.
-    double coarseness = 1.0;
+    // Local mesh density (coarseness factor): the target element size near this structure is the
+    // global size times it (1 = global, 0.5 = twice as fine, ...); refine/coarsen halve/double it.
+    // A structure starts at kStructureCoarseness: the elements along a wall, an anchor's ends, a
+    // geogrid or a pile are a quarter of the global size unless the engineer says otherwise.
+    double coarseness = 0.25;
     // Interfaces attached to the element side (right-click -> positive / negative interface).
     // They use the adjacent soil's Rinter unless iface_material >= 0 (a soil material override).
     bool iface_pos = false, iface_neg = false;
@@ -313,6 +349,11 @@ struct StructElement {
     // where a plate's rotation is held (the standard fixities, a plane of symmetry), a hinged end
     // is not held: it is a pin. false = rigid, which is what every file before these keys means.
     bool hinge1 = false, hinge2 = false;
+    // A ROTATION SPRING on a hinged end (`rotk1` / `rotk2`) [kNm/rad per metre out of plane]: the
+    // end's own rotation is tied to the joint's -- or, on a supported boundary with nothing to
+    // join, to the ground -- by a moment k (phi_end - phi_joint). 0 = a free hinge; a semi-rigid
+    // connection between the two. Read only on a hinged end.
+    double rot_k1 = 0.0, rot_k2 = 0.0;
 };
 
 enum class LoadKind { Point, Distributed };
@@ -327,7 +368,7 @@ struct Load {
     std::string name = "Load";
     double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
     double qx1 = 0, qy1 = -10, qx2 = 0, qy2 = -10;
-    double coarseness = 1.0;   // local mesh density near the load (see StructElement)
+    double coarseness = 0.25;  // local mesh density near the load (see StructElement)
 };
 
 // Deformation boundary conditions (model conditions, deformations). Automatic by default
@@ -802,7 +843,7 @@ struct PrescribedDisp {
     double x1 = 0.0, y1 = 0.0, x2 = 0.0, y2 = 0.0;   // the line [m]
     bool set_ux = false; double ux = 0.0;             // horizontal component [m]
     bool set_uy = true;  double uy = 0.0;             // vertical component [m]
-    double coarseness = 1.0;                          // local mesh density factor (like loads)
+    double coarseness = 0.25;                         // local mesh density factor (like loads)
 };
 
 // A hydraulic condition drawn INSIDE the model (docs/k2d-format.md, `hydros`): a line along
@@ -857,10 +898,31 @@ enum class InitialProcedure { K0Procedure, GravityLoading, Safety };
 // Global mesh-generation settings (Mesh mode). The mesher's target triangle area is
 // 0.5 * elem_size^2; the per-object `coarseness` factors scale the target locally.
 // Part of the file contract: a .k2d determines its own discretization.
+// LOCAL DENSITY. Every object carries the factor it is meshed at, and the factor the engineer sees
+// is the one applied: the size near it is the global size times its `coarseness`. Structures,
+// loads and prescribed displacements start at a quarter (kStructureCoarseness), regions and
+// hydraulic lines at 1; a factor lies in [kCoarsenessMin, kCoarsenessMax]. Away from a refined
+// object the size grows by `grading` per metre of distance until it meets the size around it.
+// Until .k2d v29 the factor of a structure or a load was halved again, unseen, whenever
+// `auto_refine` was on, and the size grew by half a metre per metre: the elements doubled within
+// a footing's width of it, coarser in a footing's failure mechanism than the size the engineer had
+// asked for there (a footing's force 617 kN on a mesh whose gentler transition gives 589).
+inline constexpr double kStructureCoarseness = 0.25;
+inline constexpr double kCoarsenessMin = 1.0 / 32.0, kCoarsenessMax = 8.0;
+inline constexpr double kMeshGrading = 0.15;
 struct MeshSettings {
     double elem_size = 2.0;   // target element edge length [m]
     int order = 6;            // element type: 6 = quadratic tri6, 15 = quartic tri15
-    bool auto_refine = true;  // ~2x finer near structural elements and loads
+    // The local factors of structures, loads, prescribed displacements and hydraulic lines are
+    // applied (on) or the mesh ignores them and those objects are meshed at the size of the region
+    // they lie in (off).
+    bool auto_refine = true;
+    double grading = kMeshGrading;   // size growth per metre away from a refined object
+    // ENHANCED REFINEMENT AT CORNERS: where geometry lines meet at an angle that is not a multiple
+    // of 90 degrees -- the toe and crest of a slope, a wedge -- the size there is the element size
+    // times a factor of the sharpest angle between them (kernel/jobs/src/mesh_builder.cpp,
+    // corner_factor): 1 at 90/180/270, 0.5 at 45 and 135, 0.1 at a sliver.
+    bool corner_refine = true;
     // RELATIVE ELEMENT SIZE: 0 = elem_size above is the size; above 0 the size is this factor times
     // a twentieth of the model's diagonal (element_size below), so a model drawn wider keeps the
     // same density of elements. 2 / 1.33 / 1 / 0.67 / 0.5 are very coarse ... very fine.

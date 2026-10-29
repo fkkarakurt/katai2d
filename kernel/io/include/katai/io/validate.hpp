@@ -414,10 +414,13 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
     const bool ss = m.model == SoilModel::SoftSoil || m.model == SoilModel::SoftSoilCreep ||
                     m.model == SoilModel::ModifiedCamClay;
 
-    if ((le || mc) && !(m.E > 0.0))
+    const bool adp = m.model == SoilModel::NgiAdp;
+    const bool jrk = m.model == SoilModel::JointedRock;
+    if ((le || mc || adp || jrk) && !(m.E > 0.0))
         r.add(Severity::Error, path("E"),
               who + "Young's modulus must be positive (got " + num(m.E) + " kN/m2)");
-    if ((le || mc) && !(m.nu > -1.0 && m.nu < 0.5))
+    // (A transversely isotropic rock's nu1 is checked with its other constants below.)
+    if ((le || mc || adp || (jrk && !m.jr_aniso)) && !(m.nu > -1.0 && m.nu < 0.5))
         r.add(Severity::Error, path("nu"),
               who + "Poisson's ratio must lie in (-1, 0.5); at 0.5 the material is "
                     "incompressible and the stiffness matrix is singular (got " +
@@ -470,15 +473,88 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
         }
     }
 
+    // -- NGI-ADP: an undrained total-stress model -----------------------------------
+    // Its strengths are undrained shear strengths, so it is solved in total stress or not at all;
+    // the ratios are strengths, and each failure strain a total strain that must leave the
+    // hardening a plastic part (the catalogue checks that one against the stiffness at solve
+    // time, where the stiffness is known).
+    if (m.model == SoilModel::NgiAdp) {
+        if (m.drainage != Drainage::UndrainedC)
+            r.add(Severity::Error, path("drainage"),
+                  who + "NGI-ADP is an undrained total-stress model: its strengths are undrained "
+                        "shear strengths. Set the drainage type to Undrained (C).");
+        if (!(m.c > 0.0))
+            r.add(Severity::Error, path("c"),
+                  who + "NGI-ADP reads c as the plane strain active shear strength suA, which must "
+                        "be positive (got " + num(m.c) + " kN/m2)");
+        if (!(m.adp_suP > 0.0))
+            r.add(Severity::Error, path("adpsuP"),
+                  who + "suP / suA must be positive (got " + num(m.adp_suP) + ")");
+        if (!(m.adp_suDSS > 0.0))
+            r.add(Severity::Error, path("adpsuDSS"),
+                  who + "suDSS / suA must be positive (got " + num(m.adp_suDSS) + ")");
+        if (!(m.adp_gfC > 0.0) || !(m.adp_gfE > 0.0) || !(m.adp_gfDSS > 0.0))
+            r.add(Severity::Error, path("adpgfC"),
+                  who + "the three shear strains at failure must be positive (got " + num(m.adp_gfC) +
+                      ", " + num(m.adp_gfE) + ", " + num(m.adp_gfDSS) + " %)");
+        if (m.adp_suP > 1.0 || m.adp_suDSS > 1.0)
+            r.add(Severity::Warning, path("adpsuP"),
+                  who + "suP or suDSS above suA: for a normally to lightly overconsolidated clay "
+                        "the passive strength is the lowest of the three and the simple shear one "
+                        "between (suP < suDSS < suA); check that the active strength is in c");
+    }
+
+    // -- Jointed rock: elastic rock failing on its joints ---------------------------
+    // The first set's strength is the shared c / phi / psi checked above; the second and third
+    // sets carry their own, checked the same way, and a transversely isotropic elasticity must be
+    // positive definite.
+    if (jrk) {
+        if (m.drainage == Drainage::Undrained || m.drainage == Drainage::UndrainedB ||
+            m.drainage == Drainage::UndrainedC)
+            r.add(Severity::Error, path("drainage"),
+                  who + "jointed rock is drained or non-porous: its strength is that of its "
+                        "joints, which an undrained shear strength cannot stand for, and the pore "
+                        "fluid's stiffness of Undrained (A) is derived for an isotropic skeleton");
+        if (m.jr_sets < 1 || m.jr_sets > 3)
+            r.add(Severity::Error, path("jrsets"),
+                  who + "jointed rock has one, two or three joint sets (got " + num(m.jr_sets) + ")");
+        for (int i = 1; i < std::min(std::max(m.jr_sets, 1), 3); ++i) {
+            const std::string set = who + "joint set " + std::to_string(i + 1) + ": ";
+            const std::string k = std::to_string(i + 1);
+            if (m.jr_c[i] < 0.0)
+                r.add(Severity::Error, path(("jrc" + k).c_str()), set + "cohesion cannot be negative (got " + num(m.jr_c[i]) + " kN/m2)");
+            if (m.jr_phi[i] < 0.0 || m.jr_phi[i] >= 90.0)
+                r.add(Severity::Error, path(("jrphi" + k).c_str()), set + "the friction angle must lie in [0, 90) degrees (got " + num(m.jr_phi[i]) + ")");
+            if (m.jr_psi[i] < 0.0 || m.jr_psi[i] > m.jr_phi[i])
+                r.add(Severity::Error, path(("jrpsi" + k).c_str()), set + "the dilatancy angle must lie between 0 and the friction angle (got " + num(m.jr_psi[i]) + ")");
+            if (m.jr_c[i] == 0.0 && m.jr_phi[i] == 0.0)
+                r.add(Severity::Error, path(("jrc" + k).c_str()), set + "the joints have no shear strength (c = 0 and phi = 0)");
+            if (m.jr_sigt[i] < 0.0)
+                r.add(Severity::Error, path(("jrsigt" + k).c_str()), set + "the tensile strength cannot be negative (got " + num(m.jr_sigt[i]) + " kN/m2)");
+        }
+        // (the conditions of jr::elastic_admissible, the catalogue's own check at solve time)
+        if (m.jr_aniso) {
+            const std::string te = who + "transversely isotropic elasticity: ";
+            if (!(m.jr_E2 > 0.0)) r.add(Severity::Error, path("jrE2"), te + "E2 must be positive (got " + num(m.jr_E2) + " kN/m2)");
+            if (!(m.jr_G2 > 0.0)) r.add(Severity::Error, path("jrG2"), te + "G2 must be positive (got " + num(m.jr_G2) + " kN/m2)");
+            if (!(m.nu > -1.0 && m.nu < 1.0)) r.add(Severity::Error, path("nu"), te + "nu1 must lie between -1 and 1 (got " + num(m.nu) + ")");
+            if (m.jr_E2 > 0.0 && m.E > 0.0 && !(1.0 - m.nu - 2.0 * m.jr_nu2 * m.jr_nu2 * m.E / m.jr_E2 > 0.0))
+                r.add(Severity::Error, path("jrnu2"),
+                      te + "1 - nu1 - 2 nu2^2 E1/E2 must be positive (got " +
+                          num(1.0 - m.nu - 2.0 * m.jr_nu2 * m.jr_nu2 * m.E / m.jr_E2) +
+                          "): the elastic energy would not be, and the stiffness matrix is not invertible");
+        }
+    }
+
     // -- Undrained (C): a total stress analysis ---------------------------------
     if (m.drainage == Drainage::UndrainedC) {
         // It is offered for the Linear Elastic and Mohr-Coulomb models only. The constitutive
         // catalogue refuses the rest at solve time; saying it here means the project is refused
         // before a mesh is built.
-        if (!(le || mc))
+        if (!(le || mc || m.model == SoilModel::NgiAdp))
             r.add(Severity::Error, path("drainage"),
                   who + "Undrained (C) is a total stress analysis and is available for the "
-                        "Linear elastic and Mohr-Coulomb models only; this material uses " +
+                        "Linear elastic, Mohr-Coulomb and NGI-ADP models only; this material uses " +
                       std::string(model::soil_model_name(m.model)) +
                       ", whose stiffness and hardening are written for effective stress");
         // The undrained Poisson's ratio is typically chosen close to 0.5, between 0.495 and 0.499
@@ -710,6 +786,10 @@ inline ValidationReport validate_project(const model::Project& p) {
         r.add(Severity::Error, "mesh.rel",
               "a relative element size needs the model's extent (x_min..x_max, y_min..y_max), "
               "which is empty");
+    if (!(p.mesh.grading > 0.0))
+        r.add(Severity::Error, "mesh.grading",
+              "the growth of the element size away from a refined object must be positive (got " +
+                  num(p.mesh.grading) + ")");
     if (!(p.mesh.elem_size > 0.0))
         r.add(Severity::Error, "mesh.elem_size",
               "the target element size must be positive (got " + num(p.mesh.elem_size) + " m)");
@@ -996,9 +1076,9 @@ inline ValidationReport validate_project(const model::Project& p) {
                   who + "material index " + std::to_string(P.material) +
                       " does not exist; the project has " + std::to_string(p.materials.size()) +
                       " soil material(s)");
-        if (!(P.coarseness > 0.0))
+        if (!(P.coarseness >= model::kCoarsenessMin && P.coarseness <= model::kCoarsenessMax))
             r.add(Severity::Error, at("polygons", i, "coarseness"),
-                  who + "the mesh coarseness factor must be positive (got " +
+                  who + "the mesh coarseness factor must lie in [1/32, 8] (got " +
                       num(P.coarseness) + ")");
         const auto check_edges = [&](const char* field, const std::vector<int>& v, int lo,
                                      int hi, const char* what) {
@@ -1097,9 +1177,9 @@ inline ValidationReport validate_project(const model::Project& p) {
                       who + "an interface stiffness is set but this line carries no interface, "
                             "so nothing reads it");
         }
-        if (!(s.coarseness > 0.0))
+        if (!(s.coarseness >= model::kCoarsenessMin && s.coarseness <= model::kCoarsenessMax))
             r.add(Severity::Error, at("structs", i, "coarseness"),
-                  who + "the mesh coarseness factor must be positive (got " + num(s.coarseness) +
+                  who + "the mesh coarseness factor must lie in [1/32, 8] (got " + num(s.coarseness) +
                       ")");
     }
 
@@ -1118,9 +1198,9 @@ inline ValidationReport validate_project(const model::Project& p) {
             r.add(Severity::Error, at("loads", i, "x2"),
                   who + "a distributed load needs a line of positive length (both endpoints at "
                         "(" + num(L.x1) + ", " + num(L.y1) + "))");
-        if (!(L.coarseness > 0.0))
+        if (!(L.coarseness >= model::kCoarsenessMin && L.coarseness <= model::kCoarsenessMax))
             r.add(Severity::Error, at("loads", i, "coarseness"),
-                  who + "the mesh coarseness factor must be positive (got " + num(L.coarseness) +
+                  who + "the mesh coarseness factor must lie in [1/32, 8] (got " + num(L.coarseness) +
                       ")");
     }
 
@@ -1136,9 +1216,9 @@ inline ValidationReport validate_project(const model::Project& p) {
             r.add(Severity::Error, at("disps", i, "set_uy"),
                   who + "neither component is prescribed; set set_ux and/or set_uy (a set "
                         "component with value 0 is a support line)");
-        if (!(D.coarseness > 0.0))
+        if (!(D.coarseness >= model::kCoarsenessMin && D.coarseness <= model::kCoarsenessMax))
             r.add(Severity::Error, at("disps", i, "coarseness"),
-                  who + "the mesh coarseness factor must be positive (got " + num(D.coarseness) +
+                  who + "the mesh coarseness factor must lie in [1/32, 8] (got " + num(D.coarseness) +
                       ")");
     }
     // The initial phase is the K0 / gravity / Safety PROCEDURE, not a staged solve: only
@@ -1162,6 +1242,19 @@ inline ValidationReport validate_project(const model::Project& p) {
             r.add(Severity::Warning, at("structs", i, st.hinge1 ? "hinge1" : "hinge2"),
                   "\"" + st.name + "\": only a plate has a rotation to hinge; the setting is "
                   "ignored on this element");
+        for (int e = 0; e < 2; ++e) {
+            const double k = e == 0 ? st.rot_k1 : st.rot_k2;
+            const bool hinged = e == 0 ? st.hinge1 : st.hinge2;
+            const char* key = e == 0 ? "rotk1" : "rotk2";
+            if (k < 0.0)
+                r.add(Severity::Error, at("structs", i, key),
+                      "\"" + st.name + "\": a rotation spring's stiffness cannot be negative (got " +
+                          num(k) + " kNm/rad/m)");
+            else if (k > 0.0 && (!hinged || st.kind != StructKind::Plate))
+                r.add(Severity::Warning, at("structs", i, key),
+                      "\"" + st.name + "\": a rotation spring acts on a HINGED plate end; this end "
+                      "is not hinged, so it is joined rigidly and the spring is not used");
+        }
     }
 
     // -- Cross permeability of walls and interfaces (`flow_barrier`) -----------
@@ -1208,9 +1301,9 @@ inline ValidationReport validate_project(const model::Project& p) {
                   who + "a " + std::string(model::hydro_kind_name(H.kind)) +
                       " needs a line of positive length (both endpoints at (" + num(H.x1) + ", " +
                       num(H.y1) + "))");
-        if (!(H.coarseness > 0.0))
+        if (!(H.coarseness >= model::kCoarsenessMin && H.coarseness <= model::kCoarsenessMax))
             r.add(Severity::Error, path("coarseness"),
-                  who + "the mesh coarseness factor must be positive (got " + num(H.coarseness) +
+                  who + "the mesh coarseness factor must lie in [1/32, 8] (got " + num(H.coarseness) +
                       ")");
         if (H.behaviour != 0 && H.behaviour != 1)
             r.add(Severity::Error, path("behaviour"),

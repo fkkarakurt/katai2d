@@ -232,6 +232,50 @@ class _Materials:
         return self._add(name, _core.SoilModel.ModifiedCamClay, c=0.0, phi=phi_cs, psi=0.0,
                          lam_star=lam_star, kap_star=kap_star, nu_ur=nu_ur, **kw)
 
+    def ngi_adp(self, name, *, su_A, su_P, su_DSS, G_ur_over_su, gamma_f_C, gamma_f_E,
+                gamma_f_DSS, su_inc=0.0, y_ref=0.0, nu_u=0.495, **kw):
+        """NGI-ADP: anisotropic undrained shear strength in total stress (Grimstad, Andresen &
+        Jostad 2012). ``su_A`` is the plane strain ACTIVE strength [kN/m2] at ``y_ref``, growing
+        by ``su_inc`` [kN/m2/m] below it; ``su_P`` and ``su_DSS`` the plane strain passive and
+        direct simple shear strengths [kN/m2] at the same level (their ratios to su_A hold with
+        depth); ``G_ur_over_su`` the shear modulus over su_A (it follows su with depth); the three
+        ``gamma_f_*`` the TOTAL shear strains at failure [%] in undrained triaxial compression
+        (3/2 eps1), triaxial extension and direct simple shear, as the tests report them.
+        Solved as Undrained (C), ``nu_u`` the undrained Poisson's ratio."""
+        E = 2.0 * (1.0 + nu_u) * G_ur_over_su * su_A
+        E_inc = 2.0 * (1.0 + nu_u) * G_ur_over_su * su_inc
+        return self._add(name, _core.SoilModel.NgiAdp, E=E, nu=nu_u, c=su_A, phi=0.0, psi=0.0,
+                         drainage="undrained_c", E_inc=E_inc, c_inc=su_inc, y_ref=y_ref,
+                         adp_suP=su_P / su_A, adp_suDSS=su_DSS / su_A, adp_gfC=gamma_f_C,
+                         adp_gfE=gamma_f_E, adp_gfDSS=gamma_f_DSS, **kw)
+
+    def jointed_rock(self, name, *, E, nu, joints, anisotropic=None, tensile_cutoff=True, **kw):
+        """Jointed rock: elastic rock that fails only on its joints -- up to three sets of
+        parallel planes normal to the model plane. ``joints`` is a list of one to three dicts
+        ``dict(dip=, c=, phi=, psi=0.0, sigma_t=0.0)``: the dip in the model plane from the x
+        axis, anticlockwise positive [deg], the cohesion [kN/m2], friction and dilatancy angles
+        [deg] and tensile strength [kN/m2] of the set. ``E``/``nu`` are the rock's; with
+        ``anisotropic=dict(E2=, nu2=, G2=)`` they are E1/nu1 in the bedding, and E2, nu2, G2
+        describe the rock across it -- the bedding being the first set. ``tensile_cutoff``
+        applies to every set. Drained or ``drainage="non_porous"``."""
+        if not 1 <= len(joints) <= 3:
+            raise ValueError("jointed_rock: one to three joint sets")
+        first = joints[0]
+        fields = dict(E=E, nu=nu, c=first["c"], phi=first["phi"], psi=first.get("psi", 0.0),
+                      tension_cutoff=tensile_cutoff, tensile_strength=first.get("sigma_t", 0.0),
+                      jr_sets=len(joints), jr_alpha1=first["dip"])
+        for i, j in enumerate(joints[1:], start=2):
+            fields[f"jr_alpha{i}"] = j["dip"]
+            fields[f"jr_c{i}"] = j["c"]
+            fields[f"jr_phi{i}"] = j["phi"]
+            fields[f"jr_psi{i}"] = j.get("psi", 0.0)
+            fields[f"jr_sigt{i}"] = j.get("sigma_t", 0.0)
+        if anisotropic is not None:
+            fields.update(jr_aniso=True, jr_E2=anisotropic["E2"], jr_nu2=anisotropic["nu2"],
+                          jr_G2=anisotropic["G2"])
+        fields.update(kw)
+        return self._add(name, _core.SoilModel.JointedRock, **fields)
+
     def hoek_brown(self, name, *, E, nu, sigma_ci, mi, gsi, D=0.0, psi=0.0,
                    sigma_psi=0.0, **kw):
         """Hoek-Brown rock. There is no c/phi here and that is the point: the strength is
@@ -395,7 +439,7 @@ class _Structures:
         self._prj = prj
 
     def _add(self, kind, a, b, name, material_index, *, barrier=None,
-             resistance=0.0, interfaces=None, coarseness=1.0, conn=None,
+             resistance=0.0, interfaces=None, coarseness=0.25, conn=None,
              iface_material=None, iface_kn=None, iface_ks=None, iface_thickness=None):
         S = _core.StructElement()
         S.kind = kind
@@ -439,14 +483,16 @@ class _Structures:
 
     def plate(self, a, b, *, EA, EI, w=0.0, nu=0.0, Mp=0.0, Np=0.0,
               elastoplastic=None, name="Plate", interfaces=None, barrier=None,
-              resistance=0.0, coarseness=1.0, iface_material=None, iface_kn=None,
+              resistance=0.0, coarseness=0.25, iface_material=None, iface_kn=None,
               iface_ks=None, iface_thickness=None, prevent_punching=False,
-              hinge_a=False, hinge_b=False):
+              hinge_a=False, hinge_b=False, spring_a=0.0, spring_b=0.0):
         """A wall, lining or slab: EA [kN/m], EI [kN m2/m], self-weight w [kN/m/m].
 
         ``hinge_a`` / ``hinge_b`` hinge the end at ``a`` / ``b``: plates and walls that
         meet at a point are joined rigidly, and a hinged end keeps its own rotation
         there -- force passes, moment does not. At a supported boundary it is a pin.
+        ``spring_a`` / ``spring_b`` [kN m/rad/m] put a rotation spring on that end -- a
+        semi-rigid connection to the joint, or to the support; giving one hinges the end.
 
         ``Mp`` / ``Np`` (0 = elastic) make it elastoplastic -- the plastic moment
         and axial force it cannot exceed. ``interfaces='both'`` puts a soil-
@@ -479,14 +525,16 @@ class _Structures:
                           iface_kn=iface_kn, iface_ks=iface_ks,
                           iface_thickness=iface_thickness)
             S = self._prj._structs[-1]
-            S.hinge1, S.hinge2 = bool(hinge_a), bool(hinge_b)
+            # A spring acts on a hinged end; a spring given is a hinge meant.
+            S.hinge1, S.hinge2 = bool(hinge_a) or spring_a > 0.0, bool(hinge_b) or spring_b > 0.0
+            S.rot_k1, S.rot_k2 = float(spring_a), float(spring_b)
             return h
         except (TypeError, ValueError):
             self._prj._plates.pop()   # a refused plate leaves no orphan material behind
             raise
 
     def anchor(self, a, b, *, EA, spacing=1.0, prestress=0.0, Fmax_tens=0.0,
-               Fmax_comp=0.0, elastoplastic=None, name="Anchor", coarseness=1.0):
+               Fmax_comp=0.0, elastoplastic=None, name="Anchor", coarseness=0.25):
         """A node-to-node anchor or strut: EA [kN], out-of-plane ``spacing`` [m].
 
         ``prestress`` [kN] is the lock-off force, tension-positive: the member is
@@ -504,7 +552,7 @@ class _Structures:
                          len(self._prj._anchors) - 1, coarseness=coarseness)
 
     def geogrid(self, a, b, *, EA, Np=0.0, elastoplastic=None, name="Geogrid",
-                coarseness=1.0):
+                coarseness=0.25):
         """A tension-only reinforcement sheet: EA [kN/m], tension cap ``Np``
         [kN/m] (0 = unlimited). It carries no compression and no bending -- the
         force goes to zero rather than negative, which is the whole point of it.
@@ -522,7 +570,7 @@ class _Structures:
                          len(self._prj._geogrids) - 1, coarseness=coarseness)
 
     def pile(self, a, b, *, E, diameter, spacing, gamma=24.0, Tskin_max=0.0,
-             Fmax_base=0.0, connection="hinged", name="Pile", coarseness=1.0, Tskin_end=0.0):
+             Fmax_base=0.0, connection="hinged", name="Pile", coarseness=0.25, Tskin_end=0.0):
         """An embedded beam (pile row): E [kN/m2], ``diameter`` [m], out-of-plane
         ``spacing`` [m], unit weight ``gamma`` [kN/m3].
 
@@ -547,7 +595,7 @@ class _Structures:
                          coarseness=coarseness)
 
     def interface(self, a, b, *, name="Interface", barrier=None, resistance=0.0,
-                  coarseness=1.0, iface_material=None, iface_kn=None, iface_ks=None,
+                  coarseness=0.25, iface_material=None, iface_kn=None, iface_ks=None,
                   iface_thickness=None):
         """A bare soil-structure interface line: it takes the strength of the soil
         beside it, reduced by that soil's ``Rinter`` -- or of ``iface_material``.
@@ -973,7 +1021,9 @@ class Project:
     ``relative_mesh`` instead sizes the elements from the model: "very coarse",
     "coarse", "medium", "fine", "very fine" or a factor (1 = medium = a twentieth of
     the model's diagonal), so a model drawn wider keeps the same density;
-    ``auto_refine`` refines near structures and loads.
+    ``auto_refine`` applies the local factors of structures, loads and prescribed
+    displacements (each ``coarseness=``, 0.25 of the element size by default,
+    0.03125 ... 8); off, they mesh at the size of the ground around them.
 
     Build with ``prj.materials`` / ``prj.geometry`` / ``prj.water`` /
     ``prj.loads`` / ``prj.phases``, choose ``prj.initial(...)``, then

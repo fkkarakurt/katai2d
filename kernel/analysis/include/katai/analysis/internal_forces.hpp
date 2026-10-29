@@ -741,6 +741,26 @@ public:
             }
         }
 
+        // --- Rotation springs at hinged plate ends: m = k (phi_a - phi_b), read from the
+        // spring's plate's installation cohort; b = -1 is the ground.
+        for (const auto& rs : structures.rot_springs) {
+            const int inst = rs.five ? (rs.plate < structures.plates5.size() ? structures.plates5[rs.plate].install : -1)
+                                     : (rs.plate < structures.plates.size() ? structures.plates[rs.plate].install : -1);
+            const int ea = dofs.equation(rs.a);
+            const int eb = rs.b >= 0 ? dofs.equation(rs.b) : -1;
+            const double th = u_el(rs.a, inst) - (rs.b >= 0 ? u_el(rs.b, inst) : 0.0);
+            const double m = rs.k * th;
+            if (ea >= 0) f_int(ea) += m;
+            if (eb >= 0) f_int(eb) -= m;
+            if (!build_tangent) continue;
+            if (ea >= 0) builder->add_entry(ea, ea, rs.k);
+            if (eb >= 0) builder->add_entry(eb, eb, rs.k);
+            if (ea >= 0 && eb >= 0) {
+                builder->add_entry(ea, eb, -rs.k);
+                builder->add_entry(eb, ea, -rs.k);
+            }
+        }
+
         // --- 5-node (quartic) plate contribution (tri15 edge). 15 DOFs; same logic as 3-node.
         for (size_t pli = 0; pli < structures.plates5.size(); ++pli) {
             const auto& pe = structures.plates5[pli];
@@ -843,36 +863,43 @@ public:
         // --- Geogrid (tension-only axial membrane; §8) contribution. 6 DOFs (translations;
         // no bending/rotation), shared with the soil. Per-Gauss-point tension-only + N_p
         // return mapping: ε=Be·u → N=clamp(EA(ε−ε_p),0,N_p); the compression cut-off is
-        // reversible, N_p yield is permanent (ε_p).
-        const auto gxi = geogrid::gauss_xi();
+        // reversible, N_p yield is permanent (ε_p). 3 or 5 nodes (geogrid.hpp); a membrane of
+        // revolution (GeogridProps::axisym) is integrated per radian and carries a hoop force too.
         for (size_t gi = 0; gi < structures.geogrids.size(); ++gi) {
             const auto& ge = structures.geogrids[gi];
-            geogrid::NodeCoords Xe;
-            int geq[6], gd[6];
-            for (int k = 0; k < 3; ++k) {
-                Xe(k, 0) = mesh.x[ge.nodes[k]];
-                Xe(k, 1) = mesh.y[ge.nodes[k]];
+            const int nn = ge.node_count(), nd = 2 * nn;
+            geogrid::GridCoords Xe = geogrid::GridCoords::Zero();
+            int geq[10], gd[10];
+            for (int k = 0; k < nn; ++k) {
+                Xe(k, 0) = mesh.x[ge.node(k)];
+                Xe(k, 1) = mesh.y[ge.node(k)];
                 gd[2 * k + 0] = geogrid_dof(ge, dofs, k, 0);
                 gd[2 * k + 1] = geogrid_dof(ge, dofs, k, 1);
                 geq[2 * k + 0] = dofs.equation(gd[2 * k + 0]);
                 geq[2 * k + 1] = dofs.equation(gd[2 * k + 1]);
             }
-            geogrid::Dof ug = geogrid::Dof::Zero();
-            for (int a = 0; a < 6; ++a) ug(a) = u_el(gd[a], ge.install);
-            for (int q = 0; q < geogrid::kGaussCount; ++q) {
-                const auto kin = geogrid::axial_kin(Xe, gxi[q]);
+            geogrid::GridDof ug = geogrid::GridDof::Zero();
+            for (int a = 0; a < nd; ++a) ug(a) = u_el(gd[a], ge.install);
+            for (int q = 0; q < geogrid::point_count(nn); ++q) {
+                const auto kin = geogrid::grid_kin(Xe, nn, q, ge.props.axisym);
                 const double eps = (kin.Be * ug)(0);
-                const size_t si = gi * geogrid::kGaussCount + q;
+                const size_t si = gi * geogrid::kStateStride + q;
                 const auto ret = geogrid::axial_return(ge.props, eps, (*st.geogrid_c)[si]);
                 (*st.geogrid_t)[si] = ret.ep_new;
-                const double w = kin.J;  // 2-point weight = 1
-                for (int a = 0; a < 6; ++a) {
+                const auto hr = ge.props.axisym ? geogrid::hoop_return(ge.props, (kin.Bt * ug)(0))
+                                                : geogrid::AxialReturn{0.0, 0.0, 0.0};
+                const double w = kin.wJ;
+                for (int a = 0; a < nd; ++a) {
                     if (geq[a] < 0) continue;
-                    f_int(geq[a]) += w * kin.Be(0, a) * ret.N;
+                    // (the meridional term in the historical order of its products: the 3-noded
+                    // plane element is reproduced to the bit, its hoop term an exact zero)
+                    f_int(geq[a]) += w * kin.Be(0, a) * ret.N + w * kin.Bt(0, a) * hr.N;
                     if (!build_tangent) continue;
-                    for (int b = 0; b < 6; ++b)
+                    for (int b = 0; b < nd; ++b)
                         if (geq[b] >= 0)
-                            builder->add_entry(geq[a], geq[b], w * kin.Be(0, a) * ret.Dt * kin.Be(0, b));
+                            builder->add_entry(geq[a], geq[b],
+                                               w * kin.Be(0, a) * ret.Dt * kin.Be(0, b) +
+                                                   w * kin.Bt(0, a) * hr.Dt * kin.Bt(0, b));
                 }
             }
         }

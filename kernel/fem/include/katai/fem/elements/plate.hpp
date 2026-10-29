@@ -64,6 +64,15 @@ struct PlateProps {
     // so it is evaluated on the path that reads that state even when it has no capacity.
     bool carries_state = false;
     bool stateful() const { return plastic() || carries_state; }
+    // AXIAL SYMMETRY: the plate is a shell of revolution (a cone frustum per element, r = x the
+    // radius, z = y the axis), per radian like the soil. Besides the meridional strain, curvature
+    // and shear of the plane strain plate it has a hoop strain eps_t = u_r / r and a hoop
+    // curvature kap_t = cos(beta) phi / r (beta the meridian's angle to the r axis), and
+    //     N_s = EA (eps_s + nu eps_t),  N_t = EA (eps_t + nu eps_s),
+    //     M_s = EI (kap_s + nu kap_t),  M_t = EI (kap_t + nu kap_s),
+    // so that, with no hoop strain at all, it is the plane strain plate whose EA and EI were
+    // entered. Elastic only (the M-N hinge has no hoop counterpart here and is refused).
+    bool axisym = false;
 };
 
 // Plate inertia for a Dynamic (seismic) phase, from the plate material weight w [kN/m/m]
@@ -116,9 +125,25 @@ inline void b_rows(const EdgeKinematics& e, Eigen::Matrix<double, 1, 9>& Be,
 }
 }  // namespace detail
 
+namespace detail {
+// The hoop rows of a shell of revolution (PlateProps::axisym) at a point of radius r: the hoop
+// strain u_r / r and the hoop curvature c phi / r, c = dr/ds (the cosine of the meridian's angle
+// to the r axis; it changes sign with the element's direction exactly as dphi/ds does, so the
+// energy does not).
+template <int Nn>
+inline void hoop_rows(const Eigen::Matrix<double, Nn, 1>& N, double c, double r,
+                      Eigen::Matrix<double, 1, 3 * Nn>& Bt, Eigen::Matrix<double, 1, 3 * Nn>& Bkt) {
+    Bt.setZero(); Bkt.setZero();
+    for (int i = 0; i < Nn; ++i) {
+        Bt(0, 3 * i + 0) = N(i) / r;
+        Bkt(0, 3 * i + 2) = c * N(i) / r;
+    }
+}
+}  // namespace detail
+
 // Local→global stiffness (9×9). Selective reduced integration: axial+bending 3-point
 // Gauss, shear 2-point Gauss (prevents shear locking). c,s are embedded in B → no separate
-// transformation needed.
+// transformation needed. In axial symmetry, per radian, with the hoop terms (PlateProps::axisym).
 inline ElementMatrix stiffness(const NodeCoords& X, const PlateProps& p) {
     ElementMatrix K = ElementMatrix::Zero();
     const double kGA = p.shear_rigidity();
@@ -130,6 +155,17 @@ inline ElementMatrix stiffness(const NodeCoords& X, const PlateProps& p) {
         const auto e = detail::edge_kin(X, xi3[q]);
         Eigen::Matrix<double, 1, 9> Be, Bk, Bg;
         detail::b_rows(e, Be, Bk, Bg);
+        if (p.axisym) {
+            const double r = e.N.dot(X.col(0));
+            Eigen::Matrix<double, 1, 9> Bt, Bkt;
+            detail::hoop_rows<3>(e.N, e.c, r, Bt, Bkt);
+            const double wds = w3[q] * e.J * r;
+            K += wds * (p.EA * (Be.transpose() * Be + Bt.transpose() * Bt +
+                                p.nu * (Be.transpose() * Bt + Bt.transpose() * Be)) +
+                        p.EI * (Bk.transpose() * Bk + Bkt.transpose() * Bkt +
+                                p.nu * (Bk.transpose() * Bkt + Bkt.transpose() * Bk)));
+            continue;
+        }
         const double wds = w3[q] * e.J;
         K += wds * (p.EA * Be.transpose() * Be + p.EI * Bk.transpose() * Bk);
     }
@@ -140,18 +176,27 @@ inline ElementMatrix stiffness(const NodeCoords& X, const PlateProps& p) {
         const auto e = detail::edge_kin(X, xi2[q]);
         Eigen::Matrix<double, 1, 9> Be, Bk, Bg;
         detail::b_rows(e, Be, Bk, Bg);
-        const double wds = 1.0 * e.J;  // 2-point weight = 1
+        const double wds = 1.0 * e.J * (p.axisym ? e.N.dot(X.col(0)) : 1.0);  // 2-point weight = 1
         K += wds * (kGA * Bg.transpose() * Bg);
     }
     return K;
 }
 
 // Structural force recovery at one ξ: N, Q, M (per unit width).
-struct PlateForces { double N, Q, M; };
+// In axial symmetry N and M are the meridional ones, and Nt, Mt the hoop force and moment (per
+// unit length of the hoop and of the meridian); zero in plane strain.
+struct PlateForces { double N, Q, M; double Nt = 0.0, Mt = 0.0; };
 inline PlateForces forces(const NodeCoords& X, const PlateProps& p, const Dof& u, double xi) {
     const auto e = detail::edge_kin(X, xi);
     Eigen::Matrix<double, 1, 9> Be, Bk, Bg;
     detail::b_rows(e, Be, Bk, Bg);
+    if (p.axisym) {
+        Eigen::Matrix<double, 1, 9> Bt, Bkt;
+        detail::hoop_rows<3>(e.N, e.c, e.N.dot(X.col(0)), Bt, Bkt);
+        const double es = (Be * u)(0), et = (Bt * u)(0), ks = (Bk * u)(0), kt = (Bkt * u)(0);
+        return {p.EA * (es + p.nu * et), p.shear_rigidity() * (Bg * u)(0), p.EI * (ks + p.nu * kt),
+                p.EA * (et + p.nu * es), p.EI * (kt + p.nu * ks)};
+    }
     return {p.EA * (Be * u)(0), p.shear_rigidity() * (Bg * u)(0), p.EI * (Bk * u)(0)};
 }
 
@@ -378,6 +423,17 @@ inline ElementMatrix5 stiffness5(const NodeCoords5& X, const PlateProps& p) {
         const auto e = detail::edge_kin5(X, xi5[q]);
         Eigen::Matrix<double, 1, 15> Be, Bk, Bg;
         detail::b_rows5(e, Be, Bk, Bg);
+        if (p.axisym) {
+            const double r = e.N.dot(X.col(0));
+            Eigen::Matrix<double, 1, 15> Bt, Bkt;
+            detail::hoop_rows<5>(e.N, e.c, r, Bt, Bkt);
+            const double wds = w5[q] * e.J * r;
+            K += wds * (p.EA * (Be.transpose() * Be + Bt.transpose() * Bt +
+                                p.nu * (Be.transpose() * Bt + Bt.transpose() * Be)) +
+                        p.EI * (Bk.transpose() * Bk + Bkt.transpose() * Bkt +
+                                p.nu * (Bk.transpose() * Bkt + Bkt.transpose() * Bk)));
+            continue;
+        }
         const double wds = w5[q] * e.J;
         K += wds * (p.EA * Be.transpose() * Be + p.EI * Bk.transpose() * Bk);
     }
@@ -390,7 +446,7 @@ inline ElementMatrix5 stiffness5(const NodeCoords5& X, const PlateProps& p) {
         const auto e = detail::edge_kin5(X, xi4[q]);
         Eigen::Matrix<double, 1, 15> Be, Bk, Bg;
         detail::b_rows5(e, Be, Bk, Bg);
-        K += (w4[q] * e.J) * (kGA * Bg.transpose() * Bg);
+        K += (w4[q] * e.J * (p.axisym ? e.N.dot(X.col(0)) : 1.0)) * (kGA * Bg.transpose() * Bg);
     }
     return K;
 }
@@ -400,6 +456,13 @@ inline PlateForces forces5(const NodeCoords5& X, const PlateProps& p, const Dof5
     const auto e = detail::edge_kin5(X, xi);
     Eigen::Matrix<double, 1, 15> Be, Bk, Bg;
     detail::b_rows5(e, Be, Bk, Bg);
+    if (p.axisym) {
+        Eigen::Matrix<double, 1, 15> Bt, Bkt;
+        detail::hoop_rows<5>(e.N, e.c, e.N.dot(X.col(0)), Bt, Bkt);
+        const double es = (Be * u)(0), et = (Bt * u)(0), ks = (Bk * u)(0), kt = (Bkt * u)(0);
+        return {p.EA * (es + p.nu * et), p.shear_rigidity() * (Bg * u)(0), p.EI * (ks + p.nu * kt),
+                p.EA * (et + p.nu * es), p.EI * (kt + p.nu * ks)};
+    }
     return {p.EA * (Be * u)(0), p.shear_rigidity() * (Bg * u)(0), p.EI * (Bk * u)(0)};
 }
 

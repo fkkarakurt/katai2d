@@ -67,7 +67,12 @@ def rigid_footing(steps=None, mesh=0.4, element="tri15"):
     push = prj.displacements.line((0, 4), (1, 4), ux=0.0, uy=-0.05, name="Footing")
     prj.initial(procedure="k0", exclude=[push])
     prj.phases.plastic("Push", activate=[push], **({"load_steps": steps} if steps else {}))
-    job = katai.Job(prj.build())
+    prj._disps[push.index].coarseness = 0.5
+    pr = prj.build()
+    # The density these checks were measured on: the footing at half the element size, growing by
+    # half a metre per metre (the .k2d v28 default). They are about the solver, not the mesh.
+    pr.mesh.grading = 0.5
+    job = katai.Job(pr)
     ok = job.run()
     r = job.results()[-1]
     force = -sum(r.reaction[2 * i + 1] for i in range(len(r.node_x))

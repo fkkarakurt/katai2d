@@ -65,6 +65,19 @@ struct MaterialParams {
     // than a fitted c'/phi'. The elastic pair is E / nu above -- rock keeps Hooke's law -- and
     // the dilatancy angle is psi_rad, its value at sigma'_3 = 0.
     double sig_ci = 0.0, mi = 0.0, gsi = 0.0, hb_D = 0.0, sig_psi = 0.0;
+    // NGI-ADP (ngi_adp.hpp): c is the plane strain active strength suA, E / nu the undrained
+    // elastic pair; these are suP / suA, suDSS / suA and the total shear strains at failure in
+    // triaxial compression, triaxial extension and direct simple shear [-].
+    double adp_suP = 0.0, adp_suDSS = 0.0, adp_gfC = 0.0, adp_gfE = 0.0, adp_gfDSS = 0.0;
+    // Jointed rock (jointed_rock.hpp): E / nu are E1 / nu1, the first joint set's strength is c,
+    // phi_rad, psi_rad and the tension cut-off above, at the dip jr_alpha[0]. The second and third
+    // sets carry their own; jr_sets of them (1..3) are used. Angles in radians.
+    bool jr_aniso = false;
+    double jr_E2 = 0.0, jr_nu2 = 0.0, jr_G2 = 0.0;
+    int jr_sets = 1;
+    double jr_alpha[3] = {0.0, 0.0, 0.0};
+    double jr_c[3] = {0.0, 0.0, 0.0}, jr_phi[3] = {0.0, 0.0, 0.0}, jr_psi[3] = {0.0, 0.0, 0.0};
+    double jr_sigt[3] = {0.0, 0.0, 0.0};
 
     // K0^NC memory shared by the HS cap and the SS/SSC preconsolidation law:
     // auto = Jaky 1 - sin(phi'), otherwise the given value.

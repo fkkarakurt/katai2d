@@ -117,6 +117,18 @@ void assemble_structural_stiffness(const mesh::Mesh& mesh, const DofMap& dofs,
         detail::scatter<9>(eq, plate::stiffness(Xe, pe.props), builder);
     }
 
+    // --- Rotation springs at hinged plate ends (b = -1: the ground).
+    for (const auto& rs : structures.rot_springs) {
+        const int ea = dofs.equation(rs.a);
+        const int eb = rs.b >= 0 ? dofs.equation(rs.b) : -1;
+        if (ea >= 0) builder.add_entry(ea, ea, rs.k);
+        if (eb >= 0) builder.add_entry(eb, eb, rs.k);
+        if (ea >= 0 && eb >= 0) {
+            builder.add_entry(ea, eb, -rs.k);
+            builder.add_entry(eb, ea, -rs.k);
+        }
+    }
+
     // --- 5-node (quartic) plate (tri15 edge): 15 DOF; the same logic as the 3-node one.
     for (const auto& pe : structures.plates5) {
         plate::NodeCoords5 Xe;
@@ -160,6 +172,28 @@ void assemble_structural_stiffness(const mesh::Mesh& mesh, const DofMap& dofs,
     {
         const auto gxi = geogrid::gauss_xi();
         for (const auto& ge : structures.geogrids) {
+            if (ge.node_count() == 5 || ge.props.axisym) {
+                // The quartic element and the membrane of revolution (geogrid.hpp): the same
+                // stiffness the static solver assembles on its elastic branch, the hoop included.
+                const int nn = ge.node_count();
+                geogrid::GridCoords Xg = geogrid::GridCoords::Zero();
+                std::array<int, 10> eqg;
+                eqg.fill(-1);
+                for (int k = 0; k < nn; ++k) {
+                    Xg(k, 0) = mesh.x[ge.node(k)];
+                    Xg(k, 1) = mesh.y[ge.node(k)];
+                    eqg[2 * k + 0] = dofs.equation(geogrid_dof(ge, dofs, k, 0));
+                    eqg[2 * k + 1] = dofs.equation(geogrid_dof(ge, dofs, k, 1));
+                }
+                Eigen::Matrix<double, 10, 10> Kg = Eigen::Matrix<double, 10, 10>::Zero();
+                for (int q = 0; q < geogrid::point_count(nn); ++q) {
+                    const auto kin = geogrid::grid_kin(Xg, nn, q, ge.props.axisym);
+                    Kg += (kin.wJ * ge.props.EA) *
+                          (kin.Be.transpose() * kin.Be + kin.Bt.transpose() * kin.Bt);
+                }
+                detail::scatter<10>(eqg, Kg, builder);
+                continue;
+            }
             geogrid::NodeCoords Xe;
             std::array<int, 6> eq;
             for (int k = 0; k < 3; ++k) {
@@ -366,7 +400,8 @@ void assemble_structural_weight(const mesh::Mesh& mesh, const DofMap& dofs,
             }
             for (int q = 0; q < 3; ++q) {
                 const auto e = plate::detail::edge_kin(Xe, xi3[q]);
-                const double wds = w3[q] * e.J * pe.props.rho_A * g;
+                // per radian in axial symmetry, like the shell's stiffness (plate.hpp)
+                const double wds = w3[q] * e.J * pe.props.rho_A * g * (pe.props.axisym ? e.N.dot(Xe.col(0)) : 1.0);
                 for (int i = 0; i < 3; ++i) {
                     if (eqy[i] >= 0) f(eqy[i]) += cy * wds * e.N(i);
                     if (eqx[i] >= 0 && cx != 0.0) f(eqx[i]) += cx * wds * e.N(i);
@@ -392,7 +427,7 @@ void assemble_structural_weight(const mesh::Mesh& mesh, const DofMap& dofs,
             }
             for (int q = 0; q < 5; ++q) {
                 const auto e = plate::detail::edge_kin5(Xe, xi5[q]);
-                const double wds = w5[q] * e.J * pe.props.rho_A * g;
+                const double wds = w5[q] * e.J * pe.props.rho_A * g * (pe.props.axisym ? e.N.dot(Xe.col(0)) : 1.0);
                 for (int i = 0; i < 5; ++i) {
                     if (eqy[i] >= 0) f(eqy[i]) += cy * wds * e.N(i);
                     if (eqx[i] >= 0 && cx != 0.0) f(eqx[i]) += cx * wds * e.N(i);

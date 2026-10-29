@@ -135,8 +135,17 @@ void test_berlin_triaxial() {
     // With the full gradient the shipped tolerance reaches the plateau (measured 100.000% at both
     // 1e-5 and 1e-8), so what is asserted now is that it is reached, at both, and that the
     // tolerance no longer decides where the deviator ends.
-    const double q_tight = walk(1e-8, sigma3);
-    std::printf("  plateau vs integration tolerance: shipped %.5f%% of qf -> stol 1e-8 %.5f%%\n",
+    //
+    // The tight walk is at 1e-6 since 2026-10-29. Its 1e-8 was never met: until then the
+    // integrator stopped at 200 substeps whatever its error measure said, so the "tight" walk was
+    // the shipped one taken a little finer. Now every substep's local error is held under the
+    // tolerance (Sloan, Abbo & Sheng 2001), and measured with study_hs_integration `triax 0.05`:
+    // 9 s at the shipped tolerance, 10 s at 1e-6, over ten minutes at 1e-7 -- below 1e-6 some
+    // walks no longer converge faster than first order and are refined to their ceiling (open,
+    // docs/references/hardening-soil-formulation.md Sec. 8b). A decade below the shipped
+    // tolerance still answers the question asked: whether tightening moves the deviator.
+    const double q_tight = walk(1e-6, sigma3);
+    std::printf("  plateau vs integration tolerance: shipped %.5f%% of qf -> stol 1e-6 %.5f%%\n",
                 100.0 * q_shipped / qf, 100.0 * q_tight / qf);
     check(close(q_shipped, qf, 1e-4),
           "the shipped integration tolerance reaches the failure plateau (within 0.01%)");

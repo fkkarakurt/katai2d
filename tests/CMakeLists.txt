@@ -42,6 +42,7 @@ katai_add_test(test_hs_multiaxial katai::materials)     # HS off the compression
 katai_add_test(test_hs_closed_forms katai::materials)   # HS against its four closed forms: the drained hyperbola, the cap steepness for m = 1, undrained elastic loading, where the undrained path meets the cap
 katai_add_test(test_plate katai::fem)             # Plate (Mindlin/Timoshenko beam) cantilever validation (P2.4)
 katai_add_test(test_plate5 katai::fem)            # 5-node quartic plate (tri15 edge) validation (P2.4)
+katai_add_test(test_axisym_plate katai::fem)      # KV-STR-029: a plate in axial symmetry is a shell of revolution -- a cylinder under pressure, a circular plate clamped and simply supported, against shell and plate theory
 katai_add_test(test_consolidation katai::analysis)     # Biot coupled consolidation -- Terzaghi 1D U-Tv (Phase A.2)
 katai_add_test(test_transient_flow katai::analysis katai::mesh)  # Transient saturated flow (W1): Terzaghi isochrones + Carslaw-Jaeger erfc + steady regression
 katai_add_test(test_water_retention katai::materials)   # van Genuchten SWCC + Mualem k_rel (W2a): limits/monotonicity/asymptotes/Mualem n=2 + analytic capacity = FD
@@ -146,11 +147,27 @@ katai_add_test(test_consolidation_gui katai::jobs katai::mesh katai::analysis ka
 katai_add_test(test_consolidation_stop katai::jobs katai::mesh katai::analysis katai::model katai::linsolve) # Consolidation stop criteria (phases[i].cstop, docs/k2d-format.md): restart identity + the PRESSURE-ratio degree of consolidation against Terzaghi
 katai_add_test(test_consolidation_stop_tolerance katai::jobs katai::mesh katai::model) # KV-NUM-015: a state-stop consolidation phase ends when the converged run does, at the default tolerance
 katai_add_test(test_axisym_consolidation katai::jobs katai::mesh katai::model)  # KV-CON-008: consolidation in axisymmetry -- a column = Terzaghi and the plane-strain column; a drain's unit cell = Barron; the axis is closed by default
+katai_add_test(test_axisym_fully_coupled katai::jobs katai::mesh katai::model)  # KV-CON-009: a fully coupled phase in axisymmetry -- a column = Terzaghi, a drain's unit cell = Barron, both = the consolidation phase of the same model
 katai_add_test(test_modified_cam_clay katai::jobs katai::mesh katai::model katai::materials)  # KV-CST-023: Modified Cam-Clay -- undrained/drained triaxial against the closed forms, the FE wrapper against the point, a column at the model's K0
+katai_add_test(test_ngi_adp katai::jobs katai::mesh katai::model katai::materials katai::io)  # KV-CST-024: NGI-ADP at the material point -- the three plane-strain and two triaxial strengths, the failure strains
+if(TARGET test_ngi_adp)
+  target_compile_definitions(test_ngi_adp PRIVATE KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
+katai_add_test(test_jointed_rock katai::materials)  # KV-CST-025: jointed rock at the point -- the transversely isotropic directional modulus (Lekhnitskii), Jaeger's plane of weakness, the consistent tangent of the exact multi-surface return
+katai_add_test(test_jointed_rock_fe katai::jobs katai::mesh katai::model katai::analysis)  # KV-CST-026: jointed rock through the program -- a bedded block's anisotropic stiffness, Jaeger's strength, a block's factor of safety, a rock slope sliding on a daylighting joint set (Hoek & Bray)
+katai_add_test(test_collapse_arc katai::jobs katai::mesh katai::model katai::io)  # KV-NUM-016: a load-controlled collapse load by arc length, to 1e-3 of itself -- an unconfined Mohr-Coulomb block (closed form) and the Prandtl footing
+if(TARGET test_collapse_arc)
+  target_compile_definitions(test_collapse_arc PRIVATE KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
+katai_add_test(test_axisym_plate_fe katai::jobs katai::mesh katai::model katai::analysis)  # KV-STR-030: a plate in an axisymmetric project -- a tank wall under internal pressure carries N_t = p R through the whole program
+katai_add_test(test_axisym_geogrid_anchor katai::jobs katai::mesh katai::model katai::analysis)  # KV-STR-031, KV-STR-032: a geogrid of revolution (a cylinder N_t = p R, a disk by the membrane equation) and a row of anchors round a circle, r / Ls per radian
 katai_add_test(test_consolidation_pile katai::jobs katai::mesh katai::model)  # KV-STR-023: an embedded pile row slipping in a consolidation phase -- the shaft's closed-form force, the drained limit, the control
 katai_add_test(test_tunnel_ring katai::jobs katai::mesh katai::model)  # KV-STR-024: a lining drawn as chords around a deep tunnel -- Kirsch, the ring-ground compatibility with and without an interface, the joint at the crown
 katai_add_test(test_plate_hinge katai::jobs katai::mesh katai::model)  # KV-STR-025: a hinged plate end passes no moment -- a slab joint, a pinned base, a joint of two walls with interfaces
+katai_add_test(test_rotation_spring katai::jobs katai::mesh katai::model)  # KV-STR-028: a rotation spring on a hinged plate end -- the turn of a base and of a joint, P L^2 / k at the tip
 katai_add_test(test_load_on_wall katai::jobs katai::mesh katai::model)  # KV-STR-026: a distributed load drawn on a plate with an interface is carried by the plate -- the raft's equilibrium
+katai_add_test(test_joint_water katai::jobs katai::mesh katai::model)  # KV-STR-033: a wall below the water table installs without moving, its joint holds and rubs with the effective normal stress, and a pit dug below the water table bends it as the dry ground of buoyant weight does
+katai_add_test(test_wall_split_topology katai::jobs katai::mesh katai::model)  # KV-STR-027: the mesh is opened along the drawn walls and nowhere else -- corners, junctions, tips, a ring
 katai_add_test(test_consolidation_structures katai::jobs katai::mesh katai::analysis katai::model) # Plates/anchors/geogrids INSIDE a consolidation phase: the drained limit is the oracle (KV-STR-006)
 katai_add_test(test_consolidation_layers katai::jobs katai::mesh katai::analysis katai::model)  # KV-CON-004: the storage term n/Kw per material -- each layer's undrained pressure, the same answer whatever order the materials are listed in, and the settlement history against an independent finite-volume column
 katai_add_test(test_consolidation_interface katai::jobs katai::mesh katai::analysis katai::model)  # Interfaces in a consolidation phase: cross permeability ties/separates the pore field, elastic joint reported (KV-STR-007)
@@ -470,7 +487,9 @@ set(_katai_slow_tests
   test_hs_axisym 317              test_input_corpus_kv-cst-012 306
   test_foundation_benchmarks 294  test_convergence_criteria 230
   test_gui_matrix 173             test_dynamic_gui 128    test_bearing_phi 125
-  test_input_corpus_kv-str-004 90 test_input_corpus_kv-fnd-013 72)
+  test_input_corpus_kv-str-004 90 test_input_corpus_kv-fnd-013 72
+  test_ngi_adp 88                 test_jointed_rock_fe 122
+  test_collapse_arc 124)
 while(_katai_slow_tests)
   list(POP_FRONT _katai_slow_tests _t _cost)
   if(TEST ${_t})

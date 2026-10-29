@@ -31,9 +31,43 @@ namespace katai::core {
 // a structured mesh). Returns: (right, left, y) seam pairs (not sorted top-down — the
 // caller may sort by y). Must be called BEFORE the DofMap is built.
 struct SeamPair { int right; int left; double y; };
+
+// THE SIDE OF AN ELEMENT AT A LINE'S END IS THE SECTOR IT LIES IN. Round the node where a split
+// line ends, the elements were classified by the side of the line's infinite extension -- and
+// where another wall leaves that node (an L corner, a vertex of a lining), the extension cuts
+// across the ground the other wall bounds: an element beyond it took the copy of the other side,
+// and the mesh opened along an edge no wall was drawn on (measured on an L corner of a wall and a
+// slab: one edge opened under the slab). The rays of the walls that leave the node cut its
+// neighbourhood into sectors, and an element takes the side of the sector it lies in.
+// `own` is this line's ray from the node, `others` the other walls' rays, `ccw_positive` whether
+// the sector counter-clockwise next to `own` is the positive (unchanged) side. Returns +1 positive,
+// -1 negative, 0 for a sector the line does not bound (the caller keeps its own rule there).
+inline int sector_side(double px, double py, double cx, double cy, double own,
+                       const std::vector<double>& others, bool ccw_positive) {
+    constexpr double kTwoPi = 6.28318530717958647692;
+    const auto rel = [&](double a) {
+        double d = std::fmod(a - own, kTwoPi);
+        if (d < 0.0) d += kTwoPi;
+        return d;
+    };
+    double lo = kTwoPi, hi = 0.0;   // the nearest other ray counter-clockwise, and clockwise
+    for (const double o : others) {
+        const double r = rel(o);
+        if (r < 1e-9 || r > kTwoPi - 1e-9) continue;   // a ray along this line is this line
+        lo = std::min(lo, r);
+        hi = std::max(hi, r);
+    }
+    if (lo >= kTwoPi) return 0;
+    const double t = rel(std::atan2(cy - py, cx - px));
+    if (t < lo) return ccw_positive ? 1 : -1;
+    if (t > hi) return ccw_positive ? -1 : 1;
+    return 0;
+}
+
 inline std::vector<SeamPair> split_mesh_at_wall(mesh::Mesh& mesh, double x_wall,
                                                 double y_toe, double y_top,
-                                                double tol = 1e-6) {
+                                                double tol = 1e-6,
+                                                const std::vector<double>& rays_top = {}) {
     std::vector<int> dup(mesh.node_count, -1);  // original node → twin (left) node
     std::vector<SeamPair> pairs;
     for (int n = 0; n < mesh.node_count; ++n)
@@ -48,9 +82,20 @@ inline std::vector<SeamPair> split_mesh_at_wall(mesh::Mesh& mesh, double x_wall,
     }
     mesh.node_count += static_cast<int>(pairs.size());
     for (int e = 0; e < mesh.element_count; ++e) {  // re-wire the left elements to the twins
-        double xc = 0.0;
-        for (int k = 0; k < mesh.nodes_per_element; ++k) xc += mesh.x[mesh.node_of(e, k)];
-        if (xc / mesh.nodes_per_element >= x_wall) continue;  // right side → unchanged
+        double xc = 0.0, yc = 0.0;
+        bool at_top = false;
+        for (int k = 0; k < mesh.nodes_per_element; ++k) {
+            const int nd = mesh.node_of(e, k);
+            xc += mesh.x[nd]; yc += mesh.y[nd];
+            at_top = at_top || (dup[nd] >= 0 && std::fabs(mesh.y[nd] - y_top) < tol);
+        }
+        xc /= mesh.nodes_per_element; yc /= mesh.nodes_per_element;
+        // At the top, where other walls leave it: the sector (the wall's ray points down; the
+        // right side is counter-clockwise of it).
+        const int sec = at_top && !rays_top.empty()
+                            ? sector_side(x_wall, y_top, xc, yc, -1.57079632679489661923, rays_top, true)
+                            : 0;
+        if (sec > 0 || (sec == 0 && xc >= x_wall)) continue;  // right side → unchanged
         for (int k = 0; k < mesh.nodes_per_element; ++k) {
             const int idx = e * mesh.nodes_per_element + k;
             if (dup[mesh.connectivity[idx]] >= 0)
@@ -72,9 +117,13 @@ inline std::vector<SeamPair> split_mesh_at_wall(mesh::Mesh& mesh, double x_wall,
 // pairs SORTED by s (corner,mid,corner… tri6 / corner,q,m,q,corner… tri15). Must be called
 // BEFORE the DofMap is built. (Interface: a structural/in-soil slip surface.)
 struct SegSeam { int orig; int dup; double x, y, s; };
+// `rays_a` / `rays_b`: the directions [rad] of the other walls that leave (ax, ay) / (bx, by);
+// the elements round a node split there take their side by sector (sector_side above).
 inline std::vector<SegSeam> split_mesh_at_segment(mesh::Mesh& mesh, double ax, double ay,
                                                   double bx, double by, double s_lo, double s_hi,
-                                                  double tol = 1e-6) {
+                                                  double tol = 1e-6,
+                                                  const std::vector<double>& rays_a = {},
+                                                  const std::vector<double>& rays_b = {}) {
     const double L = std::hypot(bx - ax, by - ay);
     if (L < 1e-12) return {};
     const double tx = (bx - ax) / L, ty = (by - ay) / L;  // unit tangent
@@ -100,8 +149,13 @@ inline std::vector<SegSeam> split_mesh_at_segment(mesh::Mesh& mesh, double ax, d
     // two lines CROSS is split as before -- both of its nodes again, four quadrants for four sides.
     std::vector<int> new_nodes;
     std::vector<char> paired(on.size(), 0);
+    // Which side a node's elements lie on: by sector where other walls leave the node (an
+    // element on the far side of another wall says nothing of this line's sides), else by the
+    // signed distance from the line.
     const auto side_of = [&](int node) {
-        double sum = 0.0;
+        const bool at_a = std::hypot(mesh.x[node] - ax, mesh.y[node] - ay) < tol && !rays_a.empty();
+        const bool at_b = std::hypot(mesh.x[node] - bx, mesh.y[node] - by) < tol && !rays_b.empty();
+        double sum = 0.0, by_sector = 0.0;
         for (int e = 0; e < mesh.element_count; ++e) {
             bool has = false;
             double cx = 0.0, cy = 0.0;
@@ -113,8 +167,10 @@ inline std::vector<SegSeam> split_mesh_at_segment(mesh::Mesh& mesh, double ax, d
             if (!has) continue;
             cx /= mesh.nodes_per_element; cy /= mesh.nodes_per_element;
             sum += (cx - ax) * nx + (cy - ay) * ny;
+            if (at_a) by_sector += sector_side(ax, ay, cx, cy, std::atan2(ty, tx), rays_a, false);
+            else if (at_b) by_sector += sector_side(bx, by, cx, cy, std::atan2(-ty, -tx), rays_b, true);
         }
-        return sum;
+        return by_sector != 0.0 ? by_sector : sum;
     };
     for (size_t a = 0; a < on.size(); ++a) {
         if (paired[a]) continue;
@@ -138,11 +194,27 @@ inline std::vector<SegSeam> split_mesh_at_segment(mesh::Mesh& mesh, double ax, d
     }
     for (const int i : new_nodes) { mesh.x.push_back(mesh.x[i]); mesh.y.push_back(mesh.y[i]); }
     mesh.node_count += static_cast<int>(new_nodes.size());
+    const double own_a = std::atan2(ty, tx), own_b = std::atan2(-ty, -tx);
     for (int e = 0; e < mesh.element_count; ++e) {  // re-wire the negative-side elements to the twins
         double cx = 0.0, cy = 0.0;
-        for (int k = 0; k < mesh.nodes_per_element; ++k) { cx += mesh.x[mesh.node_of(e, k)]; cy += mesh.y[mesh.node_of(e, k)]; }
+        bool at_a = false, at_b = false;
+        for (int k = 0; k < mesh.nodes_per_element; ++k) {
+            const int nd = mesh.node_of(e, k);
+            cx += mesh.x[nd]; cy += mesh.y[nd];
+            if (dup[nd] >= 0) {
+                at_a = at_a || std::hypot(mesh.x[nd] - ax, mesh.y[nd] - ay) < tol;
+                at_b = at_b || std::hypot(mesh.x[nd] - bx, mesh.y[nd] - by) < tol;
+            }
+        }
         cx /= mesh.nodes_per_element; cy /= mesh.nodes_per_element;
-        if ((cx - ax) * nx + (cy - ay) * ny >= 0.0) continue;   // positive side → unchanged
+        // At an end other walls leave: the sector. The positive side is clockwise of the line's
+        // ray at its start and counter-clockwise of it at its end (the normal is the tangent
+        // turned clockwise).
+        int sec = 0;
+        if (at_a && !rays_a.empty()) sec = sector_side(ax, ay, cx, cy, own_a, rays_a, false);
+        if (sec == 0 && at_b && !rays_b.empty()) sec = sector_side(bx, by, cx, cy, own_b, rays_b, true);
+        if (sec > 0) continue;
+        if (sec == 0 && (cx - ax) * nx + (cy - ay) * ny >= 0.0) continue;   // positive side → unchanged
         for (int k = 0; k < mesh.nodes_per_element; ++k) {
             const int idx = e * mesh.nodes_per_element + k;
             if (dup[mesh.connectivity[idx]] >= 0)

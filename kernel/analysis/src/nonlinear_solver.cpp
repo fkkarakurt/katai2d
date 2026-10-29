@@ -776,6 +776,191 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         result.converged = true;
     }
 
+    // ===================================================================================
+    // THE COLLAPSE LOAD BY ARC LENGTH (NewtonOptions::limit_by_arc).
+    //
+    // Load control finds a collapse load only to its smallest increment: the phase stops at the
+    // last load level that closed, and the next, one smallest increment above it, did not.
+    // Measured on the Prandtl footing (KV-FND-010) and its NGI-ADP twins (KV-CST-024): 51.000 and
+    // 36.000 kPa, each a whole number of the smallest increment, so a comparison with the closed
+    // form was only as fine as the stepping. Here, from the last state that closed, the load factor
+    // becomes an UNKNOWN and the path is followed by Riks' normal-plane arc length, exactly as the
+    // strength continuation above follows the strength factor -- with the derivative of the
+    // residual by the load factor the load vector itself, so no difference is needed:
+    //     r(du, l) = l f + f_held - f_int(du) = 0,   K a = r,  K b = f,
+    //     du <- du + a + dl b,   dl = (dlen - n . (du + a)) / (n . b).
+    // The collapse load is where the path stops rising: the factor falls (a limit point passed), it
+    // rises less than the resolution over each of the last two doublings of the displacement (a
+    // perfectly plastic mechanism's plateau), or no step can be closed beyond it. The largest
+    // factor reached in equilibrium is reported, with the state there. A path that rises to the
+    // full load instead was a stepping difficulty and not a collapse: the arc stops below it and
+    // load control resumes from where the arc got to.
+    // Steps are accepted on exactly the criteria of the load-controlled solve.
+    // ===================================================================================
+    // (A phase's time interval is read by the creep model alone: its increments are a time as well
+    // as a load, and an arc that left the time behind would not be the same path.)
+    const bool creep_in_time =
+        options.time_interval != 0.0 &&
+        std::any_of(materials.begin(), materials.end(),
+                    [](const MaterialModel& mm) { return mm.type == MaterialType::SoftSoilCreep; });
+    const bool arc_allowed = options.limit_by_arc && !srf_mode && !presc_active && !creep_in_time &&
+                             f_ext_norm > 0.0;
+    bool arc_tried = false;
+    // Returns true when the path rose to the full load (resume load control), false at the limit.
+    const auto collapse_by_arc = [&]() -> bool {
+        const Eigen::VectorXd held =
+            has_cf ? Eigen::VectorXd(constant_force) : Eigen::VectorXd::Zero(neq);
+        const int max_it = std::max(options.max_iterations, 20);
+        double l_cur = lambda, l_best = lambda;
+        double len = -1.0;
+        int cut = 0;
+        result.limit_path.push_back({l_cur, u_free.cwiseAbs().maxCoeff()});
+        Eigen::VectorXd sec_du;
+        double sec_dl = 0.0;
+        bool sec_ok = false;
+        cur_lambda = l_cur;
+        cur_target = l_cur;
+        if (debug) std::fprintf(stderr, "  limit arc: from l %.6f\n", l_cur);
+        for (int stepn = 0; stepn < 400; ++stepn) {
+            Eigen::VectorXd du = Eigen::VectorXd::Zero(neq);
+            prev_sc = committed;
+            std::fill(prev_deps.begin(), prev_deps.end(), 0.0);
+            Eigen::VectorXd n;
+            double l_try;
+            if (sec_ok) {
+                // the secant along the last accepted step, at the current arc length (the
+                // strength continuation's predictor, for the same reason)
+                const double scale = len / sec_du.norm();
+                du = scale * sec_du;
+                n = du / du.norm();
+                l_try = l_cur + scale * sec_dl;
+            } else {
+                builder.clear();
+                assemble(du, true, &builder);
+                const math::CsrMatrix& k0 = builder.build_cached(kt_cache);
+                Eigen::VectorXd v;
+                try {
+                    v = linear_solve(k0, f_ext);
+                    ++result.timings.n_solve;
+                } catch (const math::SingularSystem&) {
+                    if (debug) std::fprintf(stderr, "  limit arc: tangent refused at l %.6f\n", l_cur);
+                    break;
+                }
+                if (!v.allFinite() || !(v.norm() > 0.0)) break;
+                // the first length: what the smallest load increment moves along the tangent
+                if (len < 0.0) len = min_dlam * v.norm();
+                const double dlp = len / v.norm();
+                du = dlp * v;
+                n = du / du.norm();
+                l_try = l_cur + dlp;
+            }
+            bool conv = false;
+            int its = 0;
+            for (int it = 0; it < max_it; ++it) {
+                its = it + 1;
+                builder.clear();
+                probe.reset_counts();
+                probe.first_iterate = (it == 0);
+                const Eigen::VectorXd fi = assemble(du, true, &builder, &probe);
+                const Eigen::VectorXd r = held + l_try * f_ext - fi;
+                const double rnorm = r.norm();
+                measure_convergence(probe, fi, r, rnorm, cf_norm, ref, rtol, result.convergence);
+                if (debug)
+                    std::fprintf(stderr, "  limit arc: l %.6f it %d rel=%.4e\n", l_try, it, rnorm / ref);
+                const bool global_ok =
+                    csp_gate ? result.convergence.force_ok() : (rnorm <= rtol * ref);
+                if (it > 0 && global_ok && (!enforce_local || result.convergence.enforced_ok())) {
+                    conv = true;
+                    break;
+                }
+                const math::CsrMatrix& kt = builder.build_cached(kt_cache);
+                Eigen::VectorXd a, b;
+                try {
+                    a = linear_solve(kt, r);
+                    b = linear_solve(kt, f_ext);
+                    result.timings.n_solve += 2;
+                } catch (const math::SingularSystem&) {
+                    break;
+                }
+                if (!a.allFinite() || !b.allFinite()) break;
+                const double nb = n.dot(b);
+                if (std::fabs(nb) < 1e-300) break;
+                const double dli = (len - n.dot(du) - n.dot(a)) / nb;
+                const Eigen::VectorXd ddu = a + dli * b;
+                double alpha = 1.0;
+                for (int ls = 0; ls < 6; ++ls) {
+                    const Eigen::VectorXd ft = assemble(du + alpha * ddu, false, nullptr);
+                    const double rt = (held + (l_try + alpha * dli) * f_ext - ft).norm();
+                    if (std::isfinite(rt) && rt < std::max(rnorm, 10.0 * rtol * ref)) break;
+                    alpha *= 0.5;
+                }
+                du += alpha * ddu;
+                l_try += alpha * dli;
+            }
+            result.total_iterations += its;
+            if (conv && l_try >= 1.0 - 1e-9) {
+                // the path rose to the full load: no collapse. Load control takes it from the
+                // last state the arc committed (below the full load).
+                trial = committed;
+                result.limit_arc_rescued = true;
+                return true;
+            }
+            if (conv) {
+                committed = trial;
+                anchor_committed = anchor_trial;
+                geogrid_committed = geogrid_trial;
+                interface_committed = interface_trial;
+                interface5_committed = interface5_trial;
+                eskin_committed = eskin_trial;
+                efoot_committed = efoot_trial;
+                plate_committed = plate_trial;
+                plate5_committed = plate5_trial;
+                u_free += du;
+                u_struct += du;
+                const double l_prev = l_cur;
+                l_cur = l_try;
+                lambda = l_cur;
+                cur_lambda = l_cur;
+                cur_target = l_cur;
+                l_best = std::max(l_best, l_cur);
+                sec_ok = du.norm() > 0.0;
+                if (sec_ok) { sec_du = du; sec_dl = l_cur - l_prev; }
+                result.limit_path.push_back({l_cur, u_free.cwiseAbs().maxCoeff()});
+                ++result.timings.n_steps;
+                if (debug)
+                    std::fprintf(stderr, "  LIMIT ARC STEP %d: l %.6f -> %.6f in %d it, maxu %.4e\n",
+                                 stepn, l_prev, l_cur, its, result.limit_path.back()[1]);
+                if (l_cur < l_prev) break;   // a limit point passed
+                // the plateau: two successive doublings of the displacement each rise less than
+                // the resolution
+                const auto at_half = [&](double u_end, double& l_at) {
+                    for (size_t j = result.limit_path.size(); j-- > 0;)
+                        if (result.limit_path[j][1] <= 0.5 * u_end) {
+                            l_at = result.limit_path[j][0];
+                            return result.limit_path[j][1] > 0.0;
+                        }
+                    return false;
+                };
+                const double u_now = result.limit_path.back()[1];
+                double l_h = 0.0, l_q = 0.0;
+                if (at_half(u_now, l_h) && at_half(0.5 * u_now, l_q) &&
+                    l_cur - l_h < options.limit_resolution * l_cur &&
+                    l_h - l_q < options.limit_resolution * l_cur)
+                    break;
+                len *= std::clamp(std::sqrt(20.0 / std::max(its, 1)), 0.5, 2.0);
+                cut = 0;
+            } else {
+                trial = committed;
+                len *= 0.5;
+                sec_ok = false;
+                if (++cut > 12) break;   // no equilibrium beyond: the limit
+            }
+        }
+        result.limit_arc = true;
+        result.load_factor = l_best;
+        return false;
+    };
+
     // The displacement of the last accepted increment and its size (see THE SECANT START).
     Eigen::VectorXd du_last;
     double dlam_last = 0.0;
@@ -1551,6 +1736,17 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                                      "%d refused solve(s) so far\n",
                              lambda, dlam, min_dlam, result.refused_solves);
             if (dlam < min_dlam) {
+                // The collapse load to the resolution, not to the smallest increment (see
+                // collapse_by_arc); once per phase.
+                if (arc_allowed && !arc_tried) {
+                    arc_tried = true;
+                    if (collapse_by_arc()) {
+                        dlam = std::min(init_dlam, 1.0 - lambda);
+                        du_last = Eigen::VectorXd();
+                        dlam_last = 0.0;
+                        continue;
+                    }
+                }
                 result.converged = false;
                 break;  // true collapse: no equilibrium even at the smallest increment
             }
@@ -1775,7 +1971,7 @@ bool seed_structural_state(const Structures& structures, const StructuralInit& i
     for (const auto& eb : structures.embedded_beams) total_skin += eb.skin.size();
     seed(anchor, init_struct.anchor_plastic, structures.anchors.size(), "anchor_plastic");
     seed(geogrid, init_struct.geogrid_plastic,
-         structures.geogrids.size() * static_cast<size_t>(geogrid::kGaussCount), "geogrid_plastic");
+         structures.geogrids.size() * static_cast<size_t>(geogrid::kStateStride), "geogrid_plastic");
     seed(iface_v, init_struct.interface_slip,
          structures.interfaces.size() * static_cast<size_t>(iface::kPointCount), "interface_slip");
     seed(iface5_v, init_struct.interface5_slip,

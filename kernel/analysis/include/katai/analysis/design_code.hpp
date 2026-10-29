@@ -127,6 +127,17 @@ inline void factor_material_strength(MaterialModel& m, const PartialFactors& f) 
     m.ssc.c /= f.gamma_c;
     m.ssc.phi = std::atan(std::tan(m.ssc.phi) / f.gamma_phi);
     if (m.ssc.psi > m.ssc.phi) m.ssc.psi = m.ssc.phi;
+    // Jointed rock: the first joint set is the shared fields above, the other two keep their own.
+    // A drained rock, so never a Tresca material.
+    if (m.type == MaterialType::JointedRock) {
+        for (int i = 1; i < 3; ++i) {
+            auto& q = m.jr.p[i];
+            q.c /= f.gamma_c;
+            q.phi = std::atan(std::tan(q.phi) / f.gamma_phi);
+            if (q.psi > q.phi) q.psi = q.phi;
+            q.sigt /= f.gamma_c;
+        }
+    }
 }
 
 // The depth gradient of cohesion is part of the same strength, c(y) = c_ref + c_inc (y_ref - y), so a

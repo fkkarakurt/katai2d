@@ -218,6 +218,8 @@ inline const char* constitutive_name(model::SoilModel sm) {
         case model::SoilModel::SoftSoilCreep: return "SoftSoilCreep";
         case model::SoilModel::HoekBrown:     return "HoekBrown";
         case model::SoilModel::ModifiedCamClay: return "ModifiedCamClay";
+        case model::SoilModel::NgiAdp:          return "NgiAdp";
+        case model::SoilModel::JointedRock:     return "JointedRock";
     }
     return "";
 }

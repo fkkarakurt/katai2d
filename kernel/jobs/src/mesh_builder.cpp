@@ -12,6 +12,23 @@ namespace katai::app {
 
 MeshResult mesh_from_project(const model::Project& pr, double max_area,
                              int order, const MeshOptions& opt) {
+    // The factor on the element size at a corner whose sharpest sector is `deg` degrees: 1 at the
+    // multiples of 90, 0.5 at 45 and 135, falling to 0.1 at a sliver, read every 5 degrees off the
+    // implicit coarseness of an enhanced mesh refinement (the curve published for it; its values
+    // here are those of the figure to the pixel, 0..180, mirrored about 180).
+    const auto corner_factor = [](double deg) {
+        static const double t[37] = {0.106, 0.177, 0.240, 0.306, 0.360, 0.412, 0.453, 0.479, 0.499,
+                                     0.506, 0.511, 0.534, 0.568, 0.622, 0.687, 0.756, 0.837, 0.925,
+                                     1.000, 0.914, 0.835, 0.751, 0.679, 0.620, 0.572, 0.534, 0.512,
+                                     0.506, 0.511, 0.534, 0.573, 0.622, 0.687, 0.763, 0.838, 0.926,
+                                     1.000};
+        deg = std::fmod(std::fabs(deg), 360.0);
+        if (deg > 180.0) deg = 360.0 - deg;
+        const double u = deg / 5.0;
+        const int i = std::min(35, (int)u);
+        const double w = u - i;
+        return t[i] + w * (t[i + 1] - t[i]);
+    };
     const double min_angle_deg = opt.min_angle_deg;
     MeshResult R;
     if (pr.polygons.empty()) { R.message = "No soil polygons to mesh."; return R; }
@@ -181,34 +198,58 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
     if (px.size() < 3 || outline.size() < 3) { R.message = "Degenerate geometry."; return R; }
 
     // 2) Local mesh density: build the sizing field from the per-object coarseness factors
-    // (a factor scales the target element size). When everything is at the default (no factors,
-    // no auto-refine), the field is skipped entirely and the constant-max_area mesher runs --
-    // bit-identical meshes.
-    const auto clampf = [](double f) { return std::clamp(f, 1.0 / 16.0, 4.0); };
+    // (a factor scales the target element size; the factor an object carries is the one applied).
+    // When nothing is refined (no factor below 1, or auto-refine off and no region factor), the
+    // field is skipped entirely and the constant-max_area mesher runs -- bit-identical meshes.
+    const auto clampf = [](double f) { return std::clamp(f, model::kCoarsenessMin, model::kCoarsenessMax); };
     struct SizeSrc { double ax, ay, bx, by, h; };   // segment source (point: a == b)
     std::vector<SizeSrc> srcs;
     const double h0 = std::sqrt(2.0 * max_area);
+    const auto add = [&](double ax, double ay, double bx, double by, double c) {
+        const double f = clampf(c);
+        if (opt.auto_refine && f < 1.0 - 1e-12) srcs.push_back({ax, ay, bx, by, h0 * f});
+    };
     for (const auto& s : pr.structs) {
         using SK = model::StructKind;
-        if (s.kind != SK::Plate && s.kind != SK::Geogrid && s.kind != SK::EmbeddedBeam) continue;
-        const double f = clampf(s.coarseness * (opt.auto_refine ? opt.auto_factor : 1.0));
-        if (f < 1.0 - 1e-12)
-            srcs.push_back({s.x1, s.y1, s.x2, s.y2, h0 * f});
-    }
-    for (const auto& L : pr.loads) {
-        const double f = clampf(L.coarseness * (opt.auto_refine ? opt.auto_factor : 1.0));
-        if (f < 1.0 - 1e-12) {
-            if (L.kind == model::LoadKind::Distributed) srcs.push_back({L.x1, L.y1, L.x2, L.y2, h0 * f});
-            else srcs.push_back({L.x1, L.y1, L.x1, L.y1, h0 * f});
+        // An anchor is drawn between two points of the ground and is no line of it: its two ends
+        // are where it acts. Every other structure is a line of the mesh.
+        if (s.kind == SK::Anchor) {
+            add(s.x1, s.y1, s.x1, s.y1, s.coarseness);
+            add(s.x2, s.y2, s.x2, s.y2, s.coarseness);
+        } else {
+            add(s.x1, s.y1, s.x2, s.y2, s.coarseness);
         }
     }
-    for (const auto& D : pr.disps) {
-        const double f = clampf(D.coarseness * (opt.auto_refine ? opt.auto_factor : 1.0));
-        if (f < 1.0 - 1e-12) srcs.push_back({D.x1, D.y1, D.x2, D.y2, h0 * f});
+    for (const auto& L : pr.loads) {
+        if (L.kind == model::LoadKind::Distributed) add(L.x1, L.y1, L.x2, L.y2, L.coarseness);
+        else add(L.x1, L.y1, L.x1, L.y1, L.coarseness);
     }
-    for (const auto& H : pr.hydros) {
-        const double f = clampf(H.coarseness * (opt.auto_refine ? opt.auto_factor : 1.0));
-        if (f < 1.0 - 1e-12) srcs.push_back({H.x1, H.y1, H.x2, H.y2, h0 * f});
+    for (const auto& D : pr.disps) add(D.x1, D.y1, D.x2, D.y2, D.coarseness);
+    for (const auto& H : pr.hydros) add(H.x1, H.y1, H.x2, H.y2, H.coarseness);
+    // CORNERS. Where two or more kept lines meet, the sectors between consecutive lines around the
+    // point are the angles the ground (or the air) makes there; the sharpest one sets a factor on
+    // the element size (corner_factor). A straight run (180), a right angle and a T-junction leave
+    // it at 1; the toe of a slope of 1 in 2 (26.6 degrees) brings it to 0.42. The end of a single
+    // line (a wall's foot in the ground) makes no angle between two lines and is not a corner.
+    if (opt.corner_refine) {
+        std::vector<std::vector<double>> dirs(px.size());
+        for (const auto& s : segs) {
+            const double dx = px[s[1]] - px[s[0]], dy = py[s[1]] - py[s[0]];
+            dirs[s[0]].push_back(std::atan2(dy, dx));
+            dirs[s[1]].push_back(std::atan2(-dy, -dx));
+        }
+        for (size_t v = 0; v < px.size(); ++v) {
+            auto& d = dirs[v];
+            if (d.size() < 2) continue;
+            std::sort(d.begin(), d.end());
+            double f = 1.0;
+            for (size_t k = 0; k < d.size(); ++k) {
+                const double pi = 3.14159265358979323846;
+                const double sector = (k + 1 < d.size() ? d[k + 1] : d[0] + 2.0 * pi) - d[k];
+                f = std::min(f, corner_factor(sector * 180.0 / pi));
+            }
+            if (f < 1.0 - 1e-9) srcs.push_back({px[v], py[v], px[v], py[v], h0 * std::max(f, model::kCoarsenessMin)});
+        }
     }
     bool region_factors = false;
     for (const auto& P : pr.polygons)

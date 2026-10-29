@@ -179,7 +179,28 @@ namespace katai::model {
 // soft-soil material already writes (`lamstar`, `kapstar`, `nu_ur`, `phi` as the critical-state
 // angle, `ocr`/`pop`), so nothing new is written; the bump is the version gate of v18 -- an older
 // build refuses the file instead of reading model 7 as an unknown model.
-inline constexpr int kProjectFileVersion = 25;
+// v26 (2026-10): THE NGI-ADP MODEL (`materials[i].model` = 8), an anisotropic undrained shear
+// strength model in total stress: five keys of its own (`adpsuP`, `adpsuDSS`, `adpgfC`, `adpgfE`,
+// `adpgfDSS`), written only by a material that uses it; the bump is the version gate -- an older
+// build refuses the file instead of reading model 8 as an unknown model.
+// v27 (2026-10): ROTATION SPRINGS on hinged plate ends (`structs[i].rotk1` / `rotk2`), which an
+// older build would ignore and solve as free hinges. Written only when set.
+// v28 (2026-10): THE JOINTED ROCK MODEL (`materials[i].model` = 9): elastic rock, isotropic or
+// transversely isotropic, failing on up to three joint sets. Keys of its own (`jrsets`,
+// `jralpha1..3`, `jrc2/3`, `jrphi2/3`, `jrpsi2/3`, `jrsigt2/3`, `jraniso`, `jrE2`, `jrnu2`,
+// `jrG2`), written only by a material that uses it; the first set's strength is the shared
+// `c`/`phi`/`psi`/`tensile_strength`. The bump is the version gate -- an older build refuses the
+// file instead of reading model 9 as an unknown model.
+// v29 (2026-10): LOCAL MESH DENSITY AS IT IS SEEN. The coarseness factor an object carries is the
+// one applied -- structures, loads and prescribed displacements default to 0.25, anchors and bare
+// interface lines included -- and no longer halved again when `mesh.auto_refine` is on, which now
+// only says whether those factors apply. The size grows away from a refined object by `mesh.grading`
+// per metre (default 0.15; written only when not the default; it was 0.5), and where geometry lines meet
+// at an angle that is not a multiple of 90 degrees the mesh refines (`mesh.corner_refine`, default on,
+// written only when off). A file older than v29 is
+// read with the factors it meant and its old grading, so it meshes as before; an older build reading
+// a v29 file would halve its factors again and grade at 0.5 -- a different mesh, hence the gate.
+inline constexpr int kProjectFileVersion = 29;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -548,6 +569,8 @@ inline std::string project_to_json(const Project& p) {
     wfield(o, "order", (double)p.mesh.order);
     wfield(o, "auto_refine", p.mesh.auto_refine);
     if (p.mesh.rel > 0.0) wfield(o, "rel", p.mesh.rel);
+    if (p.mesh.grading != kMeshGrading) wfield(o, "grading", p.mesh.grading);
+    if (!p.mesh.corner_refine) wfield(o, "corner_refine", false);
     closeobj(o); o += ',';
 
     wkey(o, "materials"); o += '[';
@@ -584,6 +607,27 @@ inline std::string project_to_json(const Project& p) {
             wfield(o, "gsi", m.gsi);
             wfield(o, "hbD", m.hb_D);
             wfield(o, "sigpsi", m.sig_psi);
+        }
+        // NGI-ADP, the same way: written only by a material that uses it.
+        if (m.model == SoilModel::NgiAdp) {
+            wfield(o, "adpsuP", m.adp_suP);
+            wfield(o, "adpsuDSS", m.adp_suDSS);
+            wfield(o, "adpgfC", m.adp_gfC);
+            wfield(o, "adpgfE", m.adp_gfE);
+            wfield(o, "adpgfDSS", m.adp_gfDSS);
+        }
+        // Jointed rock, the same way.
+        if (m.model == SoilModel::JointedRock) {
+            wfield(o, "jrsets", (double)m.jr_sets);
+            wfield(o, "jralpha1", m.jr_alpha[0]);
+            wfield(o, "jralpha2", m.jr_alpha[1]);
+            wfield(o, "jralpha3", m.jr_alpha[2]);
+            wfield(o, "jrc2", m.jr_c[1]); wfield(o, "jrc3", m.jr_c[2]);
+            wfield(o, "jrphi2", m.jr_phi[1]); wfield(o, "jrphi3", m.jr_phi[2]);
+            wfield(o, "jrpsi2", m.jr_psi[1]); wfield(o, "jrpsi3", m.jr_psi[2]);
+            wfield(o, "jrsigt2", m.jr_sigt[1]); wfield(o, "jrsigt3", m.jr_sigt[2]);
+            wfield(o, "jraniso", m.jr_aniso);
+            wfield(o, "jrE2", m.jr_E2); wfield(o, "jrnu2", m.jr_nu2); wfield(o, "jrG2", m.jr_G2);
         }
         wfield(o, "kx", m.kx); wfield(o, "ky", m.ky);
         if (m.ck > 0.0) wfield(o, "ck", m.ck);
@@ -712,6 +756,8 @@ inline std::string project_to_json(const Project& p) {
         wfield(o, "conn", (double)s.conn);
         if (s.hinge1) wfield(o, "hinge1", true);
         if (s.hinge2) wfield(o, "hinge2", true);
+        if (s.rot_k1 > 0.0) wfield(o, "rotk1", s.rot_k1);
+        if (s.rot_k2 > 0.0) wfield(o, "rotk2", s.rot_k2);
         wfield(o, "flow_barrier", (double)s.flow_barrier);
         wfield(o, "hyd_res", s.hydraulic_resistance);
         wfield(o, "coarseness", s.coarseness);
@@ -816,6 +862,8 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
         p.mesh.order = (int)mo.num("order", (double)p.mesh.order);
         p.mesh.auto_refine = mo.flag("auto_refine", p.mesh.auto_refine);
         p.mesh.rel = mo.num("rel", p.mesh.rel);
+        p.mesh.grading = mo.num("grading", p.mesh.grading);
+        p.mesh.corner_refine = mo.flag("corner_refine", p.mesh.corner_refine);
     }
 
     if (const Json* arr = root.find("materials"); arr && arr->type == Json::Arr)
@@ -872,6 +920,22 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             m.gsi = j.num("gsi", m.gsi);
             m.hb_D = j.num("hbD", m.hb_D);
             m.sig_psi = j.num("sigpsi", m.sig_psi);
+            m.adp_suP = j.num("adpsuP", m.adp_suP);
+            m.adp_suDSS = j.num("adpsuDSS", m.adp_suDSS);
+            m.adp_gfC = j.num("adpgfC", m.adp_gfC);
+            m.adp_gfE = j.num("adpgfE", m.adp_gfE);
+            m.adp_gfDSS = j.num("adpgfDSS", m.adp_gfDSS);
+            m.jr_sets = (int)j.num("jrsets", m.jr_sets);
+            m.jr_alpha[0] = j.num("jralpha1", m.jr_alpha[0]);
+            m.jr_alpha[1] = j.num("jralpha2", m.jr_alpha[1]);
+            m.jr_alpha[2] = j.num("jralpha3", m.jr_alpha[2]);
+            m.jr_c[1] = j.num("jrc2", m.jr_c[1]); m.jr_c[2] = j.num("jrc3", m.jr_c[2]);
+            m.jr_phi[1] = j.num("jrphi2", m.jr_phi[1]); m.jr_phi[2] = j.num("jrphi3", m.jr_phi[2]);
+            m.jr_psi[1] = j.num("jrpsi2", m.jr_psi[1]); m.jr_psi[2] = j.num("jrpsi3", m.jr_psi[2]);
+            m.jr_sigt[1] = j.num("jrsigt2", m.jr_sigt[1]); m.jr_sigt[2] = j.num("jrsigt3", m.jr_sigt[2]);
+            m.jr_aniso = j.flag("jraniso", m.jr_aniso);
+            m.jr_E2 = j.num("jrE2", m.jr_E2); m.jr_nu2 = j.num("jrnu2", m.jr_nu2);
+            m.jr_G2 = j.num("jrG2", m.jr_G2);
             m.kx = j.num("kx", m.kx); m.ky = j.num("ky", m.ky);
             m.ck = j.num("ck", m.ck);
             // Undrained stiffness definition: 0 = nu_u direct, 1 = Skempton-B based. An
@@ -987,6 +1051,8 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             s.iface_vt = j.num("iface_vt", 0.1);
             s.hinge1 = j.flag("hinge1", false);
             s.hinge2 = j.flag("hinge2", false);
+            s.rot_k1 = j.num("rotk1", 0.0);
+            s.rot_k2 = j.num("rotk2", 0.0);
             // Connection point of an embedded beam. An unknown value must not land on the
             // default quietly: hinged and free are different structures, not different settings.
             const int cnv = (int)j.num("conn", 0);
@@ -1009,7 +1075,7 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
                                       "2 = semi-permeable); loaded for display as fully permeable "
                                       "-- do not solve with this file"});
             s.hydraulic_resistance = j.num("hyd_res", 0.0);
-            s.coarseness = j.num("coarseness", 1.0);
+            s.coarseness = j.num("coarseness", s.coarseness);
             p.structs.push_back(std::move(s));
         }
     if (const Json* arr = root.find("loads"); arr && arr->type == Json::Arr)
@@ -1021,7 +1087,7 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             L.x2 = j.num("x2", 0); L.y2 = j.num("y2", 0);
             L.qx1 = j.num("qx1", 0); L.qy1 = j.num("qy1", 0);
             L.qx2 = j.num("qx2", 0); L.qy2 = j.num("qy2", 0);
-            L.coarseness = j.num("coarseness", 1.0);
+            L.coarseness = j.num("coarseness", L.coarseness);
             p.loads.push_back(std::move(L));
         }
     if (const Json* arr = root.find("disps"); arr && arr->type == Json::Arr)
@@ -1032,7 +1098,7 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             D.x2 = j.num("x2", 0); D.y2 = j.num("y2", 0);
             D.set_ux = j.flag("set_ux", false); D.ux = j.num("ux", 0);
             D.set_uy = j.flag("set_uy", true);  D.uy = j.num("uy", 0);
-            D.coarseness = j.num("coarseness", 1.0);
+            D.coarseness = j.num("coarseness", D.coarseness);
             p.disps.push_back(std::move(D));
         }
 
@@ -1064,6 +1130,24 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
         p.initial = detail::rphase(*ph);
     if (const Json* arr = root.find("phases"); arr && arr->type == Json::Arr)
         for (const Json& j : arr->a) p.phases.push_back(detail::rphase(j));
+
+    // A FILE OLDER THAN v29 meshes as it always did. Its factors were halved again, unseen, near
+    // structures, loads, displacements and hydraulic lines whenever auto-refine was on; anchors and
+    // bare interface lines refined nothing; the size grew by half a metre per metre. The factors it
+    // meant are written into it here, so the same mesh comes out of a factor that is now applied as
+    // it reads.
+    if (ver < 29) {
+        const bool halved = p.mesh.auto_refine;
+        const auto meant = [halved](double c) { return std::clamp(c * (halved ? 0.5 : 1.0), 1.0 / 16.0, 4.0); };
+        for (auto& s : p.structs)
+            s.coarseness = (s.kind == StructKind::Anchor || s.kind == StructKind::Interface) ? 1.0 : meant(s.coarseness);
+        for (auto& L : p.loads) L.coarseness = meant(L.coarseness);
+        for (auto& D : p.disps) D.coarseness = meant(D.coarseness);
+        for (auto& H : p.hydros) H.coarseness = meant(H.coarseness);
+        p.mesh.auto_refine = true;
+        p.mesh.grading = 0.5;
+        p.mesh.corner_refine = false;
+    }
 
     out = std::move(p);
     return true;

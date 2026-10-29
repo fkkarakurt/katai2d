@@ -63,6 +63,8 @@ NB_MODULE(_core, m) {
         .value("SoftSoil", api::SoilModel::SoftSoil)
         .value("SoftSoilCreep", api::SoilModel::SoftSoilCreep)
         .value("ModifiedCamClay", api::SoilModel::ModifiedCamClay)
+        .value("NgiAdp", api::SoilModel::NgiAdp)
+        .value("JointedRock", api::SoilModel::JointedRock)
         .value("HoekBrown", api::SoilModel::HoekBrown);
     nb::enum_<api::Drainage>(m, "Drainage", nb::is_arithmetic())
         .value("Drained", api::Drainage::Drained)
@@ -179,6 +181,44 @@ NB_MODULE(_core, m) {
         .def_rw("sig_psi", &api::Material::sig_psi,
                 "[kPa] Hoek-Brown: the confining stress at which dilatancy has died out; the "
                 "dilatancy angle itself is `psi`, its value at sigma'_3 = 0")
+        .def_rw("adp_suP", &api::Material::adp_suP,
+                "NGI-ADP: plane strain passive strength over suA (c)")
+        .def_rw("adp_suDSS", &api::Material::adp_suDSS,
+                "NGI-ADP: direct simple shear strength over suA (c)")
+        .def_rw("adp_gfC", &api::Material::adp_gfC,
+                "[%] NGI-ADP: total shear strain at failure, triaxial compression (3/2 eps1)")
+        .def_rw("adp_gfE", &api::Material::adp_gfE,
+                "[%] NGI-ADP: total shear strain at failure, triaxial extension")
+        .def_rw("adp_gfDSS", &api::Material::adp_gfDSS,
+                "[%] NGI-ADP: total shear strain at failure, direct simple shear")
+        .def_rw("jr_sets", &api::Material::jr_sets, "Jointed rock: number of joint sets, 1..3")
+        .def_rw("jr_aniso", &api::Material::jr_aniso,
+                "Jointed rock: transversely isotropic elasticity about the normal to the first set")
+        .def_rw("jr_E2", &api::Material::jr_E2, "[kPa] Jointed rock: Young's modulus normal to the first set")
+        .def_rw("jr_nu2", &api::Material::jr_nu2, "Jointed rock: Poisson's ratio between the bedding and its normal")
+        .def_rw("jr_G2", &api::Material::jr_G2, "[kPa] Jointed rock: shear modulus across the first set")
+        .def_prop_rw("jr_alpha1", [](api::Material& m) { return m.jr_alpha[0]; },
+                     [](api::Material& m, double v) { m.jr_alpha[0] = v; }, "[deg] Jointed rock: dip of the first set from the x axis, anticlockwise positive")
+        .def_prop_rw("jr_alpha2", [](api::Material& m) { return m.jr_alpha[1]; },
+                     [](api::Material& m, double v) { m.jr_alpha[1] = v; }, "[deg] Jointed rock: dip of the second set")
+        .def_prop_rw("jr_alpha3", [](api::Material& m) { return m.jr_alpha[2]; },
+                     [](api::Material& m, double v) { m.jr_alpha[2] = v; }, "[deg] Jointed rock: dip of the third set")
+        .def_prop_rw("jr_c2", [](api::Material& m) { return m.jr_c[1]; },
+                     [](api::Material& m, double v) { m.jr_c[1] = v; }, "[kPa] Jointed rock: c of joint set 2 (the first set's is the shared field)")
+        .def_prop_rw("jr_c3", [](api::Material& m) { return m.jr_c[2]; },
+                     [](api::Material& m, double v) { m.jr_c[2] = v; }, "[kPa] Jointed rock: c of joint set 3 (the first set's is the shared field)")
+        .def_prop_rw("jr_phi2", [](api::Material& m) { return m.jr_phi[1]; },
+                     [](api::Material& m, double v) { m.jr_phi[1] = v; }, "[deg] Jointed rock: phi of joint set 2 (the first set's is the shared field)")
+        .def_prop_rw("jr_phi3", [](api::Material& m) { return m.jr_phi[2]; },
+                     [](api::Material& m, double v) { m.jr_phi[2] = v; }, "[deg] Jointed rock: phi of joint set 3 (the first set's is the shared field)")
+        .def_prop_rw("jr_psi2", [](api::Material& m) { return m.jr_psi[1]; },
+                     [](api::Material& m, double v) { m.jr_psi[1] = v; }, "[deg] Jointed rock: psi of joint set 2 (the first set's is the shared field)")
+        .def_prop_rw("jr_psi3", [](api::Material& m) { return m.jr_psi[2]; },
+                     [](api::Material& m, double v) { m.jr_psi[2] = v; }, "[deg] Jointed rock: psi of joint set 3 (the first set's is the shared field)")
+        .def_prop_rw("jr_sigt2", [](api::Material& m) { return m.jr_sigt[1]; },
+                     [](api::Material& m, double v) { m.jr_sigt[1] = v; }, "[kPa] Jointed rock: sigt of joint set 2 (the first set's is the shared field)")
+        .def_prop_rw("jr_sigt3", [](api::Material& m) { return m.jr_sigt[2]; },
+                     [](api::Material& m, double v) { m.jr_sigt[2] = v; }, "[kPa] Jointed rock: sigt of joint set 3 (the first set's is the shared field)")
         .def_rw("mu_star", &api::Material::mu_star)
         .def_rw("kx", &api::Material::kx, "permeability x [m/day]")
         .def_rw("ck", &api::Material::ck, "change of permeability: log10(k/k0) = de/ck (0 = constant)")
@@ -289,6 +329,10 @@ NB_MODULE(_core, m) {
         .def_rw("hinge1", &api::StructElement::hinge1,
                 "plates only: the end at the first point turns on its own -- a hinge to the "
                 "plates and walls that meet it there, a pin at a supported boundary")
+        .def_rw("rot_k1", &api::StructElement::rot_k1,
+                "[kNm/rad/m] rotation spring on the hinged end at the first point (0 = free hinge)")
+        .def_rw("rot_k2", &api::StructElement::rot_k2,
+                "[kNm/rad/m] rotation spring on the hinged end at the second point")
         .def_rw("hinge2", &api::StructElement::hinge2,
                 "plates only: the same at the second point")
         .def_rw("conn", &api::StructElement::conn,
@@ -528,10 +572,15 @@ NB_MODULE(_core, m) {
         .def(nb::init<>())
         .def_rw("elem_size", &api::MeshSettings::elem_size, "target element edge [m]")
         .def_rw("order", &api::MeshSettings::order, "6 = tri6, 15 = tri15")
-        .def_rw("auto_refine", &api::MeshSettings::auto_refine)
+        .def_rw("auto_refine", &api::MeshSettings::auto_refine,
+                "apply the coarseness factors of structures, loads, displacements and hydraulic lines")
         .def_rw("rel", &api::MeshSettings::rel,
                 "relative element size: 0 = elem_size; above 0 this factor times a twentieth of the "
-                "model's diagonal");
+                "model's diagonal")
+        .def_rw("grading", &api::MeshSettings::grading,
+                "growth of the element size per metre away from a refined object (default 0.15)")
+        .def_rw("corner_refine", &api::MeshSettings::corner_refine,
+                "refine where geometry lines meet at an angle that is not a multiple of 90 degrees");
 
     nb::class_<api::Project>(m, "Project")
         .def(nb::init<>())
@@ -710,7 +759,7 @@ NB_MODULE(_core, m) {
         .def_ro("y", &katai::core::InterfaceStation::y, "[m]")
         .def_ro("tau", &katai::core::InterfaceStation::tau, "shear stress [kN/m2]")
         .def_ro("sigma_n", &katai::core::InterfaceStation::sigma_n,
-                "normal stress the joint transmits, TENSION POSITIVE [kN/m2]")
+                "effective normal stress of the joint -- the ground's contact on it; the pore water passes beside it -- TENSION POSITIVE [kN/m2]")
         .def_ro("slip", &katai::core::InterfaceStation::slip, "relative slip [m]")
         .def_ro("gap", &katai::core::InterfaceStation::gap, "relative opening [m]")
         .def_ro("slipping", &katai::core::InterfaceStation::slipping,

@@ -56,17 +56,18 @@ struct MeshResult {
 // Local mesh-density options (coarseness factors; docs/references/mesh-sizing.md).
 // The target edge length h0 = sqrt(2 * max_area) is modulated by per-object coarseness factors:
 //   - inside a polygon with factor f      -> h_region = h0 * f (last polygon wins, like material);
-//   - near a structural line / load with factor f -> a line/point SOURCE of size h0 * f
-//     (times auto_factor when auto_refine is on -- automatic refinement around
-//     structures and loads), growing away from the source with the Lipschitz grading slope
-//     h(d) = h_src + grading * d (bounded size transition; Shewchuk / Persson practice).
-// h(x) = min(h_region(x), min over sources). Factors are clamped to [1/16, 4], so the field has
-// a positive lower bound (Ruppert termination stays guaranteed).
+//   - near a structure / load / prescribed displacement / hydraulic line with factor f (applied
+//     when auto_refine is on) -> a line/point SOURCE of size h0 * f, growing away from the source
+//     with the Lipschitz grading slope h(d) = h_src + grading * d (bounded size transition;
+//     Shewchuk / Persson practice).
+// h(x) = min(h_region(x), min over sources). Factors are clamped to [kCoarsenessMin,
+// kCoarsenessMax] (the validator refuses one outside), so the field has a positive lower bound
+// (Ruppert termination stays guaranteed).
 struct MeshOptions {
     double min_angle_deg = 20.0;
-    bool auto_refine = false;    // refine around structures + loads automatically (GUI default ON)
-    double auto_factor = 0.5;    // automatic refinement factor for structures/loads
-    double grading = 0.5;        // size growth per unit distance from a source
+    bool auto_refine = false;    // apply the factors of structures, loads, displacements, hydraulic lines
+    double grading = model::kMeshGrading;   // size growth per unit distance from a source
+    bool corner_refine = false;  // refine where geometry lines meet at a non-right angle
 };
 
 // The CONNECTION POINT of an embedded beam (docs/k2d-format.md, `conn`): for a pile it is the
@@ -104,6 +105,8 @@ inline MeshResult mesh_from_project(const model::Project& pr, double max_area,
 inline MeshResult mesh_from_project(const model::Project& pr) {
     MeshOptions opt;
     opt.auto_refine = pr.mesh.auto_refine;
+    opt.grading = pr.mesh.grading;
+    opt.corner_refine = pr.mesh.corner_refine;
     const double h = model::element_size(pr);
     return mesh_from_project(pr, 0.5 * h * h, pr.mesh.order, opt);
 }

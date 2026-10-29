@@ -181,6 +181,11 @@ int main() {
     // outside the asymptotic range (docs/validation/numerical-uncertainty.md).
     m::Project pr = base;
     pr.mesh.elem_size = 1.4;   // the coarse level; the finest is this refined twice
+    // The base mesh the study was measured on (the locator above: 1190 elements): the strip at half
+    // the element size, growing by half a metre per metre -- the .k2d v28 density. The study is of
+    // the nested family on THAT base; a different base is a different study.
+    for (auto& L : pr.loads) L.coarseness = 0.5;
+    pr.mesh.grading = 0.5;
     const auto M0 = katai::app::mesh_from_project(pr);
     check(M0.ok, "base mesh built from the case file");
     if (!M0.ok) { std::printf("      (%s)\n", M0.message.c_str()); return 1; }

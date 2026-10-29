@@ -156,6 +156,11 @@
   note  = {cited by KV-STR-010},
 }
 
+@misc{grimstad2012,
+  title = {Grimstad, G., Andresen, L. & Jostad, H.P. (2012). NGI-ADP: Anisotropic shear strength model for clay. International Journal for Numerical and Analytical Methods in Geomechanics 36(4), 483-497 -- the yield surface translated from the in-situ state, hardening to the three strengths at the three failure strains; Davis, E.H. & Christian, J.T. (1971). Bearing capacity of anisotropic cohesive soil. J. Soil Mech. Found. Div. ASCE 97(SM5), 753-769 -- the plane-strain ellipse the surface reduces to at failure},
+  note  = {cited by KV-CST-024},
+}
+
 @misc{hoek2002,
   title = {Hoek, E., Carranza-Torres, C. & Corkum, B. (2002). Hoek-Brown failure criterion -- 2002 edition. Proc. NARMS-TAC Conference, Toronto, 267-273 -- the generalised criterion with its rock-mass constants m_b, s and a; the same criterion KV-CST-014 checks at the material point, asked here of the assembled FE path from a project file (KATAI 2D input contract, docs/k2d-format.md, sigci / mi / gsi / hbD)},
   note  = {cited by KV-CST-015},
@@ -164,6 +169,11 @@
 @misc{hoek2002b,
   title = {Hoek, E., Carranza-Torres, C. & Corkum, B. (2002). Hoek-Brown failure criterion -- 2002 edition. Proc. NARMS-TAC Conference, Toronto, 267-273 -- the generalised criterion, the rock-mass constants m_b, s and a, and the rock-mass compressive and tensile strengths; KATAI 2D input contract (docs/k2d-format.md, sigci / mi / gsi / hbD / psi / sigpsi / tension_cutoff / tensile_strength) for the non-associated flow, the mobilised dilatancy and the optional tension cut-off. The Tresca degeneration is checked against this tree's own verified Mohr-Coulomb return (mohr_coulomb.cpp, P1.2b)},
   note  = {cited by KV-CST-014},
+}
+
+@misc{jaeger1960,
+  title = {Jaeger, J.C. (1960). Shear failure of anisotropic rocks. Geological Magazine 97(1), 65-72 -- the plane of weakness; Hoek, E. & Bray, J.W. (1981). Rock Slope Engineering, 3rd ed. Institution of Mining and Metallurgy, London -- plane failure of a rock slope; Lekhnitskii, S.G. (1963). Theory of Elasticity of an Anisotropic Elastic Body. Holden-Day -- the transversely isotropic compliance},
+  note  = {cited by KV-CST-026},
 }
 
 @misc{jaky1944,
@@ -237,21 +247,26 @@
 }
 
 @misc{katain,
+  title = {KATAI 2D input contract (docs/k2d-format.md, structs[i].iface_pos / iface_neg): a plate with an interface separates the ground along its own line only},
+  note  = {cited by KV-STR-027},
+}
+
+@misc{kataio,
   title = {KATAI 2D input contract (docs/k2d-format.md, tol) for the tolerated error every criterion is measured against; the deformation convergence criteria as a FAMILY are stated in full in the locator (and in kernel/analysis/include/katai/analysis/nonlinear_solver.hpp, NewtonResult::Convergence, and internal_forces.hpp, LocalErrorProbe). THE SAME STIFFNESS PARAMETER CAN BE WRITTEN AS EITHER OF TWO RECIPROCALS: elastic work over total, or total over elastic. Only total over elastic has the behaviour the parameter exists to show -- exactly unity while the solution is fully elastic, approaching zero at failure -- and supports the uses built on it (a mechanism is suspected below CSP 0.5, collapse below 0.015). The inverted form is >= 1 and GROWS without bound as a mechanism forms, which would make the stiffness-weighted force error loosen towards failure instead of tightening. Implemented as total over elastic, deliberately, and this case is what holds it there},
   note  = {cited by KV-NUM-013},
 }
 
-@misc{kataio,
+@misc{kataip,
   title = {KATAI 2D input contract (docs/k2d-format.md, tol, cstop / cminp): a Consolidation phase with a state stop ends at the first time step whose largest excess pore pressure is at or below cminp, and its answer is that time; the tolerated error is relative to the forces in play. The independent path is the same phase solved at a tolerance more than three decades tighter, where the stop time has stopped moving},
   note  = {cited by KV-NUM-015},
 }
 
-@misc{kataip,
+@misc{kataiq,
   title = {KATAI 2D input-safety property (an input may be used differently from the way it was written, but never in silence; docs/diagnostics.md): the independent path is the same model with the condition removed, which must run without the code},
   note  = {cited by KV-DIA-003},
 }
 
-@misc{kataiq,
+@misc{katair,
   title = {KATAI 2D input-safety property (no input may be discarded in silence): the independent path is the same problem with the object drawn where the mesh actually takes it, plus global vertical equilibrium of the support reactions},
   note  = {cited by KV-DIA-001},
 }
@@ -259,6 +274,11 @@
 @misc{kirsch1979,
   title = {Kirsch, G. (1898). Die Theorie der Elastizitaet und die Beduerfnisse der Festigkeitslehre. Zeitschrift des Vereines deutscher Ingenieure 42, 797-807 -- the circular hole in an elastic plane; Einstein, H.H. & Schwartz, C.W. (1979). Simplified analysis for tunnel supports. Journal of the Geotechnical Engineering Division, ASCE 105(GT4), 499-518 -- the support ring bonded to the ground, here its axisymmetric (isotropic-stress) part, where the ring's flexural stiffness does not enter},
   note  = {cited by KV-STR-024},
+}
+
+@misc{lekhnitskii1963,
+  title = {Lekhnitskii, S.G. (1963). Theory of Elasticity of an Anisotropic Elastic Body. Holden-Day, San Francisco -- the directional modulus of a transversely isotropic body; Jaeger, J.C. (1960). Shear failure of anisotropic rocks. Geological Magazine 97(1), 65-72 -- the single plane of weakness; Rudnicki, J.W. & Rice, J.R. (1975). Conditions for the localization of deformation in pressure-sensitive dilatant materials. J. Mech. Phys. Solids 23(6), 371-394 -- the acoustic tensor},
+  note  = {cited by KV-CST-025},
 }
 
 @misc{mindlin,
@@ -306,14 +326,14 @@
   note  = {cited by KV-CST-018},
 }
 
+@misc{schanz1998b,
+  title = {Schanz, T. (1998). Zur Modellierung des mechanischen Verhaltens von Reibungsmaterialien. Mitteilung 45, Institut fuer Geotechnik, Universitaet Stuttgart, Sec. 4.2; Benz, T. (2007). Small-strain stiffness of soils and its numerical consequences. Mitteilung 55, Institut fuer Geotechnik, Universitaet Stuttgart, Sec. 7.2},
+  note  = {cited by KV-CST-020},
+}
+
 @misc{schanz1999,
   title = {Schanz, T., Vermeer, P.A. & Bonnier, P.G. (1999). The Hardening Soil model: formulation and verification. Beyond 2000 in Computational Geotechnics, Balkema, 281-296 -- the Hardening Soil oedometric stiffness law, integrated over one-dimensional primary loading -- the same closed form KV-CST-002 is measured against; the error-decomposition procedure is the solution-verification one this program already applies to meshes (Roache 1994; Celik et al. 2008, ASME J. Fluids Eng. 130(7):078001), here applied on the axis a path-dependent model actually discretises},
   note  = {cited by KV-NUM-009},
-}
-
-@misc{schanz1999b,
-  title = {Schanz, T., Vermeer, P.A. and Bonnier, P.G. (1999). The hardening soil model: formulation and verification. Beyond 2000 in Computational Geotechnics, Balkema, Rotterdam, 281-296; Benz, T. (2007). Small-strain stiffness of soils and its numerical consequences. Mitteilung 55, Institut fuer Geotechnik, Universitaet Stuttgart, Sec. 7.2},
-  note  = {cited by KV-CST-020},
 }
 
 @misc{skempton1954,
@@ -341,6 +361,11 @@
   note  = {cited by KV-CST-013},
 }
 
+@misc{terzaghi1943c,
+  title = {Terzaghi's effective stress (the skeleton's strength and stiffness read sigma' = sigma - u); Coulomb friction of a soil-structure interface on the effective normal stress, |tau| <= c_i - sigma'_n tan(phi_i) (Terzaghi 1943; Potts & Zdravkovic 2001, interface elements); KATAI 2D input contract (docs/k2d-format.md, materials[i].Rinter: c_i = R c, tan(phi_i) = R tan(phi); structs[i].iface_pos / iface_neg)},
+  note  = {cited by KV-STR-033},
+}
+
 @misc{terzaghib,
   title = {Terzaghi's effective stress principle with one-dimensional (oedometric, nu = 0) linear elasticity: a pore pressure change du under constant total stress changes the vertical effective stress by -du, and the settlement is the integral of -du / E over the height},
   note  = {cited by KV-FLW-009},
@@ -351,27 +376,27 @@
   note  = {cited by KV-CST-003},
 }
 
-@misc{terzaghi1943c,
+@misc{terzaghi1943d,
   title = {Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley -- failure by heave: the critical hydraulic gradient i_c = gamma'/gamma_w, at which upward seepage removes the vertical effective stress},
   note  = {cited by KV-FLW-005},
 }
 
-@misc{terzaghi1943d,
+@misc{terzaghi1943e,
   title = {Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley -- one-dimensional consolidation theory; derivation recorded in docs/references/consolidation-formulation.md},
   note  = {cited by KV-CON-001},
 }
 
-@misc{terzaghi1943e,
+@misc{terzaghi1943f,
   title = {Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley -- one-dimensional consolidation; Barron, R.A. (1948). Consolidation of fine-grained soils by drain wells. Transactions of the ASCE 113, 718-742 -- radial consolidation of the cylinder of soil around a drain, under equal vertical strain},
-  note  = {cited by KV-CON-008},
+  note  = {cited by KV-CON-008, KV-CON-009},
 }
 
-@misc{terzaghi1943f,
+@misc{terzaghi1943g,
   title = {Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley -- one-dimensional consolidation; the stop criterion and the definition of its target are KATAI 2D input contract (docs/k2d-format.md, cstop / cdeg / cminp), which defines the degree of consolidation as the maximum excess pore pressure over the maximum initial excess pore pressure, not the settlement ratio the name suggests. Series derivation recorded in docs/references/consolidation-formulation.md},
   note  = {cited by KV-CON-003},
 }
 
-@misc{terzaghi1943g,
+@misc{terzaghi1943h,
   title = {Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley, New York -- the effective stress principle and the one-dimensional confined column; Biot, M.A. (1941). General theory of three-dimensional consolidation. J. Appl. Phys. 12, 155-164, for the undrained limit of the coupled column (the pore fluid adds its bulk stiffness Kw/n to the skeleton); the undrained relations of isotropic linear elasticity as recorded in docs/references/effective-stress-formulation.md; KATAI 2D input contract (docs/k2d-format.md, `ignoreund`: no water stiffness and no new excess pore pressure, the pressure generated earlier kept)},
   note  = {cited by KV-CST-017},
 }
@@ -384,6 +409,21 @@
 @misc{thiem1906,
   title = {Thiem, G. (1906). Hydrologische Methoden. Leipzig: J.M. Gebhardt -- the steady radial flow to a well fully penetrating a confined aquifer of thickness b and permeability k, between the well radius r_w at head h_w and a radius R at head h_R},
   note  = {cited by KV-FLW-012},
+}
+
+@misc{timoshenko1959,
+  title = {Timoshenko, S.P. & Woinowsky-Krieger, S. (1959). Theory of Plates and Shells, 2nd ed. McGraw-Hill, New York -- ch. 15, the cylinder under internal pressure (N_t = p R), and the membrane equilibrium of a surface of revolution, d(r N_r)/dr - N_t + q r = 0, solved here with N_r = EA u', N_t = EA u / r for a grid with no Poisson coupling},
+  note  = {cited by KV-STR-031},
+}
+
+@misc{timoshenko1959b,
+  title = {Timoshenko, S.P. & Woinowsky-Krieger, S. (1959). Theory of Plates and Shells, 2nd ed. McGraw-Hill, New York -- the cylinder under internal pressure (ch. 15) and the circular plate, clamped and simply supported (ch. 3); Mindlin, R.D. (1951). Influence of rotatory inertia and shear on flexural motions of isotropic, elastic plates. J. Appl. Mech. 18, 31-38 -- the shear term},
+  note  = {cited by KV-STR-029},
+}
+
+@misc{timoshenko1959c,
+  title = {Timoshenko, S.P. & Woinowsky-Krieger, S. (1959). Theory of Plates and Shells, 2nd ed. McGraw-Hill, New York, ch. 15 -- the cylinder under internal pressure: N_t = p R, w = p R^2 / (E t) (here EA (1 - nu^2) with the plate's plane strain EA)},
+  note  = {cited by KV-STR-030},
 }
 
 @misc{a,
@@ -452,6 +492,11 @@
 }
 
 @misc{statics,
+  title = {statics and the rotation of a linear rotational spring under the moment it carries: a cantilever's base moment is P L, and a rigid-body turn theta of a member of length L moves its tip by theta L (any structural analysis text, e.g. Hibbeler, R.C. Structural Analysis -- semi-rigid connections)},
+  note  = {cited by KV-STR-028},
+}
+
+@misc{staticsb,
   title = {statics of a free cantilever (the part of the wall above an excavation on both sides carries only the load drawn on it: M(y) = F (y_top - y), Q = F; below an anchor of force N, M(y) = N_x (y_a - y)); the identity of a one-sided interface on an excavated side with a plate bonded to the remaining side; the elastic branch of the Coulomb interface, tau = k_s (u_s - u_s^p) with u_s^p = 0 before any slip (docs/k2d-format.md, structs[i].iface_ks); the KATAI 2D input contract for iface_pos / iface_neg (positive = the right of the direction from (x1, y1) to (x2, y2)); the embedded-beam base bears in compression only (docs/references/embedded-beam-formulation.md sec 4), so on a linear ground a pile pulled up mirrors the same pile pushed down in everything but its base},
   note  = {cited by KV-STR-014},
 }
@@ -591,9 +636,19 @@
   note  = {cited by KV-CST-008},
 }
 
+@misc{theq,
+  title = {the statics and the stiffness of a row of bars: n bars of axial stiffness EA / L share a load F, each stretching F L / (n EA) and carrying F / n (any structural analysis text, e.g. Hibbeler, R.C. Structural Analysis); round a circle of radius r at the spacing Ls there are n = r / Ls per radian},
+  note  = {cited by KV-STR-032},
+}
+
 @misc{the1970,
   title = {the thick-walled cylinder under a uniform radial displacement of its inner face, plane strain (Lame; Timoshenko, S.P. & Goodier, J.N. (1970). Theory of Elasticity, 3rd ed. McGraw-Hill, sec. 30), with the ring's hoop equilibrium N = p R and its hoop strain u / R = eps0 + N / EA},
   note  = {cited by KV-STR-019},
+}
+
+@misc{the1920,
+  title = {the unconfined compressive strength of a Mohr-Coulomb material, q_u = 2 c cos(phi) / (1 - sin(phi)) (Coulomb's criterion with sigma_3 = 0); Prandtl, L. (1920). Ueber die Haerte plastischer Koerper. Nachr. Ges. Wiss. Goettingen, 74-85 -- q_u = (2 + pi) su},
+  note  = {cited by KV-NUM-016},
 }
 
 @misc{undrained,

@@ -20,6 +20,8 @@
 #include <katai/materials/mohr_coulomb.hpp>
 #include <katai/materials/soft_soil.hpp>
 #include <katai/materials/soft_soil_creep.hpp>
+#include <katai/materials/ngi_adp.hpp>
+#include <katai/materials/jointed_rock.hpp>
 
 namespace katai::core {
 
@@ -61,6 +63,8 @@ enum class MaterialType {
     SoftSoil,
     SoftSoilCreep,
     HoekBrown,
+    NgiAdp,
+    JointedRock,
 };
 
 // State of an integration (Gauss) point. Besides the in-plane Voigt stress we
@@ -111,6 +115,11 @@ struct GaussState {
     // a plate that is given end bearing. It answers with the elastic part of its model and its
     // hardening state does not move. Set by the phase that owns the zone, phase by phase.
     bool plasticity_excluded = false;
+    // NGI-ADP: the initial state the yield surface is translated from (ngi_adp.hpp), compression
+    // positive, [xx, yy, zz, xy] -- the stress the point carried when the model first acted on
+    // it -- and whether it has been taken. The model's plastic shear strain is gamma_p above.
+    Eigen::Vector4d adp_s0 = Eigen::Vector4d::Zero();
+    bool adp_set = false;
 };
 
 // Isotropic elastic constitutive matrix from an (E, nu) PAIR, rather than from the pair a
@@ -249,9 +258,49 @@ struct MaterialModel {
     // model is only a strength criterion. hb.E / hb.nu are filled from those two at the seam so
     // the core stays self-contained.
     hoekbrown::Params hb;
+    // NGI-ADP (ngi_adp.hpp): the plane strain active strength is `cohesion` and the shear modulus
+    // follows from youngs_modulus / poisson_ratio -- so the depth profile of both applies as it
+    // does to any model -- and these are the ratios and the total failure strains [-].
+    double adp_suP = 0.0, adp_suDSS = 0.0;     // suP / suA, suDSS / suA
+    double adp_gfC = 0.0, adp_gfE = 0.0, adp_gfDSS = 0.0;
+    // Jointed rock (jointed_rock.hpp). The FIRST joint set's strength is the shared cohesion,
+    // friction, dilatancy and tension cut-off above -- so the depth profile of the cohesion, the
+    // strength reduction of a Safety phase and the interface's Rinter reach it as they reach any
+    // material's -- and its dip orients the anisotropy; E / nu are E1 / nu1, the plane of
+    // isotropy's. jr holds the rest: the second and third sets whole, and E2, nu2, G2, which a
+    // depth profile of E scales with E1 (jr_E1_ref is the E1 they were entered beside).
+    jr::Params jr;
+    double jr_E1_ref = 0.0;
 
-    // Plane-strain elastic constitutive matrix (3x3 SPD, v < 0.5).
+    // The jointed rock's parameters at this point: E1 / nu1 and the first set from the shared
+    // fields, E2 and G2 scaled with E1.
+    jr::Params jr_at_point() const {
+        jr::Params P = jr;
+        P.E1 = youngs_modulus;
+        P.nu1 = poisson_ratio;
+        const double s = jr_E1_ref > 0.0 ? youngs_modulus / jr_E1_ref : 1.0;
+        P.E2 = jr.E2 * s;
+        P.G2 = jr.G2 * s;
+        P.p[0].c = cohesion;
+        P.p[0].phi = friction_angle;
+        P.p[0].psi = dilatancy_angle;
+        P.p[0].tcut = tension_cutoff;
+        P.p[0].sigt = tensile_strength;
+        return P;
+    }
+
+    // Plane-strain elastic constitutive matrix (3x3 SPD, v < 0.5). A transversely isotropic rock
+    // answers with its own operator: every caller that asks a material for its elasticity
+    // (consolidation, the coupled phases, the recovery of pore pressures) then sees the anisotropy.
     Eigen::Matrix3d elastic_plane_strain() const {
+        if (type == MaterialType::JointedRock && jr.aniso) {
+            const jr::Mat4 D = jr::elastic(jr_at_point());
+            const int idx[3] = {0, 1, 3};
+            Eigen::Matrix3d d;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) d(i, j) = D(idx[i], idx[j]);
+            return d;
+        }
         return elastic_plane_strain_of(youngs_modulus, poisson_ratio);
     }
 
@@ -307,6 +356,16 @@ struct MaterialModel {
 
     // Axisymmetric elastic matrix (4x4), strain/stress order [r, z, rz, theta].
     Eigen::Matrix4d elastic_axisym() const {
+        if (type == MaterialType::JointedRock && jr.aniso) {
+            // [r, z, rz, theta] from the core's [xx, yy, zz, xy]: the hoop direction is the
+            // out-of-plane one, and it lies in every joint (a cone about the axis)
+            const jr::Mat4 D = jr::elastic(jr_at_point());
+            const int idx[4] = {0, 1, 3, 2};
+            Eigen::Matrix4d d;
+            for (int i = 0; i < 4; ++i)
+                for (int j = 0; j < 4; ++j) d(i, j) = D(idx[i], idx[j]);
+            return d;
+        }
         return elastic_axisym_of(youngs_modulus, poisson_ratio);
     }
 };

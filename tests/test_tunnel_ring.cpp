@@ -1,6 +1,6 @@
 // A lining drawn as the chords of a circle, around a deep tunnel in elastic ground under an
-// isotropic in-situ stress (K0 = 1): unlined, lined as it is dug, lined with an interface, and lined
-// after it is dug.
+// isotropic in-situ stress (K0 = 1): unlined, lined as it is dug, lined with an interface (stiff and
+// soft), and lined after it is dug.
 //
 // THE JOINT WHERE TWO SPLIT LINES MEET. A plate with an interface is a wall: the mesh is split along
 // it, and the two sides meet the plate only through the interfaces. At the crown of a ring two
@@ -11,6 +11,12 @@
 // that point formed a cycle, which left the point without an equation -- fixed: the crown of an
 // unlined tunnel did not move at all. And where the deeper ends of two chords meet -- the invert --
 // both hung from the ground's node there: the ring was welded to the ground at that point.
+//
+// THE JOINT A DIG LINES. An interface installed in the phase that digs out the side it is bonded
+// across has no ground on that side: it starts as a new contact, sigma_n0 = 0. Measured before
+// 2026-10-26: it started at half the ground's stress (-500 of -1000 kPa, the empty side's nil
+// stress averaged in), and with kn = 1e5 the ring carried 5.9% more than the closed form, its
+// joint's normal stress 500 kPa beyond kn times its closure -- a joint that read 2.3 times as stiff.
 //
 // THE CLOSED FORMS. A circular hole of radius R in an infinite elastic plane under an isotropic
 // stress p0 at infinity: the wall moves in by u = p0 R (1 + nu) / E (Kirsch). A thin ring of axial
@@ -24,10 +30,10 @@
 // verify: KV-STR-024
 //   oracle:   closed_form
 //   source:   Kirsch, G. (1898). Die Theorie der Elastizitaet und die Beduerfnisse der Festigkeitslehre. Zeitschrift des Vereines deutscher Ingenieure 42, 797-807 -- the circular hole in an elastic plane; Einstein, H.H. & Schwartz, C.W. (1979). Simplified analysis for tunnel supports. Journal of the Geotechnical Engineering Division, ASCE 105(GT4), 499-518 -- the support ring bonded to the ground, here its axisymmetric (isotropic-stress) part, where the ring's flexural stiffness does not enter
-//   locator:  a deep tunnel, R = 3 m, centre 50 m below the surface of a 120 x 100 m block; linear elastic ground E = 50000 kPa, nu = 0.3, gamma = 20 kN/m3, K0 = 1 (p0 = 1000 kPa at the centre); the outline 48 chords; the ring EA = 1e6 kN/m, EI = 1e3 kNm2/m; the interface kn = 1e6 kPa/m. Phases: K0 procedure, then the tunnel dug (and lined); or dug, then lined
-//   quantity: the mean inward movement of the tunnel wall [m]; the mean hoop force of the ring [kN/m]; the displacement of the two chords at the crown; the movement a later-built ring causes
-//   expected: u = p0 R (1 + nu) / E = 0.078 m; N = p0 R a / (a + 1/kn + R^2/EA) = 2689.7 kN/m bonded, 2659.1 with the interface; the chords at the crown move together; the interface closes at the invert as around the ring; a ring built after the dig takes nothing and moves nothing
-//   band:     2% on u (measured -0.79%: the chords' polygon in place of the circle, and the 20-radius block in place of the plane); 3% on N (measured -0.49% bonded, +0.14% with the interface); the interface closure at the invert at least half the ring's mean (measured 0.380 against 0.390 mm; 0 when the point was welded); 1e-9 m between the chords at the crown; the later-built ring: |N| below 0.5% of the bonded value and the largest movement below 1e-3 of u
+//   locator:  a deep tunnel, R = 3 m, centre 50 m below the surface of a 120 x 100 m block; linear elastic ground E = 50000 kPa, nu = 0.3, gamma = 20 kN/m3, K0 = 1 (p0 = 1000 kPa at the centre); the outline 48 chords; the ring EA = 1e6 kN/m, EI = 1e3 kNm2/m; the interface kn = 1e6 kPa/m, and 1e5. Phases: K0 procedure, then the tunnel dug (and lined); or dug, then lined
+//   quantity: the mean inward movement of the tunnel wall [m]; the mean hoop force of the ring [kN/m]; the displacement of the two chords at the crown; the interface's normal stress and closure; the movement a later-built ring causes
+//   expected: u = p0 R (1 + nu) / E = 0.078 m; N = p0 R a / (a + 1/kn + R^2/EA) = 2689.7 kN/m bonded, 2659.1 with the interface, 2412.4 with the soft one; the chords at the crown move together; the interface closes at the invert as around the ring; the soft interface's normal stress is kn times its closure and N/R; a ring built after the dig takes nothing and moves nothing
+//   band:     2% on u (measured -0.79%: the chords' polygon in place of the circle, and the 20-radius block in place of the plane); 3% on N (measured -0.49% bonded, -0.50% with the interface, -0.52% with the soft one); the interface closure at the invert at least half the ring's mean (measured 0.903 against 0.884 mm; 0 when the point was welded); 2% between the soft joint's normal stress and kn times its closure (measured 0.00%), 3% between it and N/R (+0.05%); 1e-9 m between the chords at the crown; the later-built ring: |N| below 0.5% of the bonded value and the largest movement below 1e-3 of u
 #include <katai/jobs/driver.hpp>
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/model/project.hpp>
@@ -52,7 +58,7 @@ constexpr double kE = 50000.0, kNu = 0.3, kGamma = 20.0, kR = 3.0, kYc = 50.0;
 constexpr int kChords = 48;
 constexpr double kEA = 1.0e6, kKn = 1.0e6;
 
-struct Case { bool lining; bool interface; bool line_later; };
+struct Case { bool lining; bool interface; bool line_later; double kn = kKn; };
 
 m::Project tunnel(const Case& c) {
     m::Project pr;
@@ -60,7 +66,7 @@ m::Project tunnel(const Case& c) {
     pr.has_water = false;
     pr.initial_procedure = m::InitialProcedure::K0Procedure;
     pr.mesh.elem_size = 6.0;
-    pr.mesh.auto_refine = false;
+    pr.mesh.auto_refine = true;   // the ring's own factor (0.08 below) applies
     m::Material s;
     s.name = "Ground"; s.model = m::SoilModel::LinearElastic; s.drainage = m::Drainage::Drained;
     s.E = kE; s.nu = kNu; s.gamma_unsat = s.gamma_sat = kGamma; s.k0_auto = false; s.k0 = 1.0;
@@ -92,7 +98,7 @@ m::Project tunnel(const Case& c) {
             e.material = 0;
             e.coarseness = 0.08;
             e.iface_pos = c.interface;   // the ground side of a counter-clockwise outline
-            e.iface_kn = c.interface ? kKn : 0.0;
+            e.iface_kn = c.interface ? c.kn : 0.0;
             pr.structs.push_back(e);
         }
         pr.initial.struct_active.assign((size_t)kChords, 0);
@@ -215,6 +221,35 @@ int main() {
             std::printf("      interface closure at the invert %.4e m, around the ring %.4e m\n", gap_invert, gap_mean);
             check(n_invert > 0 && gap_invert < 0.5 * gap_mean,
                   "...and at the invert the interface closes as it does around the ring");
+        }
+    }
+    {
+        // A softer joint, where 1/kn is a fifth of the ground's compliance. The lining is built in
+        // the phase that digs it out, so nothing is across the joint to have held the ground: the
+        // joint starts as a new contact (sigma_n0 = 0) and its normal stress is its stiffness
+        // times its closure, equal to the ring's pressure. Seeded with half the ground's stress
+        // (the bonded side's empty node averaged in) it read as a joint 2.3 times as stiff.
+        const double kn = 1.0e5;
+        const double n_soft = p0 * kR * a / (a + 1.0 / kn + kR * kR / kEA);
+        const auto res = run({true, true, false, kn}, "ring with a soft interface");
+        if (!res.empty()) {
+            const auto& r = res[1];
+            const double N = hoop_force(r);
+            double gap_mean = 0.0, sn_mean = 0.0;
+            int n_all = 0;
+            for (const auto& f : r.interface_forces)
+                for (const auto& st : f.stations) { gap_mean += st.gap; sn_mean += st.sigma_n; ++n_all; }
+            gap_mean /= std::max(n_all, 1);
+            sn_mean /= std::max(n_all, 1);
+            std::printf("      hoop force %.2f kN/m, closed form %.2f (%+.2f%%)\n", N, n_soft, 100.0 * (N / n_soft - 1.0));
+            std::printf("      interface normal stress %.2f kPa, kn x closure %.2f, ring pressure N/R %.2f\n",
+                        sn_mean, kn * gap_mean, N / kR);
+            check(std::fabs(N / n_soft - 1.0) < 0.03,
+                  "a ring with a soft interface carries N = p0 R a / (a + 1/kn + R^2/EA), within 3%");
+            check(std::fabs(std::fabs(sn_mean) / (kn * std::fabs(gap_mean)) - 1.0) < 0.02,
+                  "...the joint built with the dig starts as a new contact: its normal stress is kn x its closure");
+            check(std::fabs(std::fabs(sn_mean) / (N / kR) - 1.0) < 0.03,
+                  "...and is the pressure the ring carries, N/R");
         }
     }
     {

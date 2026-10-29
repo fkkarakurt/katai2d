@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <functional>
 #include <katai/analysis/nonlinear_solver.hpp>   // StructureLaws
+#include <katai/analysis/internal_forces.hpp>    // the kinematics policies (PlaneStrainKin, AxisymKin)
 
 namespace katai::core {
 
@@ -218,7 +219,11 @@ CoupledFlowResult solve_coupled_flow_deformation(
 }
 
 namespace detail {
-template <class E>
+// Kin: the kinematics (PlaneStrainKin / AxisymKin, internal_forces.hpp), as in the consolidation
+// twin -- the strain operator and its weight (per radian in axisymmetry), the material
+// integration, the stress the element balances and the direction of the pore pressure (with the
+// hoop in axisymmetry). The flow rows of B and the storage are the same under the same weight.
+template <class E, class Kin = PlaneStrainKin>
 CoupledFlowPlasticResult coupled_flow_plastic_impl(
     const mesh::Mesh& mesh, const DofMap& dofs, const std::vector<MaterialModel>& materials,
     const std::vector<MaterialProfile>& profile,
@@ -245,7 +250,7 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
     std::vector<GaussState> trial = committed;
 
     const auto gp = E::gauss_points();
-    const Eigen::Vector3d mvec(1.0, 1.0, 0.0);
+    const typename Kin::Strain mvec = Kin::pore_vector();
 
     // The length of the time step being solved: the phase's dt, or a part of it where a step that
     // did not close is cut (below).
@@ -282,12 +287,12 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
             Eigen::Matrix<double, N, N> He = Eigen::Matrix<double, N, N>::Zero();
             Eigen::Matrix<double, N, N> Se = Eigen::Matrix<double, N, N>::Zero();
             for (int g = 0; g < ngp; ++g) {
-                const auto sd = E::strain_displacement(X, gp[g].xi, gp[g].eta);
+                const auto sd = Kin::template gradients<E>(X, gp[g].xi, gp[g].eta);
                 const auto Nsh = E::shape_functions(gp[g].xi, gp[g].eta);
-                const double wdet = gp[g].weight * sd.det_jacobian;
-                const Eigen::Vector3d deps = sd.B * du_e;
+                const double wdet = gp[g].weight * sd.weight;
+                const typename Kin::Strain deps = sd.B * du_e;
                 GaussState& tr = trial[(size_t)e * ngp + g];
-                Eigen::Matrix3d Dt;
+                typename Kin::Tangent Dt;
                 // E'(y) / c'(y) at the stress point (uniform() -> the element material, bit-for-bit).
                 const MaterialModel* mpp = &mat;
                 MaterialModel mgg;
@@ -301,7 +306,7 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
                 }
                 // dt: this coupled flow-deformation time step [day] -- SoftSoilCreep sees the
                 // creep + flow interaction through it; the other models do not read the parameter.
-                integrate_point(*mpp, committed[(size_t)e * ngp + g], deps, tr, Dt, mode, h_step);
+                Kin::integrate(*mpp, committed[(size_t)e * ngp + g], deps, tr, Dt, mode, h_step);
                 // Suction psi=+p/gamma_w (TENSION-POSITIVE: p>0 suction=unsaturated; p<=0
                 // saturated S_e=1). Bishop chi=S_eff.
                 double p_gp = 0.0;
@@ -312,7 +317,7 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
                 const double Sdeg = saturation(w, psi);
                 const double dS_dpw = -ne * moisture_capacity(w, psi) / gamma_w;  // n.dS/dp_w >= 0
                 const double Cp = Sdeg / kw_over_n.at(e_mat) + dS_dpw;             // storage coefficient
-                fe.noalias() += wdet * sd.B.transpose() * tr.stress;
+                fe.noalias() += wdet * sd.B.transpose() * Kin::stress(tr);
                 Ke.noalias() += wdet * sd.B.transpose() * Dt * sd.B;
                 Eigen::Matrix<double, 2, N> G;
                 for (int i = 0; i < N; ++i) { G(0, i) = sd.B(0, 2 * i); G(1, i) = sd.B(1, 2 * i + 1); }
@@ -539,7 +544,18 @@ CoupledFlowPlasticResult solve_coupled_flow_deformation_plastic(
     const ConsolidationSolveFactory& solve_factory,
     int max_newton, double newton_tol,
     const std::vector<MaterialProfile>& profile, const math::CsrMatrix* struct_k,
-    const std::vector<int>* pore_tie, StructureLaws* structure_laws) {
+    const std::vector<int>* pore_tie, StructureLaws* structure_laws, bool axisymmetric) {
+    if (axisymmetric) {
+        if (mesh.nodes_per_element == Tri15Element::kNodeCount)
+            return detail::coupled_flow_plastic_impl<Tri15Element, detail::AxisymKin>(mesh, dofs, materials,
+                profile, perm, retention, porosity, gamma_w, kw_over_n, drained_node, initial_state,
+                initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton,
+                newton_tol, struct_k, pore_tie, structure_laws);
+        return detail::coupled_flow_plastic_impl<Tri6Element, detail::AxisymKin>(mesh, dofs, materials,
+            profile, perm, retention, porosity, gamma_w, kw_over_n, drained_node, initial_state,
+            initial_pore, dt, nsteps, active, load_increment, solve_factory, max_newton, newton_tol,
+            struct_k, pore_tie, structure_laws);
+    }
     if (mesh.nodes_per_element == Tri15Element::kNodeCount)
         return detail::coupled_flow_plastic_impl<Tri15Element>(mesh, dofs, materials, profile, perm,
             retention, porosity, gamma_w, kw_over_n, drained_node, initial_state, initial_pore, dt,

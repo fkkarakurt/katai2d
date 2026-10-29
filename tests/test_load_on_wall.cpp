@@ -13,13 +13,18 @@
 // to the ground and its bending is the measure -- the same raft, the same moment within the
 // interface's compliance.
 //
+// BOTH ENDS. A wall hangs from its deeper end, the node it shares with the ground; a raft has
+// none, and the toe rule took its left end and welded it to the ground there. Measured before
+// 2026-10-26: the contact carried -777.7 of the -800 kN/m (-2.8%), the left end's share passing
+// through the weld. A level wall with ground on one side only is split at both ends now.
+//
 // verify: KV-STR-026
 //   oracle:   closed_form
 //   source:   vertical equilibrium of a weightless raft: the resultant of the contact pressure equals the applied load (statics); KATAI 2D input contract (docs/k2d-format.md, structs[i].iface_pos / iface_neg, loads[i])
 //   locator:  a linear elastic block 20 x 10 m (E = 50000 kPa, nu = 0.3, weightless); a raft (EA = 1e7 kN/m, EI = 1e4 kNm2/m) on its surface from x = 6 to 14 m; a distributed load q = -100 kPa drawn along the raft; the interface beneath (the positive side of a line drawn left to right), above, or none
 //   quantity: the normal stress of the interface beneath the raft integrated along it [kN/m]; the raft's largest moment [kNm/m] with the interface beneath, against the bonded raft's
 //   expected: the contact force q B = -800 kN/m; the raft bends, as the bonded one does
-//   band:     3% on the contact force (a trapezoid over the reported stations; measured -2.4%: the raft hangs from its toe -- the left end, x = 6 m -- as every wall does from the node it shares with the ground, there is no interface at that point and the end's share of the contact passes through it); the moment within 25% of the bonded raft's (measured +2.1%: the interface's compliance redistributes the contact), and above half of it -- the raft that carried nothing had 0
+//   band:     0.1% on the contact force (the joint's own Newton-Cotes rule over each element's three stations; measured 0.000%; a trapezoid over the shared points gives +1.7%, the contact peaking at the raft's ends); the moment within 25% of the bonded raft's (measured -2.0%: the interface's compliance redistributes the contact), and above half of it -- the raft that carried nothing had 0
 #include <katai/jobs/driver.hpp>
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/model/project.hpp>
@@ -40,7 +45,7 @@ void check(bool ok, const std::string& what) {
     if (!ok) ++g_failures;
 }
 
-struct Out { bool ok = false; double m_max = 0.0, resultant = 0.0; int stations = 0; };
+struct Out { bool ok = false, simpson_ok = true; double m_max = 0.0, resultant = 0.0, trapezoid = 0.0; int stations = 0; };
 
 // side: 0 no interface, 1 beneath (positive), 2 above (negative)
 Out raft(int side) {
@@ -90,7 +95,18 @@ Out raft(int side) {
     for (const auto& p : pts)
         if (uniq.empty() || p.first - uniq.back().first > 1e-9) uniq.push_back(p);
     for (size_t i = 1; i < uniq.size(); ++i)
-        o.resultant += 0.5 * (uniq[i].second + uniq[i - 1].second) * (uniq[i].first - uniq[i - 1].first);
+        o.trapezoid += 0.5 * (uniq[i].second + uniq[i - 1].second) * (uniq[i].first - uniq[i - 1].first);
+    // The joint's own rule: each element's three stations (its nodes, in order) by Newton-Cotes
+    // -- Simpson. This is the force the joint passes, which the raft's equilibrium fixes; the
+    // trapezoid over the shared points is not, where the contact peaks at the raft's ends.
+    for (const auto& f : res[0].interface_forces) {
+        std::vector<std::pair<double, double>> el;
+        for (const auto& st : f.stations) el.push_back({st.s, st.sigma_n});
+        if (el.size() % 3 != 0) { o.simpson_ok = false; continue; }
+        for (size_t i = 0; i + 2 < el.size(); i += 3)
+            o.resultant += std::fabs(el[i + 2].first - el[i].first) / 6.0 *
+                           (el[i].second + 4.0 * el[i + 1].second + el[i + 2].second);
+    }
     return o;
 }
 
@@ -101,11 +117,11 @@ int main() {
     const Out bonded = raft(0), beneath = raft(1), above = raft(2);
     check(bonded.ok && beneath.ok && above.ok, "the three rafts solve");
     std::printf("      bonded: M %.3f kNm/m; interface beneath: M %.3f, contact force %.3f kN/m over %d stations "
-                "(q B = -800); interface above: M %.3f\n",
-                bonded.m_max, beneath.m_max, beneath.resultant, beneath.stations, above.m_max);
-    check(beneath.stations > 0 && std::fabs(beneath.resultant / -800.0 - 1.0) < 0.03,
+                "(q B = -800; trapezoid over the points %.3f); interface above: M %.3f\n",
+                bonded.m_max, beneath.m_max, beneath.resultant, beneath.stations, beneath.trapezoid, above.m_max);
+    check(beneath.stations > 0 && beneath.simpson_ok && std::fabs(beneath.resultant / -800.0 - 1.0) < 1e-3,
           "the interface beneath the raft carries the load drawn on it: its contact force is q B, "
-          "less the share of the toe");
+          "both ends included");
     check(beneath.m_max > 0.5 * bonded.m_max && std::fabs(beneath.m_max / bonded.m_max - 1.0) < 0.25,
           "...and the raft bends under it, as the bonded raft does");
     check(std::fabs(above.m_max / bonded.m_max - 1.0) < 1e-6,

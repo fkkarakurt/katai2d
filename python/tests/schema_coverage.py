@@ -79,6 +79,29 @@ KEY_TO_ATTR = {
     "sigci": "sig_ci",
     "hbD": "hb_D",
     "sigpsi": "sig_psi",
+    "rotk1": "rot_k1",
+    "rotk2": "rot_k2",
+    "adpsuP": "adp_suP",
+    "adpsuDSS": "adp_suDSS",
+    "adpgfC": "adp_gfC",
+    "adpgfE": "adp_gfE",
+    "adpgfDSS": "adp_gfDSS",
+    "jrsets": "jr_sets",
+    "jraniso": "jr_aniso",
+    "jrE2": "jr_E2",
+    "jrnu2": "jr_nu2",
+    "jrG2": "jr_G2",
+    "jralpha1": "jr_alpha1",
+    "jralpha2": "jr_alpha2",
+    "jralpha3": "jr_alpha3",
+    "jrc2": "jr_c2",
+    "jrc3": "jr_c3",
+    "jrphi2": "jr_phi2",
+    "jrphi3": "jr_phi3",
+    "jrpsi2": "jr_psi2",
+    "jrpsi3": "jr_psi3",
+    "jrsigt2": "jr_sigt2",
+    "jrsigt3": "jr_sigt3",
     "cstop": "consol_stop",
     "cminp": "consol_min_pore",
     "cdeg": "consol_degree",
@@ -119,6 +142,8 @@ def coverage_project():
     pr.wy = [4.0, 4.0]
     mesh = pr.mesh
     mesh.rel = 0.67   # written only when set
+    mesh.grading = 0.3   # written only when not the default
+    mesh.corner_refine = False   # written only when off
     pr.mesh = mesh
 
     soil = core.Material()
@@ -134,7 +159,38 @@ def coverage_project():
     rock.gsi = 55.0
     rock.hb_D = 0.25
     rock.sig_psi = 1500.0
-    pr.materials = [soil, rock]
+    # And one carrying NGI-ADP, for the same reason: its five keys are its own.
+    clay = core.Material()
+    clay.name = "Anisotropic clay"
+    clay.model = core.SoilModel.NgiAdp
+    clay.drainage = core.Drainage.UndrainedC
+    clay.c = 40.0
+    clay.adp_suP = 0.45
+    clay.adp_suDSS = 0.65
+    clay.adp_gfC = 1.8
+    clay.adp_gfE = 5.5
+    clay.adp_gfDSS = 3.5
+    # And jointed rock: its keys are its own too.
+    jrock = core.Material()
+    jrock.name = "Jointed rock"
+    jrock.model = core.SoilModel.JointedRock
+    jrock.jr_sets = 3
+    jrock.jr_alpha1 = 25.0
+    jrock.jr_alpha2 = 70.0
+    jrock.jr_alpha3 = -50.0
+    jrock.jr_c2 = 15.0
+    jrock.jr_c3 = 12.0
+    jrock.jr_phi2 = 28.0
+    jrock.jr_phi3 = 33.0
+    jrock.jr_psi2 = 2.0
+    jrock.jr_psi3 = 4.0
+    jrock.jr_sigt2 = 1.5
+    jrock.jr_sigt3 = 2.5
+    jrock.jr_aniso = True
+    jrock.jr_E2 = 6000.0
+    jrock.jr_nu2 = 0.22
+    jrock.jr_G2 = 2500.0
+    pr.materials = [soil, rock, clay, jrock]
     plate = core.PlateMaterial()
     plate.name = "Wall"
     plate.prevent_punching = True   # written only when set
@@ -172,6 +228,8 @@ def coverage_project():
     wall.iface_vt = 0.2
     wall.hinge1 = True               # hinged ends are written only when set
     wall.hinge2 = True
+    wall.rot_k1 = 5000.0             # rotation springs too
+    wall.rot_k2 = 8000.0
     pr.structs = [wall]
 
     strip = core.Load()

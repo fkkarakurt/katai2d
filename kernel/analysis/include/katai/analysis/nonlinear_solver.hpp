@@ -165,6 +165,16 @@ struct NewtonOptions {
     double srf_first_step = 0.1;
     double srf_max = 3.0;
     double srf_resolution = 1.0e-3;
+    // THE COLLAPSE LOAD BY ARC LENGTH. Set, a load-controlled solve whose increments cannot be cut
+    // any further does not stop at the last load level that closed: it follows the equilibrium path
+    // from there with the load factor an unknown, as the strength continuation above follows the
+    // strength factor, to where the path stops rising -- the collapse load, to limit_resolution of
+    // itself rather than to the smallest increment. A path that climbs back to the full load
+    // instead was a stepping difficulty, not a collapse, and the load-controlled solve resumes.
+    // Only for a phase whose increments change nothing but the load (no prescribed displacement,
+    // no time).
+    bool limit_by_arc = false;
+    double limit_resolution = 1.0e-3;
 };
 
 // Plate (structural wall/beam) embedded in soil — 3-node Timoshenko beam (see
@@ -256,12 +266,19 @@ struct GeogridElement {
     // As AnchorElement::end_dof: a node on an embedded wall is attached to the wall's own
     // translations, not to the soil beside it. [A_x,A_y, B_x,B_y, mid_x,mid_y]; -1 = the mesh node.
     std::array<int, 6> trans_dof = {-1, -1, -1, -1, -1, -1};
+    // A QUARTIC grid on a 15-noded edge (geogrid.hpp, "the element of either order"): its quarter-
+    // point nodes [Q1 between A and M, Q3 between M and B], and their wall translations as above.
+    // -1 = the quadratic 3-noded element.
+    std::array<int, 2> quarter = {-1, -1};
+    std::array<int, 4> trans_dof_q = {-1, -1, -1, -1};
+    int node_count() const { return quarter[0] >= 0 ? 5 : 3; }
+    int node(int k) const { return k < 3 ? nodes[(size_t)k] : quarter[(size_t)k - 3]; }
 };
 
-// Global DOF of geogrid node k, component c.
+// Global DOF of geogrid node k (0..node_count()-1, in the element's order), component c.
 inline int geogrid_dof(const GeogridElement& ge, const DofMap& dofs, int k, int c) {
-    const int d = ge.trans_dof[2 * k + c];
-    return d >= 0 ? d : dofs.global_dof(ge.nodes[k], c);
+    const int d = k < 3 ? ge.trans_dof[(size_t)(2 * k + c)] : ge.trans_dof_q[(size_t)(2 * (k - 3) + c)];
+    return d >= 0 ? d : dofs.global_dof(ge.node(k), c);
 }
 
 // Interface — zero-thickness soil-structure Coulomb interface (see elements/interface.hpp).
@@ -320,6 +337,19 @@ struct InterfaceElement5 {
     bool axisymmetric = false;   // see InterfaceElement::axisymmetric
 };
 
+// A ROTATION SPRING at a hinged plate end (docs/k2d-format.md, `rotk1` / `rotk2`): a moment
+// k (phi_a - phi_b) between the end's own rotation `a` and the rotation it is hinged against `b`
+// -- the joint's, or the ground's (b = -1) where the end sits on a support. k is per metre out of
+// plane [kNm/rad/m]. It is installed with its plate: `plate` names one of that plate's elements
+// (in `plates5` when `five`), whose installation cohort the spring reads its displacement from.
+struct RotationSpring {
+    int a = -1;
+    int b = -1;
+    double k = 0.0;
+    std::size_t plate = 0;
+    bool five = false;
+};
+
 // Bundle of structural elements embedded in the soil (plate + anchor + geogrid + interface;
 // 3- and 5-node).
 struct Structures {
@@ -330,6 +360,7 @@ struct Structures {
     std::vector<PlateElement5> plates5;          // tri15-edge structural elements
     std::vector<InterfaceElement5> interfaces5;
     std::vector<ebeam::EmbeddedBeam> embedded_beams;  // embedded beam (pile row, mesh-nonconforming skin)
+    std::vector<RotationSpring> rot_springs;      // semi-rigid plate ends
     // INSTALLATION DATUMS. Structural elements are total-displacement formulated, so an element that
     // is activated in a later phase must not read the displacement the ground had before it existed:
     // it is installed stress-free on the deformed ground, and reads u - u_install ever after. Every
@@ -442,10 +473,11 @@ struct NewtonResult {
     Eigen::VectorXd displacement;            // total_dofs (fixed DOFs = 0)
     std::vector<GaussState> gauss_states;    // element_count * 3 (converged)
     // Structural path-dependent state (elastoplastic). anchor_plastic: committed plastic
-    // elongation U_p per anchor. geogrid_plastic: committed plastic axial ε_p per geogrid ×
-    // 2 Gauss. In multi-phase runs it can be fed back into the next phase (like gauss_states).
+    // elongation U_p per anchor. geogrid_plastic: committed plastic axial ε_p per geogrid stress
+    // point, geogrid::kStateStride slots per element. In multi-phase runs it can be fed back into
+    // the next phase (like gauss_states).
     std::vector<double> anchor_plastic;      // anchors.size()
-    std::vector<double> geogrid_plastic;     // geogrids.size() * 2
+    std::vector<double> geogrid_plastic;     // geogrids.size() * geogrid::kStateStride
     std::vector<double> interface_slip;      // interfaces.size() * 3 (Newton-Cotes node pairs)
     std::vector<double> interface5_slip;     // interfaces5.size() * 5 (5-node interface)
     std::vector<double> embedded_skin_slip;  // all embedded beam skin points (axial plastic slip)
@@ -515,6 +547,12 @@ struct NewtonResult {
     double srf = 0.0;
     bool srf_limit = false;
     std::vector<std::array<double, 2>> srf_path;
+    // The collapse load by arc length (NewtonOptions::limit_by_arc): whether the collapse load
+    // reported in load_factor was located so, and the path it followed (load factor, largest
+    // displacement); and whether the arc instead carried the solve past a stepping difficulty.
+    bool limit_arc = false;
+    bool limit_arc_rescued = false;
+    std::vector<std::array<double, 2>> limit_path;
     // Increments kept at a stagnated iterate (kStagnationAccept), and the largest relative
     // out-of-balance force any of them was kept at. Zero on a run that met its tolerance
     // everywhere; otherwise the answer carries that much unbalanced force and the phase says so.

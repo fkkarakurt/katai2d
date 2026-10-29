@@ -94,7 +94,11 @@ HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
     Ce << 1.0, -nu, -nu, -nu, 1.0, -nu, -nu, -nu, 1.0;
     Ce /= Eur;
     const Eigen::Vector3d deps_p = Ce * (sigHS - sig_n_cp);
-    const HsIntegrated ret = hs_integrate(pe, sig_n_cp, gamma_p_n, pp_n, deps_p, substep_tol,
+    // The cut-off is returned to WITH the model's own surfaces (HardeningSoilParams::sigma_t); the
+    // Rankine cap below then only meets what the integration's tolerance left past it.
+    HardeningSoilParams pt = pe;
+    pt.sigma_t = sigma_t_cap < 0.5 * kNoTensionCap ? sigma_t_cap : 1e300;
+    const HsIntegrated ret = hs_integrate(pt, sig_n_cp, gamma_p_n, pp_n, deps_p, substep_tol,
                                          plan_out, plan_in);
     double r[3] = {-ret.stress(2), -ret.stress(1), -ret.stress(0)};  // tension, by position
     // Tension cut-off (sigma_i <= sigma_t), applied to the principals the model's own return
@@ -125,8 +129,11 @@ HsReturnCore hs_return_core(const HardeningSoilParams& pe, double Eur,
     Eigen::Matrix3d Jten;
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j) Jten(i, j) = Jcomp(2 - i, 2 - j);
-    // The cut-off acts after the model's own return, so its Jacobian comes after it in the chain.
-    if (capped) Jten = Jcap * Jten;
+    // The cut-off is part of the model's own return (pt.sigma_t), whose tangent already carries
+    // its planes: the guard above only trims what the integration's tolerance left past sigma_t,
+    // and chaining its Jacobian on top counted the cut-off twice (measured: 1.2 relative against a
+    // central difference with one principal capped). Only a run without the coupled cut-off chains it.
+    if (capped && !(pt.sigma_t < 1e299)) Jten = Jcap * Jten;
     const int src[3] = {pv[0].src, pv[1].src, pv[2].src};
     const LameConstants lame_ur = lame_from(Eur, nu);
 
@@ -464,6 +471,69 @@ void ssc_forward(const MaterialModel& m, const GaussState& committed,
     if (nsub_out) *nsub_out = c.nsub;
 }
 
+// NGI-ADP at a point (ngi_adp.hpp). The core works compression-positive on [xx, yy, zz, xy]; this
+// program's stresses are tension-positive, so both the state and the strain increment change
+// sign on the way in and out, and the tangent, which maps one onto the other, does not. The
+// strengths are read at the point: suA is the cohesion (its depth profile applied), suP and
+// suDSS its ratios, and G follows from the point's E and nu.
+static bool adp_point(const MaterialModel& m, const GaussState& committed, const Eigen::Vector4d& de_k,
+                      Eigen::Vector4d& sig_k, double& gp, Eigen::Vector4d& s0, Eigen::Matrix4d& T,
+                      bool want_tangent, bool& plastic) {
+    adp::Params P;
+    P.nu = m.poisson_ratio;
+    P.G = m.youngs_modulus / (2.0 * (1.0 + m.poisson_ratio));
+    P.suA = m.cohesion;
+    P.suP = m.adp_suP * m.cohesion;
+    P.suDSS = m.adp_suDSS * m.cohesion;
+    P.gfC = m.adp_gfC;
+    P.gfE = m.adp_gfE;
+    P.gfDSS = m.adp_gfDSS;
+    adp::State c;
+    c.sig << -committed.stress(0), -committed.stress(1), -committed.stress_zz, -committed.stress(2);
+    c.s0 = committed.adp_set ? adp::Vec4(committed.adp_s0) : c.sig;
+    c.gp = committed.adp_set ? committed.gamma_p : 0.0;
+    s0 = c.s0;
+    const adp::Vec4 de = -de_k;
+    adp::State out;
+    plastic = false;
+    if (!(P.suA > 0.0) || !(P.G > 0.0) || !adp::integrate(P, c, de, out)) {
+        // Elastic, said by the caller's report as an integration it could not complete.
+        const adp::Mat4 D = adp::elastic(P.G > 0.0 ? P : adp::Params{});
+        sig_k = -(c.sig + D * de);
+        gp = c.gp;
+        T = D;
+        return false;
+    }
+    plastic = out.gp > c.gp;
+    sig_k = -out.sig;
+    gp = out.gp;
+    T = (want_tangent && plastic) ? adp::tangent(P, c, de, out) : adp::elastic(P);
+    return true;
+}
+
+// Jointed rock at a point (jointed_rock.hpp), on the core's [xx, yy, zz, xy]: the elastic
+// predictor with the rock's own (possibly anisotropic) operator, then the exact return onto the
+// joints. `elastic_only` is the point in a zone where plasticity is excluded.
+static bool jr_point(const MaterialModel& m, const GaussState& committed, const Eigen::Vector4d& de,
+                     Eigen::Vector4d& sig, Eigen::Matrix4d& T, bool& plastic, bool elastic_only) {
+    const jr::Params P = m.jr_at_point();
+    const jr::Mat4 D = jr::elastic(P);
+    jr::Vec4 s0;
+    s0 << committed.stress(0), committed.stress(1), committed.stress_zz, committed.stress(2);
+    const jr::Vec4 trial = s0 + D * de;
+    plastic = false;
+    if (elastic_only) {
+        sig = trial;
+        T = D;
+        return true;
+    }
+    const jr::Return r = jr::return_map(P, D, trial);
+    sig = r.sig;
+    T = r.T;
+    plastic = r.plastic;
+    return r.ok;
+}
+
 void integrate_point(const MaterialModel& m, const GaussState& committed,
                      const Eigen::Vector3d& strain_increment,
                      GaussState& trial, Eigen::Matrix3d& tangent,
@@ -482,6 +552,19 @@ void integrate_point(const MaterialModel& m, const GaussState& committed,
     if (committed.plasticity_excluded && m.type != MaterialType::SoftSoil &&
         m.type != MaterialType::SoftSoilCreep) {
         trial = committed;
+        if (m.type == MaterialType::JointedRock) {
+            // the rock's own operator: an anisotropic rock is not Hooke's isotropic law
+            Eigen::Vector4d sig;
+            Eigen::Matrix4d T;
+            bool plastic = false;
+            jr_point(m, committed, Eigen::Vector4d(strain_increment(0), strain_increment(1), 0.0, strain_increment(2)),
+                     sig, T, plastic, true);
+            trial.stress << sig(0), sig(1), sig(3);
+            trial.stress_zz = sig(2);
+            tangent = m.elastic_plane_strain();
+            if (report) report->elastic = tangent;
+            return;
+        }
         if (m.type == MaterialType::HardeningSoil) {
             const HardeningSoilParams pe = hs_small_strain_params(m.hs, committed.gamma_hist);
             const double Eur = hs_frozen_Eur(pe, committed.stress, committed.stress_zz);
@@ -593,9 +676,13 @@ void integrate_point(const MaterialModel& m, const GaussState& committed,
                     report->stiffest = elastic_plane_strain_of(up * Eur, m.hs.nu_ur);
                 }
             }
-            // kConsistent + plastic step → numerical consistent tangent (TangentMode
-            // block): 3 perturbed forward runs, substep count pinned to the base run.
-            if (mode == TangentMode::kConsistent && plastic) {
+            // kConsistent → numerical consistent tangent (TangentMode block): 3 perturbed forward
+            // runs, substep count pinned to the base run. An ELASTIC step too: E_ur moves with the
+            // minor stress, so the elastic matrix at the committed state is not the derivative of
+            // a finite elastic step -- off by m times the step's relative change of sigma3 (2% on
+            // a step that moves the stress by 3.5%, which is where the consistent mode is asked
+            // for: after the continuum tangent has failed an increment).
+            if (mode == TangentMode::kConsistent && strain_increment.squaredNorm() > 0.0) {
                 GaussState pert;
                 for (int j = 0; j < 3; ++j) {
                     Eigen::Vector3d dep = strain_increment;
@@ -667,6 +754,47 @@ void integrate_point(const MaterialModel& m, const GaussState& committed,
                     ssc_forward(m, committed, dep, dt_day, pert, nullptr, nullptr, nullptr, nsub);
                     tangent.col(j) = (pert.stress - trial.stress) / h;
                 }
+            }
+            break;
+        }
+        case MaterialType::NgiAdp: {
+            Eigen::Vector4d sig, s0;
+            Eigen::Matrix4d T;
+            double gp = 0.0;
+            bool plastic = false;
+            const Eigen::Vector4d de(strain_increment(0), strain_increment(1), 0.0, strain_increment(2));
+            const bool ok = adp_point(m, committed, de, sig, gp, s0, T, mode != TangentMode::kNone, plastic);
+            trial.stress << sig(0), sig(1), sig(3);
+            trial.stress_zz = sig(2);
+            trial.gamma_p = gp;
+            trial.adp_s0 = s0;
+            trial.adp_set = true;
+            const int idx[3] = {0, 1, 3};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) tangent(i, j) = T(idx[i], idx[j]);
+            if (report) {
+                report->plastic = plastic;
+                report->elastic = m.elastic_plane_strain();
+                report->integration_saturated = !ok;
+            }
+            break;
+        }
+        case MaterialType::JointedRock: {
+            Eigen::Vector4d sig;
+            Eigen::Matrix4d T;
+            bool plastic = false;
+            const bool ok = jr_point(m, committed,
+                                     Eigen::Vector4d(strain_increment(0), strain_increment(1), 0.0, strain_increment(2)),
+                                     sig, T, plastic, false);
+            trial.stress << sig(0), sig(1), sig(3);
+            trial.stress_zz = sig(2);
+            const int idx[3] = {0, 1, 3};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) tangent(i, j) = T(idx[i], idx[j]);
+            if (report) {
+                report->plastic = plastic;
+                report->elastic = m.elastic_plane_strain();
+                report->integration_saturated = !ok;   // no admissible active set: the trial kept
             }
             break;
         }
@@ -805,9 +933,9 @@ void integrate_point_axisym(const MaterialModel& m,
                     report->stiffest = elastic_axisym_of(up * Eur, m.hs.nu_ur);
                 }
             }
-            // kConsistent + plastic step → numerical consistent 4x4 tangent (same rationale
-            // as the plane-strain block; the perturbed runs replay the base subdivision).
-            if (mode == TangentMode::kConsistent && c.plastic) {
+            // kConsistent → numerical consistent 4x4 tangent, elastic steps included (same
+            // rationale as the plane-strain block; the perturbed runs replay the base subdivision).
+            if (mode == TangentMode::kConsistent && strain_increment.squaredNorm() > 0.0) {
                 for (int j = 0; j < 4; ++j) {
                     Eigen::Vector4d dep = strain_increment;
                     const double h = hs_fd_step(strain_increment(j), strain_increment.norm());
@@ -952,6 +1080,49 @@ void integrate_point_axisym(const MaterialModel& m,
                     tangent(2, j) = (cq.in_plane(2) - c.in_plane(2)) / h;
                     tangent(3, j) = (cq.zz - c.zz) / h;
                 }
+            }
+            break;
+        }
+        case MaterialType::NgiAdp: {
+            // [r, z, rz, theta] -> [xx, yy, zz, xy] = [r, z, theta, rz]
+            Eigen::Vector4d sig, s0;
+            Eigen::Matrix4d T;
+            double gp = 0.0;
+            bool plastic = false;
+            const Eigen::Vector4d de(strain_increment(0), strain_increment(1), strain_increment(3), strain_increment(2));
+            const bool ok = adp_point(m, committed, de, sig, gp, s0, T, mode != TangentMode::kNone, plastic);
+            trial.stress << sig(0), sig(1), sig(3);
+            trial.stress_zz = sig(2);
+            trial.gamma_p = gp;
+            trial.adp_s0 = s0;
+            trial.adp_set = true;
+            const int idx[4] = {0, 1, 3, 2};
+            for (int i = 0; i < 4; ++i)
+                for (int j = 0; j < 4; ++j) tangent(i, j) = T(idx[i], idx[j]);
+            if (report) {
+                report->plastic = plastic;
+                report->elastic = m.elastic_axisym();
+                report->integration_saturated = !ok;
+            }
+            break;
+        }
+        case MaterialType::JointedRock: {
+            // [r, z, rz, theta] -> [xx, yy, zz, xy] = [r, z, theta, rz]; the joints are cones about
+            // the axis, and the hoop direction lies in each of them
+            Eigen::Vector4d sig;
+            Eigen::Matrix4d T;
+            bool plastic = false;
+            const Eigen::Vector4d de(strain_increment(0), strain_increment(1), strain_increment(3), strain_increment(2));
+            const bool ok = jr_point(m, committed, de, sig, T, plastic, committed.plasticity_excluded);
+            trial.stress << sig(0), sig(1), sig(3);
+            trial.stress_zz = sig(2);
+            const int idx[4] = {0, 1, 3, 2};
+            for (int i = 0; i < 4; ++i)
+                for (int j = 0; j < 4; ++j) tangent(i, j) = T(idx[i], idx[j]);
+            if (report) {
+                report->plastic = plastic;
+                report->elastic = m.elastic_axisym();
+                report->integration_saturated = !ok;
             }
             break;
         }

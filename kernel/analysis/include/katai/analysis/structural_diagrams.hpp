@@ -130,10 +130,13 @@ inline StructForce force_diagram(const DiagSpec& sp, const Structures& structure
         double s_off = 0.0;
         for (size_t gi = sp.begin; gi < sp.end; ++gi) {
             const auto& ge = structures.geogrids[gi];
-            std::array<double, 2> ep{0.0, 0.0};
-            if (geogrid_plastic.size() >= 2 * (gi + 1))
-                ep = {geogrid_plastic[2 * gi], geogrid_plastic[2 * gi + 1]};
-            auto st = geogrid_force_diagram(ge, mesh, dofs, field, ep, elastic);
+            constexpr size_t S = (size_t)geogrid::kStateStride;
+            std::array<double, S> ep{};
+            if (geogrid_plastic.size() >= S * (gi + 1))
+                for (size_t q = 0; q < S; ++q) ep[q] = geogrid_plastic[S * gi + q];
+            auto st = ge.node_count() == 3 && !ge.props.axisym   // the historical element, to the bit
+                          ? geogrid_force_diagram(ge, mesh, dofs, field, {ep[0], ep[1]}, elastic)
+                          : geogrid_force_diagram_general(ge, mesh, dofs, field, ep, elastic);
             for (auto& s2 : st) { s2.s += s_off; d.stations.push_back(s2); }
             s_off += std::hypot(mesh.x[ge.nodes[1]] - mesh.x[ge.nodes[0]],
                                 mesh.y[ge.nodes[1]] - mesh.y[ge.nodes[0]]);

@@ -13,23 +13,28 @@
 //       step that is a fraction of the increment. Without the slope of the stiffness -- and with
 //       a difference taken at a fixed 1.5e-8, as large as the increments it differences -- a
 //       quarter of the points were more than 10% off in plane strain (748 of 3000), and 59% were
-//       within 1%; it is 99.4% and 98.9% now. What is left are the points where the walk meets
+//       within 1%; it is 99.8% and 99.0% now. What is left are the points where the walk meets
 //       a surface inside the increment or the increment's principal directions are not unique.
 //   (b) with the stiffness read from a FIXED increment (small_strain_increment) the stress is
 //       the same when that increment is the increment itself, the history is advanced by the
 //       increment the stress was integrated over whichever one the stiffness was read from, and
 //       the stress no longer follows the direction of the increment: the tangent without any
-//       slope of the stiffness is then the derivative (99.3% of the points within 1%). That
+//       slope of the stiffness is then the derivative (99.8% and 98.7% of the points within 1%;
+//       the misses examined, in axisymmetry, are all points whose walk meets its shear surface
+//       inside the increment, which the legal starts below make a share of the sample -- with the
+//       illegal ones every point was plastic from its first evaluation and none met a surface on
+//       the way). That
 //       needs the difference of the plastic walk taken with a step below the increment as well:
 //       with the fixed step it was 90%, every miss at an increment below 1e-7.
 // verify: KV-NUM-014
 //   oracle:   independent_path
 //   source:   the central difference of the returned stress with respect to the strain increment, taken with a step of 1e-5 of the increment's norm along a random direction, against the tangent the same call hands back (Hardening Soil with small-strain stiffness after Benz, T. (2007), Small-Strain Stiffness of Soils and its Numerical Consequences, Mitteilung 55, Institut fuer Geotechnik, Universitaet Stuttgart, Sec. 6.1 and App. A: the stiffness of a step depends on the direction of the step's strain increment)
-//   locator:  integrate_point / integrate_point_axisym at 2000 random stress points each (sigma_v 50-300 kPa, K0 0.4-0.9, a strain history of 1e-6 to 1e-3, increments of 1e-7 to 3e-4; below 1e-8 the slope is left out on purpose), with the stiffness read from the increment itself and from a second, fixed increment
+//   locator:  integrate_point / integrate_point_axisym at 2000 random LEGAL stress points each (sigma_v 50-300 kPa, K0 0.4-0.9, the shear hardening of the present stress raised by up to 30%, a strain history of 1e-6 to 1e-3, increments of 1e-7 to 3e-4; below 1e-8 the slope is left out on purpose), with the stiffness read from the increment itself and from a second, fixed increment
 //   quantity: share of the points at which |D d - (sigma(de + h d) - sigma(de - h d)) / 2h| < 1% of the difference [-]
 //   expected: all of them, less the points where the walk meets a yield surface inside the increment or the increment's principal directions are not unique
-//   band:     more than 97% with the stiffness read from the increment (measured 99.4% in plane strain, 98.9% in axisymmetry; 59% before the tangent carried the slope of the stiffness) and more than 99% with it read from a fixed increment (measured 99.3% and 99.4%; 90% while the plastic walk was differenced with a fixed step of 1.5e-8)
+//   band:     more than 97% with the stiffness read from the increment (measured 99.8% in plane strain, 99.0% in axisymmetry; 59% before the tangent carried the slope of the stiffness) and more than 98% with it read from a fixed increment (measured 99.8% and 98.7%, the misses examined all points that meet their surface inside the increment; 99.3% and 99.4% until 2026-10-29 on illegal starts -- gamma_p = 0 beside the deviator -- where no point did; 90% while the plastic walk was differenced with a fixed step of 1.5e-8)
 #include <katai/materials/hardening_soil.hpp>
+#include <katai/materials/hardening_soil_plastic.hpp>
 #include <katai/materials/material_model.hpp>
 
 #include <cmath>
@@ -58,7 +63,15 @@ MaterialModel sand() {
     return m;
 }
 
-GaussState state(std::mt19937& rng, std::uniform_real_distribution<double>& U) {
+// Every start is a LEGAL one: on or inside its own shear surface, the hardening that puts the
+// present stress on it (hs_initial_gamma_p) raised by up to 30%. A start outside its yield surface
+// is illegal for the integration (Sloan, Abbo & Sheng 2001, Sec. 3.4, step 4), and until 2026-10-29
+// every start here was one -- gamma_p = 0 beside a deviator of up to 150 kPa -- so each point was
+// plastic from its first evaluation, which pulled the stress back to the stale surface. The
+// integrator now raises such a start's hardening to its stress instead (as the initial state is
+// seeded); with the old states the check was measuring that seeding, at the one point of each walk
+// -- the start ON the surface -- where loading and unloading meet.
+GaussState state(std::mt19937& rng, std::uniform_real_distribution<double>& U, const MaterialModel& m) {
     GaussState gs;
     const double sv = -(50.0 + 250.0 * std::fabs(U(rng)));
     const double k0 = 0.4 + 0.5 * std::fabs(U(rng));
@@ -68,6 +81,10 @@ GaussState state(std::mt19937& rng, std::uniform_real_distribution<double>& U) {
     const double hmag = std::pow(10.0, -6.0 + 3.0 * std::fabs(U(rng)));
     gs.hs_hist << hmag * U(rng), hmag * U(rng), hmag * U(rng), hmag * U(rng);
     gs.gamma_hist = hmag;
+    const double cm = -0.5 * (gs.stress(0) + gs.stress(1));
+    const double r = std::hypot(0.5 * (gs.stress(0) - gs.stress(1)), gs.stress(2));
+    gs.gamma_p = (1.0 + 0.3 * std::fabs(U(rng))) *
+                 hs_initial_gamma_p(m.hs, Eigen::Vector3d(cm + r, cm - r, -gs.stress_zz));
     return gs;
 }
 
@@ -97,7 +114,7 @@ double share_within(bool axisym, bool frozen, unsigned seed) {
     };
     (void)axisym;
     for (int c = 0; c < n; ++c) {
-        const GaussState gs = state(rng, U);
+        const GaussState gs = state(rng, U, m);
         const double dmag = std::pow(10.0, -7.0 + 3.5 * std::fabs(U(rng)));
         Vec de, dir, fixed;
         for (int k = 0; k < N; ++k) { de(k) = dmag * U(rng); dir(k) = U(rng); fixed(k) = dmag * U(rng); }
@@ -131,7 +148,7 @@ int main() {
     double worst_same = 0.0, worst_hist = 0.0;
     int differs = 0;
     for (int c = 0; c < 400; ++c) {
-        const GaussState gs = state(rng, U);
+        const GaussState gs = state(rng, U, m);
         const double dmag = std::pow(10.0, -7.0 + 3.0 * std::fabs(U(rng)));
         const Eigen::Vector3d de(dmag * U(rng), dmag * U(rng), dmag * U(rng));
         const Eigen::Vector3d other(dmag * U(rng), dmag * U(rng), dmag * U(rng));
@@ -161,8 +178,8 @@ int main() {
     const double fps = share_within<3>(false, true, 31), fax = share_within<4>(true, true, 32);
     std::snprintf(line, sizeof(line),
                   "(b) and the tangent, with no slope of the stiffness in it, is within 1%% of the "
-                  "stress difference at %.1f%% and %.1f%% of the points (> 99%%)", 100 * fps, 100 * fax);
-    check(fps > 0.99 && fax > 0.99, line);
+                  "stress difference at %.1f%% and %.1f%% of the points (> 98%%)", 100 * fps, 100 * fax);
+    check(fps > 0.98 && fax > 0.98, line);
 
     return g_failures == 0 ? 0 : 1;
 }

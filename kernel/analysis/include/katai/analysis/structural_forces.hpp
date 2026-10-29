@@ -40,6 +40,9 @@ struct ForceStation {
     double ux = 0.0, uy = 0.0; // displacement at the station (interpolated with the SAME shape fns
                                // as the location) — for drawing the diagram on the deformed mesh
                                // (GUI overlay; NOT persisted)
+    // A plate in axial symmetry (a shell of revolution): N and M above are the meridional ones,
+    // these the hoop force and moment per unit length (0 in plane strain). Not persisted.
+    double Nt = 0.0, Mt = 0.0;
 };
 
 // Max |N|,|Q|,|M| envelope of a force diagram (output compatible with wall_force_envelope).
@@ -163,6 +166,8 @@ inline std::vector<ForceStation> plate_force_diagram(
             const double Mst = ep_pl ? detail::lagrange_eval<3>(plate::kBendGaussXi, Mg, xi) : f.M;
             const double Q = detail::lagrange_eval<2>(detail::kPlateShearXi, Qr, xi);  // optimal Q
             out.push_back({s_acc, x, y, Nst, Q, Mst, sx, sy});
+            out.back().Nt = f.Nt;
+            out.back().Mt = f.Mt;
             px = x; py = y; have_prev = true;
         }
     }
@@ -222,6 +227,8 @@ inline std::vector<ForceStation> plate_force_diagram(
             const double Mst = ep_pl ? detail::lagrange_eval<5>(plate::kBendGaussXi5, Mg, xi) : f.M;
             const double Q = detail::lagrange_eval<4>(detail::kPlate5ShearXi, Qr, xi);  // optimal Q
             out.push_back({s_acc, x, y, Nst, Q, Mst, sx, sy});
+            out.back().Nt = f.Nt;
+            out.back().Mt = f.Mt;
             px = x; py = y; have_prev = true;
         }
     }
@@ -265,17 +272,55 @@ inline AnchorForce anchor_force(const AnchorElement& an, const mesh::Mesh& mesh,
     AnchorForce r;
     if (elastic) { r.N = N; return r; }   // linear dynamic branch: uncapped elastic N (same as solver)
     const double Ft = an.Fmax_tens, Fc = an.Fmax_comp;
-    if (Ft > 0.0 && N > Ft)        { r.N = Ft;  r.yielded = true; }
-    else if (Fc > 0.0 && N < -Fc)  { r.N = -Fc; r.yielded = true; }
-    else                           { r.N = N; }
+    // AT the capacity is yielded too. An anchor that yielded in the solve was committed with the
+    // plastic elongation that puts N exactly on the cap, so N recomputed here lands on it to
+    // round-off, on either side: the flag was a coin toss (measured: the same anchor reported
+    // yielded in plane strain and not in axisymmetry, at 3.000000 kN against a 3 kN capacity).
+    constexpr double at = 1.0e-9;
+    if (Ft > 0.0 && N >= Ft * (1.0 - at))        { r.N = std::min(N, Ft);  r.yielded = true; }
+    else if (Fc > 0.0 && N <= -Fc * (1.0 - at))  { r.N = std::max(N, -Fc); r.yielded = true; }
+    else                                         { r.N = N; }
     return r;
+}
+
+// The quartic element and the membrane of revolution (geogrid.hpp): the same law at the element's
+// own stress points (4 for 5 nodes), and the hoop force beside N.
+inline std::vector<ForceStation> geogrid_force_diagram_general(
+    const GeogridElement& ge, const mesh::Mesh& mesh, const DofMap& dofs,
+    const Eigen::VectorXd& disp, const std::array<double, geogrid::kStateStride>& ep_committed,
+    bool elastic) {
+    const int nn = ge.node_count();
+    geogrid::GridCoords X = geogrid::GridCoords::Zero();
+    geogrid::GridDof u = geogrid::GridDof::Zero();
+    for (int k = 0; k < nn; ++k) {
+        X(k, 0) = mesh.x[ge.node(k)]; X(k, 1) = mesh.y[ge.node(k)];
+        u(2 * k + 0) = disp[geogrid_dof(ge, dofs, k, 0)];
+        u(2 * k + 1) = disp[geogrid_dof(ge, dofs, k, 1)];
+    }
+    std::vector<ForceStation> out;
+    for (int q = 0; q < geogrid::point_count(nn); ++q) {
+        const auto kin = geogrid::grid_kin(X, nn, q, ge.props.axisym);
+        const double eps = (kin.Be * u)(0);
+        const double ep = ep_committed[(size_t)q];
+        const double N = elastic ? ge.props.EA * (eps - ep) : geogrid::axial_return(ge.props, eps, ep).N;
+        ForceStation st;
+        geogrid::grid_point_at(X, u, nn, kin.xi, st.x, st.y, st.ux, st.uy);
+        st.s = std::hypot(st.x - X(0, 0), st.y - X(0, 1));
+        st.N = N;
+        if (ge.props.axisym) {
+            const double eps_t = (kin.Bt * u)(0);
+            st.Nt = elastic ? ge.props.EA * eps_t : geogrid::hoop_return(ge.props, eps_t).N;
+        }
+        out.push_back(st);
+    }
+    return out;
 }
 
 // Geogrid axial-force diagram — mirrors the constitutive/return mapping
 // (geogrid::axial_return) EXACTLY: N = clamp(EA(ε − ε_p), 0, N_p); compression cut-off
 // (slack) + N_p yield. The plastic state is defined at the 2 Gauss points (the element's
 // stress points) → the diagram is reported at those 2 points. `ep_committed` = this
-// geogrid's 2 committed plastic ε (NewtonResult.geogrid_plastic[2*gi .. 2*gi+1]);
+// geogrid's 2 committed plastic ε (NewtonResult.geogrid_plastic[kStateStride*gi ..]);
 // elastic/pure tension-only → {0,0}.
 // `elastic=true` → the return mapping is NOT applied (N = EA·(ε − ε_p), in compression too, from
 // the committed strain it is given -- {0,0} for a dynamic increment): for the LINEAR dynamic
@@ -286,6 +331,9 @@ inline std::vector<ForceStation> geogrid_force_diagram(
     const GeogridElement& ge, const mesh::Mesh& mesh, const DofMap& dofs,
     const Eigen::VectorXd& disp, const std::array<double, 2>& ep_committed = {0.0, 0.0},
     bool elastic = false) {
+    if (ge.node_count() == 5 || ge.props.axisym)
+        return geogrid_force_diagram_general(ge, mesh, dofs, disp,
+                                             {ep_committed[0], ep_committed[1], 0.0, 0.0}, elastic);
     geogrid::NodeCoords X;
     geogrid::Dof u = geogrid::Dof::Zero();
     for (int k = 0; k < 3; ++k) {

@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -216,6 +217,11 @@ inline bool solve_static_phase(
     // The nil-step imbalance is plastic redistribution work: give the solver load steps to do it
     // gradually even when the soil model alone would not have asked for stepping.
     if (in.nil_step) nopt.load_steps = std::max(nopt.load_steps, 10);
+    // A load the ground cannot carry is reported at its collapse load, found by arc length to
+    // 1e-3 of itself, not at the last whole increment below it (NewtonOptions::limit_by_arc).
+    // KATAI_LIMIT_BY_STEPS is the measurement seam: the stepping alone, as before (KV-NUM-016).
+    nopt.limit_by_arc = std::getenv("KATAI_LIMIT_BY_STEPS") == nullptr ||
+                        std::getenv("KATAI_LIMIT_BY_STEPS")[0] == '\0';
     // Structural init only on the carry path: passing a datum whose f_s0 is NOT in B would leave
     // residual(0) != 0 and ramp a spurious imbalance (the caller's B augmentation and this
     // argument must switch together).
@@ -245,6 +251,21 @@ inline bool solve_static_phase(
                            "integrator could do within its guard, not the one the tolerance "
                            "asks for; raise the guard (KATAI_HS_MAXSUB) or loosen the "
                            "integration tolerance to make the two agree.");
+    if (nr.limit_arc || nr.limit_arc_rescued) {
+        char lf[32];
+        std::snprintf(lf, sizeof(lf), "%.4f", nr.load_factor);
+        add_diagnostic(R, DiagnosticSeverity::Note, "K2D-A040", "",
+                       nr.limit_arc
+                           ? "the load could not be carried; the collapse load was followed by arc "
+                             "length from the last increment that closed, with the load factor an "
+                             "unknown, to where the path stops rising: " + std::string(lf) +
+                                 " of the phase's load, to 1e-3 of itself (not to the smallest "
+                                 "load increment)."
+                           : "an increment could not be closed at the smallest load step; the path "
+                             "was followed by arc length past the difficulty and rose to the full "
+                             "load, so this was no collapse, and the phase was finished under load "
+                             "control.");
+    }
     if (nr.stagnation_accepted > 0) {
         char worst[32];
         std::snprintf(worst, sizeof(worst), "%.2e", nr.worst_accepted_residual);

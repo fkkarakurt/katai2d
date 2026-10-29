@@ -75,6 +75,9 @@ struct FullyCoupledPhase {
     double duration_day = 1.0;                          // <= 0 falls back to 1 day
     int time_steps = 25;                                // clamped to [1, 2000]
     double yscale = 1.0;                                // model height, for the top-drain tolerance
+    // An axisymmetric model (x = radius): solved per radian with the hoop, by the elastoplastic
+    // core under the axisymmetric kinematics, as the consolidation twin is (KV-CON-009).
+    bool axisymmetric = false;
 };
 
 // Solve the phase. Fills the settlement-time series, the final displacement,
@@ -177,7 +180,7 @@ inline bool solve_fully_coupled_phase(
     // draining boundary say the same thing to this solver, that the excess pore pressure there
     // is zero.)
     std::vector<char> drained =
-        flow_drained_nodes(in.flow_edges, in.have_flow_bcs, mesh, in.active, in.yscale);
+        flow_drained_nodes(in.flow_edges, in.have_flow_bcs, mesh, in.active, in.yscale, in.axisymmetric);
     for (int n : in.drain_nodes)
         if (n >= 0 && n < mesh.node_count) drained[n] = 1;
     // Two nodes that share a pore pressure share its boundary condition (see the consolidation
@@ -201,7 +204,8 @@ inline bool solve_fully_coupled_phase(
                           !in.structures->embedded_beams.empty())) {
         laws = std::make_unique<StructureLaws>(
             mesh, dofs, models, *in.structures,
-            in.carry_state ? *in.carry_state : StructuralInit{}, in.active, Kinematics::PlaneStrain);
+            in.carry_state ? *in.carry_state : StructuralInit{}, in.active,
+            in.axisymmetric ? Kinematics::Axisymmetric : Kinematics::PlaneStrain);
     }
 
     // Time stepping from the phase duration / step count.
@@ -218,15 +222,16 @@ inline bool solve_fully_coupled_phase(
     std::vector<GaussState> committed;
     CoupledFlowResult cfr;
     CoupledFlowPlasticResult cfp;
-    if (nonlinear_soil || laws) {
+    if (nonlinear_soil || laws || in.axisymmetric) {
         // Elastoplastic skeleton: effective stress from the constitutive return mapping; each time
         // step is a monolithic coupled Newton-Picard. (Also every soil where there are structures:
-        // their laws are evaluated by iterate.) K_T is nonsymmetric for non-associated flow
+        // their laws are evaluated by iterate; and every soil in an axisymmetric model, the
+        // linear-elastic core being plane strain only.) K_T is nonsymmetric for non-associated flow
         // -> the caller's plastic factory selects the matching solver. The previous phase's
         // committed effective stresses (`init`) seed the state; dF drives it.
         cfp = solve_coupled_flow_deformation_plastic(mesh, dofs, models, cperm, ret,
             poros, kGammaWater, kw_over_n, drained, init, p0, dt, nsteps, in.active, &dF,
-            plastic_factory, 40, 1e-6, profiles, struct_k, in.pore_tie, laws.get());
+            plastic_factory, 40, 1e-6, profiles, struct_k, in.pore_tie, laws.get(), in.axisymmetric);
         if (!cfp.converged || cfp.series.displacement.empty()) {
             R.message = "Fully-coupled flow-deformation did not converge in a time step (the load "
                         "increment may exceed the soil capacity, or the time step is too large -- "

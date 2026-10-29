@@ -143,7 +143,7 @@
 //   locator:  with c = 0 the stiffness factor reduces to (sigma_1/p_ref)^m and d eps_1 = d sigma_1 / E_oed gives -eps_1 = (p_ref^m / E_oed^ref) [sigma_1^(1-m)]/(1-m) between the two stress levels (stated in full and evaluated in the test, not called from the material header)
 //   quantity: settlement increment of a laterally confined weightless Hardening Soil column when the vertical stress steps from 50 to 200 kPa, run from the checked-in tests/corpus/kv-cst-002-hs-oedometer.k2d [m]
 //   expected: the closed form above with E_oed^ref = 30 MPa, p_ref = 100 kPa, m = 0.5, H = 4 m
-//   band:     3%, as asserted below -- measured -0.93% on the file's own 0.5 m tri6 mesh with the driver's 40 load steps (it was +0.41% until 2026-08-20, when the stress-point integrator stopped holding the stress-dependent moduli at the state each increment began from; KV-NUM-009 carries that measurement, and the same law integrated at the stress point, with no FE at all, gives -0.95%). The first HS boundary-value case in the corpus: the model was already verified at the material point, this verifies the path from the file through the mesher, the cap return mapping and the load stepping. It also pins a phase convention: a phase reports displacement relative to its own start, so the loading phase's field IS the increment (the seating phase's 0 -> 50 kPa settlement of 0.0164 m is reported separately and is not comparable to the same integral, because the law's stiffness vanishes as sigma -> 0)
+//   band:     3%, as asserted below -- measured -0.89% on the file's own 0.5 m tri6 mesh with the driver's 40 load steps (2026-10-29; for the month before it the column walked from rest on the Mohr-Coulomb line, which the oedometer keeps but repels, and read close to the closed form for that reason -- KV-NUM-009 carries the measurement and the rule that replaced it; it was +0.41% until 2026-08-20, when the stress-point integrator stopped holding the stress-dependent moduli at the state each increment began from; KV-NUM-009 carries that measurement, and the same law integrated at the stress point, with no FE at all, gives -0.95%). The first HS boundary-value case in the corpus: the model was already verified at the material point, this verifies the path from the file through the mesher, the cap return mapping and the load stepping. It also pins a phase convention: a phase reports displacement relative to its own start, so the loading phase's field IS the increment (the seating phase's 0 -> 50 kPa settlement of 0.0164 m is reported separately and is not comparable to the same integral, because the law's stiffness vanishes as sigma -> 0)
 
 // verify: KV-STR-002
 //   oracle:   closed_form
@@ -2213,7 +2213,7 @@ m::Project build_hss_at(double h_exc, double G0) {
     s.gamma_unsat = s.gamma_sat = kHsGamma;
     s.E = 1.0e4; s.nu = kHsNu;              // not read by this model (HS reads its own pair)
     s.c = 10.0; s.phi = 35.0; s.psi = 0.0;
-    s.tension_cutoff = false;               // K2D-M001: HS does not read it; say so in the file
+    s.tension_cutoff = false;               // the file predates the coupled cut-off; kept as it was written
     s.E50ref = 3.0e4; s.Eoedref = 3.0e4; s.Eurref = kHsEur;
     s.m = 0.0;                              // stress-independent: keeps the closed form exact
     s.nu_ur = kHsNu; s.p_ref = 100.0; s.Rf = 0.9;
@@ -2872,6 +2872,11 @@ m::Project build_pile_at(double Tskin, double Fbase, double Ls, double load, int
     F.name = "Head load";
     F.x1 = kPlX; F.y1 = kPlTop; F.x2 = kPlX; F.y2 = kPlTop;
     F.qx1 = F.qx2 = 0.0; F.qy1 = -load; F.qy2 = 0.0;
+    // The density its probes were measured on (h and h/2, the 1300 kN/m note above): the pile
+    // and its head at half the element size, growing by half a metre per metre -- the .k2d v28
+    // default. Finer around the pile, the over-limit runs of this weightless no-tension fixture
+    // reach the cliff the note describes (x2 and the 3T skin returned nothing at 0.25).
+    pr.structs.back().coarseness = 0.5; F.coarseness = 0.5; pr.mesh.grading = 0.5;
     pr.loads.push_back(F);
 
     pr.initial.poly_active = {1};
@@ -3325,6 +3330,10 @@ m::Project build_tension_cutoff_at(bool cutoff, double sigma_t, double dx, doubl
     D.x1 = kTcW; D.y1 = 0.0; D.x2 = kTcW; D.y2 = kTcH;
     D.set_ux = true;  D.ux = dx;
     D.set_uy = false; D.uy = 0.0;
+    // The density its probes were measured on (h and h/2 below): the driven edge at half the
+    // element size, growing by half a metre per metre -- the .k2d v28 default. The recovered
+    // tension it reads is an extrapolation to the nodes, and its level depends on that pattern.
+    D.coarseness = 0.5; pr.mesh.grading = 0.5;
     pr.disps.push_back(D);
 
     pr.initial.poly_active = {1};

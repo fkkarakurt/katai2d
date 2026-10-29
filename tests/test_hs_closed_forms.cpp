@@ -6,6 +6,14 @@
 //       model is built on: q = E_i eps_1 / (1 + E_i eps_1 / q_a), E_i = 2 E50 / (2 - R_f),
 //       q_a = q_f / R_f. The confining stress is constant, so the stiffness is, the plastic
 //       volume change is zero, and gamma_p = 2 eps_1^p exactly.
+//       E_i is NOT a free choice of this file, and the sources do not write it one way. E50 is
+//       defined in words as the secant at 50% of the failure deviator q_f (Schanz 1998, Sec. 4.2.4,
+//       p. 81, Eqn 4.31); putting q = q_f / 2 into the hyperbola and asking for that secant gives
+//       E_i = 2 E50 / (2 - R_f). The same text's yield function (Schanz 1998 Eqn 4.34; Benz 2007
+//       Eqns 7.10-7.14) is written with q_a / E50, i.e. E_i = 2 E50 -- the secant at HALF THE
+//       ASYMPTOTE q_a / 2, not at q_f / 2 -- and so contradicts its own definition by the factor
+//       2 - R_f (1.1 at R_f = 0.9). This build keeps the definition in words, which is the one a
+//       triaxial test is read by; (1) pins it, and fails by 10% if the other is ever taken.
 //   (2) THE CAP'S STEEPNESS for m = 1 and c = 0. The shear function then depends on the stress
 //       ratio alone, a normally consolidated oedometer path keeps that ratio, the shear mechanism
 //       does not flow on it, and the two conditions of the oedometer (d eps_q / d eps_v = 2/3
@@ -24,8 +32,8 @@
 //
 // verify: KV-CST-020
 //   oracle:   closed_form
-//   source:   Schanz, T., Vermeer, P.A. and Bonnier, P.G. (1999). The hardening soil model: formulation and verification. Beyond 2000 in Computational Geotechnics, Balkema, Rotterdam, 281-296; Benz, T. (2007). Small-strain stiffness of soils and its numerical consequences. Mitteilung 55, Institut fuer Geotechnik, Universitaet Stuttgart, Sec. 7.2
-//   locator:  Schanz et al. (1999) Eqns 1-4 (the hyperbola, E_i, q_f, q_a) and Benz (2007) Eqns 7.13-7.26 with Box 7.1 (shear function, cap q~^2/alpha^2 + p^2 = p_p^2, associated cap flow, isotropic elasticity with E_ur proportional to sigma_3^m); the four closed forms follow from them as derived at the head of this file
+//   source:   Schanz, T. (1998). Zur Modellierung des mechanischen Verhaltens von Reibungsmaterialien. Mitteilung 45, Institut fuer Geotechnik, Universitaet Stuttgart, Sec. 4.2; Benz, T. (2007). Small-strain stiffness of soils and its numerical consequences. Mitteilung 55, Institut fuer Geotechnik, Universitaet Stuttgart, Sec. 7.2
+//   locator:  Schanz (1998) Eqn 4.31 with the definition of E50 as the secant at 50% of q_f on p. 81 (from which E_i = 2 E50 / (2 - R_f), as derived at the head of this file; the yield function of Schanz Eqn 4.34 and Benz Eqns 7.10-7.14 reads E_i = 2 E50, the secant at q_a / 2, and is the one the test would fail by 10%), Benz (2007) Eqns 7.10-7.11 (the hyperbola, q_f, q_a) and Benz (2007) Eqns 7.13-7.26 with Box 7.1 (shear function, cap q~^2/alpha^2 + p^2 = p_p^2, associated cap flow, isotropic elasticity with E_ur proportional to sigma_3^m); the four closed forms follow from them as derived at the head of this file
 //   quantity: (1) deviator q at five axial strains of a drained triaxial compression [kPa]; (2) cap steepness alpha [-]; (3) q and p' at four axial strains of an undrained elastic compression [kPa]; (4) the deviator at which the pre-consolidation pressure first grows in undrained compression [kPa]
 //   expected: (1) 54.79 / 100.00 / 137.93 / 170.21 / 192.77 at 0.2 / 0.5 / 1 / 2 / 4 % (E50 = 20 MPa, phi = 30, sigma_3 = 100); (2) 0.6599 (K0nc = 0.53, nu = 0.15, E_ur / E_oed = 21000 / 5285); (3) 185.75 / 191.92 / 210.11 / 239.33 at 0.01 / 0.02 / 0.05 / 0.1 % with p' = 288.32 throughout; (4) 236.6
 //   band:     (1) 0.1% of q; (2) 0.5% of alpha; (3) 0.01% of q and of p'; (4) the closed form lies within 0.1 kPa of the interval between the last deviator at which p_p has not moved and the first at which it has (the two are 0.05 kPa apart; measured 236.58 to 236.63 against 236.66)

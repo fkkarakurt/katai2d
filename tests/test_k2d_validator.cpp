@@ -506,7 +506,7 @@ int main() {
     // -- reader forward-version notes (project_io.hpp) -------------------------
     {
         const std::string text =
-            "{\"katai2d\":1,\"materials\":[{\"name\":\"Future\",\"model\":9,\"drainage\":7}],"
+            "{\"katai2d\":1,\"materials\":[{\"name\":\"Future\",\"model\":99,\"drainage\":7}],"
             "\"polygons\":[]}";
         m::Project p;
         std::string err;

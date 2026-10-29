@@ -6,6 +6,259 @@ MAJOR.MINOR.PATCH.
 
 ## [Unreleased]
 
+### Local mesh density as it is seen (.k2d v29)
+
+The coarseness factor an object carries is now the factor the mesh applies. Structures -- walls,
+geogrids, piles, bare interface lines, and anchors at their two ends -- loads and prescribed
+displacements start at 0.25 of the element size; regions and hydraulic lines at 1; a factor lies
+between 0.03125 and 8, and the validator refuses one outside instead of clamping it. Until now a
+structure's or a load's factor was halved again, unseen, whenever auto-refine was on: the panel said
+1 and the mesh used 0.5, and anchors and bare interface lines refined nothing. Auto-refine now says
+only whether those factors apply. Away from a refined object the element size grows by 0.15 of the
+distance (`mesh.grading`), where it grew by 0.5: the elements doubled within a footing's width of it,
+coarser in the footing's failure mechanism than the size the engineer had asked for there. A
+circular footing on sand under a prescribed settlement (5 x 4 m, 0.384 m elements, the footing at a
+quarter of that): 617 kN growing at 0.5, 589 kN growing at 0.15, against 576 kN on a uniform 0.15 m
+mesh -- 7% above the mesh-converged force before, 2% now. Where geometry lines meet at an angle
+that is not a multiple of 90 degrees -- the toe and crest of a slope, a wedge -- the mesh now refines
+by a factor of the sharpest angle there (`mesh.corner_refine`, on by default): 0.5 at 45 and 135
+degrees, 0.42 at the toe of a 1 in 2 slope, down to 0.1 at a sliver; a right angle, a T-junction
+and a straight run are left as they were. A file older than v29 is read with the factors it meant,
+its old grading and no corner refinement, so it meshes as before.
+
+### The water at a wall's joint goes past the joint
+
+A wall's interface is a law of the soil skeleton: it holds and rubs with the effective normal
+stress. The pore water of the ground beside it presses its face as on any boundary of the ground,
+and that pressure was the joint's to carry -- inside its own normal stress. Installed with the
+effective stress, the joint came to the total stress by closing by p / k_n, so every wall installed
+below the water table moved the ground beside it (0.4 mm on a 10 m wall in soft ground, up to 10 mm
+on a coarse mesh, where k_n is low); and it rubbed with the total stress, so a joint 5 m below the
+water table held three times the friction its effective stress allows. Where the ground of one side
+was dug away and the water left standing, the pit's water was put on the ground face behind the wall
+instead of on the wall. A submerged excavation bent its wall 11% less, and moved it 27% less, than
+the same ground dry with the buoyant weight -- the same effective stresses. The pore water now goes
+across the joint as a pair of forces, back onto the ground face and onto the wall; the free water
+of a side dug away presses the wall alone, at the water level of the phase there, unless the region
+is kept dry. KV-STR-033: the installation moves nothing, the joint holds and slips with its
+effective normal stress, and the submerged pit bends the wall exactly as the dry ground of buoyant
+weight does. The gap opens on the same stress: when the skeleton's contact -- the joint's normal
+stress less the excess pore pressure of the ground beside it -- reaches the tensile strength, and the
+pore water's share stays across the opened joint. Cut off on the joint's stress alone, a joint beside
+clay unloaded into suction opened while its skeleton was still pressed.
+
+### Hardening Soil: one meaning for the integration tolerance, a walk from rest that does not depend on its first step, and the tension cut-off in the same return
+
+The stress-point integrator had no single meaning for its tolerance: the count of substeps was an
+estimate with a margin of about sqrt(n), and K2D-A012 said "ran out of substeps" whenever a ceiling
+of 200 clipped it, measuring nothing. The tolerance is now Sloan, Abbo & Sheng's (2001): every
+substep's local error -- half the difference of its Euler and modified-Euler increments over its
+stress -- is under STOL, and the equal, real-count substeps are refined until it is (the ceiling,
+now 10 000, only guards); two successive walks whose answers agree to STOL have met it as well, for
+where the flow slides along a surface it is neutral to, that error falls only as 1/n while the
+answer has long settled (the Berlin Sand triaxial at STOL 1e-8: within 2.5e-10 at 13 substeps, the
+error measure still 5e-8 at 10 000). For the tolerance to be reachable the walk stops at its kinks,
+as their algorithm stops at the yield surface: the elastic part of a substep is taken by the elastic
+law alone, and the plastic part is walked from event to event -- the other surface met, two
+principal stresses closing on an edge, the failure plateau, each plane of the tension cut-off, and
+the stiffness floor p_limit, where the direction of the shear flow jumps -- each located and taken
+held to the set the flow was on. Taken inside one evaluation, each of these left an error that did
+not shrink with the substep, and walks were refined to thousands of substeps for it. The guard on
+q_a at a stress-free point is now applied only without cohesion: with c > 0 nothing divides by zero
+there, and the guard was a kink of its own at sigma_3 = 0.01 kPa.
+
+A point loaded from the stress-free state with c = 0 could take one of two paths, and the size of
+its first substep chose: the Mohr-Coulomb line (K = K_a, which an oedometer keeps but repels -- a
+start 0.1% inside it leaves it) or the branch to K0nc that the cap is calibrated for. One increment
+of 2e-5 from rest gave K = 0.48, one of 4e-5 gave 0.27, and the tolerance flipped it too. The
+stress-free state is now the limit of an isotropic, normally consolidated state of vanishing size,
+which takes the second branch at every increment size and tolerance. On the oedometer from rest
+(KV-NUM-009) the finite elements and the stress point now agree to 0.002 points on all three
+ranges, -1.16/-0.70/-0.43%, falling as the memory of the stiffness floor fades -- where both had
+read about -0.07% at every level on the line, the case KV-CST-002 is measured on included.
+
+A committed state outside its own yield surfaces -- a cluster given this material in a later phase,
+a stress field entered by hand -- has its hardening raised to its stress, as the initial state is
+seeded, instead of its stress pulled back with no strain; Sloan's algorithm calls such a start
+illegal, and walked from it every evaluation pair disagreed by the whole correction (measured: every
+call of the small-strain tangent check, R 1e-2 at 10 000 substeps). In the consistent tangent mode
+an elastic step is differenced too, E_ur moving with sigma_3.
+
+The cap is now a yield surface on the compressive side only, which is what it is in the model: the
+second surface that closes the elastic region along the p axis for compaction. The ellipse is
+symmetric in p, and read as a yield surface at p <= 0 it made every stress in tension a cap state as
+soon as p_p was small -- at the ground surface, in fresh fill, a point pulled a ten-thousandth of a
+kPa into tension flowed on it. On a strip footing on c = 5 kPa sand that took 5.2 of the run's 8.2
+million substeps and a third more equilibrium iterations (68 s; 8 s now, the settlement unchanged).
+With it, a stress-free point with c > 0 pulled into tension carries the tension its cohesion
+allows, where it used to stay at zero stress.
+
+And the tension cut-off of the Hardening Soil family is now three more yield functions of the same
+return, with an associated flow rule and corners per Koiter, instead of a cap applied after it: with
+c = 0 the capped state lay outside the shear cone and the next increment started from it. Where it
+holds both smaller stresses of a compression corner, the corner is solved as its face (five surfaces
+in three dimensions otherwise, and the fallback for a singular system dropped the hardening surfaces
+the major stress was still on). K2D-M001, which stated the sequential cap, is retired.
+
+On the tutorial's staged excavation the wall moves 151.92 mm (151.98 before), and K2D-A012 is raised
+in 2 increments at 1 point (40 at 84 in the last stage before).
+
+### Plates in axial symmetry: shells of revolution
+
+An axisymmetric model refused every plate (K2D-S002). A plate there is a shell of revolution --
+a tank wall, a shaft lining, a circular raft -- and it is now that element: besides the
+meridional strain, curvature and shear of the plane strain plate it has a hoop strain u_r / r and
+a hoop curvature cos(beta) phi / r, integrated per radian like the soil, with N_t = EA (eps_t +
+nu eps_s) and M_t = EI (kap_t + nu kap_s); with no hoop strain it is the plane strain plate whose
+EA and EI were entered. Its self-weight and the rotation springs at its ends are per radian too, a
+plate end on the axis has its slope held (zero by symmetry), and the force stations carry the hoop
+force and moment, which the Studio shows. Elastic plates only: one with an M-N capacity, or lying
+on the axis, is still refused, as is an embedded beam. KV-STR-029 (the
+element): a free cylinder under internal pressure carries N_t = p R and expands p R^2 / (EA (1 -
+nu^2)) exactly; a circular plate, clamped and simply supported, deflects as Mindlin's to 0.1%;
+far from the axis a strip of the shell is the plane strain plate. KV-STR-030 (through the
+program): a tank wall in very soft ground carries 19.9999 kN/m of hoop force against p R = 20.
+
+### A fully coupled phase in axial symmetry
+
+A fully coupled flow-deformation phase in an axisymmetric model was refused (K2D-S002). Its
+elastoplastic core now takes the consolidation's axisymmetric kinematics -- the hoop strain and
+stress in the skeleton, the pore pressure on the hoop, every integral per radian -- and the axis
+is a line of symmetry for its drainage, as it is for the consolidation. KV-CON-009: a column
+consolidates as Terzaghi's and the unit cell of a vertical drain as Barron's, and in these
+saturated soils the settlement history is the consolidation phase's own. Only the dynamic phase
+is now plane strain alone.
+
+### Geogrids and anchors in axial symmetry; the quartic geogrid
+
+An axisymmetric model refused every geogrid and every anchor (K2D-S002). A geogrid there is a
+membrane of revolution -- a grid under a circular footing or a tank, a lining of a shaft -- and it
+is now that element: besides the meridional strain it stretches round its circumference, eps_t =
+u_r / r, and carries a hoop force N_t = EA eps_t in the grid's other direction, tension only like
+the meridional force, everything per radian. Its hoop has no plastic state, so a geogrid with a
+tensile capacity is refused in axisymmetry. An anchor is a row of bars round a circle at the
+spacing Ls measured at its soil end (a node-to-node anchor: its first end), r / Ls of them per
+radian: its stiffness, lock-off force, re-tensioning force and capacities are scaled by r, and its
+force is reported per anchor as in plane strain. An anchor with its first end on the axis is
+refused; an embedded beam still is (a row of piles is a plane-strain idealisation). KV-STR-031: a
+cylinder of grid carries N_t = p R (19.9993 against 20) and a disk of grid from the axis follows
+the membrane equation, N_r = 2 q (b - r) / 3 and N_t = q (2 b - r) / 3, to 2e-5 of q b at every
+station; KV-STR-032: an anchor under a ring load carries F Ls / r and stretches F Ls L / (EA r) to
+4e-5, and its capacity and lock-off force are per anchor.
+
+On a 15-noded mesh a geogrid was built of quadratic pieces over half-edges: joined to the ground
+at every node, but stretched as a quadratic between them while the ground and a load on its line
+are quartic. Where the grid is the stiffer of the two its nodes took the quartic edge's load shares
+against its own, and the force oscillated from node to node -- 5.8% too much hoop force at the
+mid-height of a cylinder of grid, 0.2% of q b on a plane-strain bar. On a 15-noded mesh a geogrid
+is now one quartic element per edge, with four stress points; the 3-noded element is unchanged to
+the bit.
+
+An anchor at its capacity was reported yielded only when its force, recomputed from the committed
+state, came out above the capacity by round-off: the same anchor at 3.000000 kN against 3 kN was
+yielded in plane strain and not in axisymmetry. At the capacity, to 1e-9 of it, is now yielded.
+
+### A collapse load to its own resolution, not to the load step
+
+A static phase given more load than the ground can carry used to stop at the last increment that
+closed, so its collapse load came out as a whole number of the smallest increment (1/8 of the
+first): a comparison with a closed form was as fine as the stepping and no finer. From that
+increment the phase now follows the equilibrium path by arc length with the load factor an
+unknown (Riks' normal plane; the derivative of the residual by the factor is the load vector
+itself) and reports where the path stops rising, to 1e-3 of itself (`K2D-A040`). A path that
+rises to the full load instead was a stepping difficulty, not a collapse, and the phase is
+finished under load control. Converged phases are untouched, bit for bit; not for a phase with a
+prescribed displacement or with creep in its time. KV-NUM-016: an unconfined Mohr-Coulomb block
+loaded with three times its strength collapses at 34.641047 kPa against the closed form's
+34.641016 (the steps alone: 33.775, 2.5% short); the Prandtl footing stays at -0.08%.
+`KATAI_LIMIT_BY_STEPS` is the measurement seam that switches it off.
+
+### The jointed rock model (.k2d v28)
+
+A rock mass is mostly as strong as its joints: bedding, foliation, a few sets of fractures. The
+jointed rock model (model 9) is elastic rock -- isotropic, or transversely isotropic about the
+normal to its first joint set (E1, nu1 in the bedding; E2, nu2, G2 across it) -- that fails only
+by Coulomb slip or tensile opening on up to three sets of joints, each a family of parallel planes
+normal to the model plane, with its own dip, cohesion, friction, dilatancy and tensile strength.
+The first set's strength is the shared c / phi / psi / tensile strength, so the cohesion's depth
+profile, an interface's Rinter and the Safety reduction reach it as for any material; the Safety
+reduction and the EC7 partial factors divide every set's strength. The return onto the joints is
+exact (every surface a plane in stress space, the elasticity constant: no iteration), with the
+active set the trial names and, where that does not resolve, the admissible set closest in the
+energy norm; the consistent tangent is closed form. Drained or non-porous only. Studio: the
+material editor (joint sets, the anisotropy, Jaeger's unconfined strength of the first set as a
+check), the report, Turkish. Python: `prj.materials.jointed_rock(...)`.
+KV-CST-025 (the point): the transversely isotropic directional modulus against Lekhnitskii to
+7e-16 over 13 directions; a plane strain specimen slips at Jaeger's sigma_1 for every dip between
+phi and 90 degrees and stays elastic outside, to 5e-16; the tangent against a central difference
+on one set, on the slip-opening corner and on two crossing sets. KV-CST-026 (through the program):
+a bedded block's plane strain stiffness, Jaeger's strength of a block, a block's factor of
+safety, and a rock slope's factor of safety on a daylighting joint set against the sliding block
+of plane failure. docs/references/jointed-rock-formulation.md.
+
+### A rotation spring on a hinged plate end (.k2d v27)
+
+A hinged end turned freely and a joint passed its moment whole; a semi-rigid connection -- a
+precast joint, a base plate, a strut seated with some fixity -- lay between the two. A hinged end
+may now carry a rotation spring (`structs[i].rotk1` / `rotk2`, kNm/rad per metre): a moment
+k (phi_end - phi_joint) between the end's own rotation and the rotation of the plate or wall
+that carries on through the point, or the ground where the end stands on a supported boundary and
+nothing carries on. A spring with neither is said (`K2D-G018`) and the end stays a free hinge. In
+every phase type: the static assembly the consolidation and coupled phases share, and the
+dynamic stiffness. KV-STR-028: a cantilever on a base spring deflects P L^2 / k more than
+clamped, a spring at a joint P L_B^2 / k more than rigid, to the printed 9 digits; a very stiff
+spring is the clamped base and the rigid joint; between two walls with interfaces the joint's
+moment grows with k from the hinge's to the rigid joint's.
+
+### The NGI-ADP model: anisotropic undrained shear strength (.k2d v26)
+
+A clay's undrained strength depends on the direction it is sheared in: a plane strain active
+strength suA under vertical compression, a passive suP under vertical extension, a direct simple
+shear suDSS between them. NGI-ADP (Grimstad, Andresen & Jostad 2012) is solved in total stress
+(Undrained (C)) with exactly those inputs and the shear strain at which each test fails: a yield
+surface translated from the point's in-situ state, hardening to a rounded Tresca ellipse at the
+three strengths, a von Mises flow in the modified stress space. Model 8 of the project file
+(`adpsuP`, `adpsuDSS`, `adpgfC`, `adpgfE`, `adpgfDSS`; suA is `c`, with its depth increase), which
+moves to version 26; the Studio enters the stiffness as G_ur / suA and the report prints the
+three strengths. The failure strains entered are total strains as tests report them, and a test
+run from the in-situ state reaches its strength at exactly that strain. Three slips in a widely
+circulated printed form of the equations are corrected, each by the model's own requirement to
+return its inputs (docs/references/ngi-adp-formulation.md). KV-CST-024: the plane strain active
+and passive, triaxial compression and extension and simple shear strengths to 1e-6, the three
+failure strains to 0.02%, a block through the whole program at suA and -suP, and a strip footing
+on isotropic NGI-ADP clay at Prandtl's (2 + pi) su (-0.81%; the Tresca clay on the same mesh
+-0.73% from it), and on anisotropic clay with suDSS = (suA + suP)/2 -- a circular failure surface
+about a shifted centre -- at (2 + pi)(suA + suP)/2 (+0.03%, to the load step).
+
+### The mesh is opened along the drawn walls and nowhere else
+
+A wall with an interface splits the mesh along its line. Round the node where the line ends, the
+elements were classified by the side of the line's infinite extension, and where another wall
+leaves that node the extension cuts across the ground the other wall bounds: an element beyond it
+took the other side's copy of the node, and the mesh opened along an edge no wall was drawn on.
+And the top of a wall that ends inside the ground was split like every point of its line, opening
+the ground past the tip. Measured with an invariant -- every edge two elements share before the
+split is shared after it unless a wall was drawn on it --: one or two edges opened at an L corner of
+a wall and a slab, a T junction, a slab inside the ground, a buried wall top and a ring of 16
+chords. Round the end of a split line the elements now take their side by the sector the walls
+leaving the point cut, and the two copies of a top that ends in the ground, where no other wall
+leaves it, are tied: one point of the ground, met by the wall's interfaces on both sides. A ring of
+48 chords, a raft on the surface and every wall that reaches the surface are unchanged.
+KV-STR-027.
+
+### A joint installed with the dig starts as a new contact
+
+An interface installed in a phase takes over the stress the ground has at its line. Where the side
+across it is a mesh node in no active element -- the bonded side of a lining the phase digs out,
+held only by the wall -- that side's nil stress was averaged in, and the joint started at half the
+ground's stress: a side effect, which pressed the lining with an in-situ stress the ground had not
+yet released. With nothing across the seam to have held the ground, the joint now takes nothing
+over (sigma_n0 = 0, no slip offset), and the dig reaches the lining through the joint's stiffness.
+Measured on a deep tunnel lined as it is dug, with kn = 1e5 kPa/m: the ring carried 5.9% more than
+the ring-ground compatibility gives, its joint's normal stress 500 kPa beyond kn times its closure
+(it read as a joint 2.3 times as stiff); now -0.52%, and the normal stress is kn times the closure
+and the ring's pressure N/R. Joints with ground on both sides are unchanged. KV-STR-024.
+
 ### A load drawn on a plate with an interface is carried by the plate
 
 A plate with an interface is a wall: the mesh is split along it, and on that side the plate meets
@@ -14,9 +267,19 @@ the plate; a distributed load was assembled on the mesh nodes of its line -- the
 of the split. A raft on the ground with an interface beneath it, loaded along its line, carried
 nothing: no moment, no contact pressure, the load went into the ground directly, with nothing said
 (0 kNm/m where the bonded raft bends 7.88). Its nodal forces now go to the wall where the line is a
-wall's. KV-STR-026 holds the raft to its equilibrium: the interface's contact force is the load,
--780.9 kN/m of -800 -- the rest passes through the raft's toe, the end it shares with the ground
-as every wall does, where there is no interface -- and the raft bends as the bonded one (+2.1%).
+wall's. KV-STR-026 holds the raft to its equilibrium: the interface's contact force is the load
+(below), and the raft bends as the bonded one (-2.0%).
+
+### A raft on the ground meets it through its interface at both ends
+
+A wall hangs from its deeper end, the node it shares with the ground -- the tip of a sheet pile,
+which the ground wraps round. A level wall has no deeper end, and the rule took a raft's left end:
+there the raft was welded to the ground, with no interface. Measured on a raft with an interface
+beneath it: the contact carried -777.7 kN/m of the -800 loaded on it (-2.8%), the left end's share
+passing through the weld. A level wall with ground on one side of its line only is now split at
+that end too, and both its ends meet the ground through the interface: the contact force is the
+load to 0.000% (the joint's own Newton-Cotes rule). A slab inside the ground keeps its end, which
+the ground wraps round, and an end another wall's line reaches is a joint, as before. KV-STR-026.
 
 ### A plate's end may be hinged
 
@@ -57,12 +320,12 @@ ends, which until now was silently not made when neither end was free, is made t
 Where the deeper ends of two walls meet -- the invert of the same ring -- each hung from the node it
 shares with the ground, so the ring was welded to the ground at that point and had no interface
 there. The point is now split along the earlier wall's line and taken by both as a wall that
-continues another: at the invert the interface closes as it does around the ring (0.380 mm against
-a mean of 0.390), where it did not move at all.
+continues another: at the invert the interface closes as it does around the ring (0.903 mm against
+a mean of 0.884), where it did not move at all.
 
 KV-STR-024 holds the lining to its closed forms: unlined, the tunnel wall moves in by
 p0 R (1 + nu) / E (Kirsch, -0.79%); lined as it is dug, the ring carries
-N = p0 R a / (a + 1/kn + R^2/EA), a = R (1 + nu) / E (-0.49% bonded, +0.14% with an interface);
+N = p0 R a / (a + 1/kn + R^2/EA), a = R (1 + nu) / E (-0.49% bonded, -0.50% with an interface);
 the two chords at the crown move as one point; the interface closes at the invert as around the
 ring; and a ring built after the dig takes nothing and moves nothing. A lining drawn as a half ring on a symmetry axis has no such point, and a tunnel
 modelled that way is unchanged to every digit.

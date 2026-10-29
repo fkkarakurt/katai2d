@@ -127,6 +127,9 @@ CoupledFlowPlasticResult solve_coupled_flow_deformation_plastic(
     const std::vector<int>* pore_tie = nullptr,
     // THE STRUCTURES BY THEIR OWN LAWS, in place of struct_k (StructureLaws; the consolidation
     // twin, consolidation.hpp).
-    StructureLaws* structure_laws = nullptr);
+    StructureLaws* structure_laws = nullptr,
+    // An axisymmetric model (x = radius): the hoop strain and stress in the skeleton, the pore
+    // pressure on the hoop, every integral per radian -- the consolidation twin's kinematics.
+    bool axisymmetric = false);
 
 }  // namespace katai::core

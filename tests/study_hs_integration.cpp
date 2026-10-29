@@ -67,12 +67,12 @@ static int point_mode(int nouter, double stol) {
     return 0;
 }
 
-// usage: study_hs_integration law [stol] [strain step]
+// usage: study_hs_integration law [stol] [strain step] [start, isotropic kPa; 0 = from rest]
 // KV-CST-002's material, walked as an oedometer at the STRESS POINT, with no FE anywhere. The
 // closed form the case is judged against assumes the model reproduces Eoed_ref (sigma/p_ref)^m;
 // this asks whether it does, so that the deviation the FE run reports can be attributed to the
 // model or to the FE.
-static int law_mode(double stol, double de1) {
+static int law_mode(double stol, double de1, double s0) {
     using katai::core::HardeningSoilParams;
     using katai::core::HsIntegrated;
     HardeningSoilParams p;                       // tests/corpus/kv-cst-002-hs-oedometer.k2d
@@ -83,7 +83,6 @@ static int law_mode(double stol, double de1) {
     p.cohesion = 0.0;
     katai::core::hs_calibrate_cap(p, 1.0 - std::sin(p.friction));   // k0nc_auto in the file
 
-    const double s0 = 0.5;
     Eigen::Vector3d sig(s0, s0, s0);
     double gp = 0.0, pp = s0, eps = 0.0;
     const double marks[5] = {50.0, 100.0, 200.0, 400.0, 800.0};
@@ -111,6 +110,85 @@ static int law_mode(double stol, double de1) {
         std::printf("   %3.0f -> %3.0f kPa   model %.9f m   closed form %.9f m   %+.4f%%\n",
                     a, b, got, want, 100.0 * (got - want) / want);
     }
+    return 0;
+}
+
+// Material-point replay of one call of the staged excavation's sand (the tutorial's sand set: E50 =
+// Eoed = 40 MPa, Eur = 120 MPa, m = 0.5, phi = 32, psi = 2, K0nc = 0.4701): the committed principal
+// stress (compression positive), gamma_p, p_p, the principal strain increment and STOL, walked as
+// the integrator chooses, or uniformly in n substeps when n is given -- the reference a free walk is
+// compared with. This is how the 2026-10-29 walks were found to straddle their kinks.
+// usage: study_hs_integration line s1 s2 s3 gp pp de1 de2 de3 tol [n]
+static int line_mode(char** a, int n_force) {
+    using katai::core::HardeningSoilParams;
+    HardeningSoilParams p;
+    p.p_ref = 100.0; p.E50_ref = 4.0e4; p.Eur_ref = 1.2e5; p.Eoed_ref = 4.0e4;
+    p.m = 0.5; p.nu_ur = 0.2; p.Rf = 0.9;
+    p.friction = 32.0 * 3.14159265358979323846 / 180.0;
+    p.dilatancy = 2.0 * 3.14159265358979323846 / 180.0;
+    katai::core::hs_calibrate_cap(p, 0.4701);
+    const Eigen::Vector3d s(std::atof(a[0]), std::atof(a[1]), std::atof(a[2]));
+    const Eigen::Vector3d de(std::atof(a[5]), std::atof(a[6]), std::atof(a[7]));
+    const double gp = std::atof(a[3]), pp = std::atof(a[4]), tol = std::atof(a[8]);
+    katai::core::HsSubstepPlan plan; plan.n = n_force; plan.dT = n_force > 0 ? 1.0 / n_force : 0.0;
+    const auto r = katai::core::hs_integrate(p, s, gp, pp, de, tol, nullptr, n_force > 0 ? &plan : nullptr);
+    std::printf("alpha=%.4f beta=%.4e  out s=(%.9g %.9g %.9g) nsub=%d sat=%d\n", p.cap_alpha, p.cap_beta,
+                r.stress(0), r.stress(1), r.stress(2), r.nsub, r.saturated);
+    return 0;
+}
+
+// Is the failure line an attractor of the oedometer? KV-CST-002's material, started ON the
+// Mohr-Coulomb line at sigma1 = 100 kPa (sigma3 = K_a sigma1, gamma_p at the hyperbola's end, p_p on
+// the cap) or a fraction `off` of the deviator inside it, walked oedometrically in increments `de`;
+// K = sigma3/sigma1 is printed as the stress doubles.
+// usage: study_hs_integration ka <off> <de> [stol]
+static int ka_mode(double off, double de1, double stol) {
+    using katai::core::HardeningSoilParams;
+    HardeningSoilParams p;
+    p.p_ref = 100.0; p.E50_ref = 3.0e4; p.Eur_ref = 9.0e4; p.Eoed_ref = 3.0e4;
+    p.m = 0.5; p.nu_ur = 0.2; p.Rf = 0.9;
+    p.friction = 35.0 * 3.14159265358979323846 / 180.0;
+    p.dilatancy = 5.0 * 3.14159265358979323846 / 180.0;
+    katai::core::hs_calibrate_cap(p, 1.0 - std::sin(p.friction));
+    const double sp = std::sin(p.friction), ka = (1.0 - sp) / (1.0 + sp);
+    const double s1 = 100.0, s3 = s1 - (1.0 - off) * (s1 - ka * s1);
+    Eigen::Vector3d sig(s1, s3, s3);
+    const double q = s1 - s3, qf = p.q_failure(s3), qa = qf / p.Rf, Ei = p.Ei(s3), Eur = p.Eur(s3);
+    const double qq = std::min(q, qf);
+    double gp = (2.0 / Ei) * qq / (1.0 - qq / qa) - 2.0 * qq / Eur;
+    const double pm = (s1 + 2.0 * s3) / 3.0;
+    double pp = std::sqrt(q * q / (p.cap_alpha * p.cap_alpha) + pm * pm);
+    std::printf("ka: Ka=%.5f off=%g de=%g  start s=(%.4f %.4f) gp=%.6e pp=%.4f\n", ka, off, de1, s1, s3, gp, pp);
+    double next = 200.0;
+    for (int i = 0; i < 2000000 && next <= 1600.0; ++i) {
+        const auto r = katai::core::hs_integrate(p, sig, gp, pp, Eigen::Vector3d(de1, 0.0, 0.0), stol);
+        sig = r.stress; gp = r.gamma_p; pp = r.pp;
+        if (i < 5 || sig(0) >= next) {
+            std::printf("  step %-7d s1=%9.3f K=%.6f q/qf=%.8f nsub=%d\n", i, sig(0), sig(2) / sig(0),
+                        (sig(0) - sig(2)) / p.q_failure(sig(2)), r.nsub);
+            if (sig(0) >= next) next *= 2.0;
+        }
+    }
+    return 0;
+}
+
+// One oedometric increment from the stress-free state, the KV-CST-002 material: the walk from the
+// tip, whose first substep decides the path (2026-10-29: 200 equal substeps landed on a path with
+// sigma_3/sigma_1 = 0.48 for increments past 1.6e-4, against the active ratio 0.271 of the
+// converged walk).
+// usage: study_hs_integration tip <strain increment> [stol]
+static int tip_mode(double de1, double stol) {
+    using katai::core::HardeningSoilParams;
+    HardeningSoilParams p;
+    p.p_ref = 100.0; p.E50_ref = 3.0e4; p.Eur_ref = 9.0e4; p.Eoed_ref = 3.0e4;
+    p.m = 0.5; p.nu_ur = 0.2; p.Rf = 0.9;
+    p.friction = 35.0 * 3.14159265358979323846 / 180.0;
+    p.dilatancy = 5.0 * 3.14159265358979323846 / 180.0;
+    katai::core::hs_calibrate_cap(p, 1.0 - std::sin(p.friction));
+    const auto r = katai::core::hs_integrate(p, Eigen::Vector3d::Zero(), 0.0, 0.0,
+                                             Eigen::Vector3d(de1, 0.0, 0.0), stol);
+    std::printf("de=%g  s1=%.9f s2=%.9f s3=%.9f  pp=%.9f gp=%.6e nsub=%d\n", de1, r.stress(0),
+                r.stress(1), r.stress(2), r.pp, r.gamma_p, r.nsub);
     return 0;
 }
 
@@ -175,12 +253,17 @@ static int calib_mode() {
 }
 
 int main(int argc, char** argv) {
+    if (argc > 3 && std::string(argv[1]) == "ka")
+        return ka_mode(std::atof(argv[2]), std::atof(argv[3]), argc > 4 ? std::atof(argv[4]) : 0.0);
+    if (argc > 2 && std::string(argv[1]) == "tip") return tip_mode(std::atof(argv[2]), argc > 3 ? std::atof(argv[3]) : 0.0);
+    if (argc > 10 && std::string(argv[1]) == "line") return line_mode(argv + 2, argc > 11 ? std::atoi(argv[11]) : 0);
     if (argc > 1 && std::string(argv[1]) == "point")
         return point_mode(argc > 2 ? std::atoi(argv[2]) : 400,
                           argc > 3 ? std::atof(argv[3]) : 0.0);
     if (argc > 1 && std::string(argv[1]) == "law")
         return law_mode(argc > 2 ? std::atof(argv[2]) : 0.0,
-                        argc > 3 ? std::atof(argv[3]) : 2.0e-5);
+                        argc > 3 ? std::atof(argv[3]) : 2.0e-5,
+                        argc > 4 ? std::atof(argv[4]) : 0.5);
     if (argc > 1 && std::string(argv[1]) == "triax")
         return triax_mode(argc > 2 ? std::atof(argv[2]) : 0.20,
                           argc > 3 ? std::atof(argv[3]) : 0.0);
