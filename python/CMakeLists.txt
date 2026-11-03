@@ -162,6 +162,19 @@ set_tests_properties(test_python_plate_section_change PROPERTIES
   LABELS "python;analysis"
   ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
 
+add_test(NAME test_python_job_cancel
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/job_cancel.py
+                 ${PROJECT_SOURCE_DIR}/tests/corpus)
+set_tests_properties(test_python_job_cancel PROPERTIES
+  LABELS "python;api"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
+add_test(NAME test_python_curve_points
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/curve_points.py)
+set_tests_properties(test_python_curve_points PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+
 add_test(NAME test_python_line_contraction
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/line_contraction.py)
 set_tests_properties(test_python_line_contraction PROPERTIES
@@ -198,6 +211,21 @@ set_tests_properties(test_python_pile_row_local_stiffness PROPERTIES
   LABELS "python;analysis"
   ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
 
+add_test(NAME test_python_consolidation_balance
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/consolidation_balance.py)
+set_tests_properties(test_python_consolidation_balance PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+add_test(NAME test_python_coupled_balances
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/coupled_balances.py)
+set_tests_properties(test_python_coupled_balances PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
+add_test(NAME test_python_jointed_rock_slope
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/jointed_rock_slope.py)
+set_tests_properties(test_python_jointed_rock_slope PROPERTIES
+  LABELS "python;analysis"
+  ENVIRONMENT "PYTHONPATH=${CMAKE_BINARY_DIR}/python;KATAI_DLL_PATH=${KATAI_MKL_RUNTIME_DIR}")
 add_test(NAME test_python_consolidation_small_strain
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/consolidation_small_strain.py)
 set_tests_properties(test_python_consolidation_small_strain PROPERTIES

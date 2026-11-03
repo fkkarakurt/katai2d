@@ -41,6 +41,7 @@ namespace katai::core {
 struct FullyCoupledPhaseMaterial {
     std::string name;              // diagnostic label for honest refusals
     double kx = 1.0, ky = 1.0;     // permeability [m/day]
+    double ck = 0.0;               // change of permeability with the void ratio (Permeability::ck)
     WaterRetention retention;      // van Genuchten/Mualem SWCC parameters
     double porosity = 0.3;         // n = e / (1 + e)
     bool nonporous = false;        // refused: a non-porous region would silently behave water-filled
@@ -49,6 +50,7 @@ struct FullyCoupledPhaseMaterial {
 
 // The phase's neutral configuration.
 struct FullyCoupledPhase {
+    double gamma_water = kGammaWater;   // the unit weight of water [kN/m^3]
     std::vector<FullyCoupledPhaseMaterial> materials;   // by material id
     std::vector<FlowEdge> flow_edges;                   // B4 vocabulary, Closed edges included
     bool have_flow_bcs = false;                         // unfiltered declaration scan (B4 rule)
@@ -70,6 +72,8 @@ struct FullyCoupledPhase {
     // The parent's committed structural state, sized for this phase's structures (null = none):
     // what the report reads each element from, and what the phase hands on.
     const StructuralInit* carry_state = nullptr;
+    // The nodes of the active impermeable lines: a face along them does not drain (flow_drained_nodes).
+    const std::vector<char>* sealed_nodes = nullptr;
     const std::vector<int>* pore_tie = nullptr;
     bool has_structural_elements = false;               // plates/anchors/geogrids/walls/embedded present
     double duration_day = 1.0;                          // <= 0 falls back to 1 day
@@ -78,6 +82,7 @@ struct FullyCoupledPhase {
     // An axisymmetric model (x = radius): solved per radian with the hoop, by the elastoplastic
     // core under the axisymmetric kinematics, as the consolidation twin is (KV-CON-009).
     bool axisymmetric = false;
+    std::vector<int> curve_nodes;   // the nodes of the points for curves (SolveResult::curve_nodes)
 };
 
 // Solve the phase. Fills the settlement-time series, the final displacement,
@@ -105,22 +110,6 @@ inline bool solve_fully_coupled_phase(
         return false;
     }
     const size_t nmat = in.materials.size();
-    // Soft Soil Creep x coupled flow-deformation: the same honest refusal as the consolidation
-    // strategy (the Biot x creep interaction is unverified -- the consolidation path measured
-    // time-step-dependent settlements; see the note there).
-    for (size_t mi = 0; mi < nmat; ++mi) {
-        bool used_m = false;
-        for (int e = 0; e < mesh.element_count && !used_m; ++e)
-            if ((in.active.empty() || in.active[e]) && mesh.element_material[e] == (int)mi) used_m = true;
-        if (used_m && models[mi].type == MaterialType::SoftSoilCreep) {
-            R.message = "Material '" + in.materials[mi].name + "' is Soft Soil Creep: the "
-                        "coupled flow-deformation x creep interaction is not verified yet "
-                        "(the consolidation path showed time-step-dependent settlements) -- "
-                        "refused rather than shipped silently wrong. Use timed Plastic "
-                        "phases (verified) for loading and holding.";
-            return false;
-        }
-    }
     // Non-porous x coupled flow-deformation: the same honest refusal as the consolidation
     // strategy (every active element gets a pore-pressure DOF, so a non-porous region would
     // silently carry pore pressure and pass water).
@@ -155,7 +144,7 @@ inline bool solve_fully_coupled_phase(
     for (int e = 0; e < mesh.element_count; ++e)
         if (in.active.empty() || in.active[e]) used[mesh.element_material[e]] = 1;
     for (size_t mi = 0; mi < nmat; ++mi) {
-        cperm[mi] = {in.materials[mi].kx, in.materials[mi].ky};
+        cperm[mi] = {in.materials[mi].kx, in.materials[mi].ky, in.materials[mi].ck};
         ret[mi] = in.materials[mi].retention;
         poros[mi] = in.materials[mi].porosity;
         if (used[mi] && (cperm[mi].kx <= 0.0 || cperm[mi].ky <= 0.0)) {
@@ -180,7 +169,8 @@ inline bool solve_fully_coupled_phase(
     // draining boundary say the same thing to this solver, that the excess pore pressure there
     // is zero.)
     std::vector<char> drained =
-        flow_drained_nodes(in.flow_edges, in.have_flow_bcs, mesh, in.active, in.yscale, in.axisymmetric);
+        flow_drained_nodes(in.flow_edges, in.have_flow_bcs, mesh, in.active, in.yscale, in.axisymmetric,
+                           in.sealed_nodes);
     for (int n : in.drain_nodes)
         if (n >= 0 && n < mesh.node_count) drained[n] = 1;
     // Two nodes that share a pore pressure share its boundary condition (see the consolidation
@@ -230,7 +220,7 @@ inline bool solve_fully_coupled_phase(
         // -> the caller's plastic factory selects the matching solver. The previous phase's
         // committed effective stresses (`init`) seed the state; dF drives it.
         cfp = solve_coupled_flow_deformation_plastic(mesh, dofs, models, cperm, ret,
-            poros, kGammaWater, kw_over_n, drained, init, p0, dt, nsteps, in.active, &dF,
+            poros, in.gamma_water, kw_over_n, drained, init, p0, dt, nsteps, in.active, &dF,
             plastic_factory, 40, 1e-6, profiles, struct_k, in.pore_tie, laws.get(), in.axisymmetric);
         if (!cfp.converged || cfp.series.displacement.empty()) {
             R.message = "Fully-coupled flow-deformation did not converge in a time step (the load "
@@ -242,7 +232,7 @@ inline bool solve_fully_coupled_phase(
         committed = std::move(cfp.committed);   // final effective Gauss state (from return mapping)
     } else {
         cfr = solve_coupled_flow_deformation(mesh, dofs, models, cperm, ret, poros,
-            kGammaWater, kw_over_n, drained, p0, dt, nsteps, in.active, &dF, le_factory,
+            in.gamma_water, kw_over_n, drained, p0, dt, nsteps, in.active, &dF, le_factory,
             /*max_picard=*/40, /*picard_tol=*/1e-7, profiles, struct_k, in.pore_tie);
         if (!cfr.converged || cfr.series.displacement.empty()) {
             R.message = "Fully-coupled flow-deformation did not converge in a time step (reduce the "
@@ -264,7 +254,10 @@ inline bool solve_fully_coupled_phase(
         R.consol_time.push_back(series->times[s]);
         R.consol_settlement.push_back(smax);
         R.consol_excess_pore.push_back(pmax);
+        for (const int nd : in.curve_nodes)
+            for (int k = 0; k < 2; ++k) R.curve_u.push_back(series->displacement[s][dofs.global_dof(nd, k)]);
     }
+    if (!in.curve_nodes.empty()) R.curve_nodes = in.curve_nodes;
     // The excess pore field this phase computed, node by node (results.hpp): `pore` carries the
     // hydrostatic pressure the phase was set up in, so without this one the computed pressure
     // existed only as a maximum per step.
@@ -274,7 +267,7 @@ inline bool solve_fully_coupled_phase(
     // at the suction the coupling term evaluates it at) -- store_excess_pore_pressure.
     store_excess_pore_pressure(mesh, R.excess_pore, in.active,
                                [&](int mat, double p_gp) {
-                                   return effective_saturation(ret[(size_t)mat], p_gp / kGammaWater);
+                                   return effective_saturation(ret[(size_t)mat], p_gp / in.gamma_water);
                                },
                                committed);
     // The structures, through the one function that reports them for both coupled phases.

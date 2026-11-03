@@ -99,16 +99,24 @@ inline MeshResult mesh_from_project(const model::Project& pr, double max_area,
     return mesh_from_project(pr, max_area, order, opt);
 }
 
-// Mesh from the project's OWN MeshSettings -- the .k2d-determined discretization.
-// Every front end that meshes "the file" must come through here, so a checked-in
-// project reproduces the same mesh everywhere.
-inline MeshResult mesh_from_project(const model::Project& pr) {
+// The mesh options the project's own MeshSettings stand for. A front end that shows a mesh builds
+// it with these, so that the mesh it shows is the one a run of the file solves on (until
+// 2026-10-30 the interface built its own options from the local factors alone, and showed a mesh
+// without the corner refinement and with the default grading that the run then did not use).
+inline MeshOptions mesh_options_from(const model::Project& pr) {
     MeshOptions opt;
     opt.auto_refine = pr.mesh.auto_refine;
     opt.grading = pr.mesh.grading;
     opt.corner_refine = pr.mesh.corner_refine;
+    return opt;
+}
+
+// Mesh from the project's OWN MeshSettings -- the .k2d-determined discretization.
+// Every front end that meshes "the file" must come through here, so a checked-in
+// project reproduces the same mesh everywhere.
+inline MeshResult mesh_from_project(const model::Project& pr) {
     const double h = model::element_size(pr);
-    return mesh_from_project(pr, 0.5 * h * h, pr.mesh.order, opt);
+    return mesh_from_project(pr, 0.5 * h * h, pr.mesh.order, mesh_options_from(pr));
 }
 
 } // namespace katai::app

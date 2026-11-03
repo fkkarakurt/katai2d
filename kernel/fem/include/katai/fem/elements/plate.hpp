@@ -71,7 +71,8 @@ struct PlateProps {
     //     N_s = EA (eps_s + nu eps_t),  N_t = EA (eps_t + nu eps_s),
     //     M_s = EI (kap_s + nu kap_t),  M_t = EI (kap_t + nu kap_s),
     // so that, with no hoop strain at all, it is the plane strain plate whose EA and EI were
-    // entered. Elastic only (the M-N hinge has no hoop counterpart here and is refused).
+    // entered. With a capacity the meridional N_s, M_s keep the M-N diamond and the hoop force its
+    // own cap |N_t| <= Np (shell_return).
     bool axisym = false;
 };
 
@@ -220,8 +221,15 @@ inline constexpr int kShearGaussCount = 2;                       // 3-node, redu
 inline constexpr int kShearGaussCount5 = 4;                      // 5-node
 inline constexpr int kShearStateBegin = kBendGaussCount * kPlasticPerPoint;
 inline constexpr int kShearStateBegin5 = kBendGaussCount5 * kPlasticPerPoint;
-inline constexpr int kPlasticStateSize = kShearStateBegin + kShearGaussCount;     // 8 doubles/element
-inline constexpr int kPlasticStateSize5 = kShearStateBegin5 + kShearGaussCount5;  // 14 doubles/element
+// Last, a shell of revolution (PlateProps::axisym) keeps the HOOP part of the same state per
+// axial/bending point, [eps_t_p, kap_t_p]: the hoop strain and curvature its forces do not answer
+// for. eps_t_p grows where the hoop force is at its cap; both are carried through a change of
+// section. A plane strain plate has no hoop and leaves them zero.
+inline constexpr int kHoopPerPoint = 2;                          // [eps_t_p, kap_t_p]
+inline constexpr int kHoopStateBegin = kShearStateBegin + kShearGaussCount;
+inline constexpr int kHoopStateBegin5 = kShearStateBegin5 + kShearGaussCount5;
+inline constexpr int kPlasticStateSize = kHoopStateBegin + kBendGaussCount * kHoopPerPoint;     // 14 doubles/element
+inline constexpr int kPlasticStateSize5 = kHoopStateBegin5 + kBendGaussCount5 * kHoopPerPoint;  // 24 doubles/element
 // Bending/axial Gauss locations (the SAME literals as in stiffness) — the diagram Lagrange
 // expansion (nodal values extrapolated from the stress points) uses these ξ.
 inline constexpr std::array<double, 3> kBendGaussXi{-0.7745966692414834, 0.0, 0.7745966692414834};
@@ -284,6 +292,161 @@ inline MnReturn mn_return(const PlateProps& p, double eps, double kap, double ep
     return r;
 }
 
+// ELASTOPLASTIC SHELL OF REVOLUTION (PlateProps::axisym). The meridional force and moment keep
+// the M-N diamond of the plane strain plate, |N_s|/Np + |M_s|/Mp <= 1; the hoop force has a cap of
+// its own, |N_t| <= Np (an isotropic section has the same capacity in both directions), which
+// takes no part in the diamond; the hoop moment is not capped. With the generalized stresses
+// s = (N_s, N_t, M_s, M_t) and strains e = (eps_s, eps_t, kap_s, kap_t),
+//     s = D (e - e_p),   D = EA [[1, nu], [nu, 1]]  (+)  EI [[1, nu], [nu, 1]],
+// the elastic law of the shell (PlateProps::axisym). The admissible set is convex and bounded by
+// at most six planes a_i . s <= 1 (four of the diamond, two of the hoop cap), and with associated
+// flow the return is the closest admissible point in the energy norm of D: the one set of active
+// planes A whose point s = s_tr - D A lambda, (A^T D A) lambda = A^T s_tr - 1, has lambda >= 0 and
+// breaks no other plane. It is found by trying the sets of one, two and three planes in turn
+// (a corner of the diamond is two, with the hoop cap three). The plastic strain grows by
+// A lambda -- a component no active plane points along keeps its committed value bit for bit --
+// and the consistent tangent is D - D A (A^T D A)^-1 A^T D. With no capacity (a section changed
+// in a phase, which carries a state but cannot yield) the set is everything and s = D (e - e_p).
+struct ShellReturn {
+    Eigen::Vector4d s = Eigen::Vector4d::Zero();    // (N_s, N_t, M_s, M_t)
+    Eigen::Vector4d ep = Eigen::Vector4d::Zero();   // new plastic (eps_s, eps_t, kap_s, kap_t)
+    Eigen::Matrix4d D = Eigen::Matrix4d::Zero();    // consistent tangent
+    bool yielded = false;
+};
+inline Eigen::Matrix4d shell_elasticity(const PlateProps& p) {
+    Eigen::Matrix4d D = Eigen::Matrix4d::Zero();
+    D(0, 0) = D(1, 1) = p.EA;
+    D(0, 1) = D(1, 0) = p.nu * p.EA;
+    D(2, 2) = D(3, 3) = p.EI;
+    D(2, 3) = D(3, 2) = p.nu * p.EI;
+    return D;
+}
+inline ShellReturn shell_return(const PlateProps& p, const Eigen::Vector4d& e,
+                                const Eigen::Vector4d& ep_c) {
+    ShellReturn r;
+    r.D = shell_elasticity(p);
+    r.ep = ep_c;
+    const Eigen::Vector4d s_tr = r.D * (e - ep_c);
+    r.s = s_tr;
+    const double iN = p.Np > 0.0 ? 1.0 / p.Np : 0.0;   // 1/cap; 0 = unbounded
+    const double iM = p.Mp > 0.0 ? 1.0 / p.Mp : 0.0;
+    std::array<Eigen::Vector4d, 6> a;
+    int na = 0;
+    if (iN > 0.0 || iM > 0.0)
+        for (double sN : {1.0, -1.0})
+            for (double sM : {1.0, -1.0}) {
+                if ((iN == 0.0 && sN < 0.0) || (iM == 0.0 && sM < 0.0)) continue;   // one cap: two planes
+                a[(size_t)na++] = Eigen::Vector4d(sN * iN, 0.0, sM * iM, 0.0);
+            }
+    if (iN > 0.0) {
+        a[(size_t)na++] = Eigen::Vector4d(0.0, iN, 0.0, 0.0);
+        a[(size_t)na++] = Eigen::Vector4d(0.0, -iN, 0.0, 0.0);
+    }
+    double tol = 1.0e-12;   // a stress point on its surface stays where it is
+    const auto admissible = [&](const Eigen::Vector4d& s) {
+        for (int i = 0; i < na; ++i)
+            if (a[(size_t)i].dot(s) > 1.0 + tol) return false;
+        return true;
+    };
+    if (admissible(s_tr)) return r;
+    r.yielded = true;
+    // Candidate active sets, smallest first; each as a bit mask over the planes. Rounding can
+    // leave the exact projection a hair outside a plane it does not touch: the second pass
+    // accepts it within 1e-9 of the cap.
+    for (; tol < 1.0e-8; tol *= 1.0e3)
+    for (int size = 1; size <= 3; ++size)
+        for (int mask = 1; mask < (1 << na); ++mask) {
+            int act[3], k = 0;
+            for (int i = 0; i < na && k <= size; ++i)
+                if (mask & (1 << i)) { if (k < 3) act[k] = i; ++k; }
+            if (k != size) continue;
+            Eigen::Matrix<double, 4, Eigen::Dynamic> A(4, size);
+            for (int j = 0; j < size; ++j) A.col(j) = a[(size_t)act[j]];
+            const Eigen::MatrixXd DA = r.D * A;
+            const Eigen::MatrixXd M = A.transpose() * DA;
+            const Eigen::FullPivLU<Eigen::MatrixXd> lu(M);
+            if (lu.rank() < size) continue;   // dependent planes (opposite faces): not a corner
+            const Eigen::VectorXd lam =
+                lu.solve(A.transpose() * s_tr - Eigen::VectorXd::Ones(size));
+            if (lam.minCoeff() < 0.0) continue;
+            const Eigen::Vector4d s = s_tr - DA * lam;
+            if (!admissible(s)) continue;
+            r.s = s;
+            r.ep = ep_c + A * lam;
+            for (int c = 0; c < 4; ++c)
+                if (A.row(c).isZero(0.0)) r.ep(c) = ep_c(c);   // untouched: bit for bit
+            r.D -= DA * lu.inverse() * DA.transpose();
+            return r;
+        }
+    return r;   // unreachable for a convex set of planes; the trial is kept as it is
+}
+
+// The generalized strains of a shell of revolution at one point, (eps_s, eps_t, kap_s, kap_t) =
+// B u, and the committed plastic ones from the element state at axial/bending point q.
+inline Eigen::Vector4d shell_plastic_state(const double* state, int hoop_begin, int q) {
+    return Eigen::Vector4d(state[kPlasticPerPoint * q], state[hoop_begin + kHoopPerPoint * q],
+                           state[kPlasticPerPoint * q + 1], state[hoop_begin + kHoopPerPoint * q + 1]);
+}
+inline void write_shell_plastic_state(double* state, int hoop_begin, int q, const Eigen::Vector4d& ep) {
+    state[kPlasticPerPoint * q] = ep(0);
+    state[kPlasticPerPoint * q + 1] = ep(2);
+    state[hoop_begin + kHoopPerPoint * q] = ep(1);
+    state[hoop_begin + kHoopPerPoint * q + 1] = ep(3);
+}
+
+// The shell of revolution with a state (a capacity, or a section changed in a phase) -- 3-node:
+// the axial/bending part by shell_return at the 3-point rule, per radian (weight r), the shear
+// elastic at the reduced 2-point rule less its carried offset, as internal_force_plastic.
+inline void internal_force_shell(const NodeCoords& X, const PlateProps& p, const Dof& u,
+                                 const double* state_c, double* state_t, Dof& f, ElementMatrix* K) {
+    f.setZero();
+    if (K) K->setZero();
+    const std::array<double, 3> w3{5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0};
+    for (int q = 0; q < kBendGaussCount; ++q) {
+        const auto e = detail::edge_kin(X, kBendGaussXi[q]);
+        Eigen::Matrix<double, 1, 9> Be, Bk, Bg, Bt, Bkt;
+        detail::b_rows(e, Be, Bk, Bg);
+        const double r = e.N.dot(X.col(0));
+        detail::hoop_rows<3>(e.N, e.c, r, Bt, Bkt);
+        Eigen::Matrix<double, 4, 9> B;
+        B.row(0) = Be; B.row(1) = Bt; B.row(2) = Bk; B.row(3) = Bkt;
+        const auto sr = shell_return(p, B * u, shell_plastic_state(state_c, kHoopStateBegin, q));
+        write_shell_plastic_state(state_t, kHoopStateBegin, q, sr.ep);
+        const double wds = w3[q] * e.J * r;
+        f.noalias() += wds * (B.transpose() * sr.s);
+        if (K) K->noalias() += wds * (B.transpose() * sr.D * B);
+    }
+    const double kGA = p.shear_rigidity();
+    constexpr double g2 = 0.5773502691896257;
+    const std::array<double, 2> xi2{-g2, g2};
+    for (int q = 0; q < 2; ++q) {
+        const auto e = detail::edge_kin(X, xi2[q]);
+        Eigen::Matrix<double, 1, 9> Be, Bk, Bg;
+        detail::b_rows(e, Be, Bk, Bg);
+        const double wds = 1.0 * e.J * e.N.dot(X.col(0));   // 2-point weight = 1, per radian
+        state_t[kShearStateBegin + q] = state_c[kShearStateBegin + q];
+        f.noalias() += wds * kGA * Bg.transpose() * ((Bg * u)(0) - state_c[kShearStateBegin + q]);
+        if (K) K->noalias() += wds * kGA * Bg.transpose() * Bg;
+    }
+}
+
+// The four generalized stresses of a shell of revolution at its axial/bending points -- capped by
+// the return, or (capped = false) the elastic ones from the state: what a stiffness on top of it
+// carries.
+inline void gauss_forces_shell(const NodeCoords& X, const PlateProps& p, const Dof& u,
+                               const double* state_c, bool capped,
+                               std::array<Eigen::Vector4d, 3>& sg) {
+    for (int q = 0; q < kBendGaussCount; ++q) {
+        const auto e = detail::edge_kin(X, kBendGaussXi[q]);
+        Eigen::Matrix<double, 1, 9> Be, Bk, Bg, Bt, Bkt;
+        detail::b_rows(e, Be, Bk, Bg);
+        detail::hoop_rows<3>(e.N, e.c, e.N.dot(X.col(0)), Bt, Bkt);
+        const Eigen::Vector4d strain((Be * u)(0), (Bt * u)(0), (Bk * u)(0), (Bkt * u)(0));
+        const Eigen::Vector4d ep = shell_plastic_state(state_c, kHoopStateBegin, q);
+        sg[(size_t)q] = capped ? shell_return(p, strain, ep).s : Eigen::Vector4d(shell_elasticity(p) * (strain - ep));
+    }
+}
+
 // Elastoplastic element internal force + (if K != null) consistent tangent — 3-node.
 // Axial+bending return mapping at the 3-point Gauss rule (state_c → state_t, [ε_p,κ_p]×3),
 // shear elastic at the REDUCED 2-point rule (same scheme as stiffness). With
@@ -291,6 +454,7 @@ inline MnReturn mn_return(const PlateProps& p, double eps, double kap, double ep
 inline void internal_force_plastic(const NodeCoords& X, const PlateProps& p, const Dof& u,
                                    const double* state_c, double* state_t,
                                    Dof& f, ElementMatrix* K) {
+    if (p.axisym) { internal_force_shell(X, p, u, state_c, state_t, f, K); return; }
     f.setZero();
     if (K) K->setZero();
     const std::array<double, 3> w3{5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0};
@@ -469,9 +633,61 @@ inline PlateForces forces5(const NodeCoords5& X, const PlateProps& p, const Dof5
 // Elastoplastic element internal force + tangent — 5-node (same logic as 3-node;
 // axial+bending 5-point Gauss return mapping [ε_p,κ_p]×5, shear elastic at the REDUCED
 // 4-point rule).
+// The shell of revolution with a state -- 5-node (internal_force_shell).
+inline void internal_force_shell5(const NodeCoords5& X, const PlateProps& p, const Dof5& u,
+                                  const double* state_c, double* state_t, Dof5& f, ElementMatrix5* K) {
+    f.setZero();
+    if (K) K->setZero();
+    const std::array<double, 5> w5{0.2369268850561891, 0.4786286704993665, 0.5688888888888889,
+                                   0.4786286704993665, 0.2369268850561891};
+    for (int q = 0; q < kBendGaussCount5; ++q) {
+        const auto e = detail::edge_kin5(X, kBendGaussXi5[q]);
+        Eigen::Matrix<double, 1, 15> Be, Bk, Bg, Bt, Bkt;
+        detail::b_rows5(e, Be, Bk, Bg);
+        const double r = e.N.dot(X.col(0));
+        detail::hoop_rows<5>(e.N, e.c, r, Bt, Bkt);
+        Eigen::Matrix<double, 4, 15> B;
+        B.row(0) = Be; B.row(1) = Bt; B.row(2) = Bk; B.row(3) = Bkt;
+        const auto sr = shell_return(p, B * u, shell_plastic_state(state_c, kHoopStateBegin5, q));
+        write_shell_plastic_state(state_t, kHoopStateBegin5, q, sr.ep);
+        const double wds = w5[q] * e.J * r;
+        f.noalias() += wds * (B.transpose() * sr.s);
+        if (K) K->noalias() += wds * (B.transpose() * sr.D * B);
+    }
+    const double kGA = p.shear_rigidity();
+    constexpr double a4 = 0.3399810435848563, b4 = 0.8611363115940526;
+    const std::array<double, 4> xi4{-b4, -a4, a4, b4};
+    const std::array<double, 4> w4{0.3478548451374538, 0.6521451548625461,
+                                   0.6521451548625461, 0.3478548451374538};
+    for (int q = 0; q < 4; ++q) {
+        const auto e = detail::edge_kin5(X, xi4[q]);
+        Eigen::Matrix<double, 1, 15> Be, Bk, Bg;
+        detail::b_rows5(e, Be, Bk, Bg);
+        const double wds = w4[q] * e.J * e.N.dot(X.col(0));   // per radian
+        state_t[kShearStateBegin5 + q] = state_c[kShearStateBegin5 + q];
+        f.noalias() += wds * kGA * Bg.transpose() * ((Bg * u)(0) - state_c[kShearStateBegin5 + q]);
+        if (K) K->noalias() += wds * kGA * Bg.transpose() * Bg;
+    }
+}
+
+inline void gauss_forces_shell5(const NodeCoords5& X, const PlateProps& p, const Dof5& u,
+                                const double* state_c, bool capped,
+                                std::array<Eigen::Vector4d, 5>& sg) {
+    for (int q = 0; q < kBendGaussCount5; ++q) {
+        const auto e = detail::edge_kin5(X, kBendGaussXi5[q]);
+        Eigen::Matrix<double, 1, 15> Be, Bk, Bg, Bt, Bkt;
+        detail::b_rows5(e, Be, Bk, Bg);
+        detail::hoop_rows<5>(e.N, e.c, e.N.dot(X.col(0)), Bt, Bkt);
+        const Eigen::Vector4d strain((Be * u)(0), (Bt * u)(0), (Bk * u)(0), (Bkt * u)(0));
+        const Eigen::Vector4d ep = shell_plastic_state(state_c, kHoopStateBegin5, q);
+        sg[(size_t)q] = capped ? shell_return(p, strain, ep).s : Eigen::Vector4d(shell_elasticity(p) * (strain - ep));
+    }
+}
+
 inline void internal_force_plastic5(const NodeCoords5& X, const PlateProps& p, const Dof5& u,
                                     const double* state_c, double* state_t,
                                     Dof5& f, ElementMatrix5* K) {
+    if (p.axisym) { internal_force_shell5(X, p, u, state_c, state_t, f, K); return; }
     f.setZero();
     if (K) K->setZero();
     const std::array<double, 5> w5{0.2369268850561891, 0.4786286704993665, 0.5688888888888889,

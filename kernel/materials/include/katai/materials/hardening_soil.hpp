@@ -148,6 +148,12 @@ struct HardeningSoilParams {
     // G_m = G / G_ur the stiffness multiplier of the overlay (Benz 2007, Eqs 7.33-7.34). It is 1
     // once the stiffness has decayed to G_ur, and from there on the model is Hardening Soil.
     double hardening_scale = 1.0;
+    // What the initial stiffness has to be so that a triaxial test reads the E50 entered, as a multiple of the
+    // 2 E50 / (2 - R_f) of the hyperbola alone (hs_calibrate_cap). No more than kMaxEiScale: a soil whose cap is much
+    // softer than its shear surface has no stiffness that gives its E50 back, the cap alone being softer than that.
+    // The ceiling is where the published undrained tests of a soil of this kind are best followed (1.4 to 1.6).
+    static constexpr double kMaxEiScale = 1.6;
+    double ei_scale = 1.0;
     // The ELASTIC stiffness of this step as a multiple of the unloading-reloading one: the
     // small-strain multiplier E_t / E_ur (1 for plain Hardening Soil, and for a seed). It scales
     // the elastic matrix and nothing else. E_ur itself stays what it is in the yield function
@@ -200,8 +206,8 @@ struct HardeningSoilParams {
         return 2.0 * (cohesion * std::cos(friction) + sigma3 * s) / (1.0 - s);
     }
 
-    // Initial stiffness Ei = 2·E50/(2−Rf) and asymptote qa = qf/Rf.
-    double Ei(double sigma3) const { return 2.0 * E50(sigma3) / (2.0 - Rf); }
+    // Initial stiffness Ei = 2·E50/(2−Rf), times ei_scale (hs_calibrate_cap), and asymptote qa = qf/Rf.
+    double Ei(double sigma3) const { return 2.0 * E50(sigma3) / (2.0 - Rf) * ei_scale; }
     double q_asymptote(double sigma3) const { return q_failure(sigma3) / Rf; }
 
     // Drained triaxial PRIMARY loading: deviator q for a given axial compression −ε1 (≥0).

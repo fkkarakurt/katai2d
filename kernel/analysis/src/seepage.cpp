@@ -1,4 +1,5 @@
 #include <katai/analysis/seepage.hpp>
+#include <katai/analysis/cancel.hpp>
 
 #include <algorithm>
 #include <array>
@@ -543,6 +544,7 @@ UnconfinedResult solve_unconfined_seepage(
     UnconfinedResult res;
     res.head = head;
     for (int it = 1; it <= options.max_iter; ++it) {
+        katai::analysis::poll_cancel();
         const Eigen::VectorXd hn = step(head);
         const Eigen::VectorXd prev = head;
         head = (1.0 - options.relax) * head + options.relax * hn;
@@ -634,6 +636,7 @@ UnconfinedResult solve_unconfined_seepage_face(
     UnconfinedResult res;
     res.head = head;
     for (int it = 1; it <= options.max_iter; ++it) {
+        katai::analysis::poll_cancel();
         const Eigen::VectorXd hn = solve_with_set(head);
         const Eigen::VectorXd prev = head;
         head = (1.0 - options.relax) * head + options.relax * hn;

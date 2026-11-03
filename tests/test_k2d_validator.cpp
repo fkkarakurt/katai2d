@@ -176,6 +176,10 @@ int main() {
     probe(base, [](m::Project& p) { p.wy.pop_back(); }, "wy", E, "water line x/y size mismatch");
     probe(base, [](m::Project& p) { p.wx = {5.0}; p.wy = {8.0}; }, "wx", W,
           "one-point water line is silently dry");
+    // A boundary condition on the edge the two regions share (y = 10) acts only at its ends and on
+    // the sides of an interface along it.
+    probe(base, [](m::Project& p) { p.polygons[0].edge_bc[2] = 4; }, "polygons[0].edge_bc[2]", W,
+          "a fixity on an edge inside the model");
 
     // -- mesh and initial procedure --------------------------------------------
     probe(base, [](m::Project& p) { p.mesh.elem_size = 0.0; }, "mesh.elem_size", E,
@@ -287,6 +291,15 @@ int main() {
     // envelope while the user believed su was in force.
     probe(base, [&](m::Project& p) { add_rock(p).drainage = m::Drainage::UndrainedB; },
           "materials[4].drainage", E, "Hoek-Brown asked for an undrained shear strength");
+    // The same for the soft soils, which would be refused only when a phase asked for the model.
+    for (const m::SoilModel soft : {m::SoilModel::SoftSoil, m::SoilModel::SoftSoilCreep})
+        probe(base,
+              [&](m::Project& p) {
+                  p.materials[0].model = soft;
+                  p.materials[0].drainage = m::Drainage::UndrainedB;
+              },
+              "materials[0].drainage", E, "a soft soil asked for an undrained shear strength");
+    probe(base, [](m::Project& p) { p.gamma_water = 0.0; }, "gamma_water", E, "no unit weight of water");
     // A Safety phase in a model with rock is no longer refused: the Hoek-Brown strength is reduced
     // inside the criterion (the engine's K2D-A037; KV-CST-021). The baseline's own Safety phase is
     // what the refusal used to fire on, so it is the case that must now pass.

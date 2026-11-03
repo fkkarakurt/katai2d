@@ -8,7 +8,7 @@ Schema, every key documented here must still exist in the code, and the enum bou
 equal the enums in `kernel/model/include/katai/model/project.hpp`. A hand-maintained format document
 that can drift from the code would be a silent-wrong of its own kind; this one cannot drift silently.
 
-Current `.k2d` version: **29** · Current `.res` version: **11**
+Current `.k2d` version: **31** · Current `.res` version: **12**
 
 Version history: **v2** adds line prescribed displacements (`disps` and the phase `disp`
 activity flags). **v3** adds the anchor lock-off force (`anchors[i].prestress`), **v4** the
@@ -78,7 +78,10 @@ and **v29** local mesh density as it is seen: the `coarseness` an object carries
 applied (structures, loads and prescribed displacements default to 0.25), no longer halved again
 under `mesh.auto_refine`, and the size grows away from a refined object by `mesh.grading` -- an
 older build would halve the factors and grade at 0.5, a different mesh. A file older than v29 is
-read with the factors it meant and its old grading, so it meshes as before.
+read with the factors it meant and its old grading, so it meshes as before. **v30** adds the
+points for curves (`curves`), whose displacement every step of every phase records -- an older build
+would drop them, and the curves the file asks for, in silence. **v31** adds the unit weight of water
+(`gamma_water`), written only when it is not 9.81 -- an older build would read 9.81 in silence.
 Every bump
 is deliberate and for the same reason: an older build reading the newer file would silently
 drop the input and solve a *different* problem -- a wall with slack anchors deflects far more
@@ -128,7 +131,7 @@ Structure (types, array shapes) is described by `docs/k2d.schema.json`. Everythi
 `katai::io::validate_project()`, which reports every violation at its exact field path
 (`materials[2].Rf`) in engineer-readable language with the offending value echoed. The JSON Schema
 deliberately does **not** duplicate the validator's parameter bounds: one source of truth per rule.
-Model × drainage × phase feasibility (e.g. Soft Soil Creep under a Consolidation phase) is likewise
+Model × drainage × phase feasibility (e.g. a non-porous soil under a Consolidation phase) is likewise
 not duplicated anywhere: the engine refuses those combinations at solve time with its own tested
 messages.
 
@@ -153,6 +156,7 @@ flagged places differs from the in-memory default of a freshly created object.
 | `y_min` | num | m | `0` | Model extent, base |
 | `y_max` | num | m | `20` | Model extent, top |
 | `has_water` | bool | — | `false` | Groundwater present. NOTE: an absent key loads `false`, although a freshly created project defaults to `true` — the reader's value is the contract |
+| `gamma_water` | num | kN/m³ | `9.81` | Unit weight of water: turns a head into a pore pressure and a saturated weight into a buoyant one, in every phase. Written only when not 9.81 |
 | `wx` | num[] | m | `[]` | Water polyline x-coordinates (with `wy`; needs ≥ 2 points to take effect) |
 | `wy` | num[] | m | `[]` | Water polyline y-coordinates (elevation head) |
 | `mesh` | object | — | defaults | Global mesh-generation settings (object below); the file determines its own discretization |
@@ -168,6 +172,7 @@ flagged places differs from the in-memory default of a freshly created object.
 | `loads` | array | — | `[]` | External loads |
 | `disps` | array | — | `[]` | Line prescribed displacements (objects below) |
 | `hydros` | array | — | `[]` | Wells and drains — hydraulic conditions inside the model (objects below) |
+| `curves` | array | — | `[]` | Points for curves (objects below); written only when there are any |
 | `initial` | object | — | defaults | The initial phase (activation flags; its `type` is ignored — `initial_procedure` selects how the initial state is established) |
 | `phases` | array | — | `[]` | Staged-construction phases after the initial phase, in run order |
 
@@ -179,7 +184,7 @@ flagged places differs from the in-memory default of a freshly created object.
 | `order` | int | — | `6` | Element type: 6 = quadratic tri6, 15 = quartic tri15 |
 | `auto_refine` | bool | — | `true` | The local `coarseness` factors of structures, loads, prescribed displacements and hydraulic lines apply; `false` meshes those objects at the size of the region they lie in |
 | `grading` | num | — | `0.15` | Growth of the element size per metre away from a refined object, h(d) = h_object + grading · d, until it meets the size around it. Written only when not the default (files older than v29 are read with 0.5) |
-| `corner_refine` | bool | — | `true` | Enhanced refinement at corners: where geometry lines meet at an angle that is not a multiple of 90°, the size there is the element size times a factor of the sharpest angle between them (1 at 90/180/270°, 0.5 at 45° and 135°, 0.1 at a sliver). Written only when `false` (files older than v29 are read with `false`) |
+| `corner_refine` | bool | — | `true` | Enhanced refinement at corners: where geometry lines meet at an angle that is not a multiple of 90°, the size there is the element size times a factor of the sharpest angle between them (1 at 90/180/270°, 0.5 at 45° and 135°, 0.1 at a sliver), and a line that ends at such a corner carries the size of its two ends along its length. Written only when `false` (files older than v29 are read with `false`) |
 | `rel` | num | — | `0` | Relative element size: `0` = `elem_size` is the size; above 0 the target element edge is this factor times a twentieth of the model's diagonal (from `x_min`..`x_max`, `y_min`..`y_max`), so a model drawn wider keeps the same density; 2 / 1.33 / 1 / 0.67 / 0.5 are very coarse … very fine. It also sets the virtual thickness of the interfaces, which `elem_size` sets otherwise. Written only when set |
 
 #### Soil material object (`materials[i]`)
@@ -201,11 +206,11 @@ flagged places differs from the in-memory default of a freshly created object.
 | `E_inc` | num | kN/m²/m | `0` | Stiffness increase per metre depth below `y_ref` |
 | `c_inc` | num | kN/m²/m | `0` | Cohesion increase per metre depth below `y_ref` |
 | `y_ref` | num | m | `0` | Reference level for the increments |
-| `tension_cutoff` | bool | — | `true` | Rankine tension cut-off active. For a **Hoek-Brown** material it is not Rankine but the criterion's own tensile limit σ_t: the pair below caps σ_t and can only LOWER it, so the schema default (on, σ_t = 0) gives a rock that carries no tension — switch it off to keep the σ_t the criterion derives from σ_ci, s and m_b |
+| `tension_cutoff` | bool | — | `true` | Rankine tension cut-off active. Not read for **Modified Cam-Clay**, whose strength is its critical state line. For a **Hoek-Brown** material it is not Rankine but the criterion's own tensile limit σ_t: the pair below caps σ_t and can only LOWER it, so the schema default (on, σ_t = 0), which a file that leaves the key out reads, gives a rock that carries no tension — switch it off to keep the σ_t the criterion derives from σ_ci, s and m_b |
 | `dilatancy_cutoff` | bool | — | `false` | Stop dilatancy at the critical void ratio: once the void ratio reaches `e_max`, the mobilised dilatancy angle is set to zero |
 | `e_max` | num | — | `1` | Critical (maximum) void ratio; read when `dilatancy_cutoff` is set |
 | `tensile_strength` | num | kN/m² | `0` | Allowed tensile strength σ_t |
-| `E50ref` | num | kN/m² | `3e4` | HS: secant stiffness at p_ref |
+| `E50ref` | num | kN/m² | `3e4` | HS: secant stiffness at p_ref, as a drained triaxial test from an isotropic normally consolidated state reads it (the initial stiffness is solved for this, K2D-M009 where it cannot be) |
 | `Eoedref` | num | kN/m² | `3e4` | HS: oedometer stiffness at p_ref |
 | `Eurref` | num | kN/m² | `9e4` | HS: unload-reload stiffness at p_ref |
 | `m` | num | — | `0.5` | HS: stress-dependency power |
@@ -350,7 +355,7 @@ way past, because a geometry with two sources of truth is a geometry that can di
 | `x` | num[] | m | `[]` | Polygon vertex x-coordinates (implicitly closed; ≥ 3) |
 | `y` | num[] | m | `[]` | Polygon vertex y-coordinates |
 | `edge_bc` | int[] | — | `[]` | Per-edge deformation BC (edge j runs vertex j → j+1): 0 Free, 1 Normally fixed, 2 Horizontally fixed, 3 Vertically fixed, 4 Fully fixed. Empty or one per vertex |
-| `edge_flow` | int[] | — | `[]` | Per-edge flow BC: 0 Closed, 1 Prescribed head, 2 Seepage face, 3 Prescribed flux |
+| `edge_flow` | int[] | — | `[]` | Per-edge flow BC: 0 Closed, 1 Prescribed head, 2 Seepage face, 3 Prescribed flux. It is read on the model's own boundary. A face a phase's excavation exposes is an outer boundary of the ground: it drains in a consolidation or fully coupled phase, whatever its edge says, unless it lies along an active impermeable line |
 | `edge_head` | num[] | m | `[]` | Prescribed head per edge (read where `edge_flow` is 1). The head is the level of the water outside the ground: the part of the edge above it is a seepage face (open while water leaves the ground there, closed otherwise), in the steady and the transient flow alike |
 | `edge_flux` | num[] | m/day | `[]` | Prescribed boundary flux per edge, inflow positive (read where `edge_flow` is 3) |
 
@@ -377,14 +382,14 @@ A gap wider than the tolerance is real geometry and stays empty.
 | `iface_neg` | bool | — | `false` | Negative-side interface attached |
 | `iface_material` | int | — | `-1` | Soil material override for the interfaces (−1 = adjacent soil) |
 | `iface_kn` | num | kN/m³ | `0` | Interface normal stiffness (stress per unit relative normal movement). `0` = derived from the adjacent soil: E_oed,i / t_v with G_i = R_inter² G, ν_i = 0.45 and a virtual thickness t_v of 0.1 × the element length. Written only when set |
-| `iface_ks` | num | kN/m³ | `0` | Interface shear stiffness; `0` = derived, G_i / t_v. Written only when set |
+| `iface_ks` | num | kN/m³ | `0` | Interface shear stiffness; `0` = derived, G_i / t_v (beside a Hardening Soil or HS small material G comes from E50, and both derived stiffnesses go with the normal stress the joint was installed with by the soil's power m). Written only when set |
 | `iface_vt` | num | — | `0.1` | Virtual thickness factor of the interfaces: the derived stiffnesses divide by t_v = this factor × the model element size (`mesh.size`). Written only when it is not 0.1 |
 | `hinge1` | bool | — | `false` | **Plate only** — the end at the first point is HINGED: plates and walls that meet at a point are joined rigidly there (one rotation for all of them), and a hinged end keeps its own rotation, so the joint passes force and no moment from it. At a supported boundary where a plate's rotation is held (the standard fixities, a plane of symmetry) a hinged end is not held: it is a pin. Written only when set |
 | `hinge2` | bool | — | `false` | **Plate only** — the same for the end at the second point |
 | `rotk1` | num | kNm/rad/m | `0` | **Hinged plate end only** — a rotation spring on the end at the first point: a moment k (φ_end − φ_joint) between the end's own rotation and the joint's -- the rotation of a plate or wall that carries on through the point, or the ground where the end stands on a supported boundary and nothing carries on (`K2D-G018` where neither). 0 = a free hinge. Written only when set |
 | `rotk2` | num | kNm/rad/m | `0` | **Hinged plate end only** — the same for the end at the second point |
 | `conn` | int | — | `0` | **Embedded beam only** — how the connection point (the pile top: the end with the highest y, or for an exactly horizontal pile the lowest x) is attached. `0` hinged: the beam's top translations *are* the soil's there — the same displacement, with the rotation left free — the setting for a pile top that no other structure shares, and what makes a pile loadable at its head. `1` free: coupled to the soil through the skin springs only, which is the setting for a grout body, so a ground anchor does not shed axial force at the connection. The mesher carries the connection point as a node either way, so switching this changes the physics and not the mesh |
-| `flow_barrier` | int | — | `0` | Cross permeability in a groundwater calculation: 0 fully permeable (no effect on flow), 1 impermeable (the two sides get separate pore-pressure DOFs), 2 semi-permeable (a hydraulic resistance `hyd_res` across the line). Plates and interfaces only |
+| `flow_barrier` | int | — | `0` | Cross permeability in a groundwater calculation: 0 fully permeable (no effect on flow), 1 impermeable (the two sides get separate pore-pressure DOFs), 2 semi-permeable (a hydraulic resistance `hyd_res` across the line). Plates and interfaces only. The value is always written; an absent one reads 0, what files before v12 mean. The program creates an interface, and a wall with interfaces, at 1 |
 | `hyd_res` | num | day | `0` | Hydraulic resistance d/k of a semi-permeable barrier: the head difference divided by the discharge per unit area of wall. Read by every groundwater flow -- steady (with or without a free surface), transient and the flow of a staged phase; above the water the screen conducts at the relative permeability of the soil it is drawn in, and where a staged phase has excavated one side, the water of the pit stands behind it at the phase's table |
 
 with `name` (default `"Element"`), `material` (index into the kind's material list, default `-1`)
@@ -447,6 +452,19 @@ from the steady flow of a staged phase, does not read them (`K2D-A036`, `K2D-A03
 | `head` | num | m | `0` | Drain: the head it holds |
 
 with `name` (default `"Well"`), `x1`/`y1`/`x2`/`y2` and `coarseness` as above.
+
+#### Point-for-curves object (`curves[i]`)
+
+The node nearest to (`x`, `y`) has its displacement since the start of each phase recorded at
+every step: against Sum-Mstage in a Plastic phase, against Sum-Msf in a Safety phase, against time
+in a consolidation, fully coupled or dynamic phase (`.res`: `curve_u`). A point outside the model
+is warned about and follows the node nearest to it.
+
+| Key | Type | Unit | Default | Meaning |
+|---|---|---|---|---|
+| `name` | string | — | `"A"` | The point's name in the curves |
+| `x` | num | m | `0` | Horizontal coordinate (the radius in axial symmetry) |
+| `y` | num | m | `0` | Vertical coordinate |
 
 #### Phase object (`initial` and `phases[i]`)
 
@@ -552,7 +570,11 @@ u32 phase count · per phase: flags + scalars + message + displacements/stresses
   initial phase and the Safety mechanism in it), whether a factor of safety is only a lower bound,
   the design approach that makes it an over-design factor, the diagnostics (a warning that
   qualifies a number belongs with the number), the excess pore pressure field, the consolidation
-  curve, the degree of saturation, the support reactions and the seismic records.
+  curve, the degree of saturation, the support reactions and the seismic records · **v12** the
+  phase's path: the step factor (Sum-Mstage of a Plastic phase, Sum-Msf of a Safety phase) and the
+  largest displacement of a node since the phase began, at the phase's start and at every step it
+  accepted — the curve a factor of safety is read off, and the load-displacement curve of a stage.
+  A file older than v12 reads back with no path.
 - Files are written whole or not at all: a save goes to a temporary file beside the target,
   which replaces it only once complete. Paths are UTF-8 on every platform.
 - Committed Gauss states are NOT stored: restored results are for viewing and post-processing;

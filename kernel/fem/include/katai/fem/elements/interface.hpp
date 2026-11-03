@@ -29,7 +29,44 @@ struct InterfaceProps {
     double c_i = 0.0;       // interface cohesion (= R_inter·c_soil)
     double phi_i = 0.0;     // interface friction angle [rad] (tanφ_i = R_inter·tanφ_soil)
     double sigma_t = 0.0;   // tensile strength (tension cut-off); default 0
+    // The cohesion against a shear of negative sense, where the strength has a sense (an inclined joint
+    // in NGI-ADP: active one way, passive the other). Below zero: c_i, either way.
+    double c_neg = -1.0;
+    // The stiffnesses go as (normal stress / k_pref)^k_power; kn and ks are their values at k_pref. 0: constant.
+    double k_power = 0.0;
+    double k_pref = 100.0;
 };
+
+// What the stiffnesses are multiplied by at a point installed with the normal stress sigma_n0 (tension positive), floored
+// at a tenth of the reference stress. A new contact, a joint with no ground across it that takes over no stress (a lining
+// in the dug-out ring), has no stress to read and stands at the reference stiffness.
+inline double stiffness_factor(const InterfaceProps& p, double sigma_n0) {
+    if (p.k_power <= 0.0 || sigma_n0 >= 0.0) return 1.0;
+    return std::pow(std::max(-sigma_n0, 0.1 * p.k_pref) / p.k_pref, p.k_power);
+}
+
+// The cohesion a shear stress of this sign acts against.
+inline double cohesion_for(const InterfaceProps& p, double tau) {
+    return tau < 0.0 && p.c_neg >= 0.0 ? p.c_neg : p.c_i;
+}
+
+// The strength of a joint in NGI-ADP: the traction criterion of the model on a line of tangent (c, s). In the
+// plane strain failure ellipse, with no volume change, the shear stress on the line is limited by
+//     T = R (-/+ R_A sin 2b + sqrt(R_B^2 sin^2 2b + R_D^2 cos^2 2b)),
+// R_A = (suA - suP)/2, R_B = (suA + suP)/2, R_D = suDSS: suDSS on a level or a vertical line, whichever way it
+// shears, and at 45 degrees suP where the upper body goes up the slope and suA where it comes down. Which body
+// is upper, in the sign of the joint's own shear: the relative slip of the body on the +n side, n = (-s, c), along
+// the tangent, is the slip of the upper body along the tangent read towards +x, for either way the line was
+// drawn, and sin 2b does not change when the line is reversed. So a positive shear on a line rising to the right is the upper body
+// going up the slope.
+inline void ngi_adp_joint_strength(double R, double suA, double suP, double suDSS, double c, double s,
+                                   double& c_pos, double& c_neg) {
+    const double s2 = 2.0 * s * c, c2 = c * c - s * s;
+    const double RA = 0.5 * (suA - suP), RB = 0.5 * (suA + suP);
+    const double root = std::sqrt(RB * RB * s2 * s2 + suDSS * suDSS * c2 * c2);
+    c_pos = R * (root - RA * s2);
+    c_neg = R * (root + RA * s2);
+}
 
 // Virtual-thickness stiffness: G_i=R²G_soil, ν_i=0.45, E_oed,i=2G_i(1−ν_i)/(1−2ν_i),
 // t_i=δ·avg_size. k_s=G_i/t_i, k_n=E_oed,i/t_i. (caller; helper.)
@@ -120,14 +157,15 @@ struct Return { double tau, sigma_n, Ds, Dn, slip_p_new; };
 // beside clay in suction opened while its skeleton was still pressed, and lost its friction early.
 inline Return coulomb_return(const InterfaceProps& p, double du_s, double du_n, double slip_p_c,
                              double sigma_n0 = 0.0, double pw = 0.0) {
-    double sigma_n = sigma_n0 + p.kn * du_n, Dn = p.kn;
+    const double kf = stiffness_factor(p, sigma_n0), kn = p.kn * kf, ks = p.ks * kf;
+    double sigma_n = sigma_n0 + kn * du_n, Dn = kn;
     if (sigma_n - pw > p.sigma_t) { sigma_n = p.sigma_t + pw; Dn = 0.0; }  // tension cut-off (separation)
-    const double tau_tr = p.ks * (du_s - slip_p_c);
-    const double tau_max = std::max(0.0, p.c_i - (sigma_n - pw) * std::tan(p.phi_i));
+    const double tau_tr = ks * (du_s - slip_p_c);
+    const double tau_max = std::max(0.0, cohesion_for(p, tau_tr) - (sigma_n - pw) * std::tan(p.phi_i));
     if (std::fabs(tau_tr) <= tau_max)
-        return {tau_tr, sigma_n, p.ks, Dn, slip_p_c};            // elastic (stick)
+        return {tau_tr, sigma_n, ks, Dn, slip_p_c};              // elastic (stick)
     const double tau = std::copysign(tau_max, tau_tr);
-    return {tau, sigma_n, 0.0, Dn, du_s - tau / p.ks};           // slip (plastic)
+    return {tau, sigma_n, 0.0, Dn, du_s - tau / ks};             // slip (plastic)
 }
 
 }  // namespace katai::core::iface

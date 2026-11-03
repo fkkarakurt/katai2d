@@ -12,13 +12,10 @@
 // and is applied with the ORDERING-VALIDITY cascade (Koiter; the corner-branching lesson
 // measured on SS).
 //
-// SCOPE (Stage 1, honest): principal-space, coaxial; the direction is FROZEN at the trial
-// within a substep (explicit direction / implicit magnitude: L backward Euler, monotone
-// R → bracketed secant+bisection guaranteed); on the dry side of the ellipse
-// ∂p_eq/∂p′ < 0 → dilative creep (the model's own truth; the |·| floor is numerical
-// protection); the deviatoric creep direction is not pinned by the Stage-1 closed forms
-// (the FE stage does it, with constant-rate-of-strain and undrained creep cases). Sign
-// convention compression-POSITIVE. FE/GUI = the next stage.
+// SCOPE: principal-space, coaxial; backward Euler on the volumetric creep L and on the direction together
+// (soft_soil_creep.cpp). The rate is normalised on its volumetric part, tr(m) = 1, so the volumetric creep is
+// the 1-D rate on either side of the top of the ellipse: contractive, never dilative. What changes sign at the
+// top is the deviatoric creep, which grows without bound there. Sign convention compression-POSITIVE.
 
 #include <katai/materials/soft_soil.hpp>
 
@@ -69,10 +66,9 @@ StepResult ssc_substep(const Params& P, const softsoil::Params& S,
                        const Eigen::Vector3d& deps, double dt);
 
 // Automatic substepping: the SS strain criterion + a creep-magnitude criterion (keep the
-// explicit estimate L_exp ≤ 0.05·κ* per substep — this bounds both the direction freezing
-// and the backward-Euler time error). Upper limit 500 (the implicit L solve is
-// unconditionally stable; on extremely fast transitions the accuracy bands in the tests
-// are honest).
+// explicit estimate L_exp <= 0.05 kappa* per substep: this bounds the backward-Euler time error).
+// Upper limit 500 (the implicit solve is unconditionally stable; on extremely fast transitions
+// the accuracy bands in the tests are honest).
 inline int ssc_nsub(const Params& P, const softsoil::Params& S, const Eigen::Vector3d& sig_c,
                     double pp_c, const Eigen::Vector3d& deps, double dt) {
     const double beta = (P.lam_star - P.kap_star) / P.mu_star;

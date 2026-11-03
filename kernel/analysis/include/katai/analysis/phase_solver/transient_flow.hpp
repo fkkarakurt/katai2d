@@ -45,6 +45,7 @@ struct TransientFlowMaterial {
 // no-configuration behaviour; the >0 and clamp rules live here so every caller
 // gets the same ones.
 struct TransientFlowPhase {
+    double gamma_water = kGammaWater;   // the unit weight of water [kN/m^3]
     std::vector<TransientFlowMaterial> materials;  // by material id
     std::vector<FlowEdge> flow_edges;              // B4 vocabulary; Closed edges included
     std::vector<char> active;                      // element activity; empty = everything active
@@ -107,7 +108,7 @@ inline bool solve_transient_flow_phase(const katai::mesh::Mesh& mesh,
         cperm[mi] = {Mt.kx, Mt.ky};
         ret[mi] = Mt.retention;
         poros[mi] = Mt.porosity;
-        ss[mi] = poros[mi] * kGammaWater / kWaterBulk;   // specific storage S_s = n*gamma_w/Kw
+        ss[mi] = poros[mi] * in.gamma_water / kWaterBulk;   // specific storage S_s = n*gamma_w/Kw
         // NonPorous: impermeable barrier with no storage (holds no water) -- the same rule
         // as the steady flow solve.
         if (Mt.nonporous) {
@@ -235,7 +236,7 @@ inline bool solve_transient_flow_phase(const katai::mesh::Mesh& mesh,
     for (size_t s = 0; s < fr.times.size(); ++s) {
         double pmax = 0.0;
         for (int n = 0; n < mesh.node_count; ++n)
-            pmax = std::fmax(pmax, kGammaWater * std::fmax(0.0, fr.head[s][n] - mesh.y[n]));
+            pmax = std::fmax(pmax, in.gamma_water * std::fmax(0.0, fr.head[s][n] - mesh.y[n]));
         R.consol_time.push_back(fr.times[s]);
         R.consol_settlement.push_back(0.0);
         R.consol_excess_pore.push_back(pmax);
@@ -244,7 +245,7 @@ inline bool solve_transient_flow_phase(const katai::mesh::Mesh& mesh,
       R.saturation.assign(Sf.data(), Sf.data() + Sf.size()); }
     R.pore.assign(mesh.node_count, 0.0);
     for (int n = 0; n < mesh.node_count; ++n)
-        R.pore[n] = kGammaWater * std::fmax(0.0, fr.head.back()[n] - mesh.y[n]);
+        R.pore[n] = in.gamma_water * std::fmax(0.0, fr.head.back()[n] - mesh.y[n]);
     R.flow_head.assign(fr.head.back().data(), fr.head.back().data() + mesh.node_count);
     R.flow_head_transient = true;
     R.load_factor = 1.0; R.iterations = nsteps; R.max_disp = 0.0;

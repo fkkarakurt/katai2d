@@ -200,7 +200,11 @@ namespace katai::model {
 // written only when off). A file older than v29 is
 // read with the factors it meant and its old grading, so it meshes as before; an older build reading
 // a v29 file would halve its factors again and grade at 0.5 -- a different mesh, hence the gate.
-inline constexpr int kProjectFileVersion = 29;
+// v30: points for curves (`curves`, written only when there are any): the nodes whose displacement
+// every step of every phase records. An older build would drop them in silence, hence the gate.
+// v31: the unit weight of water (`gamma_water`, written only when not 9.81, which an older file means). An older
+// build would read 9.81 in silence, hence the gate.
+inline constexpr int kProjectFileVersion = 31;
 
 // ---------------------------------------------------------------- minimal JSON value + parser --
 struct Json {
@@ -562,6 +566,7 @@ inline std::string project_to_json(const Project& p) {
     wfield(o, "x_min", p.x_min); wfield(o, "x_max", p.x_max);
     wfield(o, "y_min", p.y_min); wfield(o, "y_max", p.y_max);
     wfield(o, "has_water", p.has_water);
+    if (p.gamma_water != 9.81) wfield(o, "gamma_water", p.gamma_water);
     warr(o, "wx", p.wx);
     warr(o, "wy", p.wy);
     wkey(o, "mesh"); o += '{';
@@ -812,6 +817,19 @@ inline std::string project_to_json(const Project& p) {
     }
     o += "],";
 
+    if (!p.curves.empty()) {   // v30; a model without them is written as before
+        wkey(o, "curves"); o += '[';
+        for (size_t i = 0; i < p.curves.size(); ++i) {
+            const CurvePoint& C = p.curves[i];
+            if (i) o += ',';
+            o += '{';
+            wfield(o, "name", C.name);
+            wfield(o, "x", C.x); wfield(o, "y", C.y);
+            closeobj(o);
+        }
+        o += "],";
+    }
+
     detail::wphase(o, "initial", p.initial);
     wkey(o, "phases"); o += '[';
     for (size_t i = 0; i < p.phases.size(); ++i) {
@@ -854,6 +872,7 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
     p.x_min = root.num("x_min", p.x_min); p.x_max = root.num("x_max", p.x_max);
     p.y_min = root.num("y_min", p.y_min); p.y_max = root.num("y_max", p.y_max);
     p.has_water = root.flag("has_water", false);
+    p.gamma_water = root.num("gamma_water", 9.81);
     p.wx = root.nums("wx");
     p.wy = root.nums("wy");
     if (const Json* mj = root.find("mesh"); mj && mj->type == Json::Obj) {
@@ -1124,6 +1143,14 @@ inline bool project_from_json(const std::string& text, Project& out, std::string
             H.q = j.num("q", 0); H.h_min = j.num("h_min", 0); H.head = j.num("head", 0);
             H.coarseness = j.num("coarseness", 1.0);
             p.hydros.push_back(std::move(H));
+        }
+
+    if (const Json* arr = root.find("curves"); arr && arr->type == Json::Arr)
+        for (const Json& j : arr->a) {
+            CurvePoint C;
+            C.name = j.str("name", C.name);
+            C.x = j.num("x", 0); C.y = j.num("y", 0);
+            p.curves.push_back(std::move(C));
         }
 
     if (const Json* ph = root.find("initial"); ph && ph->type == Json::Obj)

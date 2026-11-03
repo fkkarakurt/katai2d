@@ -105,12 +105,229 @@ void test_berlin_sand_oedometer_robust() {
     check(K0 > 0.2 && K0 < 0.8 && Eoed > 0.0, "Berlin Sand oedometer gives physical K0, Eoed");
 }
 
+// THE IMPLICIT RETURN OF THE STIFFNESS FLOOR (hs_integrate): a point of a fill with a cohesion,
+// pulled into tension across the cut-off. The material and the increments are three integrations
+// of the first phase of an embankment on soft soil, as that run handed them over. Checked:
+// (1) a point pulled from rest -- whose walk ran to its ceiling -- is returned in one step, and
+//     agrees with the limit of the walk to 1e-4: uniform walks of 20 000 and 40 000 substeps
+//     (replayed plans: no error control, no implicit return), extrapolated to an infinite count as
+//     the first-order error the walk has there (R falling as 1/n) extrapolates;
+// (2) its tangent is the derivative of the return, by central differences of replays of it;
+// (3) an increment whose answer depends on its path -- a cut-off plane met and left again in the
+//     first 0.3% of it -- carries the one step's error, 4 Pa in a stress of 90 Pa (under 1e-3 of
+//     the 5 kPa the tolerance is read against), and the return is CONSISTENT: chained over 1024
+//     equal parts of the increment it converges onto the walk's limit.
+void test_floor_implicit_return() {
+    HardeningSoilParams p;
+    p.E50_ref = 25.0e3; p.Eur_ref = 75.0e3; p.Eoed_ref = 25.0e3; p.m = 0.5; p.p_ref = 100.0;
+    p.cohesion = 1.0; p.friction = 30.0 * kPi / 180.0; p.dilatancy = 0.0; p.Rf = 0.9; p.nu_ur = 0.2;
+    p.cap_alpha = 1.2184094641781964; p.cap_beta = 0.0019959451779286543; p.K0nc = 0.5;
+    p.sigma_t = 0.0;
+    auto uniform_walk = [&](const Eigen::Vector3d& s, double gp, double pp, const Eigen::Vector3d& de) {
+        auto at = [&](int n) {
+            katai::core::HsSubstepPlan plan;
+            plan.n = n;
+            plan.dT = 1.0 / n;
+            return hs_integrate(p, s, gp, pp, de, 0.0, nullptr, &plan);
+        };
+        const HsIntegrated a = at(20000), b = at(40000);
+        HsIntegrated lim = b;
+        lim.stress = 2.0 * b.stress - a.stress;
+        lim.gamma_p = 2.0 * b.gamma_p - a.gamma_p;
+        lim.pp = 2.0 * b.pp - a.pp;
+        return lim;
+    };
+    // the measure two successive walks are compared in: the stress over its 5 kPa floor, the two
+    // hardening variables relative to themselves
+    auto differ = [](const HsIntegrated& a, const HsIntegrated& b) {
+        const double ds = (a.stress - b.stress).norm() / std::max(b.stress.norm(), 5.0);
+        const double dg = std::fabs(a.gamma_p - b.gamma_p) / std::max(std::fabs(b.gamma_p), 1e-12);
+        const double dp = std::fabs(a.pp - b.pp) / std::max(std::fabs(b.pp), 1e-12);
+        return std::max(ds, std::max(dg, dp));
+    };
+    {
+        const Eigen::Vector3d s0 = Eigen::Vector3d::Zero();
+        const Eigen::Vector3d de(0.000106361899975711, 3.3881317890172014e-21, -0.00027398110327038483);
+        katai::core::HsSubstepPlan plan;
+        const HsIntegrated r = hs_integrate(p, s0, 0.0, 0.0, de, 0.0, &plan);
+        const HsIntegrated w = uniform_walk(s0, 0.0, 0.0, de);
+        std::printf("  floor, pulled from rest: implicit nsub=%d s=(%.6f %.2e %.2e) gp=%.6e pp=%.6f\n"
+                    "                           walk limit   s=(%.6f %.2e %.2e) gp=%.6e pp=%.6f\n",
+                    r.nsub, r.stress(0), r.stress(1), r.stress(2), r.gamma_p, r.pp, w.stress(0), w.stress(1),
+                    w.stress(2), w.gamma_p, w.pp);
+        check(r.nsub == 1 && plan.implicit, "a point pulled from rest across the cut-off is returned implicitly");
+        std::printf("  floor, pulled from rest: implicit vs walk limit %.2e\n", differ(r, w));
+        check(differ(r, w) < 1e-4, "the implicit return agrees with the limit of the walk");
+        // (2) the tangent, by central differences of replays of the implicit return
+        double worst = 0.0;
+        for (int j = 0; j < 3; ++j) {
+            const double h = 1e-7 * de.norm();
+            Eigen::Vector3d dp = de, dm = de;
+            dp(j) += h;
+            dm(j) -= h;
+            const HsIntegrated rp = hs_integrate(p, s0, 0.0, 0.0, dp, 0.0, nullptr, &plan);
+            const HsIntegrated rm = hs_integrate(p, s0, 0.0, 0.0, dm, 0.0, nullptr, &plan);
+            const Eigen::Vector3d col = (rp.stress - rm.stress) / (2.0 * h);
+            worst = std::max(worst, (col - r.tangent.col(j)).norm() / std::max(r.tangent.norm(), 1.0));
+        }
+        std::printf("  floor implicit tangent vs central differences: %.2e\n", worst);
+        check(worst < 1e-5, "the implicit return's tangent is its derivative");
+    }
+    {
+        const Eigen::Vector3d s0(0.030517498771983995, 0.0009718762049324102, 0.021941964441669203);
+        const double gp0 = 0.00012872319607270638, pp0 = 1.0494678337865455;
+        const Eigen::Vector3d de(1.6718255103433506e-05, -5.082197683525802e-21, -0.0002446996066676391);
+        katai::core::HsSubstepPlan plan;
+        const HsIntegrated r = hs_integrate(p, s0, gp0, pp0, de, 0.0, &plan);
+        const HsIntegrated w = uniform_walk(s0, gp0, pp0, de);
+        // the increment in 1024 equal parts, each integrated as hs_integrate integrates it
+        constexpr int kParts = 1024;
+        HsIntegrated c = r;
+        c.stress = s0; c.gamma_p = gp0; c.pp = pp0;
+        for (int k = 0; k < kParts; ++k) c = hs_integrate(p, c.stress, c.gamma_p, c.pp, de / kParts);
+        std::printf("  floor, path-dependent: nsub=%d s=(%.6f %.6f %.2e) | in %d parts (%.6f %.6f) | walk limit "
+                    "s=(%.6f %.6f %.2e)\n  one step %.2e, %d parts %.2e from the limit\n",
+                    r.nsub, r.stress(0), r.stress(1), r.stress(2), kParts, c.stress(0), c.stress(1), w.stress(0),
+                    w.stress(1), w.stress(2), differ(r, w), kParts, differ(c, w));
+        check(r.nsub == 1 && plan.implicit, "the path-dependent increment is returned implicitly too");
+        check(differ(r, w) < 1e-3, "one implicit step is within 1e-3 of the walk's limit");
+        check(differ(c, w) < 0.1 * differ(r, w), "the implicit return converges onto the walk's limit");
+    }
+    // (3) soft clay at the surface of a slope under fill, pulled sideways: both lateral stresses end on
+    // their cut-off planes with the shear face and the cap (the edge). Read with one face, the minor's
+    // plane takes a negative multiplier; the edge's other face gives it, and the set holds.
+    {
+        HardeningSoilParams q;
+        q.E50_ref = 5600.0; q.Eur_ref = 20000.0; q.Eoed_ref = 5000.0; q.m = 1.0; q.p_ref = 100.0;
+        q.cohesion = 10.0; q.friction = 25.0 * kPi / 180.0; q.dilatancy = 0.0; q.Rf = 0.9; q.nu_ur = 0.2;
+        q.cap_alpha = 0.8981985941422174; q.cap_beta = 0.01045656517386395; q.K0nc = 0.5773817382593005;
+        q.sigma_t = 0.0;
+        const Eigen::Vector3d s0(1.648555476431281, 6.576204169810876e-06, 0.00034263449314631683);
+        const double gp0 = 0.000676145769572623, pp0 = 1.9162882618444304;
+        const Eigen::Vector3d de(0.0008218384100099963, -2.710505431213761e-20, -0.0008222232803236482);
+        katai::core::HsSubstepPlan plan;
+        const HsIntegrated r = hs_integrate(q, s0, gp0, pp0, de, 0.0, &plan);
+        auto at = [&](int n) {
+            katai::core::HsSubstepPlan u;
+            u.n = n;
+            u.dT = 1.0 / n;
+            return hs_integrate(q, s0, gp0, pp0, de, 0.0, nullptr, &u);
+        };
+        const HsIntegrated a = at(20000), b = at(40000);
+        HsIntegrated w = b;
+        w.stress = 2.0 * b.stress - a.stress;
+        w.gamma_p = 2.0 * b.gamma_p - a.gamma_p;
+        w.pp = 2.0 * b.pp - a.pp;
+        std::printf("  floor, two-plane edge: implicit nsub=%d s=(%.6f %.2e %.2e) gp=%.6e pp=%.6f\n"
+                    "                         walk limit   s=(%.6f %.2e %.2e) gp=%.6e pp=%.6f\n",
+                    r.nsub, r.stress(0), r.stress(1), r.stress(2), r.gamma_p, r.pp, w.stress(0), w.stress(1),
+                    w.stress(2), w.gamma_p, w.pp);
+        check(r.nsub == 1 && plan.implicit, "a point on the two-plane edge is returned implicitly");
+        std::printf("  floor, two-plane edge: implicit vs walk limit %.2e\n", differ(r, w));
+        check(differ(r, w) < 1e-4, "the edge's implicit return agrees with the limit of the walk");
+        double worst = 0.0;
+        for (int j = 0; j < 3; ++j) {
+            const double h = 1e-7 * de.norm();
+            Eigen::Vector3d dp = de, dm = de;
+            dp(j) += h;
+            dm(j) -= h;
+            const HsIntegrated rp = hs_integrate(q, s0, gp0, pp0, dp, 0.0, nullptr, &plan);
+            const HsIntegrated rm = hs_integrate(q, s0, gp0, pp0, dm, 0.0, nullptr, &plan);
+            const Eigen::Vector3d col = (rp.stress - rm.stress) / (2.0 * h);
+            worst = std::max(worst, (col - r.tangent.col(j)).norm() / std::max(r.tangent.norm(), 1.0));
+        }
+        std::printf("  floor, two-plane edge: tangent vs central differences %.2e\n", worst);
+        check(worst < 1e-5, "the edge's tangent is its derivative");
+    }
+    // (4) fill at the toe of an embankment, at the compression corner (sigma_b = sigma_c, off the cut-off),
+    // pulled sideways: the face (a, c) alone turns the ordering over; with the face (a, b) the two
+    // stay equal, as the walk keeps them.
+    {
+        HardeningSoilParams q;
+        q.E50_ref = 15000.0; q.Eur_ref = 45000.0; q.Eoed_ref = 15000.0; q.m = 0.5; q.p_ref = 100.0;
+        q.cohesion = 3.0; q.friction = 30.0 * kPi / 180.0; q.dilatancy = 0.0; q.Rf = 0.9; q.nu_ur = 0.2;
+        q.cap_alpha = 1.2738860785916148; q.cap_beta = 0.0034323938176975257; q.K0nc = 0.5;
+        q.sigma_t = 0.0;
+        const Eigen::Vector3d s0(4.340165321101571, 0.04527568332118562, 0.04538116750829531);
+        const double gp0 = 0.0008105400300646346, pp0 = 3.6808739598287943;
+        const Eigen::Vector3d de(0.0002530522252955523, 0.0, -0.00018579331663896972);
+        katai::core::HsSubstepPlan plan;
+        const HsIntegrated r = hs_integrate(q, s0, gp0, pp0, de, 0.0, &plan);
+        auto at = [&](int n) {
+            katai::core::HsSubstepPlan u;
+            u.n = n;
+            u.dT = 1.0 / n;
+            return hs_integrate(q, s0, gp0, pp0, de, 0.0, nullptr, &u);
+        };
+        const HsIntegrated a = at(20000), b = at(40000);
+        HsIntegrated w = b;
+        w.stress = 2.0 * b.stress - a.stress;
+        w.gamma_p = 2.0 * b.gamma_p - a.gamma_p;
+        w.pp = 2.0 * b.pp - a.pp;
+        std::printf("  floor, compression corner: implicit nsub=%d s=(%.6f %.6f %.6f) gp=%.6e pp=%.6f\n"
+                    "                             walk limit   s=(%.6f %.6f %.6f) gp=%.6e pp=%.6f\n",
+                    r.nsub, r.stress(0), r.stress(1), r.stress(2), r.gamma_p, r.pp, w.stress(0), w.stress(1),
+                    w.stress(2), w.gamma_p, w.pp);
+        check(r.nsub == 1 && plan.implicit, "a point at the compression corner is returned implicitly");
+        check(std::fabs(r.stress(1) - r.stress(2)) < 1e-9 * (1.0 + r.stress.norm()),
+              "the two stresses of the corner stay equal");
+        std::printf("  floor, compression corner: implicit vs walk limit %.2e\n", differ(r, w));
+        check(differ(r, w) < 1e-3, "the corner's implicit return agrees with the limit of the walk");
+        double worst = 0.0;
+        for (int j = 0; j < 3; ++j) {
+            const double h = 1e-7 * de.norm();
+            Eigen::Vector3d dp = de, dm = de;
+            dp(j) += h;
+            dm(j) -= h;
+            const HsIntegrated rp = hs_integrate(q, s0, gp0, pp0, dp, 0.0, nullptr, &plan);
+            const HsIntegrated rm = hs_integrate(q, s0, gp0, pp0, dm, 0.0, nullptr, &plan);
+            const Eigen::Vector3d col = (rp.stress - rm.stress) / (2.0 * h);
+            worst = std::max(worst, (col - r.tangent.col(j)).norm() / std::max(r.tangent.norm(), 1.0));
+        }
+        std::printf("  floor, compression corner: tangent vs central differences %.2e\n", worst);
+        check(worst < 1e-5, "the corner's tangent is its derivative");
+    }
+}
+
+// A POINT WITHOUT COHESION THAT ENDS AT THE APEX: sand (c = 0, phi 32, psi 2, cut-off at zero) in the
+// stiffness floor, on the failure plateau, given a strain whose plastic part the apex can take --
+// compression in one direction with more than (1 + sin psi) / (1 - sin psi) times as much extension
+// in the others. The answer is the apex, its hardening untouched: the walk slid there along the
+// cut-off with the last substep's elastic part left over, 0.0348 / 0.0035 / 0.0004 kPa at 1 000 /
+// 10 000 / 40 000 substeps, and ran every call to the ceiling (the ground heaved beside a wall pushed
+// into the sand: one to five seconds a call). With the extension too small for the apex the point
+// is integrated as before, and is not at the apex.
+void test_apex_without_cohesion() {
+    HardeningSoilParams p;
+    p.E50_ref = 40.0e3; p.Eur_ref = 120.0e3; p.Eoed_ref = 40.0e3; p.m = 0.5; p.p_ref = 100.0;
+    p.cohesion = 0.0; p.friction = 32.0 * kPi / 180.0; p.dilatancy = 2.0 * kPi / 180.0; p.Rf = 0.9;
+    p.nu_ur = 0.2; p.cap_alpha = 1.324586561619468; p.cap_beta = 0.0012449161950475467; p.K0nc = 0.47;
+    p.sigma_t = 0.0;
+    const Eigen::Vector3d s0(5.059234277866875, 5.330585043705342, 1.9092184612089125);
+    const double gp0 = 0.024436522062272314, pp0 = 68.47648619243508;
+    const Eigen::Vector3d de(0.0043973899224799395, 1.0842021724855044e-19, -0.005432015299931425);
+    const HsIntegrated r = hs_integrate(p, s0, gp0, pp0, de);
+    std::printf("  apex, c = 0: nsub=%d s=(%.3e %.3e %.3e) gp=%.6e pp=%.6f\n", r.nsub, r.stress(0), r.stress(1),
+                r.stress(2), r.gamma_p, r.pp);
+    check(r.nsub <= 1 && r.saturated == 0, "a point that ends at the apex is returned there at once");
+    check(r.stress.cwiseAbs().maxCoeff() == 0.0, "its stress is the apex");
+    check(r.gamma_p == gp0 && std::fabs(r.pp - pp0) <= 1e-9 * pp0, "its hardening is untouched");
+    // the extension a quarter of the compression: not the apex's
+    const Eigen::Vector3d de2(0.0043973899224799395, 0.0, -0.25 * 0.0043973899224799395);
+    const HsIntegrated r2 = hs_integrate(p, s0, gp0, pp0, de2);
+    std::printf("  apex, c = 0, mostly compressed: nsub=%d s=(%.3f %.3f %.3f)\n", r2.nsub, r2.stress(0),
+                r2.stress(1), r2.stress(2));
+    check(r2.stress.cwiseAbs().maxCoeff() > 1.0, "a strain the apex cannot take is integrated, off the apex");
+}
+
 } // namespace
 
 int main() {
     test_triaxial_hyperbola();
     test_isotropic_cap();
     test_berlin_sand_oedometer_robust();
+    test_floor_implicit_return();
+    test_apex_without_cohesion();
     if (g_failures == 0) {
         std::printf("OK: robust multi-surface HS integrator (substepping + Koiter) verified\n");
         return 0;

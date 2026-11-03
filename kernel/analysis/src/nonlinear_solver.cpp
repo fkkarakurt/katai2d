@@ -1,4 +1,5 @@
 #include <katai/analysis/nonlinear_solver.hpp>
+#include <katai/analysis/cancel.hpp>
 
 #include <algorithm>
 #include <array>
@@ -15,6 +16,7 @@
 
 #include <katai/analysis/excess_pore_force.hpp>
 #include <katai/analysis/internal_forces.hpp>  // SHARED internal-force/tangent assembly (static+dynamic)
+#include <katai/analysis/live_progress.hpp>
 #include <katai/analysis/post/consolidation_recovery.hpp>  // store_excess_pore_pressure
 #include <katai/fem/assembly/assembler.hpp>  // expand_to_full
 #include <katai/fem/elements/axisymmetric.hpp>
@@ -35,7 +37,8 @@ namespace {
 // satisfied -- including, when the solve fails, the last one that was reached.
 void measure_convergence(const detail::LocalErrorProbe& p, const Eigen::VectorXd& f_int,
                          const Eigen::VectorXd& residual, double rnorm, double cf_norm,
-                         double ref, double rtol, NewtonResult::Convergence& cv) {
+                         double ref, double rtol, NewtonResult::Convergence& cv,
+                         double fixed_norm2) {
     cv.measured = true;
     cv.tolerated = rtol;
 
@@ -49,11 +52,13 @@ void measure_convergence(const detail::LocalErrorProbe& p, const Eigen::VectorXd
                  : 1.0;
 
     // The stiffness-weighted global force error, ||r|| / (||f_int|| + CSP*||f_const||). The
-    // denominator is the force scale the model itself is carrying, plus the standing load from
-    // the phases before this one, weighted by how much stiffness is left.
+    // denominator is the force scale the model itself is carrying, over every degree of freedom,
+    // the supports with the free nodes, plus the standing load from the phases before this one,
+    // weighted by how much stiffness is left.
     // The floor is 1e-6 of the phase's own load scale: it bites only when nothing is resisting
     // yet, and then a huge relative error is the honest reading.
-    const double denom = std::max(f_int.norm() + cv.csp * cf_norm, 1e-6 * ref);
+    const double denom = std::max(std::sqrt(f_int.squaredNorm() + fixed_norm2) + cv.csp * cf_norm,
+                                  1e-6 * ref);
     cv.force_error = rnorm / denom;
     // The default gate's own ratio, so that both are on the record at the same iterate.
     cv.global_error = rnorm / ref;
@@ -189,6 +194,11 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     std::vector<double> efoot_trial = efoot_committed;
     std::vector<double> plate_trial = plate_committed;
     std::vector<double> plate5_trial = plate5_committed;
+    // the excess pore pressure the joints' laws read, as assembled; kept with an accepted increment
+    std::vector<double> interface_pore_trial(interface_committed.size(), 0.0);
+    std::vector<double> interface5_pore_trial(interface5_committed.size(), 0.0);
+    result.interface_pore = interface_pore_trial;
+    result.interface5_pore = interface5_pore_trial;
 
     const double f_ext_norm = f_ext.norm();
     const double rtol = options.tolerance;
@@ -340,6 +350,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     astate.geogrid_c = &geogrid_committed;   astate.geogrid_t = &geogrid_trial;
     astate.iface_c = &interface_committed;   astate.iface_t = &interface_trial;
     astate.iface5_c = &interface5_committed; astate.iface5_t = &interface5_trial;
+    astate.iface_pw = &interface_pore_trial; astate.iface5_pw = &interface5_pore_trial;
     astate.eskin_c = &eskin_committed;       astate.eskin_t = &eskin_trial;
     astate.efoot_c = &efoot_committed;       astate.efoot_t = &efoot_trial;
     astate.plate_c = &plate_committed;       astate.plate_t = &plate_trial;
@@ -377,6 +388,17 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     const double cf_norm = has_cf ? constant_force.norm() : 0.0;
     const double ref = std::max({f_ext_norm, cf_norm, 1.0});
     const bool debug = std::getenv("KATAI_NL_DEBUG") != nullptr;
+    // A NEWTON DIRECTION IS NOT A MOVEMENT OF KILOMETRES. Where a tangent is close to singular its solve can point
+    // absurdly far, and a line search on that direction asks the stress points for strains that mean nothing, each
+    // one a walk of a thousand substeps. Measured on a block of Hardening Soil 1 m across: a direction of 4416 m, its
+    // shortest trial 1 m long, and one iteration in minutes. A direction reaches a tenth of the model at most;
+    // the shares of a run that converges never come near it.
+    const double reach = [&] {
+        if (mesh.x.empty()) return std::numeric_limits<double>::infinity();
+        const auto xr = std::minmax_element(mesh.x.begin(), mesh.x.end());
+        const auto yr = std::minmax_element(mesh.y.begin(), mesh.y.end());
+        return 0.1 * std::hypot(*xr.second - *xr.first, *yr.second - *yr.first);
+    }();
     // An increment must satisfy the LOCAL criteria as well as the global force residual before
     // it is called converged -- local accuracy is part of convergence, not a report on it. ON by
     // default since 2026-08-24; see NewtonOptions::enforce_local_criteria for the measurement
@@ -506,12 +528,15 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         double s_ctrl_step = options.srf_first_step;   // for steps with no plastic response
         result.srf = s_cur;
         result.srf_path.push_back({s_cur, 0.0});
+        result.path.push_back({s_cur, 0.0});
+        append_curve_u(dofs, options.curve_nodes, u_free, result.curve_u);
         set_srf(s_cur);
         // The last accepted arc step (displacement and factor), for the secant predictor below.
         Eigen::VectorXd sec_du;
         double sec_ds = 0.0;
         bool sec_ok = false;
         for (int stepn = 0; stepn < 2000; ++stepn) {
+            katai::analysis::poll_cancel();
             if (s_cur >= options.srf_max) break;
             cur_lambda = 0.0;
             cur_target = 1.0;
@@ -570,7 +595,15 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                       vnorm > 0.0;
                 if (arc) {
                     if (dl < 0.0) dl = options.srf_first_step * vnorm;
-                    const double ds_pred = dl / vnorm;
+                    // The tangent here is read with no strain, so it sees the points on their surfaces as elastic and
+                    // a body near its limit as stiff: measured on a block of NGI-ADP at 1.95 of its factor of 2.0, a
+                    // retried step predicted a factor of 11.3, its first iterates threw the strains two orders out,
+                    // and one assembly of 24 stress points then took minutes. No step predicts more than a tenth.
+                    double ds_pred = dl / vnorm;
+                    if (ds_pred > 0.1 * s_cur) {
+                        ds_pred = 0.1 * s_cur;
+                        dl = ds_pred * vnorm;
+                    }
                     du = -ds_pred * v;
                     n = du / du.norm();
                     s_try = s_cur + ds_pred;
@@ -590,7 +623,11 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             int its = 0;
             bool kept = false;
             Eigen::VectorXd kept_fi;
+            double best_r = std::numeric_limits<double>::infinity(), best_s = s_try;
+            Eigen::VectorXd best_du;
+            int since_best = 0;
             for (int it = 0; it < max_it; ++it) {
+                katai::analysis::poll_cancel();
                 its = it + 1;
                 const double eps = 1.0e-6 * s_try;
                 set_srf(s_try);
@@ -614,7 +651,9 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 const Eigen::VectorXd fi = reuse ? std::move(kept_fi) : assemble(du, true, &builder, &probe);
                 const Eigen::VectorXd r = held - fi;
                 const double rnorm = r.norm();
-                measure_convergence(probe, fi, r, rnorm, cf_norm, ref, rtol, result.convergence);
+                measure_convergence(probe, fi, r, rnorm, cf_norm, ref, rtol, result.convergence,
+                                    fasm.fixed_norm2);
+                katai::analysis::note_iterate(it, rnorm / ref, result.convergence.plastic_points);
                 if (debug)
                     std::fprintf(stderr, "  srf %.6f it %d rnorm=%.4e rel=%.4e plastic %d/%d %s\n",
                                  s_try, it, rnorm, rnorm / ref,
@@ -624,6 +663,17 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                     csp_gate ? result.convergence.force_ok() : (rnorm <= rtol * ref);
                 if (it > 0 && global_ok && (!enforce_local || result.convergence.enforced_ok())) {
                     conv = true;
+                    break;
+                }
+                // An exact cycle among the kinks of the yield surfaces does not end by itself: measured on a block on a
+                // jointed rock's plane (psi 10, phi 30), three iterates repeating to the last digit for 120 iterations,
+                // on every cut of the step.
+                if (rnorm < 0.99 * best_r) {
+                    best_r = rnorm;
+                    best_s = s_try;
+                    best_du = du;
+                    since_best = 0;
+                } else if (++since_best >= kSrfCycleWindow) {
                     break;
                 }
                 Eigen::VectorXd fe;
@@ -656,11 +706,19 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                     if (std::fabs(nb) < 1e-300) break;
                     dsi = (n.dot(du) + n.dot(a) - dl) / nb;
                 }
-                const Eigen::VectorXd ddu = arc ? Eigen::VectorXd(a - dsi * b) : a;
+                Eigen::VectorXd ddu = arc ? Eigen::VectorXd(a - dsi * b) : a;
+                {
+                    const double far = ddu.lpNorm<Eigen::Infinity>();
+                    if (far > reach) {
+                        ddu *= reach / far;
+                        dsi *= reach / far;
+                    }
+                }
                 // A damped step when the full one throws the residual out: the residual at the
                 // trial is compared with the current one, halving up to six times.
                 double alpha = 1.0;
                 for (int ls = 0; ls < 6; ++ls) {
+                    katai::analysis::poll_cancel();
                     set_srf(s_try + alpha * dsi);
                     const bool full = ls == 0;
                     if (full) {
@@ -689,6 +747,29 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 s_try += alpha * dsi;
             }
             result.total_iterations += its;
+            // A STEP THAT WILL NOT CLOSE, AT ANY SIZE. With slip that does not dilate as it shears the iteration
+            // can settle on a cycle among the kinks of the yield surfaces, its iterates repeating to the last digit:
+            // measured on a block on a jointed rock's plane (planar sliding factor 1.396, psi 10, phi 30, 15-noded,
+            // 2 m), three iterates at 6.05e-4, 7.29e-3 and 7.73e-4 of the reference for 120 iterations, the stress
+            // points of the best of them not settled, and the same at steps of a tenth of the size. The path stopped
+            // there at 18 micrometres of movement and reported 1.03. Where the phase allows it
+            // (NewtonOptions::srf_stall_accept), after three cuts such a step is kept at its best iterate, and said
+            // (K2D-A019). The iterate kept has to have gone somewhere: a step cut this far can have its best force
+            // where it started, and keeping that spun the search on the spot to the end of its budget. Nor does a
+            // kept step restore the budget of cuts.
+            bool kept_stalled = false;
+            if (!conv && arc && options.srf_stall_accept > 0.0 && cut >= 3 && best_du.size() > 0 &&
+                best_r <= options.srf_stall_accept * ref && best_du.norm() >= 0.5 * dl) {
+                kept_stalled = true;
+                du = best_du;
+                s_try = best_s;
+                set_srf(s_try);
+                assemble(du, false, nullptr);   // the trial states of the iterate being kept
+                ++result.stagnation_accepted;
+                result.worst_accepted_residual = std::max(result.worst_accepted_residual, best_r / ref);
+                conv = true;
+                if (debug) std::fprintf(stderr, "  srf %.6f: kept at %.3e of the reference\n", s_try, best_r / ref);
+            }
             if (conv) {
                 // the trial states of the accepted iterate are the last assembled at s_try
                 committed = trial;
@@ -696,6 +777,8 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 geogrid_committed = geogrid_trial;
                 interface_committed = interface_trial;
                 interface5_committed = interface5_trial;
+                result.interface_pore = interface_pore_trial;
+                result.interface5_pore = interface5_pore_trial;
                 eskin_committed = eskin_trial;
                 efoot_committed = efoot_trial;
                 plate_committed = plate_trial;
@@ -708,6 +791,9 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 if (sec_ok) { sec_du = du; sec_ds = s_cur - s_prev; }
                 result.srf = std::max(result.srf, s_cur);
                 result.srf_path.push_back({s_cur, u_free.cwiseAbs().maxCoeff()});
+                result.path.push_back({s_cur, largest_node_displacement(mesh, dofs, u_free)});
+                katai::analysis::note_step(s_cur, result.path.back()[1]);
+                append_curve_u(dofs, options.curve_nodes, u_free, result.curve_u);
                 ++result.timings.n_steps;
                 if (debug) {
                     // e = d ln(s - s0) / d ln u over the last doubling of the displacement
@@ -725,7 +811,21 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                                  stepn, s_prev, s_cur, its, du.norm(), un, e_dbl, arc ? "" : " (s-ctrl)");
                 }
                 if (arc) {
-                    if (s_cur < s_prev) { result.srf_limit = true; break; }
+                    // A FALL IS A LIMIT ONCE THE GROUND HAS MOVED. With slip that does not dilate as it
+                    // shears, a band of the mesh can soften long before any mechanism, and the path dips:
+                    // measured on a block on a jointed rock's plane (planar sliding factor 1.396, psi 10, phi
+                    // 30, 15-noded, 2 m), it fell from 1.031 to 1.012 with nothing moving by more than 18
+                    // micrometres, and rose again to 1.422, the factor of psi 15 and psi 30 on that mesh; it
+                    // used to report 1.03. Below a ten-thousandth of the model's size in movement, and a tenth
+                    // of a fall, the path goes on, and the highest factor it reaches is the answer as ever.
+                    const bool moved = result.srf_path.back()[1] > 1e-3 * reach;   // a ten-thousandth of the model
+                    if (s_cur < s_prev) {
+                        if (moved || s_cur < 0.9 * result.srf) {
+                            result.srf_limit = true;
+                            break;
+                        }
+                        sec_ok = false;   // the secant of a step that fell points back down the path
+                    }
                     // THE PLATEAU. On a perfectly plastic mechanism the path approaches its
                     // limit F like s = F - a/u, so the rise over the last doubling of the
                     // displacement equals what is left to rise. When that rise is below the
@@ -746,7 +846,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                     for (size_t j = result.srf_path.size(); j-- > 0;)
                         if (result.srf_path[j][1] <= 0.5 * u_now) { s_half = result.srf_path[j][0]; break; }
                     const auto r2 = rise_over_doubling(0.5 * u_now, s_half);
-                    flat = (r1.first && r2.first && r1.second < options.srf_resolution * s_cur &&
+                    flat = (moved && r1.first && r2.first && r1.second < options.srf_resolution * s_cur &&
                             r2.second < options.srf_resolution * s_cur) ? 1 : 0;
                     if (flat) { result.srf_limit = true; break; }
                     // The next step aims at 20 iterations: measured on the slope above, 12
@@ -758,7 +858,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 } else {
                     s_ctrl_step *= 1.5;
                 }
-                cut = 0;
+                if (!kept_stalled) cut = 0;
             } else {
                 trial = committed;
                 if (arc) dl *= 0.5; else s_ctrl_step *= 0.5;
@@ -811,6 +911,19 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         const Eigen::VectorXd held =
             has_cf ? Eigen::VectorXd(constant_force) : Eigen::VectorXd::Zero(neq);
         const int max_it = std::max(options.max_iterations, 20);
+        // The collapse load is read to limit_resolution of itself, so its steps need not be held much tighter than
+        // that (kLimitArcTolerance). The local error above all: at a tolerance of 1e-6 a point on the plateau has to
+        // stop moving to 1e-6 of its strength between iterates, with the force long in balance. Measured on a strip
+        // footing in NGI-ADP (3961 nodes): 20 iterations per step at 2e-6 of the reference, 71 steps in 280 s, and no
+        // collapse load in 15 minutes where a Mohr-Coulomb twin takes two.
+        constexpr double kLimitArcTolerance = 1.0e-4;
+        const double arc_tol = std::max(rtol, kLimitArcTolerance);
+        struct LocalTolerance {
+            detail::LocalErrorProbe& probe;
+            const double before;
+            ~LocalTolerance() { probe.tolerated = before; }
+        } local_tolerance{probe, probe.tolerated};
+        probe.tolerated = arc_tol;
         double l_cur = lambda, l_best = lambda;
         double len = -1.0;
         int cut = 0;
@@ -822,6 +935,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         cur_target = l_cur;
         if (debug) std::fprintf(stderr, "  limit arc: from l %.6f\n", l_cur);
         for (int stepn = 0; stepn < 400; ++stepn) {
+            katai::analysis::poll_cancel();
             Eigen::VectorXd du = Eigen::VectorXd::Zero(neq);
             prev_sc = committed;
             std::fill(prev_deps.begin(), prev_deps.end(), 0.0);
@@ -857,6 +971,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             bool conv = false;
             int its = 0;
             for (int it = 0; it < max_it; ++it) {
+                katai::analysis::poll_cancel();
                 its = it + 1;
                 builder.clear();
                 probe.reset_counts();
@@ -864,11 +979,13 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 const Eigen::VectorXd fi = assemble(du, true, &builder, &probe);
                 const Eigen::VectorXd r = held + l_try * f_ext - fi;
                 const double rnorm = r.norm();
-                measure_convergence(probe, fi, r, rnorm, cf_norm, ref, rtol, result.convergence);
+                measure_convergence(probe, fi, r, rnorm, cf_norm, ref, arc_tol, result.convergence,
+                                    fasm.fixed_norm2);
+                katai::analysis::note_iterate(it, rnorm / ref, result.convergence.plastic_points);
                 if (debug)
                     std::fprintf(stderr, "  limit arc: l %.6f it %d rel=%.4e\n", l_try, it, rnorm / ref);
                 const bool global_ok =
-                    csp_gate ? result.convergence.force_ok() : (rnorm <= rtol * ref);
+                    csp_gate ? result.convergence.force_ok() : (rnorm <= arc_tol * ref);
                 if (it > 0 && global_ok && (!enforce_local || result.convergence.enforced_ok())) {
                     conv = true;
                     break;
@@ -885,13 +1002,21 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 if (!a.allFinite() || !b.allFinite()) break;
                 const double nb = n.dot(b);
                 if (std::fabs(nb) < 1e-300) break;
-                const double dli = (len - n.dot(du) - n.dot(a)) / nb;
-                const Eigen::VectorXd ddu = a + dli * b;
+                double dli = (len - n.dot(du) - n.dot(a)) / nb;
+                Eigen::VectorXd ddu = a + dli * b;
+                {
+                    const double far = ddu.lpNorm<Eigen::Infinity>();
+                    if (far > reach) {
+                        ddu *= reach / far;
+                        dli *= reach / far;
+                    }
+                }
                 double alpha = 1.0;
                 for (int ls = 0; ls < 6; ++ls) {
+                    katai::analysis::poll_cancel();
                     const Eigen::VectorXd ft = assemble(du + alpha * ddu, false, nullptr);
                     const double rt = (held + (l_try + alpha * dli) * f_ext - ft).norm();
-                    if (std::isfinite(rt) && rt < std::max(rnorm, 10.0 * rtol * ref)) break;
+                    if (std::isfinite(rt) && rt < std::max(rnorm, 10.0 * arc_tol * ref)) break;
                     alpha *= 0.5;
                 }
                 du += alpha * ddu;
@@ -911,6 +1036,8 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 geogrid_committed = geogrid_trial;
                 interface_committed = interface_trial;
                 interface5_committed = interface5_trial;
+                result.interface_pore = interface_pore_trial;
+                result.interface5_pore = interface5_pore_trial;
                 eskin_committed = eskin_trial;
                 efoot_committed = efoot_trial;
                 plate_committed = plate_trial;
@@ -926,11 +1053,15 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 sec_ok = du.norm() > 0.0;
                 if (sec_ok) { sec_du = du; sec_dl = l_cur - l_prev; }
                 result.limit_path.push_back({l_cur, u_free.cwiseAbs().maxCoeff()});
+                result.path.push_back({l_cur, largest_node_displacement(mesh, dofs, u_free)});
+                katai::analysis::note_step(l_cur, result.path.back()[1]);
+                append_curve_u(dofs, options.curve_nodes, u_free, result.curve_u);
                 ++result.timings.n_steps;
                 if (debug)
                     std::fprintf(stderr, "  LIMIT ARC STEP %d: l %.6f -> %.6f in %d it, maxu %.4e\n",
                                  stepn, l_prev, l_cur, its, result.limit_path.back()[1]);
-                if (l_cur < l_prev) break;   // a limit point passed
+                // a limit point passed; a fall inside what the load is read to is the tolerance of the steps
+                if (l_cur < l_best * (1.0 - options.limit_resolution)) break;
                 // the plateau: two successive doublings of the displacement each rise less than
                 // the resolution
                 const auto at_half = [&](double u_end, double& l_at) {
@@ -964,7 +1095,26 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
     // The displacement of the last accepted increment and its size (see THE SECANT START).
     Eigen::VectorXd du_last;
     double dlam_last = 0.0;
+    // (A strength reduction has its path already, in its own factor; the loop below has nothing
+    // to do for it.)
+    if (!srf_mode) {
+        const Eigen::VectorXd* ub = has_presc ? &presc : nullptr;
+        result.path.push_back({lambda, largest_node_displacement(mesh, dofs, u_free, ub, lambda)});
+        append_curve_u(dofs, options.curve_nodes, u_free, result.curve_u, ub, lambda);
+    }
+    // What the last increment left out of balance (kBandCarriedShare); at the start of the phase, what
+    // it starts with before any of its load.
+    double force_left = 0.0;
+    const bool band_on = options.stagnation_accept > rtol && !srf_mode && !presc_active;
+    if (band_on) {
+        cur_lambda = lambda;
+        cur_target = lambda;
+        Eigen::VectorXd start = lambda * f_ext;
+        if (has_cf) start += constant_force;
+        force_left = (start - assemble(Eigen::VectorXd::Zero(neq), false, nullptr)).norm();
+    }
     while (lambda < 1.0 - 1e-12) {
+        katai::analysis::poll_cancel();
         if (dlam > 1.0 - lambda) dlam = 1.0 - lambda;  // do not overshoot
         const double target_lambda = lambda + dlam;
         Eigen::VectorXd target = target_lambda * f_ext;
@@ -1074,9 +1224,12 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         int ls_window = ls_open ? std::max(kStallEscalationWindow, options.line_search_window)
                                 : std::max(1, options.line_search_window);
         bool step_converged = false;
+        double force_closed = 0.0;   // the force out of balance in the iterate this attempt closes on
+        const double carried_ceiling = band_ceiling(force_left, dlam * f_ext_norm);
         // The best iterate this attempt reached, for the stagnation acceptance below.
         double best_rnorm = std::numeric_limits<double>::infinity();
         double best_csp = 1.0;   // the stiffness parameter measured AT the best iterate
+        double best_scale = ref;   // the force scale over every degree of freedom, there
         Eigen::VectorXd best_du = du_free;
         // How this increment ended, if it did not converge. Set at each exit from the
         // iteration loop so the abandonment is named where it happens rather than
@@ -1095,6 +1248,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
         double kept_floor = 0.0;
         bool kept_consistent = false, kept_freeze = false;
         for (int iter = 0; iter < options.max_iterations; ++iter) {
+            katai::analysis::poll_cancel();
             // Taken only under the controls it was made under: the stall floor moves after the line
             // search, and the tangent mode and the small-strain freeze between attempts.
             const bool reuse = kept && !elastic_mode &&
@@ -1132,8 +1286,15 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                 best_du = du_free;
             }
             measure_convergence(probe, f_int, residual, rnorm, cf_norm, ref, rtol,
-                                result.convergence);
-            if (rnorm <= best_rnorm) best_csp = result.convergence.csp;
+                                result.convergence, fasm.fixed_norm2);
+            katai::analysis::note_iterate(iter, rnorm / ref, result.convergence.plastic_points);
+            const double scale_now =
+                std::max(ref, std::sqrt(f_int.squaredNorm() + fasm.fixed_norm2) +
+                                  result.convergence.csp * cf_norm);
+            if (rnorm <= best_rnorm) {
+                best_csp = result.convergence.csp;
+                best_scale = scale_now;
+            }
             // The history is kept to the LARGEST window this increment could ever use, and only
             // the tail of it is consulted. Keeping just ls_window entries would make the stall
             // escalation below arrive with no memory at all -- it would be monotone for another
@@ -1204,6 +1365,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
                         result.convergence.saturated_points, probe.integration_saturated);
                 }
                 step_converged = true;
+                force_closed = rnorm;
                 ++result.total_iterations;
                 break;
             }
@@ -1270,6 +1432,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             }
             result.timings.linear_solve += elapsed(t_lin);
             ++result.timings.n_solve;
+            if (solved && !delta.allFinite()) solved = false;   // a direction that is not a number is no direction
             if (!solved) break;   // abandon the increment -> outer loop cuts back
 
             // Developer diagnostic (KATAI_NL_TANGENT_CHECK): is K_T the derivative of the
@@ -1307,7 +1470,15 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             // The floor is the halving's own last trial, 2^-11, and a search that fails ends at
             // 2^-12 exactly as before.
             constexpr double kAlphaFloor = 1.0 / 2048.0;
-            const double phi0 = 0.5 * rnorm * rnorm, slope0 = -rnorm * rnorm;
+            double slope_share = 1.0;
+            {
+                const double far = delta.lpNorm<Eigen::Infinity>();
+                if (far > reach) {
+                    slope_share = reach / far;
+                    delta *= slope_share;
+                }
+            }
+            const double phi0 = 0.5 * rnorm * rnorm, slope0 = -slope_share * rnorm * rnorm;
             double alpha = 1.0;
             bool improved = false;
             if (elastic_mode) {
@@ -1319,6 +1490,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             double alpha_rejected = 0.0;   // the smallest step the search turned down
             double rn_kept = 0.0;          // the residual at the step it took
             for (int ls = 0; ls < 12 && !improved; ++ls) {
+                katai::analysis::poll_cancel();
                 const bool full = ls == 0 && !elastic_mode;
                 if (full) {
                     builder_t.clear();
@@ -1472,6 +1644,17 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             // ended there and handed to the remedies below -- the open window, the smaller
             // increment -- thirty iterations after it stopped instead of at the budget.
             best_history.push_back(best_rnorm);
+            // INSIDE THE BAND, BUT THE STRESS POINTS NOT SETTLED (see the close above): it goes on
+            // only while the force still comes down, and is kept at its best iterate after that.
+            if (options.stagnation_accept > rtol && best_history.size() > kBandStallWindow &&
+                band_stalled(best_rnorm, best_history[best_history.size() - 1 - kBandStallWindow],
+                             best_scale, options.stagnation_accept, best_csp, presc_active, carried_ceiling)) {
+                ended = NewtonResult::Abandonment::NoDescent;
+                if (debug)
+                    std::fprintf(stderr, "  lambda %.4f iter %d: stagnated inside the band at %.3e of %.1f\n",
+                                 target_lambda, iter, best_rnorm / best_scale, best_scale);
+                break;
+            }
             if (!elastic_mode && best_history.size() > kStagnationWindow &&
                 best_rnorm > 0.9 * best_history[best_history.size() - 1 - kStagnationWindow]) {
                 ended = NewtonResult::Abandonment::NoDescent;
@@ -1537,20 +1720,24 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             ended = NewtonResult::Abandonment::NoDescent;
 
         // An increment that stopped descending within options.stagnation_accept of the force
-        // scale is kept before anything is retried (see the option).
+        // scale is kept before anything is retried (see the option). Under a load, not past a
+        // collapse (kBandCollapseCsp).
         if (!step_converged && options.stagnation_accept > rtol &&
             ended == NewtonResult::Abandonment::NoDescent &&
-            best_rnorm <= options.stagnation_accept * ref) {
+            band_admits(best_rnorm, best_scale, options.stagnation_accept, best_csp, presc_active,
+                        carried_ceiling)) {
             du_free = best_du;
             assemble(du_free, false, nullptr);  // the trial states of the iterate being kept
             result.convergence.csp = best_csp;
             ++result.stagnation_accepted;
             result.worst_accepted_residual =
-                std::max(result.worst_accepted_residual, best_rnorm / ref);
+                std::max(result.worst_accepted_residual, best_rnorm / best_scale);
             step_converged = true;
+            force_closed = best_rnorm;
             if (debug)
-                std::fprintf(stderr, "  lambda %.4f: stopped descending at %.3e of the reference; kept\n",
-                             target_lambda, best_rnorm / ref);
+                std::fprintf(stderr, "  lambda %.4f: stopped descending at %.3e of the reference; kept "
+                                     "(force %.3e, left %.3e, added %.3e, csp %.4f)\n",
+                             target_lambda, best_rnorm / ref, best_rnorm, force_left, dlam * f_ext_norm, best_csp);
         }
 
         // STAGNATION ACCEPTANCE. Only an increment that is about to be CUT BACK is looked at --
@@ -1575,6 +1762,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             result.worst_accepted_residual =
                 std::max(result.worst_accepted_residual, best_rnorm / ref);
             step_converged = true;
+            force_closed = best_rnorm;
             if (debug)
                 std::fprintf(stderr, "  lambda %.4f: stagnated at %.3e of the reference; accepted\n",
                              target_lambda, best_rnorm / ref);
@@ -1601,6 +1789,7 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             result.worst_accepted_residual =
                 std::max(result.worst_accepted_residual, best_rnorm / ref);
             step_converged = true;
+            force_closed = best_rnorm;
             if (debug)
                 std::fprintf(stderr, "  lambda %.4f: cannot be cut further; kept at %.3e of the "
                                      "reference\n", target_lambda, best_rnorm / ref);
@@ -1637,6 +1826,8 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             elastic_mode = false;        // and back to Newton
             du_last = du_free;
             dlam_last = dlam;
+            force_left = force_closed;
+            result.force_left = force_left;
             u_free += du_free;
             u_struct += du_free;
             committed = trial;  // commit the increment
@@ -1644,6 +1835,8 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             geogrid_committed = geogrid_trial;
             interface_committed = interface_trial;
             interface5_committed = interface5_trial;
+            result.interface_pore = interface_pore_trial;
+            result.interface5_pore = interface5_pore_trial;
             eskin_committed = eskin_trial;
             efoot_committed = efoot_trial;
             plate_committed = plate_trial;
@@ -1651,6 +1844,12 @@ NewtonResult solve_nonlinear_impl(const mesh::Mesh& mesh, const DofMap& dofs,
             lambda = target_lambda;
             ++result.timings.n_steps;
             result.load_factor = lambda;
+            {
+                const Eigen::VectorXd* ub = has_presc ? &presc : nullptr;
+                result.path.push_back({lambda, largest_node_displacement(mesh, dofs, u_free, ub, lambda)});
+                append_curve_u(dofs, options.curve_nodes, u_free, result.curve_u, ub, lambda);
+                katai::analysis::note_step(lambda, result.path.back()[1]);
+            }
             dlam = std::min(init_dlam, dlam * 1.5);  // allow recovery
         } else if (has_small && !small_freeze &&
                    ended != NewtonResult::Abandonment::SolveRefused) {
@@ -2067,6 +2266,7 @@ struct StructureLawsImpl final : StructureLaws::Impl {
     std::vector<GaussState> soil_c, soil_t;
     std::vector<double> anchor_c, geogrid_c, iface_c, iface5_c, eskin_c, efoot_c, plate_c, plate5_c;
     std::vector<double> anchor_t, geogrid_t, iface_t, iface5_t, eskin_t, efoot_t, plate_t, plate5_t;
+    std::vector<double> pore_c, pore5_c, pore_t, pore5_t;   // what the joints' laws read
     Eigen::VectorXd u_datum, offset;
     typename Asm::State st;
 
@@ -2084,6 +2284,8 @@ struct StructureLawsImpl final : StructureLaws::Impl {
                               efoot_c, plate_c, plate5_c);
         anchor_t = anchor_c; geogrid_t = geogrid_c; iface_t = iface_c; iface5_t = iface5_c;
         eskin_t = eskin_c; efoot_t = efoot_c; plate_t = plate_c; plate5_t = plate5_c;
+        pore_c.assign(iface_c.size(), 0.0); pore5_c.assign(iface5_c.size(), 0.0);
+        pore_t = pore_c; pore5_t = pore5_c;
         st.committed = &soil_c;    st.trial = &soil_t;
         st.anchor_c = &anchor_c;   st.anchor_t = &anchor_t;
         st.geogrid_c = &geogrid_c; st.geogrid_t = &geogrid_t;
@@ -2093,6 +2295,7 @@ struct StructureLawsImpl final : StructureLaws::Impl {
         st.efoot_c = &efoot_c;     st.efoot_t = &efoot_t;
         st.plate_c = &plate_c;     st.plate_t = &plate_t;
         st.plate5_c = &plate5_c;   st.plate5_t = &plate5_t;
+        st.iface_pw = &pore_t;     st.iface5_pw = &pore5_t;
     }
     void add(const Eigen::VectorXd& v, Eigen::VectorXd& f, math::SparseMatrixBuilder* K) override {
         const typename Asm::Ramp no_ramp;
@@ -2107,6 +2310,7 @@ struct StructureLawsImpl final : StructureLaws::Impl {
     void commit() override {
         anchor_c = anchor_t; geogrid_c = geogrid_t; iface_c = iface_t; iface5_c = iface5_t;
         eskin_c = eskin_t; efoot_c = efoot_t; plate_c = plate_t; plate5_c = plate5_t;
+        pore_c = pore_t; pore5_c = pore5_t;
     }
     StructuralInit committed() const override {
         StructuralInit s;
@@ -2115,6 +2319,7 @@ struct StructureLawsImpl final : StructureLaws::Impl {
         s.interface_slip = iface_c; s.interface5_slip = iface5_c;
         s.embedded_skin_slip = eskin_c; s.embedded_foot_slip = efoot_c;
         s.plate_plastic = plate_c; s.plate5_plastic = plate5_c;
+        s.interface_pore = pore_c; s.interface5_pore = pore5_c;
         return s;
     }
     void reset(const StructuralInit& s) override {

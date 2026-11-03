@@ -66,6 +66,47 @@ inline constexpr size_t kStagnationWindow = 30;
 // The same for an increment of a PRESCRIBED DISPLACEMENT that can be cut no further: the phase
 // would otherwise end short of a movement the ground can always take (see the solver).
 inline constexpr double kLastResortAccept = 1.0e-2;
+// THE TOLERATED BAND OF THE HARDENING FAMILY (NewtonOptions::stagnation_accept), two constants of it.
+// An increment inside the band goes on until its best force has not fallen by a quarter over this many
+// iterates, and is kept at that best iterate. Not sooner: an iterate that merely did not halve its force
+// used to close the increment on the spot, and in the soft last stage of a phase that is no sign of a
+// stall. A line search that took a step of 0.002 closed the last increment of an anchored excavation at
+// 2.9 kN/m out of balance and a stiffness parameter of 0.10; its wall moved 17.47 mm where the same run
+// iterated on reaches 18.09 (published 18.0), and its factor of safety was 1.431 against 1.446.
+inline constexpr size_t kBandStallWindow = 5;
+inline constexpr double kBandStallDrop = 0.75;
+// A load is not kept out of balance past a collapse: under a load, an increment closes inside the
+// band only while the stiffness parameter (the work of the increment over the work the same strain
+// would do elastically) is above this, the customary mark of a body that has become a mechanism. An
+// imposed displacement has no such limit: the ground takes it and the reaction is the answer.
+inline constexpr double kBandCollapseCsp = 0.015;
+// Of a strength reduction step (solve_nonlinear): the iterates without a new best that end an attempt.
+inline constexpr int kSrfCycleWindow = 30;
+// A load that is not carried is not kept. The band is a force, and a load increment smaller than it fits
+// inside it without the ground having moved. Measured on a strip past its capacity (Tresca, 6-noded): an
+// increment kept with 0.63 of what it added still out of balance, the next with all of it, the stiffness
+// parameter reading 0.14 and 0.05 on iterates made with the elastic stiffness, whose steps are small
+// whatever the ground is doing; and the collapse 2.5% above the one found without the band, on the unsafe
+// side. So under a load the force out of balance may grow, from what the increment before left, by less
+// than this share of the load the increment added. A stall in a soft mode leaves about the same force
+// increment after increment and passes; a load nothing carries adds itself to the force and does not.
+inline constexpr double kBandCarriedShare = 0.5;
+// What an iterate of an increment may leave under that rule: `left` is what the increment before left,
+// `added` the size of the load this one adds.
+inline double band_ceiling(double left, double added) { return left + kBandCarriedShare * added; }
+// The two decisions of the band, on the numbers the iteration has in hand. `force` is the out-of-balance
+// force, `before` the iterate before's, `scale` the force scale over every degree of freedom, `band`
+// NewtonOptions::stagnation_accept, `imposed` a phase driven by a prescribed displacement, `ceiling` the
+// force allowed by band_ceiling.
+inline bool band_admits(double force, double scale, double band, double csp, bool imposed, double ceiling) {
+    return force <= band * scale && (imposed || (csp >= kBandCollapseCsp && force <= ceiling));
+}
+// The best force in the band, not a quarter below its value kBandStallWindow iterates ago, ends the attempt
+// at that best iterate.
+inline bool band_stalled(double best, double best_window_ago, double scale, double band, double csp,
+                         bool imposed, double ceiling) {
+    return band_admits(best, scale, band, csp, imposed, ceiling) && best > kBandStallDrop * best_window_ago;
+}
 
 struct NewtonOptions {
     int load_steps = 1;       // (initial) number of steps the external load is split into
@@ -145,15 +186,30 @@ struct NewtonOptions {
     // not the load -- gains nothing from a smaller increment of a load that is already applied,
     // so it passes 1 and fails at its first cut, after every retry has had its chance.
     double min_step_fraction = 0.125;
-    // AN INCREMENT THAT HAS STOPPED DESCENDING ABOVE ITS TOLERANCE IS KEPT WHEN IT IS WITHIN THIS
-    // of the force scale (0 = off; kStagnationAccept still applies to the tight tolerances).
-    // The hardening soils are asked for 3e-3 and get there wherever the iteration can; where it
-    // cannot -- fresh fill at next to no stress leaves the out-of-balance force wandering at
-    // 3-5e-3 of the forces in play -- the increment used to be retried four ways and then halved
-    // again and again (measured: 5 500 iterations and no end on a 2 m lift that takes 840 at a
-    // tolerance of 1e-2). With this set to 1e-2 such an increment is kept as it was before the
-    // tolerance was tightened, counted and reported (K2D-A019) with the residual it was kept at.
+    // THE TOLERATED BAND: an increment that Newton cannot close at its tolerance is closed when its
+    // out-of-balance force is within this of the force scale OVER EVERY DEGREE OF FREEDOM,
+    //     CSP ||f_const|| + ||f_int||,   f_int over the supports as well as the free nodes
+    // (0 = off; kStagnationAccept still applies to the tight tolerances). The hardening soils are
+    // asked for 3e-3 of the scale of the free equations and get there wherever the iteration can.
+    // Where it cannot, the force left over sits in the soft modes of a developing mechanism: with
+    // non-associated flow a tangent that has lost nearly all its stiffness along a shear band sends
+    // Newton centimetres along a mode the ground only has for a few micrometres, the full elastic
+    // operator moves along it at a rate of the stiffness parameter, and with a subspace accelerator
+    // on that operator (Scott & Fenves 2010) the force stays where it is: measured on a wall pushed
+    // into sand (Hardening Soil, phi = 32, psi = 2, 15-noded, 5442 nodes), every one of them held at
+    // about 1e-2 of the free equations' scale, 2 kN against a thrust of 1000 kN. The force scale of
+    // the free equations alone is the wrong yardstick for that: most of the ground's internal
+    // force stands on its supports (182 kN over the free equations of that model, 1170 kN over all
+    // of them), and a tolerance of 3e-3 of the smaller one was 0.05% of the larger. So the wall
+    // stopped at 31% of its movement and an embankment built undrained on soft clay at 56 to 87% of
+    // its load, each reported as a limit it is not.
+    // Counted and reported (K2D-A019) with the force left over. See kBandStallWindow, kBandStallDrop,
+    // kBandCollapseCsp, kBandCarriedShare.
     double stagnation_accept = 0.0;
+    // Of a strength reduction step: how far from equilibrium, of the reference, a step that will not
+    // close at any size may be kept at its best iterate. Zero, the default, keeps none. A force left
+    // here moves the factor: at 5e-3 on a Mohr-Coulomb block, +1.45% past the closed form.
+    double srf_stall_accept = 0.0;
     // STRENGTH CONTINUATION (strength_reduction.cpp). Set, the solve does not apply a load: it
     // follows the equilibrium path of the strength factor s from srf_start, s being an UNKNOWN
     // solved together with the displacement under an arc-length constraint on the displacement
@@ -161,6 +217,9 @@ struct NewtonOptions {
     // (materials, structures, profiles). See solve_nonlinear_impl for the method.
     std::function<void(std::vector<MaterialModel>&, Structures&, std::vector<MaterialProfile>&,
                        double)> srf_reduce;
+    // The nodes of the points for curves (SolveResult::curve_nodes): their displacement is
+    // recorded beside every entry of NewtonResult::path, in NewtonResult::curve_u. Empty = none.
+    std::vector<int> curve_nodes;
     double srf_start = 1.0;
     double srf_first_step = 0.1;
     double srf_max = 3.0;
@@ -408,6 +467,9 @@ struct StructuralInit {
                         embedded_skin_slip, embedded_foot_slip;
     // Plate M-N hinge state [ε_p,κ_p]×Gauss (plate::kPlasticStateSize(5) per element; §10).
     std::vector<double> plate_plastic, plate5_plastic;
+    // Not a seed: the excess pore pressure each joint point's law read last (laid out as the
+    // slips), which a coupled phase hands its report with the state (StructureLaws::committed).
+    std::vector<double> interface_pore, interface5_pore;
 };
 
 // Unpack the init_struct plastic seeds into the target vectors — the static Newton, the
@@ -480,6 +542,9 @@ struct NewtonResult {
     std::vector<double> geogrid_plastic;     // geogrids.size() * geogrid::kStateStride
     std::vector<double> interface_slip;      // interfaces.size() * 3 (Newton-Cotes node pairs)
     std::vector<double> interface5_slip;     // interfaces5.size() * 5 (5-node interface)
+    // The excess pore pressure each joint point's Coulomb law read in the last accepted increment
+    // (laid out as the slips; zero beside drained ground) -- what the report reads the capacity on.
+    std::vector<double> interface_pore, interface5_pore;
     std::vector<double> embedded_skin_slip;  // all embedded beam skin points (axial plastic slip)
     std::vector<double> embedded_foot_slip;  // embedded_beams.size() (foot axial plastic slip)
     std::vector<double> plate_plastic;       // plates.size() * 6  ([ε_p,κ_p]×3 Gauss; M-N hinge)
@@ -553,11 +618,22 @@ struct NewtonResult {
     bool limit_arc = false;
     bool limit_arc_rescued = false;
     std::vector<std::array<double, 2>> limit_path;
+    // THE PATH THE SOLVE FOLLOWED, for the phase's curve: at its start and at every accepted step,
+    // the multiplier -- the load factor of a stepped or an arc-length solve, the strength factor of
+    // a continuation -- and the largest displacement of a node since the start of the solve [m]
+    // (largest_node_displacement). The paths above are the solver's own records, on the largest
+    // component of any unknown; this one is the engineer's.
+    std::vector<std::array<double, 2>> path;
+    // At each entry of `path`, the displacement [ux, uy] of every node of options.curve_nodes since
+    // the start of the solve [m] (append_curve_u), point after point.
+    std::vector<double> curve_u;
     // Increments kept at a stagnated iterate (kStagnationAccept), and the largest relative
     // out-of-balance force any of them was kept at. Zero on a run that met its tolerance
     // everywhere; otherwise the answer carries that much unbalanced force and the phase says so.
     int stagnation_accepted = 0;
     double worst_accepted_residual = 0.0;
+    // The force out of balance the last increment left, where the tolerated band was on.
+    double force_left = 0.0;
     // The reason the last abandoned increment ended. When the solve did not converge
     // this is the increment that reached the minimum size and stopped it; on a solve
     // that did converge it names an increment that was abandoned and then recovered by
@@ -774,6 +850,40 @@ struct NewtonResult {
 // empty = old behaviour bit-for-bit). If given, constant_force MUST INCLUDE
 // structural_internal_force(init_struct) — otherwise residual(0) ≠ 0 and the first
 // increment ramps a spurious imbalance.
+// The displacement of node n in direction c [m], from a vector of equation values (the free part
+// of a solve): the free unknown, or on a fixed degree of freedom the share `presc_share` of its
+// prescribed displacement (none without `presc`). A footing driven by a prescribed displacement
+// moves with it; read from the free unknowns alone it stood still.
+inline double node_displacement(const DofMap& dofs, int n, int c, const Eigen::VectorXd& u_eq,
+                                const Eigen::VectorXd* presc = nullptr, double presc_share = 0.0) {
+    const int d = dofs.global_dof(n, c);
+    const int eq = dofs.equation(d);
+    if (eq >= 0) return eq < u_eq.size() ? u_eq(eq) : 0.0;
+    return presc && d >= 0 && d < presc->size() ? presc_share * (*presc)(d) : 0.0;
+}
+// The largest displacement |u| = sqrt(u_x^2 + u_y^2) of a node [m]: the measure of
+// NewtonResult::path.
+inline double largest_node_displacement(const mesh::Mesh& mesh, const DofMap& dofs,
+                                        const Eigen::VectorXd& u_eq,
+                                        const Eigen::VectorXd* presc = nullptr,
+                                        double presc_share = 0.0) {
+    double m2 = 0.0;
+    for (int n = 0; n < mesh.node_count; ++n) {
+        const double ux = node_displacement(dofs, n, 0, u_eq, presc, presc_share);
+        const double uy = node_displacement(dofs, n, 1, u_eq, presc, presc_share);
+        m2 = std::max(m2, ux * ux + uy * uy);
+    }
+    return std::sqrt(m2);
+}
+// The displacement [ux, uy] of each of `nodes`, appended to `out` (NewtonResult::curve_u).
+inline void append_curve_u(const DofMap& dofs, const std::vector<int>& nodes, const Eigen::VectorXd& u_eq,
+                           std::vector<double>& out, const Eigen::VectorXd* presc = nullptr,
+                           double presc_share = 0.0) {
+    for (const int n : nodes)
+        for (int c = 0; c < 2; ++c)
+            out.push_back(n >= 0 ? node_displacement(dofs, n, c, u_eq, presc, presc_share) : 0.0);
+}
+
 NewtonResult solve_nonlinear(const mesh::Mesh& mesh, const DofMap& dofs,
                              const std::vector<MaterialModel>& materials,
                              const Eigen::VectorXd& f_ext,

@@ -555,7 +555,7 @@ inline HsSmallStrainStep hs_small_strain_step(const HardeningSoilParams& p, cons
         out.gamma_hist = g2;
     }
     const double gm = out.g_mono > 0.0 ? out.g_mono : std::min(gfac, 10.0);
-    const double Ei_ref = 2.0 * p.E50_ref / (2.0 - p.Rf);
+    const double Ei_ref = 2.0 * p.E50_ref / (2.0 - p.Rf) * p.ei_scale;
     if (gm > 1.0 && Ei_ref > 0.0) out.pe.hardening_scale = std::pow(gm, 1.0 + p.Eur_ref / Ei_ref);
     return out;
 }

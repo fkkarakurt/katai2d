@@ -1,6 +1,8 @@
 #include <cstdlib>
+#include <exception>
 #include <string>
 #include <katai/materials/hardening_soil_plastic.hpp>
+#include <katai/materials/interrupt.hpp>
 #include <katai/materials/mohr_coulomb.hpp>   // apply_rankine_cap: the tension cut-off's own return
 
 #include <algorithm>
@@ -441,7 +443,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
         k.s3 = std::max(k.s3raw, plim);
         const double g = std::pow((law_cc + k.s3 * law_s) / law_den, p.m);
         k.Eur = p.Eur_ref * g;
-        k.Ei = 2.0 * (p.E50_ref * g) / (2.0 - p.Rf);
+        k.Ei = 2.0 * (p.E50_ref * g) / (2.0 - p.Rf) * p.ei_scale;
         k.qf = 2.0 * (law_cc + k.s3raw * law_s) / (1.0 - law_s);
         k.qa = std::max(k.qf, qf_min) / p.Rf;
         // The elastic matrix carries the small-strain multiplier; E_ur in the surface does not
@@ -1228,6 +1230,7 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
     auto substep = [&](Eigen::Vector3d& sg, double& g, double& e, const Eigen::Vector3d& de,
                        Eigen::Matrix3d& tang, bool& plastic, double& r_max, bool elastic_tangent_at_end,
                        const Inc* whole1, const Inc* whole2) {
+        poll_interrupt();   // a run's Cancel reaches inside one point's walk (interrupt.hpp)
         Eigen::Vector3d de_p = de;
         int met = 0;   // the surface the elastic part ends on, when there is one
         const double alpha = elastic_fraction(sg, g, e, de, &met);
@@ -1442,6 +1445,34 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
             tang = stiff_at(sg).De;
         }
     };
+    // A POINT WITHOUT COHESION THAT ENDS AT THE APEX IS RETURNED THERE. With c = 0 and the cut-off
+    // through the apex (sigma_t = 0), a point whose minor stress is in the stiffness floor has an
+    // elastic law that no longer moves with the stress, and the apex is the answer exactly when the
+    // strain that would be plastic there, x = De^-1 sigma + d eps, is a flow the apex has: the
+    // cut-off planes give any extension, and a shear face compression in its major direction with
+    // (1 + sin psi) / (1 - sin psi) as much extension in its minor -- so the apex holds the increment
+    // when (1 + sin psi) sum(x+) <= (1 - sin psi) sum(x-). On the failure plateau (gamma_p at least
+    // the value the stress fails at, which falls to zero with the stress) the way there hardens
+    // nothing and compacts nothing, as at the apex itself (the rule below). Walked instead, the point
+    // slid along the cut-off to the apex with the last substep's elastic part left over, its error
+    // falling as 1/n: such points -- the ground heaved and torn beside a wall pushed into sand, the
+    // floor of an excavation -- ran their walks to the ceiling of 10 000 substeps, one to five
+    // seconds each, and the first phase of a wall pushed 50 mm into Hardening Soil sand took 33
+    // times as long as the same wall in Mohr-Coulomb sand. It is tried where the walk starts and at
+    // every substep of it, so a point that enters the floor on its way is returned from there.
+    const bool apex_rule = law_cc <= 0.0 && ten_on && std::fabs(ten) <= 1e-12 * pr;
+    const double sin_psi_apex = std::clamp(dil(dil.sin_phi), -0.99, 0.99);
+    auto ends_at_apex = [&](const Eigen::Vector3d& s, double g, const Eigen::Vector3d& de) -> bool {
+        if (!apex_rule) return false;
+        const Order o = order_of(s);
+        if (!(s(o.c) <= plim)) return false;
+        const Stiff k = stiff_at(s);
+        if (!(g >= fbar(std::max(k.qf, 0.0), k))) return false;
+        const Eigen::Vector3d x = k.De.inverse() * s + de;
+        double pos = 0.0, neg = 0.0;
+        for (int i = 0; i < 3; ++i) (x(i) > 0.0 ? pos : neg) += std::fabs(x(i));
+        return pos + neg > 0.0 && (1.0 + sin_psi_apex) * pos <= (1.0 - sin_psi_apex) * neg;
+    };
     {
         const double tiny = 1e-9 * pr;
         const Eigen::Vector3d ds_tr = k_n.De * dstrain;
@@ -1458,9 +1489,10 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
         // so the stress went as 1/n (6.63 / 0.663 / 0.0663 kPa at 10 / 100 / 1000 substeps), the error
         // measure never settled, and such points -- the floor of an excavation -- ran every walk to the
         // ceiling: 203 of the staged excavation's 11 600 costliest calls, and nearly all of its time.
-        if (law_cc <= 0.0 && sigma_n.cwiseAbs().maxCoeff() <= tiny && step > 0.0 && mean(ds_tr) <= 0.0) {
+        if (step > 0.0 && ((law_cc <= 0.0 && sigma_n.cwiseAbs().maxCoeff() <= tiny && mean(ds_tr) <= 0.0) ||
+                           ends_at_apex(sigma_n, gamma_p_n, dstrain))) {
             HsIntegrated apex;
-            apex.stress = sigma_n;
+            apex.stress = sigma_n.cwiseAbs().maxCoeff() <= tiny ? sigma_n : Eigen::Vector3d::Zero();
             apex.gamma_p = gamma_p_n;
             apex.pp = pp_n;
             apex.tangent.setZero();
@@ -1469,6 +1501,418 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
             apex.saturated = 0;
             if (plan_out) plan_out->clear();
             return apex;
+        }
+        // IN THE STIFFNESS FLOOR, PULLED ACROSS THE CUT-OFF, THE INCREMENT IS RETURNED IMPLICITLY.
+        // Below p_limit the elastic stiffness no longer moves with the stress, so the elastic trial is
+        // exact, and the fully implicit (backward Euler) return solves the increment in one step: the
+        // stress and the multipliers of the surfaces active at its end (the closest-point return,
+        // Simo & Hughes 1998, Sec. 3.3, with several surfaces by Koiter's rule, Koiter 1960) -- the
+        // three cut-off planes, the shear face of the major and minor stresses and, at the compression
+        // corner, the face of the major and intermediate (both harden the one gamma_p; on the plateau
+        // the Mohr-Coulomb line), and the cap. The set is found by Koiter's rule from the cut-off planes
+        // the trial crosses: a negative multiplier leaves it, a surface the answer crosses joins it.
+        //
+        // Walked instead, such a point -- fill with a cohesion, pulled into tension at the surface --
+        // slides along the cut-off with the shear surface and the cap meeting it, the two evaluations
+        // of each pair read the planes a hair apart, and the error estimate falls only as 1/n: walks at
+        // the ceiling of 10 000 substeps, a tenth to four tenths of a second per call, and an embankment
+        // on soft soil whose first phase ran an hour where it had run three minutes (measured: 517 of
+        // the 551 thread-seconds of its integrations in 13 298 such calls).
+        //
+        // ITS ERROR IS THAT OF ONE IMPLICIT STEP: first order in the increment, the order of the
+        // implicit time stepping that hands the increment over, and it vanishes with it (the return is
+        // consistent). Measured on 532 calls sampled from that phase, against the limit of the walk
+        // (100 000 substeps): the stress within 1e-2 of the 5 kPa the tolerance is read against, 5e-5
+        // at the median, the hardening variables within 2%; 15 times less integration time. Where the
+        // return does not converge to a set that holds -- multipliers, crossings, ordering, the floor,
+        // the plateau reached by hardening -- the walk integrates the increment as before.
+        //
+        // A TEST OF PATH INDEPENDENCE WAS TRIED AND TAKEN OUT: the answer only where one step, two
+        // and four agreed to the walk's tolerance. It misjudged both ways -- an increment whose
+        // cut-off plane is met and left in its first 0.3% agrees at every count up to sixteen and is
+        // 9e-4 off, and a point pulled from rest, 7e-5 off, did not agree -- and it made the
+        // integrator a jump between two schemes wherever it changed its mind.
+        struct BeOut {
+            Eigen::Vector3d stress;
+            double gp = 0.0, ev = 0.0;
+            Eigen::Matrix3d tangent;
+            bool plastic = false;
+        };
+        // One backward-Euler return over de_in from (s_in, g_in, e_in), the state in the floor.
+        auto be_return = [&](const Eigen::Vector3d& s_in, double g_in, double e_in, const Eigen::Vector3d& de_in,
+                             BeOut& res) -> bool {
+            const double pp_in = pc_of(e_in);
+            const Eigen::Vector3d s_tr = s_in + k_n.De * de_in;
+            {
+                const Order ot = order_of(s_tr);
+                int ia = ot.a, ib = ot.b, ic = ot.c;   // the ordering the shear faces and the cap read
+                const Eigen::Matrix3d& De = k_n.De;
+                const double hi = p.hardening_scale;
+                // A cap at the tip is seeded with a vanishing size, as the walk from the tip seeds it.
+                const double pp_seed = 1e-6 * (1.0 + s_tr.cwiseAbs().maxCoeff());
+                const double ev0 = (cap_on && pp_in < pp_seed) ? p.cap_ev_from_pc(pp_seed) : e_in;
+                const double dqf = 2.0 * law_s / (1.0 - law_s);
+                const double dqa = 2.0 * law_s / ((1.0 - law_s) * p.Rf);
+                auto qf_of = [&](double sc) { return 2.0 * (law_cc + sc * law_s) / (1.0 - law_s); };
+                auto qa_of = [&](double sc) { return std::max(qf_of(sc), qf_min) / p.Rf; };
+                const double Ei = k_n.Ei, Eur = k_n.Eur;
+                auto fb = [&](double q, double qa) { return (2.0 / Ei) * q / (1.0 - q / qa) - 2.0 * q / Eur; };
+                Eigen::Vector3d dqt;
+                auto set_order = [&](int a, int b, int c) {
+                    ia = a; ib = b; ic = c;
+                    dqt.setZero();
+                    dqt(ia) = 1.0; dqt(ib) = delta - 1.0; dqt(ic) = -delta;
+                };
+                set_order(ia, ib, ic);
+                int reorders = 0;
+                int corner_adds = 0;
+                using Mat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 9, 9>;
+                using Vec = Eigen::Matrix<double, Eigen::Dynamic, 1, 0, 9, 1>;
+                // surfaces: 0..2 the cut-off plane of each direction, 3 the shear face (a, c), 4 the cap,
+                // 5 the shear face (a, b) -- the compression corner
+                constexpr int NS = 6;
+                std::array<char, NS> act{};
+                bool plateau = false;
+                Eigen::Vector3d sg = s_tr;
+                std::array<double, NS> dl{};
+                double gp_end = g_in, ev_end = ev0, cap_dfdl = 0.0;
+                // one shear face (i the larger, j the smaller): its value, gradient and flow
+                auto face = [&](const Eigen::Vector3d& x, int i, int j, double gsum, double& fv, Eigen::Vector3d& nv,
+                                Eigen::Vector3d& mv, double& gpv) {
+                    const double q = x(i) - x(j), sj = x(j);
+                    const double qf = qf_of(sj), qa = qa_of(sj);
+                    Stiff kk = k_n;
+                    kk.s3raw = sj;
+                    const double spm = spm_of(q, kk);
+                    mv.setZero();
+                    mv(i) = 0.5 * (1.0 - spm);
+                    mv(j) = -0.5 * (1.0 + spm);
+                    nv.setZero();
+                    if (plateau || !(qf > 0.0)) {
+                        fv = q - qf;
+                        nv(i) = 1.0;
+                        nv(j) = -1.0 - dqf;
+                        gpv = qf > 0.0 ? std::max(g_in, fb(qf * (1.0 - 1e-12), qa)) : g_in;
+                    } else {
+                        gpv = g_in + hi * gsum;
+                        const double qq = std::min(q, qf * (1.0 - 1e-9));
+                        const double w = 1.0 - qq / qa;
+                        fv = fb(qq, qa) - gpv;
+                        const double fp = (2.0 / Ei) / (w * w) - 2.0 / Eur;
+                        nv(i) = fp;
+                        nv(j) = -fp - (2.0 / Ei) * qq * qq / (qa * qa * w * w) * dqa;
+                    }
+                };
+                auto eval = [&](const Eigen::Vector3d& x, const std::array<double, NS>& l, std::array<double, NS>& f,
+                                std::array<Eigen::Vector3d, NS>& n, std::array<Eigen::Vector3d, NS>& m, double& gpv,
+                                double& evv, Eigen::Matrix3d& dm_cap) {
+                    for (int t = 0; t < 3; ++t) {
+                        f[t] = -x(t) - ten;
+                        n[t] = -Eigen::Vector3d::Unit(t);
+                        m[t] = n[t];
+                    }
+                    double g5 = g_in;
+                    face(x, ia, ic, l[3] + l[5], f[3], n[3], m[3], gpv);
+                    face(x, ia, ib, l[3] + l[5], f[5], n[5], m[5], g5);
+                    // the cap, written out for any mean stress (a yield surface only where it is positive)
+                    const double pm = x.sum() / 3.0;
+                    // at the compression corner the cap's two faces averaged (as increment_core does)
+                    Eigen::Vector3d dqc = dqt;
+                    if (act[5]) { dqc.setZero(); dqc(ia) = 1.0; dqc(ib) = -0.5; dqc(ic) = -0.5; }
+                    const double qt = x.dot(dqc);
+                    evv = ev0 + hi * 2.0 * pm * l[4];
+                    const double pcv = pc_of(evv);
+                    if (cap_on) {
+                        f[4] = qt * qt / (alpha * alpha) + pm * pm - pcv * pcv;
+                        const double Hc = p.cap_hardening_modulus(pcv);
+                        m[4] = 2.0 * qt / (alpha * alpha) * dqc + (2.0 * pm / 3.0) * Eigen::Vector3d::Ones();
+                        n[4] = m[4] - 2.0 * pcv * Hc * hi * 2.0 * l[4] / 3.0 * Eigen::Vector3d::Ones();
+                        cap_dfdl = -2.0 * pcv * Hc * hi * 2.0 * pm;
+                        dm_cap = (2.0 / (alpha * alpha)) * dqc * dqc.transpose() + (2.0 / 9.0) * Eigen::Matrix3d::Ones();
+                    } else {
+                        f[4] = -1.0;
+                        m[4] = n[4] = Eigen::Vector3d::Zero();
+                        cap_dfdl = 0.0;
+                        dm_cap.setZero();
+                    }
+                };
+                // d f_r / d dl_c: both shear faces harden the one gamma_p; the cap hardens p_p
+                auto dfdl = [&](int r, int c) {
+                    if ((r == 3 || r == 5) && (c == 3 || c == 5)) return plateau ? 0.0 : -hi;
+                    if (r == 4 && c == 4) return cap_dfdl;
+                    return 0.0;
+                };
+                // crossed: the cap only where the mean stress is positive; the face (a, b) only where the
+                // intermediate stress is not held by its own cut-off plane (there the edge is the face)
+                auto crossed = [&](int t, const Eigen::Vector3d& x, double fv) {
+                    if (t == 4) return x.sum() > 0.0 && fv > 1e-10 * (1.0 + x.cwiseAbs().maxCoeff());
+                    if (t == 3) return fv > 1e-12 || x(ia) - x(ic) > qf_of(x(ic)) * (1.0 + 1e-9);
+                    // the corner face only where the ordering holds: an intermediate below the minor is a
+                    // swapped ordering (re-read below), not a corner -- taken as one, the set cycled
+                    if (t == 5) return !act[ib] && act[3] && x(ib) >= x(ic) - 1e-9 * (1.0 + x.cwiseAbs().maxCoeff()) &&
+                                       (fv > 1e-12 || x(ia) - x(ib) > qf_of(x(ib)) * (1.0 + 1e-9));
+                    return fv > 1e-12 * (1.0 + x.cwiseAbs().maxCoeff());
+                };
+                std::array<double, NS> f{};
+                std::array<Eigen::Vector3d, NS> n, m;
+                Eigen::Matrix3d dm_cap;
+                double gpv = g_in, evv = e_in;
+                eval(s_tr, dl, f, n, m, gpv, evv, dm_cap);
+                const double fscale = 1.0 + s_tr.cwiseAbs().maxCoeff();
+                for (int t = 0; t < 3; ++t) act[t] = crossed(t, s_tr, f[t]) ? 1 : 0;
+                bool solved = false;
+                int retries = 0;
+                bool line_tried = false;
+                std::array<int, 16> dropped{};
+                int ndropped = 0;
+                std::array<char, NS> readded{};
+                // the cap's multiplier where p_p passes through x (an initial guess: the solution is the set's)
+                auto seed_cap = [&](const Eigen::Vector3d& x) {
+                    if (!cap_on || !act[4]) return;
+                    const double pm = x.sum() / 3.0;
+                    if (!(pm > 0.0)) return;
+                    Eigen::Vector3d dqc = dqt;
+                    if (act[5]) { dqc.setZero(); dqc(ia) = 1.0; dqc(ib) = -0.5; dqc(ic) = -0.5; }
+                    const double qt = x.dot(dqc);
+                    const double target = std::sqrt(qt * qt / (alpha * alpha) + pm * pm);
+                    if (!(target > pc_of(ev0 + hi * 2.0 * pm * dl[4]))) return;
+                    dl[4] = (p.cap_ev_from_pc(target) - ev0) / (hi * 2.0 * pm);
+                };
+                if (!act[0] && !act[1] && !act[2]) {
+                    if (crossed(3, s_tr, f[3])) {
+                        act[3] = 1;
+                    } else if (crossed(4, s_tr, f[4])) {
+                        act[4] = 1;
+                        seed_cap(s_tr);
+                    } else {
+                        res.stress = s_tr;
+                        res.gp = g_in;
+                        res.ev = e_in;
+                        res.plastic = false;
+                        res.tangent = De;
+                        return true;
+                    }
+                }
+                Mat Jlast;
+                std::array<int, NS> idx{};
+                int nact = 0;
+                for (int pass = 0; pass < 24 && !solved; ++pass) {
+                    nact = 0;
+                    for (int t = 0; t < NS; ++t) if (act[t]) idx[nact++] = t;
+                    if (nact == 0) break;
+                    if (act[3] && !plateau && sg(ia) - sg(ic) >= qf_of(sg(ic)) * (1.0 - 1e-9) &&
+                        s_in(ia) - s_in(ic) < qf_of(s_in(ic)) * (1.0 - 1e-9)) {
+                        sg = s_in;
+                        dl.fill(0.0);
+                        seed_cap(sg);
+                    }
+                    bool conv = false;
+                    const Eigen::Vector3d sg_pass = sg;
+                    const std::array<double, NS> dl_pass = dl;
+                    const bool plateau_pass = plateau;
+                    Eigen::Vector3d sg_ok = sg;
+                    for (int it = 0; it < 60; ++it) {
+                        eval(sg, dl, f, n, m, gpv, evv, dm_cap);
+                        Eigen::Vector3d flow = Eigen::Vector3d::Zero();
+                        for (int a = 0; a < nact; ++a) flow += dl[idx[a]] * m[idx[a]];
+                        Vec R(3 + nact);
+                        R.head<3>() = sg - s_tr + De * flow;
+                        for (int a = 0; a < nact; ++a) R(3 + a) = f[idx[a]];
+                        Mat J = Mat::Zero(3 + nact, 3 + nact);
+                        J.topLeftCorner<3, 3>() = Eigen::Matrix3d::Identity() + (act[4] ? dl[4] : 0.0) * De * dm_cap;
+                        for (int a = 0; a < nact; ++a) {
+                            J.block<3, 1>(0, 3 + a) = De * m[idx[a]];
+                            J.block<1, 3>(3 + a, 0) = n[idx[a]].transpose();
+                            for (int b = 0; b < nact; ++b) J(3 + a, 3 + b) = dfdl(idx[a], idx[b]);
+                        }
+                        Jlast = J;
+                        const double rn = R.head<3>().norm() / fscale + R.tail(nact).cwiseAbs().maxCoeff() / fscale;
+                        if (rn < 1e-13) { conv = true; break; }
+                        const Eigen::FullPivLU<Mat> lu(J);
+                        if (lu.rank() < 3 + nact) break;
+                        const Vec dz = lu.solve(-R);
+                        sg_ok = sg;
+                        const std::array<double, NS> dl_old = dl;
+                        sg += dz.head<3>();
+                        for (int a = 0; a < nact; ++a) dl[idx[a]] += dz(3 + a);
+                        if (!sg.allFinite()) break;
+                        if (act[3] && !plateau) {
+                            // a hyperbola iterate past q_f reads no surface: the step is cut back until it is not
+                            double th = 1.0;
+                            for (int h = 0; h < 40 && sg(ia) - sg(ic) >= qf_of(sg(ic)) * (1.0 - 1e-9); ++h) {
+                                th *= 0.5;
+                                sg = sg_ok + th * dz.head<3>();
+                                dl = dl_old;
+                                for (int a = 0; a < nact; ++a) dl[idx[a]] += th * dz(3 + a);
+                            }
+                            // gamma_p at its failure value: no root of the hyperbola below q_f, the line is the surface
+                            const double scf = sg(ic);
+                            const double gpf = fb(qf_of(scf) * (1.0 - 1e-12), qa_of(scf));
+                            if (qf_of(scf) > 0.0 && g_in + hi * (dl[3] + dl[5]) >= gpf) plateau = true;
+                        }
+                    }
+                    if (!conv) {
+                        // the surfaces the last finite iterate crosses join the set, solved again from the pass's start
+                        const Eigen::Vector3d xr = sg.allFinite() ? sg : sg_ok;
+                        int addr = -1;
+                        if (retries < 6 && xr.allFinite()) {
+                            std::array<double, NS> fr{};
+                            std::array<Eigen::Vector3d, NS> nr, mr;
+                            Eigen::Matrix3d dmr;
+                            double gr = g_in, er = e_in;
+                            eval(xr, dl, fr, nr, mr, gr, er, dmr);
+                            for (int t = 0; t < NS && addr < 0; ++t)
+                                if (!act[t] && t != 5 && crossed(t, xr, fr[t])) addr = t;
+                        }
+                        if (addr < 0 && retries < 6)
+                            for (int k = ndropped - 1; k >= 0 && addr < 0; --k)
+                                if (!act[dropped[k]] && !readded[dropped[k]]) addr = dropped[k];
+                        if (addr >= 0) readded[addr] = 1;
+                        if (addr >= 0) {
+                            sg = sg_pass;
+                            dl = dl_pass;
+                            plateau = plateau_pass;
+                            act[addr] = 1;
+                            dl[addr] = 0.0;
+                            seed_cap(sg);
+                            ++retries;
+                            continue;
+                        }
+                        if (act[3] && !plateau && !line_tried) {
+                            line_tried = true;
+                            sg = sg_pass;
+                            dl = dl_pass;
+                            plateau = true;
+                            continue;
+                        }
+                        break;
+                    }
+                    // Koiter: a negative multiplier leaves the set (and a cap at a tensile mean stress)...
+                    // (negative beyond the rounding of the set's own multipliers: at the tip they are 1e-9)
+                    // ...but on the edge where both lateral stresses are held by their planes, the flow of the
+                    // shear face and of the cap is not one direction: any mix of the faces (a, c) and (a, b) and
+                    // of the cap's two orderings is a gradient there (the edge's subdifferential). It moves
+                    // multiplier between the two planes and leaves the stress and the hardening as they are:
+                    // what the minor's plane is short, the intermediate's gives. (Read with the face (a, c) and
+                    // the ordering as solved, the minor's plane is at its least; dropped for it, the set cycled
+                    // between the orderings -- measured: soft clay at the surface, pulled sideways under fill.)
+                    if (act[ib] && act[ic] && act[3] && !act[5] && dl[ic] < 0.0) {
+                        double give = std::max(0.0, -m[3](ic) * dl[3]);
+                        const double qt = sg.dot(dqt);
+                        if (act[4] && qt > 0.0)
+                            give += std::max(0.0, 2.0 * qt / (alpha * alpha) * (2.0 * delta - 1.0) * dl[4]);
+                        if (dl[ic] + give >= 0.0 && dl[ib] + dl[ic] >= 0.0) {
+                            dl[ib] += dl[ic];
+                            dl[ic] = 0.0;
+                        }
+                    }
+                    double lsum = 0.0;
+                    for (int a = 0; a < nact; ++a) lsum += std::fabs(dl[idx[a]]);
+                    int worst = -1;
+                    double wv = -1e-9 * lsum;
+                    // At the compression corner the two faces are one surface -- sigma_b = sigma_c and one
+                    // gamma_p -- and where the set came to it because the face (a, c) alone turned the
+                    // ordering over, only their sum has to be positive: the split between them carries the
+                    // cap's corner gradient, averaged here, against the cap's face gradient the point flowed
+                    // along before it reached the corner (measured: a split of -21 % of the face's multiplier,
+                    // with the stress and gamma_p those of the walk to 1e-4).
+                    const bool one_corner = act[3] && act[5] && corner_adds > 0 && dl[3] + dl[5] > 0.0;
+                    for (int a = 0; a < nact; ++a)
+                        if (!(one_corner && (idx[a] == 3 || idx[a] == 5)) && dl[idx[a]] < wv) {
+                            wv = dl[idx[a]];
+                            worst = idx[a];
+                        }
+                    if (worst < 0 && act[4] && !(sg.sum() > 0.0)) worst = 4;
+                    if (worst >= 0) {
+                        act[worst] = 0; dl[worst] = 0.0;
+                        if (worst != 5 && ndropped < 16) dropped[ndropped++] = worst;
+                        if (worst == 3) { plateau = false; act[5] = 0; dl[5] = 0.0; }
+                        continue;
+                    }
+                    // ...the intermediate fallen below the minor while the face (a, c) holds alone is the
+                    // compression corner, not a new ordering: the face (a, b) joins, and the two faces, sharing
+                    // gamma_p, hold the two stresses equal. Read as a new ordering (or as the intermediate's
+                    // plane, when it had gone below it too), the set cycled between the two orderings --
+                    // measured: fill at the toe of an embankment on 15-noded elements, the walk ending on
+                    // the corner with sigma_b = sigma_c = 0.05 kPa, off both planes.
+                    if (!act[5] && act[3] && !act[ib] && !act[ic] && corner_adds < 2 &&
+                        sg(ib) < sg(ic) - 1e-9 * fscale) {
+                        act[5] = 1;
+                        dl[5] = 0.0;
+                        ++corner_adds;
+                        continue;
+                    }
+                    // ...a surface the answer crosses joins it (a held intermediate takes the corner face away)...
+                    std::array<double, NS> f2{};
+                    std::array<Eigen::Vector3d, NS> n2, m2;
+                    Eigen::Matrix3d dm2;
+                    double g2 = g_in, e2 = e_in;
+                    eval(sg, dl, f2, n2, m2, g2, e2, dm2);
+                    int add = -1;
+                    for (int t = 0; t < NS && add < 0; ++t)
+                        if (!act[t] && crossed(t, sg, f2[t])) add = t;
+                    if (add >= 0) {
+                        act[add] = 1; dl[add] = 0.0;
+                        if (add == 4) seed_cap(sg);
+                        if (add == ib && act[5]) { act[5] = 0; dl[5] = 0.0; }
+                        continue;
+                    }
+                    // ...then the answer's own ordering: the trial's most-pulled stress need not end the smallest
+                    const Order o2 = order_of(sg);
+                    const double tie2 = 1e-9 * fscale;
+                    if (reorders < 4 && (sg(o2.a) > sg(ia) + tie2 || sg(o2.c) < sg(ic) - tie2)) {
+                        set_order(o2.a, o2.b, o2.c);
+                        ++reorders;
+                        continue;
+                    }
+                    gp_end = g2;
+                    ev_end = e2;
+                    solved = true;
+                }
+                // the floor and the ordering assumed must hold at the end; else the walk decides
+                if (solved) {
+                    const double tie = 1e-9 * fscale;
+                    if (!(sg(ia) >= sg(ib) - tie && sg(ib) >= sg(ic) - tie) || sg(ib) > plim) solved = false;
+                    // an answer on the line has hardened gamma_p to its failure value on the way
+                    if (solved && act[3] && plateau) {
+                        const double scf = sg(ic);
+                        const double gpf = fb(qf_of(scf) * (1.0 - 1e-12), qa_of(scf));
+                        if (g_in < gpf && g_in + hi * (dl[3] + dl[5]) < gpf * (1.0 - 1e-9)) solved = false;
+                    }
+                }
+                if (solved) {
+                    res.stress = sg;
+                    res.gp = gp_end;
+                    res.ev = act[4] ? ev_end : e_in;
+                    res.plastic = true;
+                    // the consistent tangent: d sigma = (J^-1)_ss De d eps
+                    const Eigen::FullPivLU<Mat> lu(Jlast);
+                    res.tangent = lu.inverse().topLeftCorner<3, 3>() * De;
+                    if (!res.tangent.allFinite()) res.tangent.setZero();
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (ten_on && law_cc > 0.0 && step > 0.0 && !(plan_in && plan_in->n > 0 && plan_in->dT > 0.0)) {
+            const Order on = order_of(sigma_n);
+            // (a replay of an implicit answer is returned the same way, whether or not its perturbed
+            // trial still crosses the cut-off)
+            if (sigma_n(on.b) <= plim && ((sigma_n + ds_tr).minCoeff() < -ten || (plan_in && plan_in->implicit))) {
+                BeOut r1;
+                if (be_return(sigma_n, gamma_p_n, ev_n, dstrain, r1)) {
+                    HsIntegrated out;
+                    out.stress = r1.stress;
+                    out.gamma_p = r1.gp;
+                    out.pp = r1.ev == ev_n ? pp_n : pc_of(r1.ev);
+                    out.plastic = r1.plastic;
+                    out.nsub = 1;
+                    out.saturated = 0;
+                    out.tangent = r1.tangent;
+                    if (plan_out) { plan_out->clear(); plan_out->implicit = true; }
+                    return out;
+                }
+            }
         }
         // Only a COMPRESSIVE trial walks from the tip in graded substeps: the cap closes the
         // compressive side only, so a trial with a tensile mean stress has no cap to grow and no
@@ -1718,6 +2162,12 @@ HsIntegrated hs_integrate(const HardeningSoilParams& p_in,
         // and stopped at it would return the integral of part of the strain, silently.
         const int planned = (int)std::ceil(n - 1e-9) + 1;
         for (double T = 0.0; T < 1.0 - 1e-12 && w.taken < planned; ++w.taken) {
+            if (T > 0.0 && ends_at_apex(w.sig, w.gp, (1.0 - T) * dstrain_w)) {   // (above)
+                w.sig.setZero();
+                w.tangent.setZero();
+                w.plastic = true;
+                break;
+            }
             const double dT = std::min(dT_full, 1.0 - T);
             const Eigen::Vector3d de = dT * dstrain_w;
             const bool whole = have_whole && w.taken == 0 && dT == 1.0;
@@ -1793,15 +2243,18 @@ HsSeed hs_seed_from_history(const HardeningSoilParams& p, double sxx, double syy
     else if (mode == 2) syy_c = syy + std::max(0.0, POP);
     const Eigen::Vector3d now = principal(sxx, syy, sxy, szz);
     const Eigen::Vector3d past = principal(k0nc * syy_c, syy_c, sxy, k0nc * syy_c);
-    // THE CAP COMES FROM THE HISTORY, THE SHEAR HARDENING FROM THE PRESENT. The pre-consolidation
-    // state is what the cap remembers: pp is the larger of the two. The shear hardening is the
-    // one that puts the CURRENT stress on the shear surface. It used to be the larger of the two
-    // as well, so ground with a little overconsolidation started with a shear surface it had
-    // reached in its past and answered a first excavation elastically in shear. Measured on a
-    // strutted excavation in clay with a pre-overburden of 5 kPa against a published solution
-    // (wall movement after each stage 6.1 / 24.1 / 57.1 mm): 6.01 / 22.61 / 55.50 with the shear
-    // hardening of the past, 6.01 / 23.68 / 57.25 with that of the present.
-    return {std::max(hs_initial_pp(p, now), hs_initial_pp(p, past)), hs_initial_gamma_p(p, now)};
+    // THE PRE-CONSOLIDATION STATE IS WHAT BOTH SURFACES REMEMBER: the ground has been at that stress,
+    // on the K0nc line, and both the cap and the shear surface were pushed out to it. An
+    // overconsolidated state lies inside them and answers elastically up to where it left them.
+    // Measured on the undrained element tests of four clays against the published curves (rms of the
+    // deviators and mean stresses 3.5% -> 3.1%, first yield of a clay of POP 32 at 107 kPa against the
+    // published 112 and 103 with the shear surface on the present state), and on a strutted excavation
+    // in clay with a pre-overburden of 5 kPa (wall movement after each stage, published 6.1 / 24.1 / 57.1
+    // / 141.6 mm): 6.04 / 23.11 / 57.06 / 156.34 against 6.11 / 25.01 / 59.73 / 162.65. This same
+    // excavation had once chosen the other way (22.61 / 55.50 against 23.68 / 57.25), but on a joint that
+    // read the wrong water.
+    return {std::max(hs_initial_pp(p, now), hs_initial_pp(p, past)),
+            std::max(hs_initial_gamma_p(p, now), hs_initial_gamma_p(p, past))};
 }
 
 void hs_oedometer_probe(const HardeningSoilParams& p, double& Eoed_pref,
@@ -1854,6 +2307,41 @@ void hs_oedometer_probe(const HardeningSoilParams& p, double& Eoed_pref,
     }
 }
 
+// E50 as a drained triaxial test reads it: from an isotropic stress at p_ref on the cap, the minor stress held, the
+// secant at half the failure deviator.
+static double hs_triaxial_e50(const HardeningSoilParams& p) {
+    const double s3 = p.p_ref, qf = p.q_failure(s3);
+    if (!(qf > 0.0)) return p.E50(s3);
+    Eigen::Vector3d sig(s3, s3, s3);
+    double gp = 0.0, pp = hs_initial_pp(p, sig);
+    double e1 = 0.0, q_prev = 0.0, e_prev = 0.0;
+    const double de1 = 0.04 * 0.5 * qf / p.E50(s3);   // 25 steps to the strain of the hyperbola alone
+    double lateral = -0.2;                            // lateral over axial strain, carried from step to step
+    for (int i = 0; i < 200; ++i) {
+        double de3 = lateral * de1;
+        const auto walk = [&](double d3) {
+            return hs_integrate(p, sig, gp, pp, Eigen::Vector3d(de1, d3, d3), kHsCalibrationTol);
+        };
+        HsIntegrated r = walk(de3);
+        double err = r.stress(1) - s3;
+        if (std::fabs(err) >= 1e-7 * s3) {
+            const double slope = (walk(de3 + 1e-3 * de1).stress(1) - r.stress(1)) / (1e-3 * de1);
+            for (int it = 0; it < 12 && std::fabs(slope) > 0.0 && std::fabs(err) >= 1e-7 * s3; ++it) {
+                de3 -= err / slope;
+                r = walk(de3);
+                err = r.stress(1) - s3;
+            }
+        }
+        lateral = de3 / de1;
+        sig = r.stress; gp = r.gamma_p; pp = r.pp;
+        e1 += de1;
+        const double q = sig(0) - sig(1);
+        if (q >= 0.5 * qf) return 0.5 * qf / (e_prev + (0.5 * qf - q_prev) / (q - q_prev) * (e1 - e_prev));
+        q_prev = q; e_prev = e1;
+    }
+    return p.E50(s3);
+}
+
 void hs_calibrate_cap(HardeningSoilParams& p, double K0_NC) {
     p.K0nc = K0_NC;   // the line the oedometer probe starts on
     // ONE CALIBRATION PER SOIL, NOT PER PHASE. The two nested bisections below walk an oedometer
@@ -1867,25 +2355,30 @@ void hs_calibrate_cap(HardeningSoilParams& p, double K0_NC) {
     // keyed (and NaN on every set of parameters that reaches this function), so it is not keyed.
     // sigma_t is not keyed either: the material wrapper sets it on its own copy for each call, and
     // the calibration walks a compressive oedometer path the cut-off never reaches.
-    static_assert(sizeof(HardeningSoilParams) == 20 * sizeof(double),
+    static_assert(sizeof(HardeningSoilParams) == 21 * sizeof(double),
                   "a member was added to HardeningSoilParams: add it to the calibration key");
     using Key = std::array<double, 16>;
     const Key key{p.E50_ref, p.Eur_ref, p.Eoed_ref, p.m, p.p_ref, p.cohesion, p.friction,
                   p.dilatancy, p.dilatancy_cut ? 1.0 : 0.0, p.Rf, p.nu_ur, p.G0_ref, p.gamma07,
                   p.hardening_scale, p.elastic_scale, K0_NC};
     static std::mutex cache_mutex;
-    static std::vector<std::pair<Key, std::array<double, 2>>> cache;
+    static std::vector<std::pair<Key, std::array<double, 3>>> cache;
     {
         const std::lock_guard<std::mutex> lock(cache_mutex);
         for (const auto& e : cache)
-            if (e.first == key) { p.cap_alpha = e.second[0]; p.cap_beta = e.second[1]; return; }
+            if (e.first == key) { p.cap_alpha = e.second[0]; p.cap_beta = e.second[1]; p.ei_scale = e.second[2]; return; }
     }
-    struct Keep {   // stored on every way out of the search below
+    // Stored on every way out of the search below but an exception: a calibration stopped half way
+    // -- a run cancelled inside it (katai/materials/interrupt.hpp) -- holds an alpha and a beta that
+    // are not this material's, and every later build in the process would have read them back.
+    struct Keep {
         HardeningSoilParams& p; const Key& key;
+        const int unwinding = std::uncaught_exceptions();
         ~Keep() {
+            if (std::uncaught_exceptions() > unwinding) return;
             const std::lock_guard<std::mutex> lock(cache_mutex);
             for (const auto& e : cache) if (e.first == key) return;
-            cache.push_back({key, {p.cap_alpha, p.cap_beta}});
+            cache.push_back({key, {p.cap_alpha, p.cap_beta, p.ei_scale}});
         }
     } keep{p, key};
     const double Kp = hs_cap_Kp(p, K0_NC);
@@ -1923,6 +2416,9 @@ void hs_calibrate_cap(HardeningSoilParams& p, double K0_NC) {
         }
         return c;
     };
+    // Each root starts next to the last one where it brackets there, and that is most of the walks: k moves little with
+    // alpha, and alpha little with the initial stiffness.
+    double k_last = 0.0, alpha_last = 0.0;
     // Inner: at a given alpha, the k (beta = p_ref / (k Kp)) that gives Eoed_ref; returns K0.
     auto solve_k_return_K0 = [&](double alpha) {
         p.cap_alpha = alpha;
@@ -1931,25 +2427,73 @@ void hs_calibrate_cap(HardeningSoilParams& p, double K0_NC) {
             double e, k0; hs_oedometer_probe(p, e, k0);
             return e - p.Eoed_ref;   // rises with k (a stiffer cap)
         };
-        const double klo = 0.2, khi = 5.0;
-        const double glo = eoed_gap(klo), ghi = eoed_gap(khi);
+        double klo = 0.2, khi = 5.0, glo = 0.0, ghi = 0.0;
+        bool near = false;
+        if (k_last > 0.0) {
+            const double a = std::max(klo, 0.8 * k_last), b = std::min(khi, 1.25 * k_last);
+            glo = eoed_gap(a);
+            ghi = eoed_gap(b);
+            near = (glo > 0.0) != (ghi > 0.0);
+            if (near) { klo = a; khi = b; }
+        }
+        if (!near) { glo = eoed_gap(klo); ghi = eoed_gap(khi); }
         const double k = (glo > 0.0) == (ghi > 0.0)
                              ? (std::fabs(glo) < std::fabs(ghi) ? klo : khi)
                              : illinois(eoed_gap, klo, glo, khi, ghi, 1e-6, 60);
+        k_last = k;
         p.cap_beta = p.p_ref / (k * Kp);
         double e, k0; hs_oedometer_probe(p, e, k0);
         return k0;
     };
     // Outer: alpha for K0 = K0_NC (K0 falls with alpha), in log alpha.
-    const double alo = 0.1, ahi = 80.0;
-    const double klo = solve_k_return_K0(alo), khi = solve_k_return_K0(ahi);
-    if ((K0_NC - klo) * (K0_NC - khi) <= 0.0) {  // bracketed -> reachable
+    const auto solve_cap = [&] {
+        const double alo = 0.1, ahi = 80.0;
         const auto k0_gap = [&](double la) { return solve_k_return_K0(std::exp(la)) - K0_NC; };
-        const double la = illinois(k0_gap, std::log(alo), klo - K0_NC, std::log(ahi), khi - K0_NC,
-                                   1e-5, 60);
-        solve_k_return_K0(std::exp(la));
-    } else {
-        solve_k_return_K0(std::fabs(klo - K0_NC) < std::fabs(khi - K0_NC) ? alo : ahi);
+        if (alpha_last > 0.0) {
+            const double a = std::max(alo, alpha_last / 1.3), b = std::min(ahi, alpha_last * 1.3);
+            const double ga = solve_k_return_K0(a) - K0_NC, gb = solve_k_return_K0(b) - K0_NC;
+            if (ga * gb <= 0.0) {
+                alpha_last = std::exp(illinois(k0_gap, std::log(a), ga, std::log(b), gb, 1e-5, 60));
+                solve_k_return_K0(alpha_last);
+                return;
+            }
+        }
+        const double klo = solve_k_return_K0(alo), khi = solve_k_return_K0(ahi);
+        if ((K0_NC - klo) * (K0_NC - khi) <= 0.0) {  // bracketed -> reachable
+            alpha_last = std::exp(illinois(k0_gap, std::log(alo), klo - K0_NC, std::log(ahi), khi - K0_NC, 1e-5, 60));
+        } else {
+            alpha_last = std::fabs(klo - K0_NC) < std::fabs(khi - K0_NC) ? alo : ahi;
+        }
+        solve_k_return_K0(alpha_last);
+    };
+    solve_cap();
+    // THE INITIAL STIFFNESS IS AN INTERNAL PARAMETER LIKE THE OTHER TWO. "In double hardening situations, i.e. both
+    // yield loci are hardened simultaneously, analytical back-calculation of internal model parameters is impossible.
+    // Therefore, the internal parameters [E_i, H and alpha] are solved for in an iterative scheme so that the HS model
+    // simulates the user input E50 in triaxial element tests and both, E_oed, and K0nc in oedometer element tests"
+    // (Benz 2007, p. 81). The hyperbola's 2 E50 / (2 - R_f) is the answer only with the cap far away. In a normally
+    // consolidated test the cap flows as well, and until this was solved for E50 came out low by what the cap added:
+    // read in the test, 0.75 of the value entered on a clay of E_oed / E50 = 0.8, 0.87 on a sand of 1, and on the
+    // published points of a drained test of Berlin sand III 389.8 / 502.7 / 576.8 kPa against 400 / 512 / 587 at 0.1 /
+    // 0.2 / 0.3% axial strain. The test is from an isotropic stress at p_ref, on the cap, as the definition of E50 has it.
+    // The cap is solved again with the stiffness found, since its own walk feels the shear surface, and two rounds settle.
+    {
+        HardeningSoilParams t = p;
+        t.G0_ref = 0.0;
+        t.hardening_scale = 1.0;
+        t.elastic_scale = 1.0;
+        for (int round = 0; round < 2; ++round) {
+            t.cap_alpha = p.cap_alpha;
+            t.cap_beta = p.cap_beta;
+            const auto gap = [&](double f) {
+                t.ei_scale = f;
+                return hs_triaxial_e50(t) - p.E50_ref;
+            };
+            const double flo = 1.0, fhi = HardeningSoilParams::kMaxEiScale;
+            const double glo = gap(flo), ghi = glo < 0.0 ? gap(fhi) : 0.0;
+            p.ei_scale = !(glo < 0.0) ? 1.0 : ghi < 0.0 ? fhi : illinois(gap, flo, glo, fhi, ghi, 1e-4, 30);
+            solve_cap();
+        }
     }
 }
 

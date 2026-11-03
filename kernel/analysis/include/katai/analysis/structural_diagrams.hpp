@@ -101,7 +101,7 @@ inline StructForce force_diagram(const DiagSpec& sp, const Structures& structure
         if ((!elastic || from_state) && plate_plastic.size() >= sp.end * S3)
             ps_slice.assign(plate_plastic.begin() + sp.begin * S3,
                             plate_plastic.begin() + sp.end * S3);
-        d.stations = plate_force_diagram(chain, mesh, dofs, field, ps_slice, 5, !elastic);
+        d.stations = plate_force_diagram(chain, mesh, dofs, field, ps_slice, 5, !elastic, &d.yielded);
     } else if (sp.kind == 5) {     // tri15 embedded wall: 5-node plate N/Q/M (plate_force_diagram overload)
         const std::vector<PlateElement5> chain(
             structures.plates5.begin() + sp.begin, structures.plates5.begin() + sp.end);
@@ -110,7 +110,7 @@ inline StructForce force_diagram(const DiagSpec& sp, const Structures& structure
         if ((!elastic || from_state) && plate5_plastic.size() >= sp.end * S5)
             ps_slice.assign(plate5_plastic.begin() + sp.begin * S5,
                             plate5_plastic.begin() + sp.end * S5);
-        d.stations = plate_force_diagram(chain, mesh, dofs, field, ps_slice, 9, !elastic);
+        d.stations = plate_force_diagram(chain, mesh, dofs, field, ps_slice, 9, !elastic, &d.yielded);
     } else if (sp.kind == 1) {     // anchor: one axial force (mirrors the solver exactly)
         const auto& an = structures.anchors[sp.begin];
         const double Up = sp.begin < anchor_plastic.size() ? anchor_plastic[sp.begin] : 0.0;
@@ -155,7 +155,9 @@ inline InterfaceResult force_diagram(const IfaceDiag& is, const Structures& stru
                                      const std::vector<double>& slip3,
                                      const std::vector<double>& slip5, bool elastic,
                                      bool disp_is_total = true, bool from_state = false,
-                                     const Eigen::VectorXd* parent_total = nullptr) {
+                                     const Eigen::VectorXd* parent_total = nullptr,
+                                     const std::vector<double>* pore3 = nullptr,
+                                     const std::vector<double>* pore5 = nullptr) {
     InterfaceResult ir; ir.name = is.name;
     int install = -1;
     if (is.order == 15 && is.begin < structures.interfaces5.size())
@@ -172,9 +174,9 @@ inline InterfaceResult force_diagram(const IfaceDiag& is, const Structures& stru
         pfield = &detail::installed_field(structures, install, dofs, *parent_total, true, pbuf);
     ir.stations = (is.order == 15)
         ? interface_force_diagram(structures.interfaces5, is.begin, is.end, mesh,
-                                  dofs, field, slip5, elastic, from_state, pfield)
+                                  dofs, field, slip5, elastic, from_state, pfield, pore5)
         : interface_force_diagram(structures.interfaces, is.begin, is.end, mesh,
-                                  dofs, field, slip3, elastic, from_state, pfield);
+                                  dofs, field, slip3, elastic, from_state, pfield, pore3);
     return ir;
 }
 

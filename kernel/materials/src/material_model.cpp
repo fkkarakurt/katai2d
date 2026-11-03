@@ -496,7 +496,9 @@ static bool adp_point(const MaterialModel& m, const GaussState& committed, const
     const adp::Vec4 de = -de_k;
     adp::State out;
     plastic = false;
-    if (!(P.suA > 0.0) || !(P.G > 0.0) || !adp::integrate(P, c, de, out)) {
+    adp::Mat4 Tc = adp::Mat4::Identity();
+    if (!(P.suA > 0.0) || !(P.G > 0.0) ||
+        !(want_tangent ? adp::integrate_tangent(P, c, de, out, Tc) : adp::integrate(P, c, de, out))) {
         // Elastic, said by the caller's report as an integration it could not complete.
         const adp::Mat4 D = adp::elastic(P.G > 0.0 ? P : adp::Params{});
         sig_k = -(c.sig + D * de);
@@ -507,7 +509,7 @@ static bool adp_point(const MaterialModel& m, const GaussState& committed, const
     plastic = out.gp > c.gp;
     sig_k = -out.sig;
     gp = out.gp;
-    T = (want_tangent && plastic) ? adp::tangent(P, c, de, out) : adp::elastic(P);
+    T = (want_tangent && plastic) ? Tc : adp::elastic(P);
     return true;
 }
 
@@ -744,6 +746,7 @@ void integrate_point(const MaterialModel& m, const GaussState& committed,
                 report->plastic = plastic;
                 report->stress_dependent = true;
                 report->elastic = tangent;
+                report->integration_saturated = nsub >= 500;   // the size rule of ssc_nsub no longer holds
             }
             if (plastic && mode != TangentMode::kNone) {
                 GaussState pert;

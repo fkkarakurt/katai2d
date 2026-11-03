@@ -11,10 +11,10 @@
 //          cross-references, enum ranges the reader cannot check without
 //          losing information) and parameter bounds that make a solve
 //          indefensible on sight (E <= 0, Rf >= 1, kappa* >= lambda*).
-//   * OUT: model x drainage x phase feasibility (e.g. Soft Soil Creep under a
-//          Consolidation phase, NonPorous in a flow phase). The ENGINE refuses
-//          those at solve time with its own tested messages -- one source of
-//          truth; duplicating the rules here would let the two drift apart.
+//   * OUT: model x drainage x phase feasibility (e.g. NonPorous in a flow
+//          phase). The ENGINE refuses those at solve time with its own tested
+//          messages -- one source of truth; duplicating the rules here would let
+//          the two drift apart.
 //   * OUT: how regions meet. Overlap is defined (the last polygon containing a point
 //          owns it, as for material and phase activity), and near-coincident vertices
 //          and edges are noded by the mesher to one model-scaled tolerance
@@ -29,6 +29,7 @@
 // Every rule is pinned by tests/test_k2d_validator.cpp, which also prints the
 // full message catalogue so engineer-readability stays reviewable.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -473,6 +474,18 @@ inline void check_material(ValidationReport& r, const model::Material& m, size_t
         }
     }
 
+    // A linear elastic soil has no strength for Undrained (B) to put su into.
+    if (m.model == SoilModel::LinearElastic && m.drainage == Drainage::UndrainedB)
+        r.add(Severity::Warning, path("drainage"),
+              "Undrained (B) reads c as an undrained shear strength, and a linear elastic material has no strength: "
+              "c is not read. Use Undrained (A), or Undrained (C) with Eu and nu_u");
+    // Refused here as well as by the model's registry entry, so that the file says so before a run does.
+    if ((m.model == SoilModel::SoftSoil || m.model == SoilModel::SoftSoilCreep) && m.drainage == Drainage::UndrainedB)
+        r.add(Severity::Error, path("drainage"),
+              "Undrained (B) replaces the strength by c = su with phi = 0, and Soft Soil and Soft Soil Creep are "
+              "written with the friction angle throughout (their cap and their stress-dependent stiffness need "
+              "it). Use Undrained (A), which keeps the effective strength and adds the pore fluid");
+
     // -- NGI-ADP: an undrained total-stress model -----------------------------------
     // Its strengths are undrained shear strengths, so it is solved in total stress or not at all;
     // the ratios are strengths, and each failure strain a total strain that must leave the
@@ -765,6 +778,9 @@ inline ValidationReport validate_project(const model::Project& p) {
     ValidationReport r;
 
     // -- Domain ----------------------------------------------------------------
+    if (!(p.gamma_water > 0.0))
+        r.add(Severity::Error, "gamma_water",
+              "the unit weight of water must be positive (got " + num(p.gamma_water) + " kN/m3)");
     if (!(p.x_max > p.x_min))
         r.add(Severity::Error, "x_max",
               "the model must span x_min < x_max (got x_min = " + num(p.x_min) +
@@ -1101,6 +1117,49 @@ inline ValidationReport validate_project(const model::Project& p) {
         };
         check_edges("edge_bc", P.edge_bc, 0, 5, "boundary-condition");
         check_edges("edge_flow", P.edge_flow, 0, 4, "flow-boundary");
+        // A BOUNDARY CONDITION ON AN EDGE INSIDE THE MODEL. The conditions act on the mesh's
+        // boundary nodes, and on an edge another region shares those are only its ends where it
+        // meets the model's boundary -- and the two sides of an interface drawn along it, which the
+        // condition then holds together. Measured: an internal edge carrying a wall's interface,
+        // fixed to drive the wall, pinned both sides of the joint at its end, and the force driving
+        // the wall grew with the displacement without limit (1.6e5 to 2.6e6 kN/m), with nothing said.
+        if (P.edge_bc.size() == nv && nv >= 3) {
+            double ext = 1.0;
+            for (size_t k = 0; k < nv; ++k) ext = std::max({ext, std::fabs(P.x[k]), std::fabs(P.y[k])});
+            const double tol = 1e-6 * ext;
+            // Does the segment c-d lie on a-b over a positive length?
+            const auto overlaps = [tol](double ax, double ay, double bx, double by, double cx, double cy,
+                                        double dx, double dy) {
+                const double ex = bx - ax, ey = by - ay, len = std::hypot(ex, ey);
+                if (len <= tol) return false;
+                const auto off = [&](double px, double py) {
+                    return std::fabs((px - ax) * ey - (py - ay) * ex) / len;
+                };
+                if (off(cx, cy) > tol || off(dx, dy) > tol) return false;
+                const double tc = ((cx - ax) * ex + (cy - ay) * ey) / len;
+                const double td = ((dx - ax) * ex + (dy - ay) * ey) / len;
+                return std::min(len, std::max(tc, td)) - std::max(0.0, std::min(tc, td)) > tol;
+            };
+            for (size_t j = 0; j < nv; ++j) {
+                if (P.edge_bc[j] == (int)model::BCType::Free) continue;
+                const double ax = P.x[j], ay = P.y[j], bx = P.x[(j + 1) % nv], by = P.y[(j + 1) % nv];
+                const model::SoilPolygon* other = nullptr;
+                for (size_t q = 0; q < p.polygons.size() && !other; ++q) {
+                    if (q == i) continue;
+                    const auto& Q = p.polygons[q];
+                    const size_t nq = std::min(Q.x.size(), Q.y.size());
+                    for (size_t k = 0; k < nq && !other; ++k)
+                        if (overlaps(ax, ay, bx, by, Q.x[k], Q.y[k], Q.x[(k + 1) % nq], Q.y[(k + 1) % nq]))
+                            other = &Q;
+                }
+                if (other)
+                    r.add(Severity::Warning, at("polygons", i, "edge_bc") + "[" + std::to_string(j) + "]",
+                          who + "edge " + std::to_string(j) + " lies inside the model (region \"" +
+                              other->name + "\" has it too): a boundary condition there acts only where "
+                              "the edge meets the model's boundary, and on the two sides of an interface "
+                              "along it, which it holds together; draw it on the model's boundary");
+            }
+        }
         // A prescribed-flux edge needs a value to prescribe: without the array the edge would
         // silently behave as closed, which is a different problem from the one asked for.
         {
@@ -1333,6 +1392,18 @@ inline ValidationReport validate_project(const model::Project& p) {
                           " m): a normal drain cannot pull the water below itself, so the level "
                           "it reaches is set by the geometry rather than by this number");
         }
+    }
+    // -- Points for curves (`curves`) -------------------------------------------
+    for (size_t i = 0; i < p.curves.size(); ++i) {
+        const auto& C = p.curves[i];
+        const std::string who = "\"" + C.name + "\": ";
+        if (!std::isfinite(C.x) || !std::isfinite(C.y))
+            r.add(Severity::Error, at("curves", i, std::isfinite(C.x) ? "y" : "x"),
+                  who + "a point for curves needs finite coordinates");
+        else if (C.x < p.x_min || C.x > p.x_max || C.y < p.y_min || C.y > p.y_max)
+            r.add(Severity::Warning, at("curves", i, "x"),
+                  who + "(" + num(C.x) + ", " + num(C.y) + ") lies outside the model; its curve "
+                        "follows the node nearest to it");
     }
     // -- Phases ----------------------------------------------------------------
     detail::check_phase(r, p.initial, "initial", true, p.polygons.size(), p.structs.size(),

@@ -41,13 +41,7 @@ inline void report_structures_by_their_laws(const Structures& structures,
             StructForce d = force_diagram(sp, structures, mesh, dofs, disp_total, st.anchor_plastic,
                                           st.geogrid_plastic, /*elastic=*/false, st.plate_plastic,
                                           st.plate5_plastic);
-            if (sp.kind == 0 || sp.kind == 5) {   // a plate hinge formed (or carried in)
-                const auto& psv = sp.kind == 0 ? st.plate_plastic : st.plate5_plastic;
-                const size_t S = sp.kind == 0 ? (size_t)plate::kPlasticStateSize
-                                              : (size_t)plate::kPlasticStateSize5;
-                for (size_t k = sp.begin * S; k < sp.end * S && k < psv.size(); ++k)
-                    if (psv[k] != 0.0) { d.yielded = true; break; }
-            }
+            // a plate yielded: force_diagram reads it (plate_on_cap, static_phase.hpp)
             const auto env = force_envelope(d.stations);
             d.max_N = env.max_abs_N; d.max_Q = env.max_abs_Q; d.max_M = env.max_abs_M;
             R.struct_forces.push_back(std::move(d));
@@ -55,7 +49,9 @@ inline void report_structures_by_their_laws(const Structures& structures,
     if (iface_diagrams)
         for (const auto& is : *iface_diagrams) {
             InterfaceResult ir = force_diagram(is, structures, mesh, dofs, disp_total,
-                                               st.interface_slip, st.interface5_slip, false);
+                                               st.interface_slip, st.interface5_slip, false, true,
+                                               false, nullptr, &st.interface_pore,
+                                               &st.interface5_pore);
             ir.slip_checked = true;   // the Coulomb return ran on every iterate of the phase
             for (const auto& s : ir.stations) {
                 ir.max_abs_tau = std::max(ir.max_abs_tau, std::fabs(s.tau));

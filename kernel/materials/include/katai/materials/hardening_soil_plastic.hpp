@@ -250,7 +250,10 @@ struct HsIntegrated {
 struct HsSubstepPlan {
     double dT = 0.0;   // pseudo-time size of every substep but the remainder; 0 = nothing recorded
     int n = 0;         // substeps taken
-    void clear() { dT = 0.0; n = 0; }
+    // The answer was the implicit return of the stiffness floor (hs_integrate): a replay -- the
+    // perturbed runs of the consistent tangent -- integrates the same way, never by a walk.
+    bool implicit = false;
+    void clear() { dT = 0.0; n = 0; implicit = false; }
 };
 
 // Integrate the Hardening Soil model over `dstrain` from the committed state, with the local

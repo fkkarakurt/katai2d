@@ -319,19 +319,14 @@ void test_ssc_time_classes() {
           "the 100 vs 1 day difference is the depth-uniform mu* ln(t) creep (10%)");
 }
 
-// HOLDING periods for SSC. The consolidation route was tried first and did NOT
-// verify: on a fast-draining column the settlement DECREASED with time-step
-// refinement (T=100 day: -0.519 at 50 steps, -0.506 at 100, diverged at 200;
-// T=1 day: -0.442 at 10 steps, -0.403 at 25, diverged at 50) and the creep tail
-// came out 37% short of the exact mu* H ln(100) oracle the verified plastic-phase
-// path meets at +0.1%. A recommendation that cannot be verified must not ship:
-// SSC x Consolidation is now REFUSED (pinned below) and the working alternative is
-// pinned instead -- load WITH time, then hold in a timed NIL Plastic phase (no
-// creep shock: the state sits on its isotach when the hold starts, rates are
-// moderate). Isotach uniqueness says the chain must land where the single ramped
-// run lands.
+// HOLDING periods for SSC: load WITH time, then hold in a timed NIL Plastic phase (no creep shock: the state
+// sits on its isotach when the hold starts, rates are moderate). Isotach uniqueness says the chain must land
+// where the single ramped run lands. And in a consolidation phase, which on this fast-draining column is the
+// same hold: it must land on the same isotach at any size of step. (It used to depend on the step: the settlement
+// DECREASED as the step was refined, T = 100 days -0.519 at 50 steps, -0.506 at 100, because the base force of a
+// time step had the step's creep in it.)
 void test_ssc_consolidation_hold() {
-    std::printf("-- SSC holding: timed-NIL chain verified; consolidation refused --\n");
+    std::printf("-- SSC holding: timed-NIL chain, and the same hold in a consolidation phase --\n");
     // Two-phase hold: timed loading (T=1, verified) + a timed NIL hold (T=99).
     // No shock: the state sits on the isochrone, the creep rate is moderate — it must land
     // where the single-phase T=100 ramped run does (isochrone uniqueness).
@@ -380,23 +375,39 @@ void test_ssc_consolidation_hold() {
           "the aged chain sits on the ideal 100-day isotach closed form (5%)");
     check(std::fabs(u_chain) > std::fabs(u_ramp),
           "the ramped run is younger and settles less (staged-fraction youth, physical)");
-    // SSC x Consolidation: honest refusal until the Biot x creep interaction verifies.
-    {
+    // The hold in a consolidation phase and in a coupled one, at two sizes of step: on the isotach, and not moved
+    // by the step.
+    const auto consolidated = [&](m::PhaseType type, int steps, double& u) {
         m::Project pr = ssc_column();
+        add_surcharge_phase(pr, 50.0);
+        pr.phases.back().duration = 1.0;
         m::Phase ph;
         ph.name = "consolidate";
-        ph.type = m::PhaseType::Consolidation;
+        ph.type = type;
         ph.poly_active = {1};
-        ph.duration = 10.0;
-        ph.time_steps = 10;
+        ph.load_active = {1};
+        ph.duration = 99.0;
+        ph.time_steps = steps;
         pr.phases.push_back(ph);
         const auto M = katai::app::mesh_from_project(pr, 0.5, 6);
         const auto res = katai::app::solve_phases(pr, M.mesh, InitialPhase::K0Procedure);
-        bool refused = false;
-        for (const auto& r : res)
-            if (!r.ok && r.message.find("Soft Soil Creep") != std::string::npos) refused = true;
-        check(refused, "SSC + consolidation refused with an explicit message (unverified path)");
-    }
+        if (res.size() != 3 || !res[1].ok || !res[2].ok) {
+            std::printf("   (%d steps: %s)\n", steps, res.empty() ? "no result" : res.back().message.c_str());
+            return false;
+        }
+        u = uy_top(res[1]) + uy_top(res[2]);
+        return true;
+    };
+    double uc25 = 0, uc100 = 0, uf25 = 0;
+    check(consolidated(m::PhaseType::Consolidation, 25, uc25), "SSC in a consolidation phase runs, 25 steps");
+    check(consolidated(m::PhaseType::Consolidation, 100, uc100), "SSC in a consolidation phase runs, 100 steps");
+    check(consolidated(m::PhaseType::FullyCoupled, 25, uf25), "SSC in a coupled phase runs, 25 steps");
+    std::printf("   consolidation 25 / 100 steps %.4f / %.4f m, coupled 25 steps %.4f m (the chain %.4f, ideal %.4f)\n",
+                uc25, uc100, uf25, u_chain, u_ideal);
+    check(std::fabs(uc25 - uc100) < 0.01 * std::fabs(uc100), "the settlement does not move with the time step (1%)");
+    check(std::fabs(uc100 - u_chain) < 0.02 * std::fabs(u_chain),
+          "the consolidation hold lands where the Plastic chain lands (2%)");
+    check(std::fabs(uf25 - uc25) < 0.01 * std::fabs(uc25), "the coupled route lands on the consolidation route (1%)");
 }
 
 void test_ssc_undrained_refusal() {

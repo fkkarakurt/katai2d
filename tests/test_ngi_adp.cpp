@@ -94,8 +94,39 @@ Path drive(const adp::Params& P, const adp::Vec4& dir, double h, int steps, Tau 
 
 }  // namespace
 
+// Direct simple shear before the peak. The failure strain is read at the orientation of the modified deviator, which moves
+// with the hardening itself; read at a k that is not the answer, the curve was 5.7% low at 5% of the failure strain, where
+// triaxial compression and extension agree to 0.1%. Symbols of Ukritchon & Boonyatee (2015), Geotech. Eng. J. 46(1), Fig. 13.
+void test_dss_curve() {
+    std::printf("-- the direct simple shear curve before its peak --\n");
+    adp::Params P;
+    P.suA = 60.0; P.suP = 24.0; P.suDSS = 42.0; P.G = 200.0 * 60.0; P.nu = 0.495;
+    P.gfC = 0.04; P.gfE = 0.15; P.gfDSS = 0.07; P.r_tx = 0.99;
+    adp::State s;
+    s.sig << -0.0, -0.0, -0.0, 0.0;
+    s.s0 = s.sig;
+    const double g_end = 0.0105, h = g_end / 3000.0;
+    double g = 0.0;
+    double at35 = 0.0, at70 = 0.0, at105 = 0.0;
+    for (int i = 0; i < 3000; ++i) {
+        adp::State n;
+        adp::Vec4 de; de << 0.0, 0.0, 0.0, h;
+        if (!adp::integrate(P, s, de, n)) { check(false, "the path integrates"); return; }
+        s = n;
+        g += h;
+        if (i == 999) at35 = std::fabs(s.sig(3));
+        if (i == 1999) at70 = std::fabs(s.sig(3));
+        if (i == 2999) at105 = std::fabs(s.sig(3));
+    }
+    std::printf("   tau at gamma 0.35, 0.70, 1.05%%: %.3f %.3f %.3f against 14.405 21.314 26.024\n", at35, at70, at105);
+    check(rel(at35, 14.4048) < 0.012 && rel(at70, 21.3135) < 0.01 && rel(at105, 26.0244) < 0.01,
+          "on the published curve (1%, the symbols' own scatter)");
+}
+
 int main() {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);   // what it got through is in the log if it runs out of time
     std::printf("== NGI-ADP at the material point (KV-CST-024) ==\n");
+    test_dss_curve();
     const auto tau_v = [](const adp::Vec4& s) { return 0.5 * (s(1) - s(0)); };
     const auto tau_xy = [](const adp::Vec4& s) { return s(3); };
     const auto g_v = [](const adp::Vec4& de) { return de(1) - de(0); };   // eps1 - eps3

@@ -17,6 +17,7 @@
 #include <katai/jobs/driver.hpp>
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/materials/material_model.hpp>
+#include <katai/materials/registry.hpp>
 #include <katai/materials/soft_soil.hpp>
 #include <katai/model/project.hpp>
 
@@ -255,6 +256,37 @@ void test_wrapper_identity() {
     check(std::fabs(gs.stress(0) - gs.stress_zz) < 1e-8 * kP0, "the radial and hoop stresses stay equal");
 }
 
+// The model has no tension cut-off, whatever the material's switch says (it is on by default): at an
+// overconsolidation where the elastic path reaches a tensile principal stress, an undrained test still ends on
+// the critical state line, at p_f = p0 (R/2)^Lambda.
+void test_no_cutoff() {
+    std::printf("-- the critical state of a heavily overconsolidated clay, with the default switch --\n");
+    MaterialParams p;
+    p.lam_star = 0.10; p.kap_star = 0.02; p.nu_ur = 0.2; p.phi_rad = 25.0 * 3.14159265358979323846 / 180.0;
+    p.tension_cutoff = true;
+    p.tensile_strength = 0.0;
+    const MaterialModel mm = find_model("ModifiedCamClay")->build(p);
+    check(!mm.tension_cutoff, "the model takes no cut-off");
+    const double sphi = std::sin(p.phi_rad), M = 6.0 * sphi / (3.0 - sphi), Lam = 1.0 - p.kap_star / p.lam_star;
+    constexpr double kR = 20.0;
+    GaussState gs;
+    gs.stress = Eigen::Vector3d(-kP0, -kP0, 0.0);
+    gs.stress_zz = -kP0;
+    gs.pp = kR * kP0;
+    const int n = 6000;
+    const double d = 0.30 / n;
+    Eigen::Matrix4d Dt;
+    for (int i = 0; i < n; ++i) {
+        GaussState tr;
+        integrate_point_axisym(mm, gs, Eigen::Vector4d(0.5 * d, -d, 0.0, 0.5 * d), tr, Dt);
+        gs = tr;
+    }
+    const Eigen::Vector3d s(-gs.stress(1), -gs.stress(0), -gs.stress_zz);
+    const double pf = kP0 * std::pow(0.5 * kR, Lam);
+    std::printf("  OCR %.0f: p %.3f, q %.3f against p_f %.3f, M p_f %.3f\n", kR, s.mean(), q_of(s), pf, M * pf);
+    check(rel(s.mean(), pf) < 2e-3 && rel(q_of(s), M * pf) < 2e-3, "it ends on the critical state line (0.2%)");
+}
+
 void test_column() {
     std::printf("-- (e) a confined column through the whole program --\n");
     const double K0 = k0_closed_form();
@@ -311,6 +343,7 @@ int main() {
     test_undrained();
     test_drained();
     test_wrapper_identity();
+    test_no_cutoff();
     test_column();
     if (g_failures) std::fprintf(stderr, "\n%d check(s) failed\n", g_failures);
     return g_failures ? 1 : 0;

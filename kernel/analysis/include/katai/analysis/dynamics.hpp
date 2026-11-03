@@ -13,6 +13,7 @@
 
 #include <Eigen/Dense>
 
+#include <katai/analysis/cancel.hpp>
 #include <katai/math/sparse_matrix.hpp>
 
 namespace katai::core {
@@ -129,6 +130,7 @@ inline NewmarkResult solve_newmark(
     };
     record(0, 0.0);
     for (int step = 0; step < nsteps; ++step) {
+        katai::analysis::poll_cancel();
         // Effective load F_eff = F_{n+1} + M(a0 u+a2 v+a3 a) + C(a1 u+a4 v+a5 a).
         const Eigen::VectorXd Feff =
             force(step + 1) + M * (a0 * u + a2 * v + a3 * a) + C * (a1 * u + a4 * v + a5 * a);

@@ -33,15 +33,15 @@ public:
     bool try_acquire() { return busy_.try_lock(); }
     void release() { busy_.unlock(); }
 
-    // [0,n) is handed out in small contiguous pieces, taken by whichever thread is free: the
-    // caller and the workers each take the next piece until none is left. On return all of
+    // [0,n) is handed out one index at a time (see run_chunk), taken by whichever thread is free:
+    // the caller and the workers each take the next one until none is left. On return all of
     // them have finished.
     void run(int n, const std::function<void(int, int)>& fn) {
         {
             std::lock_guard<std::mutex> lk(m_);
             job_fn_ = &fn;
             job_n_ = n;
-            job_piece_ = std::max(1, n / (nthreads_ * 8));
+            job_piece_ = 1;
             job_next_.store(0, std::memory_order_relaxed);
             job_error_ = nullptr;
             pending_ = nthreads_ - 1;
@@ -70,6 +70,11 @@ public:
         // or two blocks: two cores busy of eight, measured on fill placed on soft clay. Which
         // thread takes which piece now depends on timing; the answer does not, because every
         // index writes only to its own storage (the rule this pool has always had).
+        // ONE INDEX PER PIECE. The callers are element loops, whose every index is an element's
+        // whole stress-point work, so taking the next one costs nothing beside it. With pieces of
+        // n / (8 x threads) elements the costly ones -- the cohesive fill at an embankment's surface,
+        // neighbours in the numbering -- still shared a piece: the same embankment's first phase
+        // 3769 s -> 3000 s with single elements, the answer to every printed digit.
         const int n = job_n_, piece = job_piece_;
         try {
             for (;;) {

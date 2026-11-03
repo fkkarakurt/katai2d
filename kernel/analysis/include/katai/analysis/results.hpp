@@ -188,11 +188,27 @@ struct SolveResult {
     // staged-construction multiplier reached). Lets the GUI report "equilibrated X% of the load" and enables
     // limit-load checks.
     double load_factor = 1.0;
+    // The force out of balance the phase ended with, where its tolerated band was on [kN/m].
+    double force_left = 0.0;
     // Factor of safety from a Safety (phi-c reduction) analysis; < 0 when not a Safety run.
     double fos = -1.0;
     // True when no failure mechanism developed up to the srf_max cap: `fos` is then only a LOWER
     // BOUND (e.g. "FoS > 3.0"), not a definitive factor of safety. The GUI must say ">" not "=".
     bool fos_lower_bound = false;
+    // THE PHASE'S PATH, step by step (NewtonResult::path, SafetyResult::path): the multiplier --
+    // the share of the stage applied in a Plastic phase (Sum-Mstage), the strength reduction factor
+    // in a Safety phase (Sum-Msf) -- and the largest displacement of a node since the start of the
+    // phase there [m]. A factor of safety is read off the plateau of its path. Empty for the other
+    // phase types, and for a factor found by bisection.
+    std::vector<double> path_factor, path_disp;
+    // THE POINTS FOR CURVES (Project::curves): the node each one follows (the node of the mesh
+    // nearest to it), and at every step the phase records -- each entry of path_factor in a
+    // Plastic or Safety phase, of consol_time in a consolidation, fully coupled or dynamic one --
+    // the displacement of each point since the phase began [m]:
+    //     curve_u[(k * curve_nodes.size() + i) * 2 + c],  step k, point i, component c (0 = x).
+    // Empty when the project has no points, or the phase records no steps.
+    std::vector<int> curve_nodes;
+    std::vector<double> curve_u;
     // Design approach (EC7 / TBDY 2018) echoed from the phase, for the report + verdict, as the
     // ENGINE's enum -- the schema's value is mapped once at the driver seam. When a material-factored
     // approach (DA1-C2, DA3) is set, `fos` on a Safety run is the OVER-DESIGN FACTOR (ODF >= 1.0 =>

@@ -101,6 +101,18 @@ inline constexpr std::array<double, 4> kPlate5ShearXi{
     -0.8611363115940526, -0.3399810435848563, 0.3399810435848563, 0.8611363115940526};
 }  // namespace detail
 
+namespace detail {
+// A stress point of a plate AT CAPACITY: on its M-N diamond or, a shell of revolution, at its hoop
+// cap (to 1e-6 of it). A diagram marks a plate yielded where a hinge has formed -- a plate with a
+// capacity whose state only its return mapping writes, and that state is not zero -- or where it
+// is at capacity now. A section change and a line contraction write the state too, without a
+// hinge: such a plate is yielded only while it is at capacity.
+inline bool plate_on_cap(const plate::PlateProps& p, double N, double M, double Nt) {
+    const double iN = p.Np > 0.0 ? 1.0 / p.Np : 0.0, iM = p.Mp > 0.0 ? 1.0 / p.Mp : 0.0;
+    return std::fabs(N) * iN + std::fabs(M) * iM >= 1.0 - 1e-6 || std::fabs(Nt) * iN >= 1.0 - 1e-6;
+}
+}  // namespace detail
+
 // N,Q,M diagram along a 3-node plate (wall/beam) chain. `plates` is consecutive (ends
 // sharing geometry; e.g. WallBuild.plates bottom to top). Samples each element at
 // `stations_per_elem` equally spaced ξ ∈ [−1,+1], accumulating arc length from the physical
@@ -117,9 +129,10 @@ inline constexpr std::array<double, 4> kPlate5ShearXi{
 inline std::vector<ForceStation> plate_force_diagram(
     const std::vector<PlateElement>& plates, const mesh::Mesh& mesh, const DofMap& dofs,
     const Eigen::VectorXd& disp, const std::vector<double>& plastic_state = {},
-    int stations_per_elem = 5, bool capped = true) {
+    int stations_per_elem = 5, bool capped = true, bool* at_capacity = nullptr) {
     std::vector<ForceStation> out;
     if (stations_per_elem < 2) stations_per_elem = 2;
+    if (at_capacity) *at_capacity = false;
     const bool has_ps = plastic_state.size() == plates.size() * plate::kPlasticStateSize;
     double s_acc = 0.0;
     bool have_prev = false;
@@ -135,8 +148,16 @@ inline std::vector<ForceStation> plate_force_diagram(
             u(3 * k + 2) = disp[pe.rot_dof[k]];
         }
         const bool ep_pl = has_ps && pe.props.stateful();
-        std::array<double, 3> Ng{}, Mg{};
-        if (ep_pl && capped)
+        std::array<double, 3> Ng{}, Mg{}, Ntg{}, Mtg{};
+        // A shell of revolution with a state has its hoop force and moment in that state too.
+        const bool shell_pl = ep_pl && pe.props.axisym;
+        if (shell_pl) {
+            std::array<Eigen::Vector4d, 3> sg;
+            plate::gauss_forces_shell(X, pe.props, u, plastic_state.data() + ei * plate::kPlasticStateSize, capped, sg);
+            for (size_t q = 0; q < sg.size(); ++q) {
+                Ng[q] = sg[q](0); Ntg[q] = sg[q](1); Mg[q] = sg[q](2); Mtg[q] = sg[q](3);
+            }
+        } else if (ep_pl && capped)
             plate::gauss_forces_plastic(X, pe.props, u,
                                         plastic_state.data() + ei * plate::kPlasticStateSize, Ng, Mg);
         else if (ep_pl)   // elastic from the state: what a stiffness on top of it carries, uncapped
@@ -149,6 +170,13 @@ inline std::vector<ForceStation> plate_force_diagram(
                 Ng[q] = pe.props.EA * ((Be * u)(0) - st[0]);
                 Mg[q] = pe.props.EI * ((Bk * u)(0) - st[1]);
             }
+        if (at_capacity && ep_pl && capped && pe.props.plastic()) {
+            for (size_t q = 0; q < Ng.size(); ++q)
+                *at_capacity = *at_capacity || detail::plate_on_cap(pe.props, Ng[q], Mg[q], Ntg[q]);
+            if (!pe.props.carries_state)   // a hinge that formed, here or in a phase before
+                for (int k = 0; k < plate::kPlasticStateSize; ++k)
+                    *at_capacity = *at_capacity || plastic_state[ei * plate::kPlasticStateSize + (size_t)k] != 0.0;
+        }
         auto Qr = detail::plate_reduced_shear(X, pe.props, u);  // Barlow shear samples
         if (ep_pl)   // less the shear strain the section does not answer for (plate.hpp)
             for (int k = 0; k < plate::kShearGaussCount; ++k)
@@ -166,8 +194,8 @@ inline std::vector<ForceStation> plate_force_diagram(
             const double Mst = ep_pl ? detail::lagrange_eval<3>(plate::kBendGaussXi, Mg, xi) : f.M;
             const double Q = detail::lagrange_eval<2>(detail::kPlateShearXi, Qr, xi);  // optimal Q
             out.push_back({s_acc, x, y, Nst, Q, Mst, sx, sy});
-            out.back().Nt = f.Nt;
-            out.back().Mt = f.Mt;
+            out.back().Nt = shell_pl ? detail::lagrange_eval<3>(plate::kBendGaussXi, Ntg, xi) : f.Nt;
+            out.back().Mt = shell_pl ? detail::lagrange_eval<3>(plate::kBendGaussXi, Mtg, xi) : f.Mt;
             px = x; py = y; have_prev = true;
         }
     }
@@ -178,9 +206,10 @@ inline std::vector<ForceStation> plate_force_diagram(
 inline std::vector<ForceStation> plate_force_diagram(
     const std::vector<PlateElement5>& plates, const mesh::Mesh& mesh, const DofMap& dofs,
     const Eigen::VectorXd& disp, const std::vector<double>& plastic_state = {},
-    int stations_per_elem = 9, bool capped = true) {
+    int stations_per_elem = 9, bool capped = true, bool* at_capacity = nullptr) {
     std::vector<ForceStation> out;
     if (stations_per_elem < 2) stations_per_elem = 2;
+    if (at_capacity) *at_capacity = false;
     const bool has_ps = plastic_state.size() == plates.size() * plate::kPlasticStateSize5;
     double s_acc = 0.0;
     bool have_prev = false;
@@ -196,8 +225,16 @@ inline std::vector<ForceStation> plate_force_diagram(
             u(3 * k + 2) = disp[pe.rot_dof[k]];
         }
         const bool ep_pl = has_ps && pe.props.stateful();
-        std::array<double, 5> Ng{}, Mg{};
-        if (ep_pl && capped)
+        std::array<double, 5> Ng{}, Mg{}, Ntg{}, Mtg{};
+        // A shell of revolution with a state has its hoop force and moment in that state too.
+        const bool shell_pl = ep_pl && pe.props.axisym;
+        if (shell_pl) {
+            std::array<Eigen::Vector4d, 5> sg;
+            plate::gauss_forces_shell5(X, pe.props, u, plastic_state.data() + ei * plate::kPlasticStateSize5, capped, sg);
+            for (size_t q = 0; q < sg.size(); ++q) {
+                Ng[q] = sg[q](0); Ntg[q] = sg[q](1); Mg[q] = sg[q](2); Mtg[q] = sg[q](3);
+            }
+        } else if (ep_pl && capped)
             plate::gauss_forces_plastic5(X, pe.props, u,
                                          plastic_state.data() + ei * plate::kPlasticStateSize5, Ng, Mg);
         else if (ep_pl)
@@ -210,6 +247,13 @@ inline std::vector<ForceStation> plate_force_diagram(
                 Ng[q] = pe.props.EA * ((Be * u)(0) - st[0]);
                 Mg[q] = pe.props.EI * ((Bk * u)(0) - st[1]);
             }
+        if (at_capacity && ep_pl && capped && pe.props.plastic()) {
+            for (size_t q = 0; q < Ng.size(); ++q)
+                *at_capacity = *at_capacity || detail::plate_on_cap(pe.props, Ng[q], Mg[q], Ntg[q]);
+            if (!pe.props.carries_state)   // a hinge that formed, here or in a phase before
+                for (int k = 0; k < plate::kPlasticStateSize5; ++k)
+                    *at_capacity = *at_capacity || plastic_state[ei * plate::kPlasticStateSize5 + (size_t)k] != 0.0;
+        }
         auto Qr = detail::plate5_reduced_shear(X, pe.props, u);  // Barlow shear samples
         if (ep_pl)
             for (int k = 0; k < plate::kShearGaussCount5; ++k)
@@ -227,8 +271,8 @@ inline std::vector<ForceStation> plate_force_diagram(
             const double Mst = ep_pl ? detail::lagrange_eval<5>(plate::kBendGaussXi5, Mg, xi) : f.M;
             const double Q = detail::lagrange_eval<4>(detail::kPlate5ShearXi, Qr, xi);  // optimal Q
             out.push_back({s_acc, x, y, Nst, Q, Mst, sx, sy});
-            out.back().Nt = f.Nt;
-            out.back().Mt = f.Mt;
+            out.back().Nt = shell_pl ? detail::lagrange_eval<5>(plate::kBendGaussXi5, Ntg, xi) : f.Nt;
+            out.back().Mt = shell_pl ? detail::lagrange_eval<5>(plate::kBendGaussXi5, Mtg, xi) : f.Mt;
             px = x; py = y; have_prev = true;
         }
     }
@@ -309,7 +353,8 @@ inline std::vector<ForceStation> geogrid_force_diagram_general(
         st.N = N;
         if (ge.props.axisym) {
             const double eps_t = (kin.Bt * u)(0);
-            st.Nt = elastic ? ge.props.EA * eps_t : geogrid::hoop_return(ge.props, eps_t).N;
+            const double ept = ep_committed[(size_t)(geogrid::kHoopState + q)];
+            st.Nt = elastic ? ge.props.EA * (eps_t - ept) : geogrid::hoop_return(ge.props, eps_t, ept).N;
         }
         out.push_back(st);
     }
@@ -410,10 +455,12 @@ inline std::vector<ForceStation> embedded_beam_force_diagram(
 }
 
 // --- INTERFACE (soil-structure Coulomb joint) output --------------------------------------------
-// Along an interface, at the Newton-Cotes node pairs: shear stress tau, normal (effective)
-// stress sigma_n (tension-pos; compression < 0), relative slip = du_s, relative opening
-// gap = du_n, and whether at the Coulomb limit (slipping). Mirrors the solver's
-// coulomb_return EXACTLY (converged disp + committed plastic slip from NewtonResult).
+// Along an interface, at the Newton-Cotes node pairs: shear stress tau, the normal stress the
+// joint transmits sigma_n (tension-pos; compression < 0: the skeleton's contact, plus the excess pore
+// pressure of undrained ground beside it -- the steady water passes beside the joint), relative
+// slip = du_s, relative opening gap = du_n, and whether at the Coulomb limit (slipping). Mirrors the
+// solver's coulomb_return EXACTLY (converged disp + committed plastic slip + the excess pore
+// pressure each point's law read, from NewtonResult).
 // Math: docs/references/interface-formulation.md.
 struct InterfaceStation {
     double s = 0.0;                 // arc length along the interface
@@ -436,7 +483,8 @@ std::vector<InterfaceStation> interface_diagram_impl(
     const std::vector<Iface>& ifaces, std::size_t begin, std::size_t end, const mesh::Mesh& mesh,
     const DofMap& dofs, const Eigen::VectorXd& disp, const std::vector<double>& slip_committed,
     const std::array<iface::NCPoint, NN>& ncp, iface::EdgeFrame (*frame)(const NodeC&, double),
-    bool elastic = false, bool from_state = false, const Eigen::VectorXd* parent = nullptr) {
+    bool elastic = false, bool from_state = false, const Eigen::VectorXd* parent = nullptr,
+    const std::vector<double>* pore = nullptr) {
     std::vector<InterfaceStation> out;
     double s_acc = 0.0, px = 0.0, py = 0.0; bool have_prev = false;
     for (std::size_t ii = begin; ii < end && ii < ifaces.size(); ++ii) {
@@ -456,6 +504,7 @@ std::vector<InterfaceStation> interface_diagram_impl(
             for (int i = 0; i < 4; ++i) { du_s += a[i] * u[i]; du_n += b[i] * u[i]; }
             const std::size_t si = ii * NN + q;
             const double slip_c = si < slip_committed.size() ? slip_committed[si] : 0.0;
+            const double pw = pore && si < pore->size() ? (*pore)[si] : 0.0;
             const double x = mesh.x[ie.soil_nodes[nd]], y = mesh.y[ie.soil_nodes[nd]];
             if (have_prev) s_acc += std::hypot(x - px, y - py);
             InterfaceStation st;
@@ -481,11 +530,13 @@ std::vector<InterfaceStation> interface_diagram_impl(
                     double ps = 0.0, pn = 0.0;
                     for (int i = 0; i < 4; ++i) { ps += a[i] * up[i]; pn += b[i] * up[i]; }
                     const auto ret = iface::coulomb_return(ie.props, ps, pn, slip_c, ie.sigma_n0[q]);
-                    st.tau = ret.tau + ie.props.ks * (du_s - ps);
-                    st.sigma_n = ret.sigma_n + ie.props.kn * (du_n - pn);
+                    const double kf = iface::stiffness_factor(ie.props, ie.sigma_n0[q]);
+                    st.tau = ret.tau + kf * ie.props.ks * (du_s - ps);
+                    st.sigma_n = ret.sigma_n + kf * ie.props.kn * (du_n - pn);
                 } else {
-                    st.tau = ie.props.ks * (du_s - slip_c);
-                    st.sigma_n = ie.sigma_n0[q] + ie.props.kn * du_n;
+                    const double kf = iface::stiffness_factor(ie.props, ie.sigma_n0[q]);
+                    st.tau = kf * ie.props.ks * (du_s - slip_c);
+                    st.sigma_n = ie.sigma_n0[q] + kf * ie.props.kn * du_n;
                 }
                 st.slipping = false;
             } else if (elastic) {
@@ -500,18 +551,19 @@ std::vector<InterfaceStation> interface_diagram_impl(
                 st.sigma_n = ie.props.kn * du_n;
                 st.slipping = false;
             } else {
-                const auto ret = iface::coulomb_return(ie.props, du_s, du_n, slip_c, ie.sigma_n0[q]);
+                // The capacity on the excess pore pressure the solve read there (the start of its
+                // last increment). Read without it, a joint beside clay unloaded undrained into
+                // suction was reported at half its capacity and slipping where the solve held it
+                // (measured on a retaining wall's last excavation stage: 8.2 kPa against 15.7).
+                const auto ret = iface::coulomb_return(ie.props, du_s, du_n, slip_c, ie.sigma_n0[q], pw);
                 st.tau = ret.tau; st.sigma_n = ret.sigma_n;
                 // AT THE LIMIT IS SLIPPING. The return is re-run here from the committed slip at the
                 // converged displacement, so a point that slipped to its capacity in the solve comes
                 // back with its trial shear EXACTLY at the capacity -- on the elastic side of `<=` --
                 // and was reported bonded, by the last bit of the iterate the solve stopped at
                 // (measured: a weak joint slipping along its whole length in a consolidation phase,
-                // reported as slipping nowhere). A consolidation phase also reads the capacity with
-                // the excess pore pressure at the start of its last step, which this report does not
-                // have; at the end of a dissipation it is a few parts in a million of the capacity,
-                // and a point within 1e-4 of its capacity is counted at it.
-                const double tmax = std::max(0.0, ie.props.c_i - ret.sigma_n * std::tan(ie.props.phi_i));
+                // reported as slipping nowhere); a point within 1e-4 of its capacity is counted at it.
+                const double tmax = std::max(0.0, iface::cohesion_for(ie.props, ret.tau) - (ret.sigma_n - pw) * std::tan(ie.props.phi_i));
                 st.slipping = ret.Ds == 0.0 || (tmax > 0.0 && std::fabs(ret.tau) >= tmax * (1.0 - 1e-4));
             }
             out.push_back(st); px = x; py = y; have_prev = true;
@@ -529,20 +581,20 @@ inline std::vector<InterfaceStation> interface_force_diagram(
     const std::vector<InterfaceElement>& ifaces, std::size_t begin, std::size_t end,
     const mesh::Mesh& mesh, const DofMap& dofs, const Eigen::VectorXd& disp,
     const std::vector<double>& slip_committed, bool elastic = false, bool from_state = false,
-    const Eigen::VectorXd* parent = nullptr) {
+    const Eigen::VectorXd* parent = nullptr, const std::vector<double>* pore = nullptr) {
     return detail::interface_diagram_impl<iface::kNodeCount, InterfaceElement, iface::NodeCoords>(
         ifaces, begin, end, mesh, dofs, disp, slip_committed, iface::nc_points(), &iface::edge_frame,
-        elastic, from_state, parent);
+        elastic, from_state, parent, pore);
 }
 // 5-node (tri15) interface chain.
 inline std::vector<InterfaceStation> interface_force_diagram(
     const std::vector<InterfaceElement5>& ifaces, std::size_t begin, std::size_t end,
     const mesh::Mesh& mesh, const DofMap& dofs, const Eigen::VectorXd& disp,
     const std::vector<double>& slip_committed, bool elastic = false, bool from_state = false,
-    const Eigen::VectorXd* parent = nullptr) {
+    const Eigen::VectorXd* parent = nullptr, const std::vector<double>* pore = nullptr) {
     return detail::interface_diagram_impl<iface::kNodeCount5, InterfaceElement5, iface::NodeCoords5>(
         ifaces, begin, end, mesh, dofs, disp, slip_committed, iface::nc_points5(), &iface::edge_frame5,
-        elastic, from_state, parent);
+        elastic, from_state, parent, pore);
 }
 
 }  // namespace katai::core

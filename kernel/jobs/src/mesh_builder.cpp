@@ -202,7 +202,13 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
     // When nothing is refined (no factor below 1, or auto-refine off and no region factor), the
     // field is skipped entirely and the constant-max_area mesher runs -- bit-identical meshes.
     const auto clampf = [](double f) { return std::clamp(f, model::kCoarsenessMin, model::kCoarsenessMax); };
-    struct SizeSrc { double ax, ay, bx, by, h; };   // segment source (point: a == b)
+    struct SizeSrc {   // segment source (point: a == b); the size runs from h at a to hb at b
+        double ax, ay, bx, by, h, hb;
+        SizeSrc(double ax_, double ay_, double bx_, double by_, double h_)
+            : ax(ax_), ay(ay_), bx(bx_), by(by_), h(h_), hb(h_) {}
+        SizeSrc(double ax_, double ay_, double bx_, double by_, double h_, double hb_)
+            : ax(ax_), ay(ay_), bx(bx_), by(by_), h(h_), hb(hb_) {}
+    };
     std::vector<SizeSrc> srcs;
     const double h0 = std::sqrt(2.0 * max_area);
     const auto add = [&](double ax, double ay, double bx, double by, double c) {
@@ -232,6 +238,7 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
     // it at 1; the toe of a slope of 1 in 2 (26.6 degrees) brings it to 0.42. The end of a single
     // line (a wall's foot in the ground) makes no angle between two lines and is not a corner.
     if (opt.corner_refine) {
+        std::vector<double> corner_f(px.size(), 1.0);
         std::vector<std::vector<double>> dirs(px.size());
         for (const auto& s : segs) {
             const double dx = px[s[1]] - px[s[0]], dy = py[s[1]] - py[s[0]];
@@ -249,6 +256,18 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
                 f = std::min(f, corner_factor(sector * 180.0 / pi));
             }
             if (f < 1.0 - 1e-9) srcs.push_back({px[v], py[v], px[v], py[v], h0 * std::max(f, model::kCoarsenessMin)});
+            corner_f[v] = std::max(f, model::kCoarsenessMin);
+        }
+        // THE SIZE RUNS ALONG THE LINE. The factor multiplies the local element size of the geometry,
+        // and a line has one as a point does: read at the corner alone it gave an embankment a patch of
+        // small elements at each toe and elements of the full size along the rest of its base, where
+        // the slip surfaces of its safety analysis run (factor of safety 1.850 against a published 1.815
+        // at the fine mesh, and 1.029 against a converged 1.10 on a softer one). Each line that ends in
+        // a refined corner now carries the size of its two ends, linearly between them.
+        for (const auto& s : segs) {
+            const double fa = corner_f[s[0]], fb = corner_f[s[1]];
+            if (fa < 1.0 - 1e-9 || fb < 1.0 - 1e-9)
+                srcs.push_back({px[s[0]], py[s[0]], px[s[1]], py[s[1]], h0 * fa, h0 * fb});
         }
     }
     bool region_factors = false;
@@ -267,7 +286,7 @@ MeshResult mesh_from_project(const model::Project& pr, double max_area,
                 double t = l2 > 1e-18 ? ((qx - s.ax) * dx + (qy - s.ay) * dy) / l2 : 0.0;
                 t = std::clamp(t, 0.0, 1.0);
                 const double d = std::hypot(qx - (s.ax + t * dx), qy - (s.ay + t * dy));
-                h = std::fmin(h, s.h + grading * d);
+                h = std::fmin(h, s.h + t * (s.hb - s.h) + grading * d);
             }
             return 0.5 * h * h;
         };

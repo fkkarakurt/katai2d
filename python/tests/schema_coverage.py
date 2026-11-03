@@ -137,6 +137,7 @@ KEY_TO_ATTR = {
 def coverage_project():
     pr = core.Project()
     pr.name = "schema coverage"
+    pr.gamma_water = 10.0   # written only when not the default
     pr.has_water = True
     pr.wx = [0.0, 10.0]
     pr.wy = [4.0, 4.0]
@@ -260,6 +261,12 @@ def coverage_project():
     drain.x1, drain.y1, drain.x2, drain.y2 = 8.0, 2.0, 12.0, 2.0
     drain.head = 2.0
     pr.hydros = [well, drain]
+
+    # A point for curves (v30), written only when there is one.
+    point = core.CurvePoint()
+    point.name = "A"
+    point.x, point.y = 5.0, 5.0
+    pr.curves = [point]
 
     # Borehole logs (v16), so the writer emits `strata` and `boreholes`. Two logs with a head, and
     # a middle layer that pinches out on the right -- the shape the generator has to get right.

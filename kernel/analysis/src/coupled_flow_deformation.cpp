@@ -1,6 +1,7 @@
 // The fully-coupled flow-deformation bodies (LE Picard + elastoplastic monolithic
 // Newton-Picard), compiled ONCE (section 5.2 batch 3b): the element-templated detail
 // implementations instantiate here for tri6 and tri15; consumers see declarations only.
+#include <katai/analysis/cancel.hpp>
 #include <katai/math/solve_error.hpp>   // SingularSystem: a refused solve is an answer
 #include <katai/analysis/coupled_flow_deformation.hpp>
 
@@ -151,9 +152,11 @@ CoupledFlowResult coupled_flow_impl(
     record(0.0);
 
     for (int step = 0; step < nsteps && R.converged; ++step) {
+        katai::analysis::poll_cancel();
         Eigen::VectorXd v_new = v, p_new = p;
         bool ok = false; int it = 0;
         for (; it < max_picard; ++it) {
+            katai::analysis::poll_cancel();
             // Picard: evaluate the coefficients at the latest estimate p_new; solve the
             // increment from (v^n, p^n).
             math::SparseMatrixBuilder Ab(NT), Hb(std::max(1, npore));
@@ -313,7 +316,13 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
                 for (int i = 0; i < N; ++i) p_gp += Nsh(i) * pfull[mesh.node_of(e, i)];
                 const double psi = p_gp / gamma_w;
                 const double Se_eff = effective_saturation(w, psi);
-                const double kr = relative_permeability(w, Se_eff);
+                // The volumetric strain, of which the void ratio is read, and the CHANGE OF PERMEABILITY,
+                // log10(k / k0) = de / ck, from the state at the start of the time step, as in the consolidation twin.
+                tr.eps_vol = committed[(size_t)e * ngp + g].eps_vol + mvec.dot(deps);
+                double kfac = 1.0;
+                if (pm.ck > 0.0)
+                    kfac = std::pow(10.0, (1.0 + mat.e_init) * std::expm1(committed[(size_t)e * ngp + g].eps_vol) / pm.ck);
+                const double kr = kfac * relative_permeability(w, Se_eff);
                 const double Sdeg = saturation(w, psi);
                 const double dS_dpw = -ne * moisture_capacity(w, psi) / gamma_w;  // n.dS/dp_w >= 0
                 const double Cp = Sdeg / kw_over_n.at(e_mat) + dS_dpw;             // storage coefficient
@@ -400,10 +409,13 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
     // trial states at the converged iterate.
     const auto one_step = [&](const Eigen::VectorXd& df, Eigen::VectorXd& dv, Eigen::VectorXd& dpv) -> bool {
         // Base internal force of the committed (start-of-step) effective state (coefficients
-        // evaluated at the committed pore).
+        // evaluated at the committed pore). No time passes in it: see the consolidation twin.
         Eigen::VectorXd Bbase;
         { math::SparseMatrixBuilder a0(NT), h0(std::max(1, npore)), l0(ndisp, std::max(1, npore));
-          assemble(Eigen::VectorXd::Zero(ndisp), to_full_pore(p), a0, h0, l0, Bbase, tmode); }
+          const double h_of_step = h_step;
+          h_step = 0.0;
+          assemble(Eigen::VectorXd::Zero(ndisp), to_full_pore(p), a0, h0, l0, Bbase, tmode);
+          h_step = h_of_step; }
         // The structures by their own laws: the pore pressure a joint reads beside it is the
         // step's start, in the share the skeleton feels (Bishop chi); their force is in the base.
         if (structure_laws) {
@@ -418,7 +430,14 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
         dpv = Eigen::VectorXd::Zero(std::max(1, npore));
         // The balance of an iterate, the matrix at it, and whether it has closed. The trial states
         // are left at the iterate evaluated last.
-        struct Ev { Eigen::VectorXd r; math::CsrMatrix A; bool conv = false; };
+        // Converged: the force balance and the volume balance, each against its own scale, as in the consolidation
+        // twin. One norm over the two, with a floor tied to the force the soil already carries, let a step close at
+        // its first iterate once the flow of the step fell under that floor, with nothing moved: the pressure and
+        // the settlement froze and the phase reported itself solved. Measured on a column of Mohr-Coulomb sand seated
+        // at 1000 kPa under 10 kPa: 18% short of the end settlement, and of a jointed rock 75%, with the excess pressure
+        // stopped at 2.9 and 9.6 kPa where the consolidation solver reaches 0.1; more of it on more steps. `tight` is
+        // the first correction's test: it closes a step only well inside the tolerance (see that twin).
+        struct Ev { Eigen::VectorXd r; math::CsrMatrix A; bool conv = false, tight = false; };
         const auto evaluate = [&](const Eigen::VectorXd& dv_, const Eigen::VectorXd& dpv_) {
             Ev ev;
             math::SparseMatrixBuilder Ab(NT), Hb(std::max(1, npore)), Lb(ndisp, std::max(1, npore));
@@ -439,12 +458,20 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
                 ev.r.head(ndisp).noalias() -= Lc * dpv_;                        // − L_χ·Δp
                 Eigen::VectorXd x(NT); x.head(ndisp) = dv_; x.tail(npore) = dpv_;
                 const Eigen::VectorXd Ax = ev.A * x;
-                ev.r.tail(npore) = h_step * (Hc * p) - Ax.tail(npore);         // ΔtH_kr·p_n − (L_χᵀΔv − S*Δp)
-                const double ref = std::max({df.norm(), (h_step * (Hc * p)).norm(), 1e-30});
-                ev.conv = ev.r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0);
+                const Eigen::VectorXd hHp = h_step * (Hc * p);
+                ev.r.tail(npore) = hHp - Ax.tail(npore);                       // ΔtH_kr·p_n − (L_χᵀΔv − S*Δp)
+                Eigen::VectorXd xv = Eigen::VectorXd::Zero(NT);
+                xv.head(ndisp) = dv_;
+                const Eigen::VectorXd Ltdv = (ev.A * xv).tail(npore);          // L_χᵀΔv
+                const double ru = ev.r.head(ndisp).norm(), rp = ev.r.tail(npore).norm();
+                const double ref_u = (df + oob).norm() + Bbase.norm() + (Lc * (p + dpv_)).norm();
+                const double ref_p = std::max(hHp.norm(), Ltdv.norm());
+                ev.conv = ru <= newton_tol * ref_u + 1e-12 && rp <= newton_tol * ref_p + 1e-15;
+                ev.tight = ru <= 0.1 * newton_tol * ref_u + 1e-12 && rp <= 0.1 * newton_tol * ref_p + 1e-15;
             } else {
-                const double ref = std::max(df.norm(), 1e-30);
-                ev.conv = ev.r.norm() <= newton_tol * ref + 1e-9 * (Bbase.norm() + 1.0);
+                const double ru = ev.r.norm(), ref_u = (df + oob).norm() + Bbase.norm();
+                ev.conv = ru <= newton_tol * ref_u + 1e-12;
+                ev.tight = ru <= 0.1 * newton_tol * ref_u + 1e-12;
             }
             return ev;
         };
@@ -452,7 +479,8 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
         Ev cur = evaluate(dv, dpv);
         std::vector<double> recent{cur.r.norm()};   // the balance at the last few iterates
         for (; it < max_newton; ++it) {
-            if (cur.conv) { step_ok = true; oob_next = cur.r.head(ndisp); break; }
+            katai::analysis::poll_cancel();
+            if (cur.conv && (it >= 2 || cur.tight)) { step_ok = true; oob_next = cur.r.head(ndisp); break; }
             if (std::getenv("KATAI_NL_DEBUG"))
                 std::fprintf(stderr, "    coupled h=%.4g it %d: |r| %.3e (disp %.3e) |Bbase| %.3e |df| %.3e\n", h_step, it,
                              cur.r.norm(), cur.r.head(ndisp).norm(), Bbase.norm(), df.norm());
@@ -477,6 +505,7 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
             Ev nxt;
             bool found = false;
             for (int ls = 0; ls < 8; ++ls) {
+                katai::analysis::poll_cancel();
                 Eigen::VectorXd dv2 = dv + alpha * d.head(ndisp);
                 Eigen::VectorXd dpv2 = dpv;
                 if (npore > 0) dpv2 += alpha * d.tail(npore);
@@ -525,6 +554,7 @@ CoupledFlowPlasticResult coupled_flow_plastic_impl(
                advance(t0 + 0.5 * h, 0.5 * h, t1, half, depth + 1);
     };
     for (int step = 0; step < nsteps && R.converged; ++step) {
+        katai::analysis::poll_cancel();
         Eigen::VectorXd df = Eigen::VectorXd::Zero(ndisp);
         if (step == 0 && load_increment) df = *load_increment;
         if (!advance(step * dt, dt, (step + 1) * dt, df, 0)) R.converged = false;

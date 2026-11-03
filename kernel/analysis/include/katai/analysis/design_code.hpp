@@ -161,6 +161,7 @@ inline void factor_interface_strength(iface::InterfaceProps& p, const MaterialMo
                                       const PartialFactors& f) {
     const bool tresca = strength_is_undrained(soil);
     p.c_i /= tresca ? f.gamma_cu : f.gamma_c;
+    if (p.c_neg >= 0.0) p.c_neg /= tresca ? f.gamma_cu : f.gamma_c;
     p.phi_i = std::atan(std::tan(p.phi_i) / f.gamma_phi);
     p.sigma_t /= tresca ? f.gamma_cu : f.gamma_c;
 }

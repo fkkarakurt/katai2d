@@ -259,9 +259,10 @@ SolveResult solve_gravity_le(const model::Project& pr, const katai::mesh::Mesh& 
 // count, phase display name). It lets a GUI report "Phase k of n: <name>" live from a worker thread
 // (purely informational; must be thread-safe on the caller's side).
 // `cancelled`, when set, is polled at every phase boundary (before and right after `on_phase`, so
-// the progress receiver itself may cancel the announced phase). Returning true stops the run and
-// the COMPLETED prefix is returned -- cooperative cancellation: a running phase is never
-// interrupted. The Job object (katai/jobs/job.hpp) is the intended consumer.
+// the progress receiver itself may cancel the announced phase) and, on the calling thread, at
+// every step and iteration of the phase being solved (katai/analysis/cancel.hpp). Returning true
+// stops the run and the COMPLETED prefix is returned: a phase cancelled while it is solved is
+// dropped whole. The Job object (katai/jobs/job.hpp) is the intended consumer.
 using PhaseProgress = std::function<void(int, int, const std::string&)>;
 // `numeric` overrides the numerical controls of EVERY phase in the run (zero fields keep the
 // driver's material-class defaults, so an omitted argument reproduces previous runs exactly). It

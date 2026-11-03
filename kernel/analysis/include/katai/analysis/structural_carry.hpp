@@ -319,12 +319,14 @@ inline std::vector<Eigen::VectorXd> install_datum_full(const Structures& structu
 // element keeps at its integration points: eps_p' = eps - (EA_old / EA_new)(eps - eps_p), and
 // the same for the curvature. N and M are then what they were, to round-off, and every further
 // deformation is taken with the new stiffness. The shear force is kept the same way, through
-// the shear strain offset at the reduced shear points.
+// the shear strain offset at the reduced shear points. A shell of revolution (`axisym`) moves its
+// hoop strain and curvature the same way, so that its hoop force and moment are kept too (with
+// the plate's Poisson's ratio unchanged the coupled law scales by the same two ratios).
 // `full_datum` is the parent's total displacement in this phase's DOF numbering.
 inline void rescale_plate_state(const mesh::Mesh& mesh, const DofMap& dofs,
                                 const Structures& structures, const Eigen::VectorXd& full_datum,
                                 const StructCarryRecord& rec, double EA_old, double EI_old,
-                                double GA_old, StructuralInit& init) {
+                                double GA_old, StructuralInit& init, bool axisym = false) {
     const auto rel = [&](int gdof, int install) -> double {
         const double u = gdof >= 0 && gdof < full_datum.size() ? full_datum[gdof] : 0.0;
         if (install < 0) return u;
@@ -362,6 +364,13 @@ inline void rescale_plate_state(const mesh::Mesh& mesh, const DofMap& dofs,
             double& kp = init.plate_plastic[off + (size_t)plate::kPlasticPerPoint * q + 1];
             ep = moved((Be * u)(0), ep, EA_old, pe.props.EA);
             kp = moved((Bk * u)(0), kp, EI_old, pe.props.EI);
+            if (axisym) {
+                Eigen::Matrix<double, 1, 9> Bt, Bkt;
+                plate::detail::hoop_rows<3>(e.N, e.c, e.N.dot(X.col(0)), Bt, Bkt);
+                const size_t h = off + (size_t)plate::kHoopStateBegin + (size_t)plate::kHoopPerPoint * q;
+                init.plate_plastic[h] = moved((Bt * u)(0), init.plate_plastic[h], EA_old, pe.props.EA);
+                init.plate_plastic[h + 1] = moved((Bkt * u)(0), init.plate_plastic[h + 1], EI_old, pe.props.EI);
+            }
         }
         constexpr double g2 = 0.5773502691896257;
         const std::array<double, 2> xi2{-g2, g2};
@@ -396,6 +405,13 @@ inline void rescale_plate_state(const mesh::Mesh& mesh, const DofMap& dofs,
             double& kp = init.plate5_plastic[off + (size_t)plate::kPlasticPerPoint * q + 1];
             ep = moved((Be * u)(0), ep, EA_old, pe.props.EA);
             kp = moved((Bk * u)(0), kp, EI_old, pe.props.EI);
+            if (axisym) {
+                Eigen::Matrix<double, 1, 15> Bt, Bkt;
+                plate::detail::hoop_rows<5>(e.N, e.c, e.N.dot(X.col(0)), Bt, Bkt);
+                const size_t h = off + (size_t)plate::kHoopStateBegin5 + (size_t)plate::kHoopPerPoint * q;
+                init.plate5_plastic[h] = moved((Bt * u)(0), init.plate5_plastic[h], EA_old, pe.props.EA);
+                init.plate5_plastic[h + 1] = moved((Bkt * u)(0), init.plate5_plastic[h + 1], EI_old, pe.props.EI);
+            }
         }
         constexpr double a4 = 0.3399810435848563, b4 = 0.8611363115940526;
         const std::array<double, 4> xi4{-b4, -a4, a4, b4};

@@ -13,7 +13,10 @@
 //       Eqns 7.10-7.14) is written with q_a / E50, i.e. E_i = 2 E50 -- the secant at HALF THE
 //       ASYMPTOTE q_a / 2, not at q_f / 2 -- and so contradicts its own definition by the factor
 //       2 - R_f (1.1 at R_f = 0.9). This build keeps the definition in words, which is the one a
-//       triaxial test is read by; (1) pins it, and fails by 10% if the other is ever taken.
+//       triaxial test is read by; (1) pins it, and fails by 10% if the other is ever taken. The
+//       same stiffness is then scaled so that a normally consolidated test, where the cap flows as
+//       well, reads E50 (hs_calibrate_cap, KV-CST-027); (1) reads the scale from the model, so what
+//       it pins is the hyperbola on that stiffness.
 //   (2) THE CAP'S STEEPNESS for m = 1 and c = 0. The shear function then depends on the stress
 //       ratio alone, a normally consolidated oedometer path keeps that ratio, the shear mechanism
 //       does not flow on it, and the two conditions of the oedometer (d eps_q / d eps_v = 2/3
@@ -91,7 +94,11 @@ void test_drained_hyperbola() {
     std::printf("(1) drained triaxial compression, cap far away\n");
     const MaterialModel m = soil(20000, 20000, 60000, 0.5, 0.2, 30, 0.5);
     GaussState gs = state(100, 100, 0.0, 1.0e6);
-    const double Ei = 2.0 * 20000 / (2.0 - 0.9), qa = 200.0 / 0.9;
+    // The initial stiffness the calibration found for this soil: what makes a normally consolidated test read the
+    // E50 entered. The cap being far away here, the hyperbola stands on it alone.
+    const double Ei = m.hs.Ei(100.0), qa = 200.0 / 0.9;
+    check(m.hs.ei_scale >= 1.0 && std::fabs(Ei - m.hs.ei_scale * 2.0 * 20000 / (2.0 - 0.9)) < 1e-9 * Ei,
+          "E_i = 2 E50 / (2 - R_f), times what the calibration found");
     const double targets[] = {0.002, 0.005, 0.01, 0.02, 0.04};
     const double de = 2.0e-6;
     double eps = 0.0;

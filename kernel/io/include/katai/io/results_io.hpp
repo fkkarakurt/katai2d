@@ -75,10 +75,13 @@ using katai::core::InterfaceStation;
 // that makes it an over-design factor, the diagnostics (a warning that qualifies a number belongs
 // with the number), the excess pore pressure field, the consolidation curve, the degree of
 // saturation, the support reactions and the seismic records.
+// v12 stores the path of a Plastic or a Safety phase (SolveResult::path_factor / path_disp), the
+// curve a factor of safety is read off, and the curves of the points for curves (curve_nodes,
+// curve_u).
 // Older files predate each feature, so reading the fields back as false/0/None/empty is correct
 // for them -- except the v10 force error, which reads back as NaN: zero would be a measurement
 // nobody made.
-inline constexpr std::uint32_t kResultsFileVersion = 11;
+inline constexpr std::uint32_t kResultsFileVersion = 12;
 
 inline std::uint64_t fnv1a64(const std::string& s) {
     std::uint64_t h = 1469598103934665603ull;
@@ -275,6 +278,10 @@ inline bool save_results(const std::string& path, std::uint64_t model_hash,
         w.vec(R.dyn_period); w.vec(R.dyn_response_sa); w.vec(R.dyn_design_sa); w.vec(R.dyn_design_sa_ec8);
         w.put<double>(R.dyn_peak_surface_a);
         w.put<double>(R.dyn_model_f1);
+        if (version < 12) continue;
+        // v12: the phase's path, and the points' curves.
+        w.vec(R.path_factor); w.vec(R.path_disp);
+        w.vec(R.curve_nodes); w.vec(R.curve_u);
     }
     return katai::io::write_file_atomically(path, w.buf, err);
 }
@@ -450,6 +457,18 @@ inline bool load_results(const std::string& path, std::uint64_t model_hash,
             R.dyn_design_sa_ec8 = r.vec<double>();
             R.dyn_peak_surface_a = r.get<double>();
             R.dyn_model_f1 = r.get<double>();
+            if (ver >= 12) {   // absent in v11: the phase's path
+                R.path_factor = r.vec<double>();
+                R.path_disp = r.vec<double>();
+                if (R.path_factor.size() != R.path_disp.size()) r.ok = false;
+                R.curve_nodes = r.vec<int>();
+                R.curve_u = r.vec<double>();
+                // a step axis (the path, or the time curve) times two components per point
+                const std::size_t steps = R.path_factor.empty() ? R.consol_time.size() : R.path_factor.size();
+                if (R.curve_u.size() != steps * 2 * R.curve_nodes.size()) r.ok = false;
+                for (const int nd : R.curve_nodes)
+                    if (nd < 0 || nd >= mesh.node_count) r.ok = false;
+            }
             const auto nodal = [&mesh](std::size_t n, std::size_t per) {
                 return n == 0 || n == (std::size_t)mesh.node_count * per;
             };

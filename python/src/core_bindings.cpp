@@ -20,6 +20,7 @@
 #include <nanobind/eigen/dense.h>
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
 #include <katai/api/katai.hpp>
@@ -401,6 +402,13 @@ NB_MODULE(_core, m) {
         .def_rw("head", &api::HydroLine::head, "drain: the head it holds [m]")
         .def_rw("coarseness", &api::HydroLine::coarseness);
 
+    nb::class_<api::CurvePoint>(m, "CurvePoint",
+                                "a point whose node's displacement every step of every phase records")
+        .def(nb::init<>())
+        .def_rw("name", &api::CurvePoint::name)
+        .def_rw("x", &api::CurvePoint::x, "[m] (the radius in axial symmetry)")
+        .def_rw("y", &api::CurvePoint::y, "[m]");
+
     nb::class_<api::Load>(m, "Load")
         .def(nb::init<>())
         .def_rw("kind", &api::Load::kind)
@@ -593,6 +601,7 @@ NB_MODULE(_core, m) {
         .def_rw("y_min", &api::Project::y_min)
         .def_rw("y_max", &api::Project::y_max)
         .def_rw("has_water", &api::Project::has_water)
+        .def_rw("gamma_water", &api::Project::gamma_water)
         .def_rw("wx", &api::Project::wx)
         .def_rw("wy", &api::Project::wy)
         .def_rw("materials", &api::Project::materials)
@@ -609,6 +618,7 @@ NB_MODULE(_core, m) {
         .def_rw("loads", &api::Project::loads)
         .def_rw("disps", &api::Project::disps)
         .def_rw("hydros", &api::Project::hydros, "wells and drains (hydraulic conditions)")
+        .def_rw("curves", &api::Project::curves, "points for curves")
         .def_rw("initial", &api::Project::initial)
         .def_rw("phases", &api::Project::phases);
 
@@ -759,7 +769,7 @@ NB_MODULE(_core, m) {
         .def_ro("y", &katai::core::InterfaceStation::y, "[m]")
         .def_ro("tau", &katai::core::InterfaceStation::tau, "shear stress [kN/m2]")
         .def_ro("sigma_n", &katai::core::InterfaceStation::sigma_n,
-                "effective normal stress of the joint -- the ground's contact on it; the pore water passes beside it -- TENSION POSITIVE [kN/m2]")
+                "normal stress the joint transmits -- the ground's contact on it, plus the excess pore pressure of undrained ground beside it; the steady pore water passes beside it -- TENSION POSITIVE [kN/m2]")
         .def_ro("slip", &katai::core::InterfaceStation::slip, "relative slip [m]")
         .def_ro("gap", &katai::core::InterfaceStation::gap, "relative opening [m]")
         .def_ro("slipping", &katai::core::InterfaceStation::slipping,
@@ -968,6 +978,27 @@ NB_MODULE(_core, m) {
                      [](const api::SolveResult& r) { return r.consol_settlement; })
         .def_prop_ro("consol_excess_pore",
                      [](const api::SolveResult& r) { return r.consol_excess_pore; })
+        // THE PHASE'S PATH and THE POINTS' CURVES (Project.curves): the step factor -- Sum-Mstage
+        // of a Plastic phase, Sum-Msf of a Safety phase -- and the largest displacement of a node
+        // since the phase began, at every step; and the displacement of each point there.
+        .def_prop_ro("path_factor", [](const api::SolveResult& r) { return r.path_factor; })
+        .def_prop_ro("path_disp", [](const api::SolveResult& r) { return r.path_disp; })
+        .def_prop_ro("curve_nodes", [](const api::SolveResult& r) { return r.curve_nodes; },
+                     "the node each point for curves follows")
+        .def("curve", [](const api::SolveResult& r, size_t i) {
+                 // [(step value, ux, uy)]: the step value is path_factor's in a Plastic or Safety
+                 // phase and consol_time's in a consolidation, fully coupled or dynamic phase
+                 std::vector<std::tuple<double, double, double>> out;
+                 const size_t np = r.curve_nodes.size();
+                 const std::vector<double>& axis = r.path_factor.empty() ? r.consol_time : r.path_factor;
+                 if (i >= np || r.curve_u.size() != axis.size() * 2 * np) return out;
+                 for (size_t k = 0; k < axis.size(); ++k)
+                     out.emplace_back(axis[k], r.curve_u[(k * np + i) * 2], r.curve_u[(k * np + i) * 2 + 1]);
+                 return out;
+             }, nb::arg("point"),
+             "the curve of point `point` (an index into Project.curves): [(step value, ux, uy)], "
+             "the step value Sum-Mstage / Sum-Msf / time [day; s for Dynamic], the displacement "
+             "since the phase began [m]")
         // The excess pore pressure FIELD at the end of the phase, node by node -- `pore` is the
         // hydrostatic pressure the phase was set up in, which is a different quantity.
         .def_prop_ro("excess_pore", [](const api::SolveResult& r) { return r.excess_pore; })
@@ -1011,8 +1042,15 @@ NB_MODULE(_core, m) {
         // closes an uncollectable cycle (job -> C++ -> callable -> module dict ->
         // job) and nanobind reports every instance still alive at interpreter
         // shutdown (measured: two examples printed a leak dump on exit).
+        // run() lets go of the interpreter while it solves: held, another thread could not even
+        // ask the run to stop (request_cancel waited for the interpreter to the end of the run).
+        // The progress callback takes it back for each call (nanobind's function wrapper does).
         .def("run", [](api::Job& j) {
-            const bool ok = j.run();
+            bool ok = false;
+            {
+                nb::gil_scoped_release release;
+                ok = j.run();
+            }
             j.set_on_phase({});
             return ok;
         })

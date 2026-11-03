@@ -15,6 +15,7 @@
 
 #include <Eigen/Core>
 
+#include <katai/analysis/cancel.hpp>
 #include <katai/fem/elements/element_traits.hpp>
 #include <katai/materials/material_model.hpp>
 #include <katai/materials/soft_soil.hpp>   // ss_initial_pp (preconsolidation seeding)
@@ -117,6 +118,7 @@ std::vector<GaussState> k0_layered_impl(const mesh::Mesh& mesh, const K0LayeredO
     const auto gauss = E::gauss_points();
     typename E::NodeCoords coords;
     for (int e = 0; e < mesh.element_count; ++e) {
+        katai::analysis::poll_cancel();   // the column searches below are seconds on a large mesh
         const int mat = mesh.element_material[e];
         const double k0 = (mat >= 0 && mat < static_cast<int>(opt.k0.size())) ? opt.k0[mat] : 0.0;
         for (int k = 0; k < E::kNodeCount; ++k) {

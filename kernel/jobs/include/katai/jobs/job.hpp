@@ -8,7 +8,8 @@
 //
 // A Job runs on the CALLING thread; asynchrony is the caller's choice (the GUI runs one
 // on its worker thread, a batch driver may spawn several). request_cancel() may be
-// called from any thread and takes effect at the next phase boundary.
+// called from any thread and takes effect at the next step or iteration of the phase being
+// solved; that phase is dropped and the completed ones are kept.
 //
 // run() executes the INPUT CONTRACT first: a project whose validation report carries
 // errors is refused -- message() names the first error at its field path, report()
@@ -17,9 +18,9 @@
 // never block; they stay in report() for the front end to show.
 //
 // Scope, honestly:
-//   * Cancellation is PHASE-granular today: the poll sits at the phase boundaries of
-//     solve_phases. Iteration-granular cancellation needs a hook through the nonlinear
-//     solver's step loop and is the remaining Stage D work (tracked in the roadmap).
+//   * Cancellation reaches inside a phase: every solver's step and iteration loops poll the
+//     request (katai/analysis/cancel.hpp). It does not reach inside one linear solve or one
+//     material calibration, so a stop waits for the one under way.
 //   * A flow-coupled mechanical solve (consuming a separately computed groundwater head
 //     field) is front-end state today and not yet expressible in the .k2d, so it is not
 //     a Job run kind yet -- that contract gap travels with the flow corpus work.
@@ -35,6 +36,7 @@
 #include <vector>
 
 #include <katai/io/validate.hpp>
+#include <katai/analysis/live_progress.hpp>
 #include <katai/jobs/driver.hpp>
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/model/project.hpp>
@@ -59,12 +61,17 @@ public:
 
     void set_on_phase(PhaseProgress cb) { on_phase_ = std::move(cb); }
 
-    // Cooperative: takes effect at the next phase boundary. Callable from any thread,
-    // including from inside the progress callback (the announced phase then never runs).
+    // Cooperative: takes effect at the next poll -- a phase boundary, a step, an iteration, a
+    // line-search trial, or an element of an assembly (katai/analysis/cancel.hpp); the phase
+    // under way is dropped. Callable from any thread, including from inside the progress
+    // callback (the announced phase then never runs).
     void request_cancel() { cancel_.store(true, std::memory_order_relaxed); }
     bool cancel_requested() const { return cancel_.load(std::memory_order_relaxed); }
 
     JobState state() const { return state_.load(std::memory_order_acquire); }
+
+    // What the phase under way is doing right now (katai/analysis/live_progress.hpp), from any thread.
+    analysis::LiveProgress::Snapshot live() const { return live_.snapshot(); }
 
     // Run every phase on the calling thread. True only when the whole run converged;
     // otherwise state() and message() say honestly what stopped it and results() holds
@@ -110,8 +117,10 @@ public:
                 timings_.back().seconds = std::chrono::duration<double>(now - t_open).count();
             timings_.push_back({name, 0.0});
             t_open = now;
+            live_.start_phase();
             if (on_phase_) on_phase_(cur, total, name);
         };
+        const analysis::LiveScope live_scope(&live_);
         results_ = app::solve_phases(project_, mesh_.mesh,
                                      app::initial_phase_from(project_.initial_procedure),
                                      progress, [this] { return cancel_requested(); });
@@ -153,6 +162,7 @@ private:
     PhaseProgress on_phase_;
     std::atomic<bool> cancel_{false};
     std::atomic<JobState> state_{JobState::Pending};
+    analysis::LiveProgress live_;
     io::ValidationReport report_;
     app::MeshResult mesh_;
     std::vector<app::SolveResult> results_;

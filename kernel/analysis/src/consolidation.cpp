@@ -1,6 +1,7 @@
 // The Biot consolidation bodies (LE + elastoplastic), compiled ONCE (section 5.2
 // batch 3a): the element-templated detail implementations instantiate here for tri6
 // and tri15, and every consumer sees declarations only.
+#include <katai/analysis/cancel.hpp>
 #include <katai/math/solve_error.hpp>   // SingularSystem: a refused solve is an answer
 #include <katai/analysis/consolidation.hpp>
 #include <katai/analysis/nonlinear_solver.hpp>   // kStagnationAccept
@@ -168,6 +169,7 @@ ConsolidationResult consolidation_impl(const mesh::Mesh& mesh, const DofMap& dof
     };
     record(0.0);
     for (int step = 0; step < nsteps; ++step) {
+        katai::analysis::poll_cancel();
         Eigen::VectorXd rhs = Eigen::VectorXd::Zero(NT);
         // Applied load increment Δf (staged-construction surcharge / fill): applied in full at the
         // FIRST step, i.e. at t=0+ of the consolidation phase. With the storage
@@ -284,8 +286,11 @@ ConsolidationPlasticResult consolidation_plastic_impl(
         f_int.setZero(ndisp);
         elem_out.resize((size_t)mesh.element_count);
         const auto pp0 = std::chrono::steady_clock::now();
+        katai::analysis::CancelRegion cancel_region;   // a Cancel stops the assembly per element
         math::parallel_for(mesh.element_count, [&](int e_begin, int e_end) {
+        const katai::analysis::CancelRegion::Bind bind(cancel_region);   // ...and inside a point's walk
         for (int e = e_begin; e < e_end; ++e) {
+            cancel_region.poll();
             if (!active.empty() && !active[e]) continue;
             typename E::NodeCoords X;
             for (int k = 0; k < N; ++k) { X(k, 0) = mesh.x[mesh.node_of(e, k)]; X(k, 1) = mesh.y[mesh.node_of(e, k)]; }
@@ -352,7 +357,8 @@ ConsolidationPlasticResult consolidation_plastic_impl(
                         (1.0 + mat.e_init) * std::expm1(committed[(size_t)e * ngp + g].eps_vol);
                     kfac = std::pow(10.0, de / pm.ck);
                 }
-                if (std::getenv("KATAI_NL_DEBUG") && (!Dt.allFinite() || !tr.stress.allFinite())) {
+                static const bool nl_debug = std::getenv("KATAI_NL_DEBUG") != nullptr;   // read once, not per point
+                if (nl_debug && (!Dt.allFinite() || !tr.stress.allFinite())) {
                     const GaussState& c0 = committed[(size_t)e * ngp + g];
                     std::fprintf(stderr, "    NONFINITE el %d gp %d mat %d type %d  Dt finite %d  stress finite %d  "
                                  "committed s=(%.4g %.4g %.4g) zz=%.4g pp=%.4g  deps=(%.3e %.3e %.3e)\n",
@@ -537,9 +543,15 @@ ConsolidationPlasticResult consolidation_plastic_impl(
             for (int n = 0; n < mesh.node_count; ++n) if (pore_eq[n] >= 0) pn[n] = p(pore_eq[n]);
             structure_laws->set_soil_pore(pn);
         }
+        // Bbase = f_int(committed): the force of the state the step starts from, so no time passes in it.
+        // Read with the step's time, a creeping soil relaxes in the base as well as in the iterate, and the
+        // residual (f_int - Bbase) never sees that relaxation: the creep then carries no load back and the
+        // stress simply drops out of equilibrium. Measured on a column consolidating in Soft Soil Creep, against
+        // an independent finite-volume integration of it: the settlement at 1000 days -42% at 50 steps and -65% at
+        // 800, worse as the step is refined; with no time in the base -0.18% and +0.01%.
         Eigen::VectorXd Bbase;
         { Eigen::VectorXd dvz = Eigen::VectorXd::Zero(ndisp);
-          assemble(dvz, Bbase, tmode, h); }   // trial == committed -> Bbase = f_int(committed)
+          assemble(dvz, Bbase, tmode, 0.0); }
         const Coupling cpl = npore > 0 ? coupling_blocks(h) : Coupling{};
         int eval_count = 0, elem_of_eval = -1;   // which evaluation the kept element matrices are of
         dv = Eigen::VectorXd::Zero(ndisp);
@@ -583,6 +595,20 @@ ConsolidationPlasticResult consolidation_plastic_impl(
         const auto converged = [&](const Eval& ev) {
             return ev.ru <= newton_tol * ev.ref_u + 1e-12 &&
                    (npore == 0 || ev.rp <= newton_tol * ev.ref_p + 1e-15);
+        };
+        // THE FIRST CORRECTION OF A STEP IS NOT ITS ANSWER. It leaves a force of about the size of the
+        // tolerance, and the next correction takes that to round-off in one go; where the first
+        // happens to land just under the tolerance the second was skipped, and that step's share of the
+        // load went missing for good. Measured on a Modified Cam-Clay column consolidating under a load
+        // (the excess pore pressure at mid-depth, against an independent solve of 69.96 kPa after 100 days,
+        // and the balance of effective stress and pore pressure, 250 kPa): the series dropped 2.74 kPa in one
+        // step against 0.44 in its neighbours, the balance stayed at 247.73 from there on, and the answer
+        // was 3.1% low, the settlement hardly moving. So a first correction closes a step only
+        // if it is well inside the tolerance.
+        const auto settled = [&](const Eval& ev, int corrections) {
+            return converged(ev) &&
+                   (corrections >= 2 || (ev.ru <= 0.1 * newton_tol * ev.ref_u + 1e-12 &&
+                                         (npore == 0 || ev.rp <= 0.1 * newton_tol * ev.ref_p + 1e-15)));
         };
         // The line search compares the two balances together, each relative to its own scale:
         // a step with no load starts in force balance (ru = 0) and out of volume balance, and a
@@ -636,7 +662,9 @@ ConsolidationPlasticResult consolidation_plastic_impl(
         int small_refresh = 0;
         int it = 0;
         for (;;) {
-        for (; it < budget && !converged(cur); ++it) {
+            katai::analysis::poll_cancel();
+        for (; it < budget && !settled(cur, it); ++it) {
+            katai::analysis::poll_cancel();
             if (stalled >= 6 && has_small && !small_frozen) {
                 // Stalled on a stiffness that follows the iterate: continued with the
                 // small-strain stiffness read from the increment reached so far.
@@ -781,6 +809,7 @@ ConsolidationPlasticResult consolidation_plastic_impl(
             // dissipation step went from 0.16 of its scale to 1e+3, then to 1e+17).
             constexpr int kLineSearchHalvings = 14;
             for (int ls = 0; ls < kLineSearchHalvings; ++ls) {
+                katai::analysis::poll_cancel();
                 dv_n = dv + alpha * d.head(ndisp);
                 dpv_n = dpv;
                 if (npore > 0) dpv_n += alpha * d.tail(npore);
@@ -951,12 +980,20 @@ ConsolidationPlasticResult consolidation_plastic_impl(
     // one Newton solve of 40 iterations at any number of time steps, while the same fill in a
     // Plastic phase -- which cuts its load -- was. Every sub-step that converges is committed and
     // recorded, so a cut step adds its intermediate times to the series.
+    // What a step applies at its first instant -- what the phase inherits and a load put on at
+    // once -- stays whole in the first half when the step is cut; only the load spread over the
+    // phase is split with the time. Split in two with the rest, the first half of a cut first step
+    // regenerated half of the parent's pore pressure, and the dissipation that followed started from
+    // a pressure the parent never left (measured on an embankment's chained consolidation stages:
+    // the maximum excess pore pressure dipped from 24.6 to 11.8 kPa across a cut first step).
     int depth_used = 0;
-    const std::function<bool(double, double, const Eigen::VectorXd&, int)> advance =
-        [&](double t0, double h, const Eigen::VectorXd& df_step, int depth) -> bool {
+    const std::function<bool(double, double, const Eigen::VectorXd&, const Eigen::VectorXd&, int)> advance =
+        [&](double t0, double h, const Eigen::VectorXd& df_now, const Eigen::VectorXd& df_spread,
+            int depth) -> bool {
         Eigen::VectorXd dv, dpv;
         bool stagnant = false;
         step_depth = depth;
+        const Eigen::VectorXd df_step = df_now + df_spread;
         if (one_step(h, df_step, dv, dpv, stagnant)) {
             v += dv;
             if (npore > 0) p += dpv;
@@ -976,8 +1013,9 @@ ConsolidationPlasticResult consolidation_plastic_impl(
                          depth >= 6 ? " -- GIVEN UP" : ", cut in two");
         if (depth >= 6) return false;
         depth_used = std::max(depth_used, depth + 1);
-        const Eigen::VectorXd half = 0.5 * df_step;
-        return advance(t0, 0.5 * h, half, depth + 1) && advance(t0 + 0.5 * h, 0.5 * h, half, depth + 1);
+        const Eigen::VectorXd half = 0.5 * df_spread;
+        return advance(t0, 0.5 * h, df_now, half, depth + 1) &&
+               advance(t0 + 0.5 * h, 0.5 * h, Eigen::VectorXd::Zero(df_now.size()), half, depth + 1);
     };
     const Eigen::VectorXd no_load = Eigen::VectorXd::Zero(ndisp);
     Eigen::VectorXd part;   // the load of one step when it is placed over the whole duration
@@ -985,13 +1023,14 @@ ConsolidationPlasticResult consolidation_plastic_impl(
     Eigen::VectorXd first;   // the first step also carries what the phase inherits, at once
     if (instant_load) {
         first = *instant_load;
-        if (load_increment) first += ramp_load ? part : *load_increment;
+        if (load_increment && !ramp_load) first += *load_increment;
     }
     for (int step = 0; step < nsteps && R.converged; ++step) {
-        const Eigen::VectorXd& df = (step == 0 && instant_load) ? first
-                                    : (load_increment && ramp_load) ? part
-                                    : (step == 0 && load_increment) ? *load_increment : no_load;
-        if (!advance(step * dt, dt, df, 0)) R.converged = false;
+        katai::analysis::poll_cancel();
+        const Eigen::VectorXd& now = (step == 0 && instant_load) ? first
+                                     : (step == 0 && load_increment && !ramp_load) ? *load_increment : no_load;
+        const Eigen::VectorXd& spread = (load_increment && ramp_load) ? part : no_load;
+        if (!advance(step * dt, dt, now, spread, 0)) R.converged = false;
     }
     R.steps_cut = depth_used;
     R.committed = committed;

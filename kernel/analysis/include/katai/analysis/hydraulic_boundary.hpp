@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
+#include <utility>
 #include <vector>
 
 #include <katai/mesh/boundary_extraction.hpp>
@@ -72,11 +74,37 @@ inline double phreatic_surface_at(const std::vector<double>& wx,
 // elements carry no pore DOF -> drained.
 // AXISYMMETRIC (`axisymmetric`): the edge on the axis, x = 0, is a line of symmetry and never one
 // of the sides that drain by default -- no water leaves the ground through it.
+//
+// THE FACES AN EXCAVATION EXPOSES are boundaries of the ground like any other, and they drain whatever
+// was declared on the model's own boundary: a line inside the model becomes an outer boundary when
+// the ground on one side of it is taken away, and the flow calculations already treat it so. Until
+// 2026-11-02 a model with flow conditions read them on the boundary of the WHOLE mesh, excavated regions
+// included, so the floor of a pit was sealed even with a head declared on it, and silently: a Terzaghi
+// column whose block was removed from its top drained through the two corner nodes alone, U(1 d) =
+// 0.060 against 0.115. A face along an impermeable line (`sealed`, its nodes) stays closed, with or
+// without declared conditions: the wall is still there. Without it the ground behind a wall drained
+// through the wall as soon as the pit was dug. And only the model's own base is closed by looking
+// down: the crown of a tunnel looks down too, and is a face like the others.
 inline std::vector<char> flow_drained_nodes(const std::vector<FlowEdge>& edges, bool have_flow_bcs,
                                             const katai::mesh::Mesh& mesh,
                                             const std::vector<char>& act, double yscale,
-                                            bool axisymmetric = false) {
+                                            bool axisymmetric = false,
+                                            const std::vector<char>* sealed = nullptr) {
     std::vector<char> drained(mesh.node_count, 0);
+    const bool partly = std::find(act.begin(), act.end(), 0) != act.end();
+    std::set<std::pair<int, int>> outer;   // the model's own boundary, as edges (when some ground is out)
+    if (partly)
+        for (const auto& ed : katai::mesh::extract_exposed_edges(mesh, {}))
+            outer.insert(std::minmax(ed.node[0], ed.node[ed.npe - 1]));
+    const auto on_outer = [&](const katai::mesh::BoundaryEdgeChain& ed) {
+        return !partly || outer.count(std::minmax(ed.node[0], ed.node[ed.npe - 1])) > 0;
+    };
+    const auto is_sealed = [&](const katai::mesh::BoundaryEdgeChain& ed) {
+        if (!sealed) return false;
+        for (int i = 0; i < ed.npe; ++i)
+            if (!(*sealed)[ed.node[i]]) return false;
+        return true;
+    };
     if (have_flow_bcs) {
         for (int node : mesh.boundary_nodes) {
             const double xn = mesh.x[node], yn = mesh.y[node];
@@ -96,6 +124,11 @@ inline std::vector<char> flow_drained_nodes(const std::vector<FlowEdge>& edges, 
                 if (h.d <= tol && (h.kind == FlowEdgeKind::Head ||
                                    h.kind == FlowEdgeKind::Seepage)) drained[node] = 1;
         }
+        if (partly)
+            for (const auto& ed : katai::mesh::extract_exposed_edges(mesh, act)) {
+                if (on_outer(ed) || is_sealed(ed)) continue;
+                for (int i = 0; i < ed.npe; ++i) drained[ed.node[i]] = 1;
+            }
     } else {
         // THE GROUND SURFACE DRAINS: every exposed face of the ACTIVE ground that looks upwards --
         // the surface beside an embankment as well as its crest and slopes, the floor of an
@@ -117,7 +150,8 @@ inline std::vector<char> flow_drained_nodes(const std::vector<FlowEdge>& edges, 
         double xspan = 0.0;
         for (int n = 0; n < mesh.node_count; ++n) xspan = std::fmax(xspan, std::fabs(mesh.x[n]));
         for (const auto& ed : katai::mesh::extract_exposed_edges(mesh, act)) {
-            if (ed.ny < -1e-3) continue;
+            if (ed.ny < -1e-3 && on_outer(ed)) continue;
+            if (is_sealed(ed)) continue;
             bool axis = axisymmetric;
             for (int i = 0; i < ed.npe; ++i) axis = axis && std::fabs(mesh.x[ed.node[i]]) <= 1e-9 * (1.0 + xspan);
             if (axis) continue;   // the axis of symmetry: closed

@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["katai2d"],
   "properties": {
-    "katai2d": { "type": "integer", "minimum": 1, "maximum": 29 },
+    "katai2d": { "type": "integer", "minimum": 1, "maximum": 31 },
     "name": { "type": "string" },
     "axisymmetric": { "type": "boolean" },
     "initial_procedure": { "type": "integer", "minimum": 0, "maximum": 2 },
@@ -15,6 +15,7 @@
     "y_min": { "type": "number" },
     "y_max": { "type": "number" },
     "has_water": { "type": "boolean" },
+    "gamma_water": { "type": "number", "exclusiveMinimum": 0 },
     "wx": { "$ref": "#/$defs/numbers" },
     "wy": { "$ref": "#/$defs/numbers" },
     "mesh": { "$ref": "#/$defs/mesh" },
@@ -45,6 +46,17 @@
           "h_min": { "type": "number" },
           "head": { "type": "number" },
           "coarseness": { "type": "number", "minimum": 0.03125, "maximum": 8 }
+        }
+      }
+    },
+    "curves": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "x": { "type": "number" },
+          "y": { "type": "number" }
         }
       }
     },

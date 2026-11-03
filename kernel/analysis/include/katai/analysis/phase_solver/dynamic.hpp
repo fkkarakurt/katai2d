@@ -93,6 +93,7 @@ struct DynamicPhase {
     std::vector<double> gamma_sat;                // per-material saturated unit weight, drainage-
                                                   // resolved at the seam (NonPorous holds no water:
                                                   // its saturated weight IS gamma_unsat)
+    std::vector<int> curve_nodes;   // the nodes of the points for curves (SolveResult::curve_nodes)
 };
 
 // Solve the phase. `carry_full` is the parent's converged full-DOF displacement
@@ -190,7 +191,7 @@ inline bool solve_dynamic_phase(
                 } else if (mtype == MaterialType::SoftSoil ||
                            mtype == MaterialType::SoftSoilCreep) {
                     // SS/SSC unload/reload stiffness frozen at the committed mean stress:
-                    // K_ur = p'/kappa* -> E_ur = 3K(1 - 2 nu_ur). The linear dynamic path sees
+                    // K_ur = (p' + c cot phi)/kappa* -> E_ur = 3K(1 - 2 nu_ur). The linear dynamic path sees
                     // small oscillations on the u/r branch -- the same class of decision as the
                     // HS frozen-Eur above; shaking lasts seconds, so creep is negligible here.
                     const auto& mmod = models[mesh.element_material[e]];
@@ -200,11 +201,14 @@ inline bool solve_dynamic_phase(
                     const double nu_ur = mtype == MaterialType::SoftSoil
                                              ? mmod.ssoil.nu_ur
                                              : mmod.ssc.nu_ur;
+                    const double phi = mtype == MaterialType::SoftSoil ? mmod.ssoil.phi : mmod.ssc.phi;
+                    const double coh = mtype == MaterialType::SoftSoil ? mmod.ssoil.c : mmod.ssc.c;
+                    const double ccot = phi > 1e-12 ? coh * std::cos(phi) / std::sin(phi) : 0.0;
                     const auto& gsi = (*st)[gi];
                     const double p_c = std::max(
                         -(gsi.stress(0) + gsi.stress(1) + gsi.stress_zz) / 3.0,
                         softsoil::kPmin);
-                    le.youngs_modulus = 3.0 * (p_c / kap) * (1.0 - 2.0 * nu_ur);
+                    le.youngs_modulus = 3.0 * ((p_c + ccot) / kap) * (1.0 - 2.0 * nu_ur);
                     le.poisson_ratio = nu_ur;
                 }
                 gauss_elastic[gi] = le;
@@ -718,6 +722,9 @@ inline bool solve_dynamic_phase(
         R.consol_time.push_back(t);
         R.consol_settlement.push_back(mx);      // reused: peak |u| over the domain at time t
         R.consol_excess_pore.push_back(0.0);
+        if (!in.curve_nodes.empty()) R.curve_nodes = in.curve_nodes;
+        for (const int nd : in.curve_nodes)
+            for (int k = 0; k < 2; ++k) R.curve_u.push_back(uf[dofs.global_dof(nd, k)]);
         // Track 1a: with the parent state carried, the solver's structural elements live at
         // TOTAL displacement (parent datum + dynamic) with the streamed committed plastic
         // state -- so evaluate the diagrams there too (same constitutive as the solve, D6b).
@@ -772,7 +779,8 @@ inline bool solve_dynamic_phase(
                     // governed -- it shows where the joint rode its capacity, and the margin
                     // elsewhere. (tau_max = 0 = separated: tau is 0 too, so report 0.)
                     const double tmax2 =
-                        std::fmax(0.0, props.c_i - cur.stations[k].sigma_n * std::tan(props.phi_i));
+                        std::fmax(0.0, iface::cohesion_for(props, cur.stations[k].tau) -
+                                           cur.stations[k].sigma_n * std::tan(props.phi_i));
                     const double ut = tmax2 > 1e-12
                                           ? std::fabs(cur.stations[k].tau) / tmax2
                                           : (std::fabs(cur.stations[k].tau) > 1e-12 ? kUtilCap : 0.0);
@@ -975,7 +983,7 @@ inline bool solve_dynamic_phase(
             for (int c = 0; c < 2; ++c) {
                 const double tt = sT + (c == 0 ? sgn_if[i].tmin[k] : sgn_if[i].tmax[k]);
                 const double sn = sS + (c == 0 ? sgn_if[i].smin[k] : sgn_if[i].smax[k]);
-                const double tmax = std::fmax(0.0, props.c_i - sn * std::tan(props.phi_i));
+                const double tmax = std::fmax(0.0, iface::cohesion_for(props, tt) - sn * std::tan(props.phi_i));
                 const double u = tmax > 1e-12 ? std::fabs(tt) / tmax
                                               : (std::fabs(tt) > 1e-12 ? kUtilCap : 0.0);
                 util = std::fmax(util, std::fmin(u, kUtilCap));

@@ -25,6 +25,7 @@
 
 #include <Eigen/Dense>
 
+#include <katai/analysis/cancel.hpp>
 #include <katai/analysis/nonlinear_solver.hpp>   // Structures + element structs + NewtonResult::Timings
 #include <katai/fem/assembly/dof_map.hpp>
 #include <katai/fem/elements/axisymmetric.hpp>
@@ -297,6 +298,9 @@ public:
         // Plate M-N hinge state [ε_p,κ_p]×Gauss (plate::kPlasticStateSize(5) per element).
         const std::vector<double>* plate_c = nullptr;   std::vector<double>* plate_t = nullptr;
         const std::vector<double>* plate5_c = nullptr;  std::vector<double>* plate5_t = nullptr;
+        // WRITTEN when given (laid out as the slips): the excess pore pressure each joint point's
+        // Coulomb law read, so that the report reads the capacity the solve checked.
+        std::vector<double>* iface_pw = nullptr;        std::vector<double>* iface5_pw = nullptr;
         // Local convergence measurement. nullptr (the default) = not measured, and then not a
         // single extra flop happens in the Gauss loop: the line search re-evaluates the
         // residual several times per iteration and none of those iterates is the one whose
@@ -375,6 +379,10 @@ public:
     // Newton direction stopped descending (see elastic_mode in the solver). Like the floor it
     // changes only how an answer is reached: the internal force is untouched.
     bool elastic_tangent = false;
+    // The squared norm, at the last assembly, of the soil's internal force on the FIXED degrees of
+    // freedom: the part of the internal force the free equations do not hold, and the larger part
+    // of it wherever the ground stands on its supports. See NewtonOptions::stagnation_accept.
+    double fixed_norm2 = 0.0;
     // The displacement increment (free DOFs) the small-strain stiffness of the step is read
     // from, where the solver has fixed one (see small_freeze there); nullptr reads it from the
     // increment being assembled, which is the formulation itself.
@@ -468,8 +476,11 @@ public:
             fit(probe->prev_skin, st.eskin_c ? st.eskin_c->size() : 0);
             fit(probe->prev_foot, st.efoot_c ? st.efoot_c->size() : 0);
         }
+        katai::analysis::CancelRegion cancel_region;   // a Cancel stops the assembly per element
         math::parallel_for(mesh.element_count, [&](int e_begin, int e_end) {
+        const katai::analysis::CancelRegion::Bind bind(cancel_region);   // ...and inside a point's walk
         for (int e = e_begin; e < e_end; ++e) {
+            cancel_region.poll();
             if (structures_only) continue;
             if (!active_element.empty() && !active_element[e]) continue;  // passive (excavated)
             const typename E::NodeCoords& coords = all_coords_[e];
@@ -659,6 +670,8 @@ public:
         }
         });  // parallel_for (rethrows any exception to the caller)
 
+        if (f_fixed_.size() != dofs.total_dofs()) f_fixed_.resize(dofs.total_dofs());
+        f_fixed_.setZero();
         for (int e = 0; e < mesh.element_count; ++e) {  // sequential scatter (deterministic)
             if (structures_only) continue;
             if (!active_element.empty() && !active_element[e]) continue;
@@ -679,7 +692,7 @@ public:
             const ElementVector& fe = fe_buf_[e];
             for (int a = 0; a < E::kDofCount; ++a) {
                 const int eq_a = dofs.equation(edofs[a]);
-                if (eq_a < 0) continue;
+                if (eq_a < 0) { f_fixed_(edofs[a]) += fe(a); continue; }
                 f_int(eq_a) += fe(a);
                 if (!build_tangent) continue;
                 const typename E::ElementMatrix& ke = ke_buf_[e];
@@ -691,6 +704,7 @@ public:
             }
         }
 
+        fixed_norm2 = f_fixed_.squaredNorm();
         // --- Plate (structural wall/beam) contribution. 9-DOF Timoshenko beam; translational
         // DOFs (u_x,u_y) are SHARED with the soil nodes (assembly summation → soil-structure
         // interaction), the rotational DOF (φ) is plate-specific. props.plastic() off ⇒
@@ -886,8 +900,11 @@ public:
                 const size_t si = gi * geogrid::kStateStride + q;
                 const auto ret = geogrid::axial_return(ge.props, eps, (*st.geogrid_c)[si]);
                 (*st.geogrid_t)[si] = ret.ep_new;
-                const auto hr = ge.props.axisym ? geogrid::hoop_return(ge.props, (kin.Bt * ug)(0))
-                                                : geogrid::AxialReturn{0.0, 0.0, 0.0};
+                const size_t sh = gi * geogrid::kStateStride + geogrid::kHoopState + q;
+                const auto hr = ge.props.axisym
+                                    ? geogrid::hoop_return(ge.props, (kin.Bt * ug)(0), (*st.geogrid_c)[sh])
+                                    : geogrid::AxialReturn{0.0, 0.0, 0.0};
+                if (ge.props.axisym) (*st.geogrid_t)[sh] = hr.ep_new;
                 const double w = kin.wJ;
                 for (int a = 0; a < nd; ++a) {
                     if (geq[a] < 0) continue;
@@ -963,15 +980,17 @@ public:
                     du_s += a[i] * ui; du_n += b[i] * ui;
                 }
                 const size_t si = ii * iface::kPointCount + q;
+                const double pw = joint_pore(ie.soil_elem, ie.soil_elem2);
+                if (st.iface_pw && si < st.iface_pw->size()) (*st.iface_pw)[si] = pw;
                 const auto ret = iface::coulomb_return(ie.props, du_s, du_n, (*st.iface_c)[si],
-                                                       ie.sigma_n0[q], joint_pore(ie.soil_elem, ie.soil_elem2));
+                                                       ie.sigma_n0[q], pw);
                 (*st.iface_t)[si] = ret.slip_p_new;
                 if (probe && probe->prev_iface)
                     measure_traction_point(*probe, (*probe->prev_iface)[si], ret.tau, du_s,
-                                           ie.props.ks, ret.Ds == 0.0,
-                                           std::max(0.0, ie.props.c_i -
+                                           ie.props.ks * iface::stiffness_factor(ie.props, ie.sigma_n0[q]), ret.Ds == 0.0,
+                                           std::max(0.0, iface::cohesion_for(ie.props, ret.tau) -
                                                              ret.sigma_n * std::tan(ie.props.phi_i)),
-                                           ie.props.c_i);
+                                           iface::cohesion_for(ie.props, ret.tau));
                 for (int i = 0; i < 4; ++i) {
                     if (idx[i] < 0) continue;
                     f_int(idx[i]) += wJ * (a[i] * ret.tau + b[i] * ret.sigma_n);
@@ -1013,15 +1032,17 @@ public:
                     du_s += a[i] * ui; du_n += b[i] * ui;
                 }
                 const size_t si = ii * iface::kPointCount5 + q;
+                const double pw = joint_pore(ie.soil_elem, ie.soil_elem2);
+                if (st.iface5_pw && si < st.iface5_pw->size()) (*st.iface5_pw)[si] = pw;
                 const auto ret = iface::coulomb_return(ie.props, du_s, du_n, (*st.iface5_c)[si],
-                                                       ie.sigma_n0[q], joint_pore(ie.soil_elem, ie.soil_elem2));
+                                                       ie.sigma_n0[q], pw);
                 (*st.iface5_t)[si] = ret.slip_p_new;
                 if (probe && probe->prev_iface5)
                     measure_traction_point(*probe, (*probe->prev_iface5)[si], ret.tau, du_s,
-                                           ie.props.ks, ret.Ds == 0.0,
-                                           std::max(0.0, ie.props.c_i -
+                                           ie.props.ks * iface::stiffness_factor(ie.props, ie.sigma_n0[q]), ret.Ds == 0.0,
+                                           std::max(0.0, iface::cohesion_for(ie.props, ret.tau) -
                                                              ret.sigma_n * std::tan(ie.props.phi_i)),
-                                           ie.props.c_i);
+                                           iface::cohesion_for(ie.props, ret.tau));
                 for (int i = 0; i < 4; ++i) {
                     if (idx[i] < 0) continue;
                     f_int(idx[i]) += wJ * (a[i] * ret.tau + b[i] * ret.sigma_n);
@@ -1203,6 +1224,7 @@ private:
     std::vector<ElementVector> fe_buf_;
     std::vector<typename E::ElementMatrix> ke_buf_;
     std::vector<LocalErrorPartial> probe_buf_;  // per-element partials, reduced sequentially
+    Eigen::VectorXd f_fixed_;                   // the soil's internal force on the fixed DOFs
 };
 
 }  // namespace detail

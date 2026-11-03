@@ -1,4 +1,5 @@
 #include <katai/analysis/dynamics_nonlinear.hpp>
+#include <katai/analysis/cancel.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -164,12 +165,14 @@ NewmarkNonlinearResult solve_newmark_nonlinear_impl(
     };
 
     for (int step = 0; step < nsteps; ++step) {
+        katai::analysis::poll_cancel();
         const Eigen::VectorXd F1 = force(step + 1);
         Eigen::VectorXd du = Eigen::VectorXd::Zero(neq);
         Eigen::VectorXd a1n = a, v1n = v;   // n+1 values (committed on convergence)
         bool step_ok = false;
         int stall = 0;
         for (int it = 0; it < options.max_newton; ++it) {
+            katai::analysis::poll_cancel();
             builder.clear();
             const Eigen::VectorXd r = residual(du, F1, /*build_tangent=*/true, &builder, a1n, v1n);
             const double rnorm = r.norm();
@@ -197,6 +200,7 @@ NewmarkNonlinearResult solve_newmark_nonlinear_impl(
             bool improved = false;
             Eigen::VectorXd a1t, v1t;
             for (int ls = 0; ls < 12; ++ls) {
+                katai::analysis::poll_cancel();
                 const Eigen::VectorXd rt = residual(du + alpha * delta, F1, false, nullptr, a1t, v1t);
                 if (rt.norm() < (1.0 - 1.0e-4 * alpha) * rnorm) { improved = true; break; }
                 alpha *= 0.5;

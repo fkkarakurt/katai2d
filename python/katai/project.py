@@ -52,8 +52,9 @@ _FLOW = {
     "seepage": _core.FlowBCType.Seepage,
 }
 _BARRIER = {
-    "permeable": 0,          # the default: the flow net runs through the line
-    "impermeable": 1,        # a screen; the two sides' pore pressures are separated
+    "permeable": 0,          # the flow net runs through the line (a plate without interfaces)
+    "impermeable": 1,        # a screen; the two sides' pore pressures are separated (the
+                             # default of a wall with interfaces and of an interface)
     "semi_permeable": 2,     # passes q = dh / R, R = d/k [day]
 }
 _CONNECTION = {"hinged": 0, "free": 1}   # embedded-beam top attachment
@@ -285,9 +286,12 @@ class _Materials:
         intact rock's uni-axial compressive strength [kN/m2] as a magnitude; ``mi`` the
         intact rock parameter (~4 claystone, ~33 granite); ``gsi`` the Geological Strength
         Index 0..100; ``D`` the disturbance factor 0..1 (0 undisturbed, 1 heavily blasted).
+        The tensile strength is the criterion's own unless ``tension_cutoff=True`` and a
+        ``tensile_strength`` below it are given.
         ``psi`` is the dilatancy angle [deg] at zero confinement and ``sigma_psi`` [kN/m2]
         the confining stress at which it has died out (0 = no decay).
         """
+        kw.setdefault("tension_cutoff", False)
         return self._add(name, _core.SoilModel.HoekBrown, E=E, nu=nu, psi=psi,
                          sig_ci=sigma_ci, mi=mi, gsi=gsi, hb_D=D, sig_psi=sigma_psi, **kw)
 
@@ -456,6 +460,14 @@ class _Structures:
             S.hydraulic_resistance = resistance
             if barrier == "semi_permeable" and not resistance > 0.0:
                 raise ValueError("a semi-permeable line needs resistance=d/k [day] > 0")
+        elif kind == _core.StructKind.Interface or (kind == _core.StructKind.Plate and
+                                                     (S.iface_pos or S.iface_neg)):
+            # THE WATER DOES NOT CROSS A JOINT unless it is said to: an interface is a screen
+            # in a groundwater calculation, and so is a wall that has one; a plate without
+            # interfaces lets the flow net through. A dewatered pit behind a wall with
+            # interfaces used to draw its flow net through the wall unless the script said
+            # barrier="impermeable".
+            S.flow_barrier = _BARRIER["impermeable"]
         if conn is not None:
             S.conn = _pick(_CONNECTION, conn, "connection")
         # The interface's own strength and stiffness. Strength: the soil material it is reduced
@@ -505,8 +517,10 @@ class _Structures:
         thickness factor (0.1: the derived stiffness is the soil's over a tenth of the
         model's element size); ``iface_kn`` / ``iface_ks`` [kN/m3]
         set its normal and shear stiffness (default: derived from that soil).
-        ``barrier='impermeable'`` makes it a groundwater screen
-        ('semi_permeable' needs ``resistance`` = d/k [day])."""
+        ``barrier`` is what the water does at it in a groundwater calculation: a wall
+        with interfaces is a screen ('impermeable') unless it is given 'permeable' or
+        'semi_permeable' (which needs ``resistance`` = d/k [day]); a plate without
+        interfaces is 'permeable' unless it is given one of the others."""
         M = _core.PlateMaterial()
         M.name, M.EA, M.EI, M.w, M.nu = name, EA, EI, w, nu
         M.Mp, M.Np = Mp, Np
@@ -601,7 +615,8 @@ class _Structures:
         beside it, reduced by that soil's ``Rinter`` -- or of ``iface_material``.
         ``iface_kn`` / ``iface_ks`` [kN/m3] set its stiffness. Use this for a slip
         surface that has no structure on it; a wall's own interfaces come from
-        ``plate(..., interfaces='both')``."""
+        ``plate(..., interfaces='both')``. In a groundwater calculation it is a screen
+        unless ``barrier`` says 'permeable' or 'semi_permeable'."""
         return self._add(_core.StructKind.Interface, a, b, name, -1,
                          barrier=barrier, resistance=resistance, coarseness=coarseness,
                          iface_material=iface_material, iface_kn=iface_kn, iface_ks=iface_ks,
@@ -1023,7 +1038,12 @@ class Project:
     the model's diagonal), so a model drawn wider keeps the same density;
     ``auto_refine`` applies the local factors of structures, loads and prescribed
     displacements (each ``coarseness=``, 0.25 of the element size by default,
-    0.03125 ... 8); off, they mesh at the size of the ground around them.
+    0.03125 ... 8); off, they mesh at the size of the ground around them;
+    ``grading`` is how much the element size grows per metre of distance from a
+    refined object (0.15); ``corner_refine`` refines where geometry lines meet at
+    an angle that is not a multiple of 90 degrees -- the toe and crest of a slope --
+    by a factor of the sharpest angle there (0.5 at 45 degrees; on by default);
+    ``gamma_water`` is the unit weight of water [kN/m3] (9.81).
 
     Build with ``prj.materials`` / ``prj.geometry`` / ``prj.water`` /
     ``prj.loads`` / ``prj.phases``, choose ``prj.initial(...)``, then
@@ -1032,7 +1052,8 @@ class Project:
     """
 
     def __init__(self, name, *, kind="plane_strain", element="tri6",
-                 mesh_size=2.0, auto_refine=True, relative_mesh=None):
+                 mesh_size=2.0, auto_refine=True, relative_mesh=None, grading=0.15,
+                 corner_refine=True, gamma_water=9.81):
         if kind not in ("plane_strain", "axisymmetric"):
             raise ValueError("kind must be 'plane_strain' or 'axisymmetric'")
         if element not in ("tri6", "tri15"):
@@ -1042,6 +1063,10 @@ class Project:
         self._element = element
         self._mesh_size = mesh_size
         self._auto_refine = auto_refine
+        if not grading > 0.0:
+            raise ValueError(f"grading must be positive, not {grading!r}")
+        self._grading = float(grading)
+        self._corner_refine = bool(corner_refine)
         if relative_mesh is None:
             self._mesh_rel = 0.0
         elif isinstance(relative_mesh, str):
@@ -1063,6 +1088,7 @@ class Project:
         self._disps = []
         self._hydros = []
         self._water = None
+        self._gamma_water = gamma_water
         self._procedure = "k0"
         self._initial_exclude = []
         self._initial_numerics = {}
@@ -1075,6 +1101,7 @@ class Project:
         self._phase_retension = []
         self._phase_water_set = []
         self._phase_pore_set = []
+        self._curves = []
         self.materials = _Materials(self)
         self.geometry = _Geometry(self)
         self.water = _Water(self)
@@ -1100,6 +1127,18 @@ class Project:
                                   "ignore_undrained": ignore_undrained}
         return self
 
+    def curve_point(self, x, y, *, name=None):
+        """A point for curves: the node nearest to (x, y) [m] has its displacement recorded at
+        every step of every phase -- against Sum-Mstage in a Plastic phase, Sum-Msf in a Safety
+        phase, time in a consolidation, fully coupled or dynamic one. Returns its index; a
+        phase's ``result.curve(index)`` is then ``[(step value, ux, uy)]``."""
+        C = _core.CurvePoint()
+        C.name = name if name is not None else chr(ord("A") + len(self._curves) % 26)
+        C.x = float(x)
+        C.y = float(y)
+        self._curves.append(C)
+        return len(self._curves) - 1
+
     # ------------------------------------------------------------------ build --
     def _extent(self):
         xs = [x for p in self._polygons for x in p.x]
@@ -1123,6 +1162,8 @@ class Project:
         mesh.elem_size = self._mesh_size
         mesh.order = 6 if self._element == "tri6" else 15
         mesh.auto_refine = self._auto_refine
+        mesh.grading = self._grading
+        mesh.corner_refine = self._corner_refine
         mesh.rel = self._mesh_rel
         pr.mesh = mesh
         pr.x_min, pr.x_max, pr.y_min, pr.y_max = self._extent()
@@ -1135,6 +1176,7 @@ class Project:
             pr.wy = wy
         else:
             pr.has_water = False
+        pr.gamma_water = self._gamma_water
         pr.materials = self._materials
         pr.polygons = self._polygons
         pr.loads = self._loads
@@ -1145,6 +1187,7 @@ class Project:
         pr.embedded = self._embedded
         pr.disps = self._disps
         pr.hydros = self._hydros
+        pr.curves = self._curves
 
         # The initial phase: everything active except the exclusions. Vectors are
         # materialized ONLY for a touched class, exactly like the GUI's files.

@@ -129,6 +129,35 @@ void capped_small_strain_stiffness() {
     check(all_ok(res, 1) && !said(res, "K2D-M004"), "G0 = 4 G_ur: not said");
 }
 
+void cap_too_soft_for_its_e50() {
+    std::printf("-- K2D-M009: a cap too soft for the E50 entered --\n");
+    m::Project pr = block(m::SoilModel::HardeningSoil);
+    pr.materials[0].E50ref = 30000.0;
+    pr.materials[0].Eurref = 60000.0;
+    pr.materials[0].Eoedref = 9000.0;
+    auto res = run(pr);
+    check(all_ok(res, 1) && said(res, "K2D-M009"), "E_oed = 0.3 E50: the triaxial test falls short, and that is said (K2D-M009)");
+    pr.materials[0].Eurref = 90000.0;
+    pr.materials[0].Eoedref = 30000.0;
+    res = run(pr);
+    check(all_ok(res, 1) && !said(res, "K2D-M009"), "E_oed = E50: not said");
+}
+
+void creep_time_decides() {
+    std::printf("-- K2D-A041: the time of a Plastic phase decides the answer of a creeping soil --\n");
+    m::Project pr = block(m::SoilModel::SoftSoilCreep);
+    m::Phase ph; ph.name = "Stage"; ph.poly_active = {1};
+    ph.duration = 10.0;
+    pr.phases.push_back(ph);
+    auto res = run(pr);
+    check(all_ok(res, 2) && said(res, "K2D-A041"), "a Plastic phase of a creeping soil: said");
+    pr = block(m::SoilModel::SoftSoil);
+    ph.duration = 10.0;
+    pr.phases.push_back(ph);
+    res = run(pr);
+    check(all_ok(res, 2) && !said(res, "K2D-A041"), "of a soil that does not creep: not said");
+}
+
 // --- structures --------------------------------------------------------------------------------
 void interface_in_rock() {
     std::printf("-- K2D-G014: an interface that would take its strength from a Hoek-Brown rock --\n");
@@ -504,7 +533,8 @@ void scope_refusals() {
         check(all_ok(res, 1) && !said(res, "K2D-S002"), "a geogrid in axisymmetry: runs, a membrane of revolution");
         pr.geogrids[0].elastoplastic = true; pr.geogrids[0].Np = 50.0;
         res = run(pr);
-        check(refused_with(res, "K2D-S002"), "a geogrid with a capacity in axisymmetry: refused (K2D-S002)");
+        check(all_ok(res, 1) && !said(res, "K2D-S002"),
+              "a geogrid with a capacity in axisymmetry: runs, each direction capped (KV-STR-035)");
         pr.structs.clear();
         m::PlateMaterial pm; pm.name = "Wall";
         pr.plates.push_back(pm);
@@ -515,7 +545,8 @@ void scope_refusals() {
         check(all_ok(res, 1) && !said(res, "K2D-S002"), "an elastic plate in axisymmetry: runs, a shell of revolution");
         pr.plates[0].elastoplastic = true; pr.plates[0].Mp = 50.0; pr.plates[0].Np = 500.0;
         res = run(pr);
-        check(refused_with(res, "K2D-S002"), "an elastoplastic plate in axisymmetry: refused (K2D-S002)");
+        check(all_ok(res, 1) && !said(res, "K2D-S002"),
+              "an elastoplastic plate in axisymmetry: runs, its hoop force capped apart (KV-STR-034)");
         pr.structs.clear();
         add_water(pr, H);
         m::Phase c = phase(m::PhaseType::FullyCoupled, "Coupled"); c.duration = 1.0; c.time_steps = 2;
@@ -656,6 +687,8 @@ int main() {
     embedded_beam_without_a_section();
     pile_head_between_nodes();
     capped_small_strain_stiffness();
+    cap_too_soft_for_its_e50();
+    creep_time_decides();
     displacement_off_the_mesh();
     material_factors_on_rock();
     well_in_consolidation();

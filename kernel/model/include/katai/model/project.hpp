@@ -931,6 +931,16 @@ struct MeshSettings {
 // A twentieth of the model's diagonal: the element size of a relative factor of 1.
 inline constexpr double kRelativeElementBase = 1.0 / 20.0;
 
+// A POINT FOR CURVES. The node nearest to (x, y) has its displacement recorded at every step of
+// every phase -- against the step factor of a Plastic phase (Sum-Mstage) or of a Safety phase
+// (Sum-Msf), against time in a consolidation, fully coupled or dynamic phase -- so that the
+// load-displacement curve of a footing or the settlement-time curve of a point can be drawn
+// (SolveResult::curve_u). Part of the file since .k2d v30.
+struct CurvePoint {
+    std::string name = "A";
+    double x = 0.0, y = 0.0;
+};
+
 struct Project {
     std::string name = "Untitled project";
     std::vector<Material> materials;            // soil & interfaces
@@ -947,6 +957,7 @@ struct Project {
     std::vector<Load> loads;                    // external loads
     std::vector<PrescribedDisp> disps;          // line prescribed displacements
     std::vector<HydroLine> hydros;              // wells and drains (hydraulic conditions)
+    std::vector<CurvePoint> curves;             // points whose displacement every step records
     // Staged construction phases AFTER the initial phase (empty = classic single-phase solve).
     // phases[0] runs from the initial state, phases[k] from phases[k-1]'s committed stresses.
     std::vector<Phase> phases;
@@ -955,14 +966,16 @@ struct Project {
     Phase initial;
     BoundaryConditions bc;                      // deformation boundary conditions (auto default)
     bool has_water = true;                      // groundwater level (a polyline, may be sloped)
+    // The unit weight of water [kN/m^3]: what turns a head into a pore pressure and a saturated weight into a
+    // buoyant one, in every phase of the project.
+    double gamma_water = 9.81;
     std::vector<double> wx, wy;                 // water polyline
     double x_min = 0.0, x_max = 40.0;           // model horizontal extent (BC edges)
     double y_min = 0.0, y_max = 20.0;           // model vertical extent (BC edges)
     // Analysis mode: plane strain (default) or axisymmetric. In axisymmetric mode the
     // x-coordinate is the RADIUS r (x=0 is the symmetry axis) and the integration is r-weighted; used
-    // for circular footings, piles, shafts and cylinders: soil, water, excavation and fill, and
-    // interfaces (a pile is a soil region with interfaces); plates, anchors, geogrids and embedded
-    // beams are refused there, and only Plastic and Safety phases follow the initial one.
+    // for circular footings, piles, shafts, tanks and cylinders. Embedded beams and dynamic phases
+    // are refused there (K2D-S002); docs/diagnostics.md says what else is.
     bool axisymmetric = false;
     // How the initial phase establishes the in-situ state, and the global mesh settings.
     // Both belong to the file contract: a .k2d must determine the whole run, or no case

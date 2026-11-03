@@ -18,9 +18,8 @@
 //       ed. IMM, London, ch. 7, without cohesion, water or a tension crack). Cohesionless,
 //       because with cohesion the smallest factor is the plane through the toe's, and there the
 //       plane runs into the ground in front: a limit a mesh approaches only from above.
-//       Associated, because with psi < phi the same slope stalled at a few percent of its weight
-//       (psi = 0, any mesh) or depended on the mesh (psi = 5: 1.22 on 6-noded 2 m elements, no
-//       equilibrium on 15-noded 1 m) -- which K2D-M008 says to the user.
+//       Associated, because with psi < phi the same slope stops under its weight: at 45% with psi 0
+//       and 65% with psi 10 (15-noded, 2 m, phi 45) -- which K2D-M008 says to the user.
 //
 // verify: KV-CST-026
 //   oracle:   closed_form

@@ -43,6 +43,7 @@ katai_add_test(test_hs_closed_forms katai::materials)   # HS against its four cl
 katai_add_test(test_plate katai::fem)             # Plate (Mindlin/Timoshenko beam) cantilever validation (P2.4)
 katai_add_test(test_plate5 katai::fem)            # 5-node quartic plate (tri15 edge) validation (P2.4)
 katai_add_test(test_axisym_plate katai::fem)      # KV-STR-029: a plate in axial symmetry is a shell of revolution -- a cylinder under pressure, a circular plate clamped and simply supported, against shell and plate theory
+katai_add_test(test_axisym_plate_plastic katai::fem)      # KV-STR-034: a shell of revolution with a capacity -- the meridional M-N diamond and an independent hoop cap; the return's Kuhn-Tucker conditions and tangent, a free cylinder expanded through its hoop capacity
 katai_add_test(test_consolidation katai::analysis)     # Biot coupled consolidation -- Terzaghi 1D U-Tv (Phase A.2)
 katai_add_test(test_transient_flow katai::analysis katai::mesh)  # Transient saturated flow (W1): Terzaghi isochrones + Carslaw-Jaeger erfc + steady regression
 katai_add_test(test_water_retention katai::materials)   # van Genuchten SWCC + Mualem k_rel (W2a): limits/monotonicity/asymptotes/Mualem n=2 + analytic capacity = FD
@@ -64,6 +65,7 @@ katai_add_test(test_design_code katai::analysis)       # EC7 (EN 1997-1) + TBDY 
 katai_add_test(test_geometry2d katai::geometry)     # planar arrangement: geometry lines -> closed regions (clusters)
 katai_add_test(test_model_mesh katai::jobs katai::mesh katai::model)  # project polygon -> FE mesh (katai/jobs/mesh_builder.hpp)
 katai_add_test(test_mesh_multi_region katai::jobs katai::mesh katai::model)  # regions that share, touch or overlap one another mesh as one conforming partition
+katai_add_test(test_mesh_corner_lines katai::jobs katai::mesh katai::model)  # a line between refined corners is refined along its length
 katai_add_test(test_mesh_relative katai::jobs katai::mesh katai::model katai::io)  # mesh.rel (.k2d v24): a relative element size meshes node for node as the absolute size it stands for
 katai_add_test(test_region_edit katai::jobs katai::mesh katai::model)  # close a region against existing ones, split regions with a line, keep phase flags aligned
 katai_add_test(test_project_edit katai::model)  # KV-GEO-004: deleting / splitting an object or a material = the project built without it, in every phase setting
@@ -160,6 +162,7 @@ if(TARGET test_collapse_arc)
   target_compile_definitions(test_collapse_arc PRIVATE KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
 katai_add_test(test_axisym_plate_fe katai::jobs katai::mesh katai::model katai::analysis)  # KV-STR-030: a plate in an axisymmetric project -- a tank wall under internal pressure carries N_t = p R through the whole program
+katai_add_test(test_axisym_plate_plastic_fe katai::jobs katai::mesh katai::model katai::analysis)  # KV-STR-035: an axisymmetric tank wall that yields in its hoop, and one whose section a phase changes, through the whole program
 katai_add_test(test_axisym_geogrid_anchor katai::jobs katai::mesh katai::model katai::analysis)  # KV-STR-031, KV-STR-032: a geogrid of revolution (a cylinder N_t = p R, a disk by the membrane equation) and a row of anchors round a circle, r / Ls per radian
 katai_add_test(test_consolidation_pile katai::jobs katai::mesh katai::model)  # KV-STR-023: an embedded pile row slipping in a consolidation phase -- the shaft's closed-form force, the drained limit, the control
 katai_add_test(test_tunnel_ring katai::jobs katai::mesh katai::model)  # KV-STR-024: a lining drawn as chords around a deep tunnel -- Kirsch, the ring-ground compatibility with and without an interface, the joint at the crown
@@ -167,6 +170,11 @@ katai_add_test(test_plate_hinge katai::jobs katai::mesh katai::model)  # KV-STR-
 katai_add_test(test_rotation_spring katai::jobs katai::mesh katai::model)  # KV-STR-028: a rotation spring on a hinged plate end -- the turn of a base and of a joint, P L^2 / k at the tip
 katai_add_test(test_load_on_wall katai::jobs katai::mesh katai::model)  # KV-STR-026: a distributed load drawn on a plate with an interface is carried by the plate -- the raft's equilibrium
 katai_add_test(test_joint_water katai::jobs katai::mesh katai::model)  # KV-STR-033: a wall below the water table installs without moving, its joint holds and rubs with the effective normal stress, and a pit dug below the water table bends it as the dry ground of buoyant weight does
+set(KATAI_TEST_CASES rules small strip wall)
+katai_add_test(test_tolerated_band katai::analysis katai::jobs katai::mesh katai::model)  # KV-NUM-018: the hardening soils' tolerated band, over every degree of freedom
+unset(KATAI_TEST_CASES)
+katai_add_test(test_joint_strength_here katai::jobs katai::mesh katai::model katai::analysis)  # KV-STR-036: a joint's strength where it stands, a fixity on an inner line
+katai_add_test(test_exposed_face_drains katai::jobs katai::mesh katai::model katai::analysis)  # KV-CON-010: the faces an excavation exposes drain, unless they stand against an impermeable line
 katai_add_test(test_wall_split_topology katai::jobs katai::mesh katai::model)  # KV-STR-027: the mesh is opened along the drawn walls and nowhere else -- corners, junctions, tips, a ring
 katai_add_test(test_consolidation_structures katai::jobs katai::mesh katai::analysis katai::model) # Plates/anchors/geogrids INSIDE a consolidation phase: the drained limit is the oracle (KV-STR-006)
 katai_add_test(test_consolidation_layers katai::jobs katai::mesh katai::analysis katai::model)  # KV-CON-004: the storage term n/Kw per material -- each layer's undrained pressure, the same answer whatever order the materials are listed in, and the settlement history against an independent finite-volume column
@@ -192,6 +200,8 @@ katai_add_test(test_foundation_benchmarks katai::mesh katai::analysis katai::geo
 katai_add_test(test_soft_soil katai::mesh katai::analysis katai::geometry)  # Soft Soil: stage 1 material point (ln law lambda*/kappa*, memory, K0NC pin, MC failure) + stage 2 FE wiring (integrate_point identity, frame independence, axisymmetry, oedometer BVP)
 katai_add_test(test_soft_soil_gui katai::jobs katai::mesh katai::analysis katai::model)  # Soft Soil stage 3 GUI path: K0 + ss_initial_pp seeding, NC lambda* integral, OCR/POP memory, honest undrained refusal, dynamic p'/kappa* stiffness
 katai_add_test(test_soft_soil_creep katai::mesh katai::analysis katai::geometry)  # Soft Soil Creep: stage 1 material point (mu*.ln(1+t/tau), OCR^-beta, closed-form relaxation, 1-day NC line, MC) + stage 2 FE (time into integrate_point, time-stepped relaxation BVP identity) (Vermeer & Neher 1999)
+katai_add_test(test_ssc_top_of_ellipse katai::materials)  # KV-CST-028: Soft Soil Creep where its direction is singular, against the rate equations
+katai_add_test(test_ssc_consolidation katai::mesh katai::analysis katai::geometry)  # KV-CON-011: Soft Soil Creep consolidating, against an independent column
 katai_add_test(test_input_audit katai::jobs katai::mesh katai::analysis katai::model)  # Input audit pins: OCR -> K0 = K0nc*OCR - nu/(1-nu)*(OCR-1), HS+Undrained(B) refusal, plate Mp/Np refusal
 if(TARGET test_real_record)
   target_compile_definitions(test_real_record PRIVATE KATAI_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
@@ -199,6 +209,14 @@ endif()
 katai_add_test(test_design_gui katai::jobs katai::mesh katai::analysis katai::model)  # EC7 design approach through the GUI path (build_problem): DA3 ODF = FoS/gamma_M identity + None baseline (v0.3 B1.3)
 katai_add_test(test_project_io katai::model katai::io)                # Project file JSON round trip (every field exact + honest failure modes)
 katai_add_test(test_results_io katai::mesh katai::analysis katai::model katai::io)  # Binary result file: bitwise round trip + model-hash staleness + refusal of a corrupt file
+katai_add_test(test_phase_path katai::jobs katai::mesh katai::model katai::analysis katai::io)  # the path of a Plastic and a Safety phase (Sum-Mstage / Sum-Msf against the largest displacement), through a results file
+if(TARGET test_phase_path)
+  target_compile_definitions(test_phase_path PRIVATE KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
+katai_add_test(test_curve_points katai::jobs katai::mesh katai::model katai::analysis katai::io)  # points for curves: every step's displacement of a chosen node, in every phase type (KV-NUM-017)
+if(TARGET test_curve_points)
+  target_compile_definitions(test_curve_points PRIVATE KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
+endif()
 katai_add_test(test_k2d_validator katai::model katai::io)             # .k2d input contract: every rule probed at its exact field path + reader forward-version notes
 katai_add_test(test_stratigraphy katai::model)                        # KV-GEO-001: borehole logs -> soil regions + water surface (strata/boreholes, docs/k2d-format.md). A wrong stratigraphy is invisible downstream -- the mesher meshes it, every phase converges on it, and no residual sees it
 # One ctest entry per corpus case. Together they were 1370 s and, once test_phase_numerics had
@@ -284,6 +302,13 @@ if(TARGET katai::jobs AND TARGET katai::io)
   # The convergence criteria family (N-2): prints every member for a set of cases, so the
   # question "does a case exist that meets the global criterion and fails a local one?" is
   # answered by a run rather than by an argument.
+  # Cancelling a run: the longest stretch between two polls of the request, phase by phase -- the
+  # longest a Cancel waits (wall-clock, so not a test).
+  add_executable(study_hs_cap_element EXCLUDE_FROM_ALL study_hs_cap_element.cpp)
+  target_link_libraries(study_hs_cap_element PRIVATE katai::jobs katai::mesh katai::analysis katai::model katai::io katai::linsolve)
+  add_executable(study_cancel_latency EXCLUDE_FROM_ALL study_cancel_latency.cpp)
+  target_link_libraries(study_cancel_latency PRIVATE katai::jobs katai::mesh katai::analysis katai::model katai::io katai::linsolve)
+
   add_executable(study_convergence_family EXCLUDE_FROM_ALL study_convergence_family.cpp)
   target_link_libraries(study_convergence_family PRIVATE katai::jobs katai::mesh katai::analysis katai::model katai::io katai::linsolve)
   target_compile_definitions(study_convergence_family PRIVATE KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
@@ -315,7 +340,7 @@ if(TARGET test_no_silent_drop)
     KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus"
     KATAI_DROP_CASE_COUNT=${_katai_drop_ids})
 endif()
-katai_add_test(test_jobs katai::jobs katai::mesh katai::analysis katai::model katai::io)  # The Job object (Stage D): driver-path equivalence bit-identical, progress, cooperative phase-boundary cancel, timings, two concurrent jobs in one process
+katai_add_test(test_jobs katai::jobs katai::mesh katai::analysis katai::model katai::io)  # The Job object (Stage D): driver-path equivalence bit-identical, progress, cooperative cancel at phase boundaries and inside a phase, timings, two concurrent jobs in one process
 if(TARGET test_jobs)
   target_compile_definitions(test_jobs PRIVATE KATAI_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 endif()
@@ -489,7 +514,7 @@ set(_katai_slow_tests
   test_gui_matrix 173             test_dynamic_gui 128    test_bearing_phi 125
   test_input_corpus_kv-str-004 90 test_input_corpus_kv-fnd-013 72
   test_ngi_adp 88                 test_jointed_rock_fe 122
-  test_collapse_arc 124)
+  test_collapse_arc 124           test_tolerated_band_wall 900)
 while(_katai_slow_tests)
   list(POP_FRONT _katai_slow_tests _t _cost)
   if(TEST ${_t})

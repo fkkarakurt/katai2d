@@ -19,10 +19,10 @@
 // verify: KV-STR-033
 //   oracle:   independent_path
 //   source:   Terzaghi's effective stress (the skeleton's strength and stiffness read sigma' = sigma - u); Coulomb friction of a soil-structure interface on the effective normal stress, |tau| <= c_i - sigma'_n tan(phi_i) (Terzaghi 1943; Potts & Zdravkovic 2001, interface elements); KATAI 2D input contract (docs/k2d-format.md, materials[i].Rinter: c_i = R c, tan(phi_i) = R tan(phi); structs[i].iface_pos / iface_neg)
-//   locator:  a Mohr-Coulomb block 40 x 20 m (E = 20000 kPa, nu = 0.3, c = 1 kPa, phi = 25 deg, psi = 0, R_inter = 0.5, K0 = 0.5), a 10 m wall (EA = 1e7 kN/m, EI = 1e5 kNm2/m, weightless) at x = 20 with interfaces on both sides, installed in a Plastic phase after the K0 phase; wet: gamma_sat = 18 kN/m3 under a water table at the surface; dry: gamma = 18 - 9.81 and no water. (3): the wet wall pulled up at its head with 1.5 times the friction of its joints; (4): a 4 m pit on the right of the wall, the water left standing in it
-//   quantity: the displacement of the installation [m]; the joints' normal stress at every station [kPa]; the shear of every slipping joint point against c_i - sigma'_n tan(phi_i) [kPa]; the wall's largest moment [kNm/m] and displacement [m] after the pit
-//   expected: no movement; the wet joints' normal stress = the dry ones'; every joint point slipping between the head and the toe, at its effective friction; the wet wall's moment and displacement = the dry ones'
-//   band:     1e-9 m on the installation; 1e-6 relative on the normal stress (the two are the same equations with the water moved across; measured 0); 90% of the points slipping and 1e-3 relative on their shear (measured 128 of 128, 1e-13); 1e-3 relative on the moment and the displacement (measured 0.0000%). Before the fix, on the same model with Jaky's K0 (python/tests/joint_water.py): 0.43 mm of installation, 89 kPa on the normal stress, no point slipping, the moment 10.7% and the displacement 26.7% under the dry ones
+//   locator:  a Mohr-Coulomb block 40 x 20 m (E = 20000 kPa, nu = 0.3, c = 1 kPa, phi = 25 deg, psi = 0, R_inter = 0.5, K0 = 0.5), a 10 m wall (EA = 1e7 kN/m, EI = 1e5 kNm2/m, weightless) at x = 20 with interfaces on both sides, installed in a Plastic phase after the K0 phase; wet: gamma_sat = 18 kN/m3 under a water table at the surface; dry: gamma = 18 - 9.81 and no water. (3): the wet wall pulled up at its head with 1.5 times the friction of its joints; (4): a 4 m pit on the right of the wall, the water left standing in it; (6): a 50 kPa surcharge over the whole surface, up to the wall's head, put on Undrained (A) ground
+//   quantity: the displacement of the installation [m]; the joints' normal stress at every station [kPa]; the shear of every slipping joint point against c_i - sigma'_n tan(phi_i) [kPa]; the wall's largest moment [kNm/m] and displacement [m] after the pit; (6): whether the surcharge is carried, and the largest displacement [m]
+//   expected: no movement; the wet joints' normal stress = the dry ones'; every joint point slipping between the head and the toe, at its effective friction; the wet wall's moment and displacement = the dry ones'; (6): carried, the ground settling as a confined undrained column, q H / M_u
+//   band:     1e-9 m on the installation; 1e-6 relative on the normal stress (the two are the same equations with the water moved across; measured 0); 90% of the points slipping and 1e-3 relative on their shear (measured 128 of 128, 1e-13); 1e-3 relative on the moment and the displacement (measured 0.0000%). Before the fix, on the same model with Jaky's K0 (python/tests/joint_water.py): 0.43 mm of installation, 89 kPa on the normal stress, no point slipping, the moment 10.7% and the displacement 26.7% under the dry ones; (6): carried, the largest displacement within 1.5 x q H / M_u (measured 1.12 x; the ground at the head collapsed at 12 of 50 kPa before)
 #include <katai/jobs/driver.hpp>
 #include <katai/jobs/mesh_builder.hpp>
 #include <katai/model/project.hpp>
@@ -47,13 +47,16 @@ constexpr double kGw = 9.81;
 constexpr double kRinter = 0.5, kC = 1.0, kPhi = 25.0;
 
 // pull: an upward point load on the wall's head [kN/m] in a phase after the installation; pit: a
-// phase digging the pit with the water left standing in it.
-std::vector<katai::app::SolveResult> run(bool wet, double pull, bool pit) {
+// phase digging the pit with the water left standing in it; surcharge: a uniform load on the whole
+// surface [kPa] in a phase before the pull; undrained: the ground Undrained (A); c: its cohesion.
+std::vector<katai::app::SolveResult> run(bool wet, double pull, bool pit, double surcharge = 0.0,
+                                         bool undrained = false, double c = kC) {
     m::Project pr;
     pr.x_min = 0; pr.x_max = 40; pr.y_min = 0; pr.y_max = 20;
     m::Material s;
-    s.name = "Soil"; s.model = m::SoilModel::MohrCoulomb; s.drainage = m::Drainage::Drained;
-    s.E = 2.0e4; s.nu = 0.3; s.c = kC; s.phi = kPhi; s.psi = 0.0;
+    s.name = "Soil"; s.model = m::SoilModel::MohrCoulomb;
+    s.drainage = undrained ? m::Drainage::Undrained : m::Drainage::Drained;
+    s.E = 2.0e4; s.nu = 0.3; s.c = c; s.phi = kPhi; s.psi = 0.0;
     s.gamma_sat = 18.0; s.gamma_unsat = wet ? 18.0 : 18.0 - kGw;
     if (!wet) s.gamma_sat = s.gamma_unsat;
     s.rinter_rigid = false; s.Rinter = kRinter;
@@ -78,15 +81,22 @@ std::vector<katai::app::SolveResult> run(bool wet, double pull, bool pit) {
     m::Load up; up.kind = m::LoadKind::Point; up.name = "Pull";
     up.x1 = 20; up.y1 = 20; up.qx1 = 0.0; up.qy1 = pull;
     pr.loads.push_back(up);
+    m::Load q; q.kind = m::LoadKind::Distributed; q.name = "Surcharge";
+    q.x1 = 0; q.y1 = 20; q.x2 = 40; q.y2 = 20; q.qx1 = q.qx2 = 0.0; q.qy1 = q.qy2 = -surcharge;
+    pr.loads.push_back(q);
     pr.mesh.elem_size = 1.0;
     pr.mesh.auto_refine = false;   // the identities below hold on any mesh; no refinement needed
     pr.initial.struct_active = {0};
-    pr.initial.load_active = {0};
+    pr.initial.load_active = {0, 0};
     m::Phase install; install.type = m::PhaseType::Plastic; install.name = "Install";
-    install.struct_active = {1}; install.load_active = {0};
+    install.struct_active = {1}; install.load_active = {0, 0};
     pr.phases = {install};
+    if (surcharge != 0.0) {
+        m::Phase p = install; p.name = "Surcharge"; p.load_active = {0, 1};
+        pr.phases.push_back(p);
+    }
     if (pull != 0.0) {
-        m::Phase p = install; p.name = "Pull"; p.load_active = {1};
+        m::Phase p = install; p.name = "Pull"; p.load_active = {1, surcharge != 0.0 ? 1 : 0};
         pr.phases.push_back(p);
     }
     if (pit) {
@@ -99,7 +109,11 @@ std::vector<katai::app::SolveResult> run(bool wet, double pull, bool pit) {
 }
 
 bool all_ok(const std::vector<katai::app::SolveResult>& r, size_t n) {
-    if (r.size() != n) return false;
+    if (r.size() != n) {
+        std::printf("  (%zu of %zu phases%s%s)\n", r.size(), n, r.empty() ? "" : ": ",
+                    r.empty() ? "" : r.back().message.c_str());
+        return false;
+    }
     for (const auto& x : r)
         if (!x.ok) { std::printf("  (%s)\n", x.message.c_str()); return false; }
     return true;
@@ -174,6 +188,65 @@ int main() {
                     mw, md, 1000.0 * uw, 1000.0 * ud);
         check(md > 1.0 && std::fabs(mw / md - 1.0) < 1e-3 && std::fabs(uw / ud - 1.0) < 1e-3,
               "a pit dug below the water table bends the wall as the dry ground of buoyant weight does");
+    }
+    // (5) a pull (1.2 x the joints' friction) in UNDRAINED ground under a surcharge put on undrained:
+    // the surcharge is taken by the pore water (excess pw ~ -q beside the wall, tension positive), the
+    // joint transmits it with the skeleton's contact, and its friction is still that of the effective
+    // stress. The report re-runs the joint's law at the converged state and must read the excess pore
+    // pressure the solve read: reading the transmitted stress alone it puts the capacity q tan(phi_i)
+    // higher and reports the joint bonded where the solve slipped it. (c = 10 kPa; the ground of
+    // c = 1 kPa under the same surcharge is (6).)
+    {
+        const double c5 = 10.0, ci5 = kRinter * c5, qs = 20.0;
+        const auto inst = run(true, 0.0, false, 0.0, true, c5);
+        double cap5 = 0.0;
+        if (all_ok(inst, 2))
+            for (const auto& f : inst[1].interface_forces)
+                for (size_t k = 0; k + 1 < f.stations.size(); ++k) {
+                    const auto& a = f.stations[k];
+                    const auto& b = f.stations[k + 1];
+                    const double ta = std::max(0.0, ci5 - a.sigma_n * tan_i), tb = std::max(0.0, ci5 - b.sigma_n * tan_i);
+                    cap5 += 0.5 * (ta + tb) * std::fabs(b.s - a.s);
+                }
+        const auto und = run(true, 1.2 * cap5, false, qs, true, c5);
+        int slipping = 0, points = 0;
+        double implied = 0.0;   // (c_i - sigma_n tan(phi_i) - |tau|) / tan(phi_i): the pw the capacity read
+        if (cap5 > 0.0 && all_ok(und, 4))
+            for (const auto& f : und[3].interface_forces)
+                for (const auto& q : f.stations) {
+                    if (!(q.y > 10.5 && q.y < 19.5)) continue;
+                    ++points;
+                    if (!q.slipping) continue;
+                    ++slipping;
+                    implied += (ci5 - q.sigma_n * tan_i - std::fabs(q.tau)) / tan_i;
+                }
+        if (slipping > 0) implied /= slipping;
+        std::printf("      undrained (c = %.0f kPa) under %.0f kPa put on undrained, pulled with 1.2 x %.2f kN/m: %d of %d "
+                    "points slipping, the capacity read %.2f kPa of excess pore pressure off the transmitted stress\n",
+                    c5, qs, cap5, slipping, points, implied);
+        check(points > 0 && slipping >= 0.9 * points,
+              "undrained: the joint is reported slipping where the solve slipped it");
+        check(std::fabs(implied - qs) < 0.2 * qs,
+              "undrained: its capacity is read on the transmitted stress less the excess pore pressure");
+    }
+    // (6) a surcharge put on undrained ground (c = 1 kPa) right up to the wall's head. The load's
+    // line meets the wall there, and the nodes of the line at that point are the ground's on its two
+    // sides and the wall's. Carried by the wall for that point, the load left the ground at the head
+    // without its share, and the corner -- no effective stress there to give it strength -- was
+    // squeezed up the wall by the ground's water: the phase collapsed at 12 kPa of the 50. The
+    // ground takes its share, and settles as a confined undrained column, q H / M_u.
+    {
+        const double q6 = 50.0, nu_u = 0.495, G = 2.0e4 / (2.0 * 1.3);
+        const double m_u = 2.0 * G * (1.0 - nu_u) / (1.0 - 2.0 * nu_u);   // undrained constrained modulus
+        const double s1d = q6 * 20.0 / m_u;
+        const auto s6 = run(true, 0.0, false, q6, true);
+        const bool ok6 = all_ok(s6, 3);
+        std::printf("      undrained (c = %.0f kPa) under %.0f kPa up to the wall's head: %s, max |u| %.3f mm "
+                    "(a confined undrained column: %.3f mm)\n",
+                    kC, q6, ok6 ? "carried" : "not carried", ok6 ? s6[2].max_disp * 1e3 : 0.0, s1d * 1e3);
+        check(ok6, "undrained: a surcharge up to the head of a wall with interfaces is carried");
+        check(ok6 && s6[2].max_disp < 1.5 * s1d,
+              "undrained: the ground at the wall settles as the confined column away from it");
     }
     std::printf(g_failures ? "\n%d CHECK(S) FAILED\n" : "\nall checks passed\n", g_failures);
     return g_failures ? 1 : 0;

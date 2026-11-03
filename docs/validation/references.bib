@@ -21,6 +21,11 @@
   note  = {cited by KV-LIQ-001},
 }
 
+@misc{benz2007,
+  title = {Benz, T. (2007). Small-strain stiffness of soils and its numerical consequences. Mitteilung 55, Institut fuer Geotechnik, Universitaet Stuttgart.},
+  note  = {cited by KV-CST-027},
+}
+
 @misc{benz2008,
   title = {Benz, T., Schwab, R., Kauther, R.A. & Vermeer, P.A. (2008). A Hoek-Brown criterion with intrinsic material strength factorization. Int. J. Rock Mech. Min. Sci. 45(2), 210-222 -- strength reduction of the Hoek-Brown envelope through its local Mohr-Coulomb tangent; the tangent construction evaluated in this file},
   note  = {cited by KV-CST-021},
@@ -159,6 +164,11 @@
 @misc{grimstad2012,
   title = {Grimstad, G., Andresen, L. & Jostad, H.P. (2012). NGI-ADP: Anisotropic shear strength model for clay. International Journal for Numerical and Analytical Methods in Geomechanics 36(4), 483-497 -- the yield surface translated from the in-situ state, hardening to the three strengths at the three failure strains; Davis, E.H. & Christian, J.T. (1971). Bearing capacity of anisotropic cohesive soil. J. Soil Mech. Found. Div. ASCE 97(SM5), 753-769 -- the plane-strain ellipse the surface reduces to at failure},
   note  = {cited by KV-CST-024},
+}
+
+@misc{grimstad2012b,
+  title = {Grimstad, G., Andresen, L. & Jostad, H.P. (2012). NGI-ADP: anisotropic shear strength model for clay. Int. J. Numer. Anal. Methods Geomech. 36(4), 483-497 -- the traction criterion of the model on a plane, with no volume change in the plane; the Coulomb limit of a joint for the block sliding on it},
+  note  = {cited by KV-STR-036},
 }
 
 @misc{hoek2002,
@@ -301,6 +311,11 @@
   note  = {cited by KV-FND-005, KV-FND-010},
 }
 
+@misc{prandtl1920,
+  title = {Prandtl, L. (1920). Ueber die Haerte plastischer Koerper. Nachr. Ges. Wiss. Goettingen, 74-85 -- the limit pressure of a strip on a weightless Tresca half-space, (2 + pi) c; Rankine's at-rest and the classical passive thrust as bounds on the wall; the same model with the band off for the rest},
+  note  = {cited by KV-NUM-018},
+}
+
 @misc{prandtl1921b,
   title = {Prandtl, L. (1921) and Reissner, H. (1924): the bearing capacity of a weightless cohesive-frictional soil under a strip, q_ult = c Nc with Nc = (Nq - 1) cot(phi), Nq = e^(pi tan phi) tan^2(45 + phi/2)},
   note  = {cited by KV-FND-018},
@@ -334,6 +349,11 @@
 @misc{schanz1999,
   title = {Schanz, T., Vermeer, P.A. & Bonnier, P.G. (1999). The Hardening Soil model: formulation and verification. Beyond 2000 in Computational Geotechnics, Balkema, 281-296 -- the Hardening Soil oedometric stiffness law, integrated over one-dimensional primary loading -- the same closed form KV-CST-002 is measured against; the error-decomposition procedure is the solution-verification one this program already applies to meshes (Roache 1994; Celik et al. 2008, ASME J. Fluids Eng. 130(7):078001), here applied on the axis a path-dependent model actually discretises},
   note  = {cited by KV-NUM-009},
+}
+
+@misc{simo1998,
+  title = {Simo, J.C. & Hughes, T.J.R. (1998). Computational Inelasticity. Springer, New York -- multisurface plasticity: the closest point projection, its Kuhn-Tucker conditions and the consistent tangent; Timoshenko, S.P. & Woinowsky-Krieger, S. (1959). Theory of Plates and Shells, 2nd ed. McGraw-Hill, New York, ch. 15 -- the free cylinder: N_t = p R, N_s = 0},
+  note  = {cited by KV-STR-034},
 }
 
 @misc{skempton1954,
@@ -387,16 +407,21 @@
 }
 
 @misc{terzaghi1943f,
+  title = {Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley -- one-dimensional consolidation, the average degree of consolidation U(Tv) as a series; KATAI 2D input contract (docs/k2d-format.md, edge_flow, flow_barrier) for the conditions on the faces},
+  note  = {cited by KV-CON-010},
+}
+
+@misc{terzaghi1943g,
   title = {Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley -- one-dimensional consolidation; Barron, R.A. (1948). Consolidation of fine-grained soils by drain wells. Transactions of the ASCE 113, 718-742 -- radial consolidation of the cylinder of soil around a drain, under equal vertical strain},
   note  = {cited by KV-CON-008, KV-CON-009},
 }
 
-@misc{terzaghi1943g,
+@misc{terzaghi1943h,
   title = {Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley -- one-dimensional consolidation; the stop criterion and the definition of its target are KATAI 2D input contract (docs/k2d-format.md, cstop / cdeg / cminp), which defines the degree of consolidation as the maximum excess pore pressure over the maximum initial excess pore pressure, not the settlement ratio the name suggests. Series derivation recorded in docs/references/consolidation-formulation.md},
   note  = {cited by KV-CON-003},
 }
 
-@misc{terzaghi1943h,
+@misc{terzaghi1943i,
   title = {Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley, New York -- the effective stress principle and the one-dimensional confined column; Biot, M.A. (1941). General theory of three-dimensional consolidation. J. Appl. Phys. 12, 155-164, for the undrained limit of the coupled column (the pore fluid adds its bulk stiffness Kw/n to the skeleton); the undrained relations of isotropic linear elasticity as recorded in docs/references/effective-stress-formulation.md; KATAI 2D input contract (docs/k2d-format.md, `ignoreund`: no water stiffness and no new excess pore pressure, the pressure generated earlier kept)},
   note  = {cited by KV-CST-017},
 }
@@ -424,6 +449,21 @@
 @misc{timoshenko1959c,
   title = {Timoshenko, S.P. & Woinowsky-Krieger, S. (1959). Theory of Plates and Shells, 2nd ed. McGraw-Hill, New York, ch. 15 -- the cylinder under internal pressure: N_t = p R, w = p R^2 / (E t) (here EA (1 - nu^2) with the plate's plane strain EA)},
   note  = {cited by KV-STR-030},
+}
+
+@misc{timoshenko1959d,
+  title = {Timoshenko, S.P. & Woinowsky-Krieger, S. (1959). Theory of Plates and Shells, 2nd ed. McGraw-Hill, New York, ch. 15 -- the free cylinder: N_t = p R from statics, N_t = EA (1 - nu^2) u_r / R with N_s = 0},
+  note  = {cited by KV-STR-035},
+}
+
+@misc{vermeer1999,
+  title = {Vermeer, P.A. & Neher, H.P. (1999). A soft soil model that accounts for creep. Beyond 2000 in Computational Geotechnics, Balkema, 249-261, on Terzaghi's column: Terzaghi, K. (1943). Theoretical Soil Mechanics. Wiley, ch. XIII; solved independently of the program by a finite-volume column in space with an implicit integrator in time on the same rate equations},
+  note  = {cited by KV-CON-011},
+}
+
+@misc{vermeer1999b,
+  title = {Vermeer, P.A. & Neher, H.P. (1999). A soft soil model that accounts for creep. Beyond 2000 in Computational Geotechnics, Balkema, 249-261, the rate equations integrated independently of the program by an implicit Runge-Kutta scheme (Radau IIA, relative tolerance 1e-10)},
+  note  = {cited by KV-CST-028},
 }
 
 @misc{a,
@@ -474,6 +514,11 @@
 @misc{linear,
   title = {linear superposition: for a linear-elastic soil the staged-construction ramp is a linear operator on the configuration imbalance, so applying a fraction of it must give exactly that fraction of the response -- the definition of the staged fraction as the proportion of the phase's unbalanced force that has been applied, KATAI 2D input contract (docs/k2d-format.md, mstage), stated as a testable equality},
   note  = {cited by KV-EXC-002},
+}
+
+@misc{linearity,
+  title = {linearity of the elastic boundary value problem: the displacement under a load (and a prescribed displacement) scaled by a factor is the displacement under the whole load scaled by it (KATAI 2D, docs/k2d-format.md, `curves`)},
+  note  = {cited by KV-NUM-017},
 }
 
 @misc{one,

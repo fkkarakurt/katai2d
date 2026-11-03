@@ -42,6 +42,8 @@ struct StrengthReductionOptions {
     bool incremental = true;
     double msf_step = 0.1;           // the first strength-reduction increment
     double fos_resolution = 1e-3;    // relative width of the final bracket
+    // The force the parent phase left out of balance, inside its tolerated band: see safety_analysis.
+    double parent_left = 0.0;
 };
 
 // Bisect the strength reduction factor to the slope's factor of safety. The base
@@ -71,6 +73,14 @@ struct SafetyResult {
     // Started from a parent phase, and the ground did not carry this phase's own configuration
     // change at full strength (the SRF = 1 step): no factor of safety is defined.
     bool start_failed = false;
+    // The search's path, for the safety curve: the strength factor and the largest displacement of
+    // a node since the start of the reduction [m] (NewtonResult::path), at every equilibrium the
+    // continuation or the prescribed steps reached. The factor of safety is the plateau of this
+    // path. Empty where the factor was found by bisection, whose trials are not a path.
+    std::vector<std::array<double, 2>> path;
+    // Beside each entry of `path`, the displacement [ux, uy] of every node of
+    // newton.curve_nodes since the start of the reduction [m] (NewtonResult::curve_u).
+    std::vector<double> curve_u;
 };
 // profile: optional depth gradient (materials/material_model.hpp MaterialProfile), passed
 // through to solve_nonlinear as-is. If c'_inc is GIVEN, the φ-c reduction divides c'_ref

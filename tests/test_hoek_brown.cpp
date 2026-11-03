@@ -261,6 +261,95 @@ void test_tension_cutoff() {
           "with the cut-off off, the entered value is not read at all");
 }
 
+// Past the tensile limit is not at the apex: the limit is a plane. A stress with its major principal a hair over it and
+// the others in compression used to go to the isotropic point, a jump of the whole compressive stress for a hair of
+// trial. With the cut-off at zero, (+0.02, -300, -1000) came back as nothing at all.
+// The dilatancy of a return is that of the stress it returns to, and the 90 degrees of the tensile limit has a finite answer.
+void test_dilatancy_of_the_returned_stress() {
+    std::printf("-- the dilatancy of the returned stress --\n");
+    hb::Params P = rock();
+    P.psi = 0.2;
+    const hb::Constants C = hb::constants_of(P);
+    check(C.sigt > 0.0, "the rock has a tensile strength of its own");
+    // A trial past sigma_t with the minor stress far below what the plane admits: the corrector works at 90 degrees.
+    const hb::Return far = hb::return_mapping(1.2 * C.sigt, -100.0, -5000.0, P, C);
+    check(std::isfinite(far.s1) && std::isfinite(far.s2) && std::isfinite(far.s3), "a trial past sigma_t comes back finite");
+    check(std::fabs(hb::yield(far.s1, far.s3, P, C)) < 1e-6 * std::fabs(C.sigc) && far.s1 <= C.sigt + 1e-9,
+          "and on the criterion, under the limit");
+    // In the tensile zone the flow is the dilatancy of the end of the step: solved with that one held fixed the return
+    // lands on the same stress, so the answer is a fixed point and not an average.
+    const double s1t = 0.8 * C.sigt, s2t = -600.0, s3t = -1400.0;
+    const hb::Return r = hb::return_mapping(s1t, s2t, s3t, P, C);
+    const double psi_end = hb::psi_mobilised(r.s1, P, C), sp = std::sin(psi_end), n = (1.0 + sp) / (1.0 - sp);
+    const katai::core::LameConstants l = katai::core::lame_from(P.E, P.nu);
+    const double d1 = (l.lambda + 2.0 * l.mu) * n - l.lambda, d3 = l.lambda * n - (l.lambda + 2.0 * l.mu);
+    const double la = (s3t - r.s3) / d3;
+    check(r.s1 > 0.0 && r.s1 < s1t, "the return stays in the tensile zone, where the dilatancy depends on the stress");
+    check(std::fabs(hb::yield(r.s1, r.s3, P, C)) < 1e-6 * std::fabs(C.sigc), "the return is on the criterion");
+    check(std::fabs(s1t - la * d1 - r.s1) < 1e-6 * std::fabs(C.sigc), "and flowed by the dilatancy of where it ended");
+    // In compression with no decay, nothing depends on the stress: the direction is the dilatancy entered.
+    const hb::Return c = hb::return_mapping(-100.0, -3000.0, -9000.0, P, C);
+    const double spc = std::sin(P.psi), nc = (1.0 + spc) / (1.0 - spc);
+    const double dc1 = (l.lambda + 2.0 * l.mu) * nc - l.lambda, dc3 = l.lambda * nc - (l.lambda + 2.0 * l.mu);
+    check(std::fabs((-100.0 - c.s1) * dc3 - (-9000.0 - c.s3) * dc1) < 1e-6 * dc1 * std::fabs(C.sigc),
+          "in compression the flow is the dilatancy entered");
+    // A plateau step keeps its lateral balance. From a stress on the criterion at a confinement held, an axial step: there
+    // has to be a lateral strain that holds the confinement, and it has to leave the stress on the plateau. With the
+    // dilatancy read at the trial there was none from 2e-6 of axial strain at zero confinement, 1e-4 at 100 kPa, 5e-4 at 1000.
+    hb::Params Q = rock();
+    const hb::Constants QC = hb::constants_of(Q);
+    const katai::core::LameConstants q = katai::core::lame_from(Q.E, Q.nu);
+    for (double conf : {0.0, 100.0, 1000.0})
+        for (double dy : {-5e-4, -1e-4, -1e-5}) {
+            const double s1 = -conf, s3 = s1 - hb::fbar(s1, Q, QC), s2 = Q.nu * (s1 + s3);
+            const auto ret = [&](double dx) {
+                return hb::return_mapping(s1 + (q.lambda + 2.0 * q.mu) * dx + q.lambda * dy, s2 + q.lambda * (dx + dy),
+                                          s3 + q.lambda * dx + (q.lambda + 2.0 * q.mu) * dy, Q, QC);
+            };
+            const double span = 4.0 * std::fabs(dy);
+            double a = -0.5 * span, fa = ret(a).s1 - s1, root = 0.0;
+            bool found = false;
+            for (int i = 1; i <= 800 && !found; ++i) {
+                const double b = -0.5 * span + span * i / 800.0, fb = ret(b).s1 - s1;
+                if ((fa < 0.0) != (fb < 0.0)) {
+                    double lo = a, hi = b, flo = fa;
+                    for (int k = 0; k < 60; ++k) {
+                        const double mid = 0.5 * (lo + hi), fm = ret(mid).s1 - s1;
+                        if ((fm < 0.0) == (flo < 0.0)) { lo = mid; flo = fm; } else { hi = mid; }
+                    }
+                    root = 0.5 * (lo + hi);
+                    found = true;
+                }
+                a = b; fa = fb;
+            }
+            const hb::Return r_ = ret(root);
+            char msg[160];
+            std::snprintf(msg, sizeof msg, "at %.0f kPa, axial step %.0e: lateral stress off by %.2e, the major stress %.2f against %.2f",
+                          conf, dy, r_.s1 - s1, r_.s3, s3);
+            check(found && std::fabs(r_.s1 - s1) < 1e-3 && std::fabs(r_.s3 - s3) < 1e-3 * std::fabs(s3), msg);
+        }
+}
+
+void test_tensile_plane() {
+    std::printf("\n-- (7) past the tensile limit the stress is cut back along the plane --\n");
+    hb::Params Pc = rock();
+    Pc.tension_cutoff = true; Pc.sigt_user = 0.0;
+    const hb::Constants Cc = hb::constants_of(Pc);
+    const hb::Return a = hb::return_mapping(0.02, -300.0, -1000.0, Pc, Cc);
+    std::printf("   cut-off at zero, trial (0.02, -300, -1000): (%.4f, %.4f, %.4f)\n", a.s1, a.s2, a.s3);
+    check(std::fabs(a.s1) < 1e-9 && a.s3 < -999.0 && a.s2 < -299.0 && !a.apex, "the compressive stresses stay");
+    const hb::Return all = hb::return_mapping(50.0, 40.0, 30.0, Pc, Cc);
+    check(all.apex && all.s1 == 0.0 && all.s2 == 0.0 && all.s3 == 0.0, "all three in tension: the apex");
+    // Without a cut-off the limit is the criterion's own, and the corrector meets its surface from either side of it.
+    const hb::Params P0 = rock();
+    const hb::Constants C0 = hb::constants_of(P0);
+    const hb::Return lo = hb::return_mapping(C0.sigt * 0.999, -300.0, -1000.0, P0, C0);
+    const hb::Return hi = hb::return_mapping(C0.sigt * 1.001, -300.0, -1000.0, P0, C0);
+    std::printf("   the criterion's own sigma_t %.3f, either side of it: s3 %.3f and %.3f\n", C0.sigt, lo.s3, hi.s3);
+    check(std::fabs(lo.s3 - hi.s3) < 0.01 * std::fabs(lo.s3), "continuous across the limit");
+    check(std::fabs(hb::yield(hi.s1, hi.s3, P0, C0)) < 1e-6 * std::fabs(C0.sigc), "and on the surface");
+}
+
 int main() {
     std::printf("Hoek-Brown (rock behaviour) at the material point\n\n");
     test_constants_and_closed_forms();
@@ -269,6 +358,8 @@ int main() {
     test_tresca_identity();
     test_mobilised_dilatancy();
     test_tension_cutoff();
+    test_tensile_plane();
+    test_dilatancy_of_the_returned_stress();
     if (g_failures == 0) {
         std::printf("\nOK: the published criterion; it degenerates to this tree's Tresca\n");
         return 0;

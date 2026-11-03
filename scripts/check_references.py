@@ -128,7 +128,6 @@ UNDECLARED_AT_ADOPTION: frozenset[str] = frozenset({
     "test_gui_solve.cpp",
     "test_hardening_soil.cpp",
     "test_hs_axisym.cpp",
-    "test_hs_berlin.cpp",
     "test_hs_calibration.cpp",
     "test_hs_cap.cpp",
     "test_hs_fe.cpp",

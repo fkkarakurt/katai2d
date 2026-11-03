@@ -33,7 +33,8 @@ struct GeogridProps {
     // grid stretches round its circumference, eps_t = u_r / r, and carries the hoop force
     // N_t = EA eps_t in the other direction of the grid -- the same stiffness, no Poisson coupling,
     // tension only like the meridional force. Everything is integrated per radian (weight r).
-    // The hoop has no plastic state, so a capacity N_p is not taken here (the driver refuses it).
+    // A capacity caps each direction on its own, N <= Np and N_t <= Np (an isotropic grid), each
+    // with its own plastic strain.
     bool axisym = false;
 };
 
@@ -77,11 +78,11 @@ inline AxialReturn axial_return(const GeogridProps& p, double eps, double ep_c) 
 }
 
 // The hoop law of a membrane of revolution, eps_t = u_r / r (grid_kin below; a stress point lies
-// inside the element, so r > 0 there even when an end of the grid is on the axis): tension only
-// and elastic -- slack, reversibly, when the ring would shorten.
-inline AxialReturn hoop_return(const GeogridProps& p, double eps_t) {
-    if (eps_t <= 0.0) return {0.0, 0.0, 0.0};
-    return {p.EA * eps_t, 0.0, p.EA};
+// inside the element, so r > 0 there even when an end of the grid is on the axis): the same law as
+// the meridional force with a plastic hoop strain of its own -- tension only, slack (reversibly)
+// when the ring would shorten, and yielding at Np apart from the meridional force.
+inline AxialReturn hoop_return(const GeogridProps& p, double eps_t, double ept_c = 0.0) {
+    return axial_return(p, eps_t, ept_c);
 }
 
 // 2-point Gauss (ε is linear on the quadratic edge → exact).
@@ -106,7 +107,10 @@ inline std::array<double, 2> gauss_xi() {
 // Gauss for 3 nodes (the historical element, unchanged), 4-point for 5 (exact for the quartic's
 // cubic strain squared). The state vectors keep kStateStride slots per element, whatever its order.
 inline constexpr int kMaxNodes = 5;
-inline constexpr int kStateStride = 4;
+// Per element: the meridional plastic strain at each of up to 4 stress points, then (a membrane of
+// revolution) the hoop plastic strain at the same points, from kHoopState on.
+inline constexpr int kHoopState = 4;
+inline constexpr int kStateStride = 2 * kHoopState;
 using GridCoords = Eigen::Matrix<double, kMaxNodes, 2>;
 using GridRow = Eigen::Matrix<double, 1, 2 * kMaxNodes>;
 using GridDof = Eigen::Matrix<double, 2 * kMaxNodes, 1>;

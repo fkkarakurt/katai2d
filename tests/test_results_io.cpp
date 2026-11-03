@@ -97,6 +97,10 @@ std::vector<katai::app::SolveResult> build_phases() {
             R.excess_pore = {0, -1.5, -3.25, -4.5, -6, -7.75};
             R.consol_time = {0.0, 0.5, 2.0};
             R.consol_settlement = {0.0, 0.0125, 0.03};
+            R.path_factor = {1.0, 1.25, 1.375};   // v12: a Safety phase's path
+            R.path_disp = {0.0, 0.004, 0.0625};
+            R.curve_nodes = {0, 2};                                     // v12: two points
+            R.curve_u = {0, 0, 0, 0, 1e-3, -2e-3, 0, -1e-3, 4e-3, -8e-3, 1e-4, -5e-3};
             R.consol_excess_pore = {9.5, 4.25, 1.0};
             R.saturation = {1, 1, 0.875, 0.75, 1, 1};
             R.reaction = Eigen::VectorXd::LinSpaced(12, -3.0, 4.5);
@@ -170,6 +174,8 @@ bool same(const katai::app::SolveResult& a, const katai::app::SolveResult& b) {
         a.dyn_period != b.dyn_period || a.dyn_response_sa != b.dyn_response_sa ||
         a.dyn_design_sa != b.dyn_design_sa || a.dyn_design_sa_ec8 != b.dyn_design_sa_ec8 ||
         a.dyn_peak_surface_a != b.dyn_peak_surface_a || a.dyn_model_f1 != b.dyn_model_f1) return false;
+    if (a.path_factor != b.path_factor || a.path_disp != b.path_disp) return false;   // v12
+    if (a.curve_nodes != b.curve_nodes || a.curve_u != b.curve_u) return false;
     if (a.reaction.size() != b.reaction.size() ||
         (a.reaction.size() > 0 && (a.reaction - b.reaction).cwiseAbs().maxCoeff() != 0.0)) return false;
     if (a.stress.stress.size() != b.stress.stress.size()) return false;
@@ -250,6 +256,22 @@ int main() {
     check(!katai::app::load_results(path, hash, cut, &err) && !err.empty(),
           "truncated file rejected");
 
+    // A version 11 file has no path: it reads back empty, and everything else exactly.
+    {
+        err.clear();
+        check(katai::app::save_results(path, hash, phases, &err, 11), "results saved in the v11 layout");
+        std::vector<katai::app::SolveResult> v11;
+        check(katai::app::load_results(path, hash, v11, &err) && v11.size() == 2, "a version 11 file still loads");
+        bool rest_same = v11.size() == 2;
+        for (int k = 0; k < 2 && rest_same; ++k) {
+            auto expect = phases[k];
+            expect.path_factor.clear(); expect.path_disp.clear();
+            expect.curve_nodes.clear(); expect.curve_u.clear();
+            rest_same = same(expect, v11[k]);
+        }
+        check(rest_same, "...without the v12 path, and the rest exact");
+    }
+
     // A version 10 file has none of the v11 fields: they read back empty / false / None, and
     // everything a v10 file did hold comes back exactly.
     {
@@ -268,6 +290,8 @@ int main() {
                 expect.reaction.resize(0); expect.dyn_time.clear(); expect.dyn_surface_ax.clear();
                 expect.dyn_period.clear(); expect.dyn_response_sa.clear(); expect.dyn_design_sa.clear();
                 expect.dyn_design_sa_ec8.clear(); expect.dyn_peak_surface_a = 0.0; expect.dyn_model_f1 = 0.0;
+                expect.path_factor.clear(); expect.path_disp.clear();
+                expect.curve_nodes.clear(); expect.curve_u.clear();
                 rest_same = rest_same && same(expect, v10[k]);
             }
             check(rest_same && !v10[1].fos_lower_bound && v10[1].diagnostics.empty(),
@@ -322,6 +346,8 @@ int main() {
                 expect.reaction.resize(0); expect.dyn_time.clear(); expect.dyn_surface_ax.clear();
                 expect.dyn_period.clear(); expect.dyn_response_sa.clear(); expect.dyn_design_sa.clear();
                 expect.dyn_design_sa_ec8.clear(); expect.dyn_peak_surface_a = 0.0; expect.dyn_model_f1 = 0.0;
+                expect.path_factor.clear(); expect.path_disp.clear();
+                expect.curve_nodes.clear(); expect.curve_u.clear();
                 rest_same = rest_same && same(expect, old[k]);
             }
             check(rest_same, "...and every other field is unchanged");

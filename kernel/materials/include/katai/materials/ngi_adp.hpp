@@ -172,23 +172,39 @@ inline void plastic_failure_strains(const Params& P, const Derived& d, const Vec
 // One strain increment from a committed state: backward Euler on [sigma, dlambda, gp] (a Newton
 // iteration with a finite-difference Jacobian; the hardening's square root at gp = 0 makes an
 // analytical one awkward and buys nothing at six unknowns). Returns false if it did not converge.
-inline bool return_map(const Params& P, const Derived& d, const State& c, const Vec4& de, State& out) {
+// Given `T`, it also returns the consistent tangent of the increment: differentiating the residual at
+// the answer with respect to the strain (only the trial stress depends on it) gives
+// J dX = (D / S) d(eps) in its first four rows, so the tangent is one more Jacobian and a solve,
+// where differencing the integration itself is four more integrations of the whole Newton iteration.
+inline bool return_map(const Params& P, const Derived& d, const State& c, const Vec4& de, State& out,
+                       Mat4* T = nullptr) {
     const Mat4 D = elastic(P);
     double gC, gE, gD;
     plastic_failure_strains(P, d, c.s0, gC, gE, gD);
     out = c;
     const Vec4 tr = c.sig + D * de;
     // k at a stress and a plastic strain: the failure strain is read at the orientation of the
-    // modified deviator, which itself moves with k -- two passes, the second at the first's k.
+    // modified deviator, which itself moves with k, so the two are solved together (the map's slope is
+    // below 0.2, and three passes reach what more would). One pass read the orientation at a k that was not the answer:
+    // measured on direct simple shear against the published curves, 5.7% and 4.1% low before the peak in
+    // two clays (rms 2.3% and 1.5%) where triaxial compression and extension agreed to 0.1%; the peak,
+    // where k = 1, does not depend on it.
     const auto kappa_at = [&](const Vec4& sig, double gp) {
-        const Mod m0 = modified(sig, c.s0, kappa_of(gp, gC), d);
-        return kappa_of(gp, failure_strain(m0, gC, gE, gD));
+        double k = kappa_of(gp, gC);
+        for (int pass = 0; pass < 3; ++pass) {   // measured: three reach the curves, more do not move them
+            const double next = kappa_of(gp, failure_strain(modified(sig, c.s0, k, d), gC, gE, gD));
+            const bool settled = std::fabs(next - k) <= 1e-12;   // at the peak, or where the three strains agree
+            k = next;
+            if (settled) break;
+        }
+        return k;
     };
     {
         const double k0 = kappa_at(tr, c.gp);
         const Mod mk = modified(tr, c.s0, k0, d);
         if (std::sqrt(mk.H * mk.J2) - k0 * 0.5 * d.S <= 1e-10 * d.S) {   // elastic
             out.sig = tr;
+            if (T) *T = D;
             return true;
         }
     }
@@ -224,22 +240,34 @@ inline bool return_map(const Params& P, const Derived& d, const State& c, const 
         X.head<4>() = tr - dl0 * (D * n);
     }
     Vec6 R;
-    for (int it = 0; it < 60; ++it) {
-        residual(X, R);
-        if (R.norm() < 1e-12) {
-            out.sig = X.head<4>();
-            out.gp = X(5);
-            return X(4) >= -1e-14;
-        }
+    const auto jacobian = [&]() {
         Mat6 J;
         for (int j = 0; j < 6; ++j) {
             Vec6 Xp = X;
-            const double h = j < 4 ? 1e-7 * ss : (j == 4 ? 1e-7 * gs + 1e-12 : 1e-7 * gs + 1e-12);
+            const double h = j < 4 ? 1e-7 * ss : 1e-7 * gs + 1e-12;
             Xp(j) += h;
             Vec6 Rp;
             residual(Xp, Rp);
             J.col(j) = (Rp - R) / h;
         }
+        return J;
+    };
+    for (int it = 0; it < 60; ++it) {
+        residual(X, R);
+        if (R.norm() < 1e-12) {
+            out.sig = X.head<4>();
+            out.gp = X(5);
+            if (X(4) < -1e-14) return false;
+            if (T) {
+                Eigen::Matrix<double, 6, 4> B = Eigen::Matrix<double, 6, 4>::Zero();
+                B.topRows<4>() = D / ss;
+                const Eigen::Matrix<double, 6, 4> dXde = jacobian().partialPivLu().solve(B);
+                *T = dXde.topRows<4>();
+                if (!T->allFinite()) *T = D;
+            }
+            return true;
+        }
+        const Mat6 J = jacobian();
         Vec6 dX = J.partialPivLu().solve(-R);
         if (!dX.allFinite()) return false;
         // Keep the multiplier and the plastic strain where they mean something.
@@ -258,16 +286,31 @@ inline bool return_map(const Params& P, const Derived& d, const State& c, const 
 }
 
 // The increment, cut into substeps when one step does not converge.
+// A STRAIN TOO SMALL TO RETURN. The hardening has an infinite slope where it starts, kappa ~ 2 sqrt(gp / gf), and from the
+// stress a point started at (s = s0) the flow direction is singular too, so the return of a very small increment may not
+// converge, and cutting the increment only makes that worse: every level of the cut then costs its whole iteration. Measured on
+// a shear column shaken in a nonlinear Dynamic phase (99 nodes): no result in 280 s, each stress point spending 15 ms of cuts
+// on every evaluation. An increment below 1e-3 of the strength, as a stress, is taken elastically: that is the size of the
+// error, the next larger increment returns to the surface, and a test from rest loses nothing it can read.
+inline bool too_small_to_return(const Params& P, const Derived& d, const Vec4& de) {
+    return 2.0 * P.G * de.lpNorm<Eigen::Infinity>() <= 1e-3 * d.S;
+}
+
 inline bool integrate(const Params& P, const State& c, const Vec4& de, State& out, int depth = 0) {
     const Derived d = derive(P);
     if (return_map(P, d, c, de, out)) return true;
+    if (depth <= 1 && too_small_to_return(P, d, de)) {
+        out = c;
+        out.sig = c.sig + elastic(P) * de;
+        return true;
+    }
     if (depth > 10) return false;
     State mid;
     if (!integrate(P, c, 0.5 * de, mid, depth + 1)) return false;
     return integrate(P, mid, 0.5 * de, out, depth + 1);
 }
 
-// The consistent tangent, by differencing the integration itself.
+// The consistent tangent, by differencing the integration itself: for an increment that had to be cut.
 inline Mat4 tangent(const Params& P, const State& c, const Vec4& de, const State& out) {
     Mat4 T;
     const double h = 1e-8 + 1e-6 * de.lpNorm<Eigen::Infinity>();
@@ -279,6 +322,15 @@ inline Mat4 tangent(const Params& P, const State& c, const Vec4& de, const State
         T.col(j) = (o.sig - out.sig) / h;
     }
     return T;
+}
+
+// The increment and its consistent tangent.
+inline bool integrate_tangent(const Params& P, const State& c, const Vec4& de, State& out, Mat4& T) {
+    const Derived d = derive(P);
+    if (return_map(P, d, c, de, out, &T)) return true;
+    if (!integrate(P, c, de, out, 1)) return false;
+    T = too_small_to_return(P, d, de) ? elastic(P) : tangent(P, c, de, out);
+    return true;
 }
 
 }  // namespace katai::core::adp

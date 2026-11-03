@@ -2,17 +2,29 @@
 // two-surface substepping integrator (hs_integrate, cap+shear) drives a drained triaxial at
 // sigma3 = 200 kPa with the cap CALIBRATED to (K0^NC, Eoed_ref); we verify the full response:
 //   - deviatoric: qf = (c cot phi + sigma3) 2 sin phi/(1-sin phi) = 646 kPa,
-//     reached as a perfectly-plastic plateau; secant at qf/2 == E50 (HS hyperbola);
+//     reached as a perfectly-plastic plateau; secant at qf/2 == E50 (HS hyperbola), with the cap
+//     yielding as it does in this test, on the published points of this parameter set: axial stress
+//     400 / 512 / 587 / 637 / 678 / 705 / 730 kPa at 0.1 .. 0.7% axial strain;
 //   - volumetric: initial CONTRACTION (cap, p rising) then net
 //     DILATION (shear, psi=6 deg) -- eps_v turns negative and reaches ~ -0.005 at axial 5%.
 // The volumetric dilation needs (a) the Rowe dilatancy with the correct sign
 // (eps_v^p/eps_q^p = -sin psi_m) and (b) the perfectly-plastic Mohr-Coulomb flow on the qf
 // plateau (the hardening shear surface cannot grow past qf -> it must hand over to the MC
 // failure surface with continued dilatant flow). (See hardening-soil-formulation.md sec 4-5.)
+//
+// verify: KV-CST-027
+//   oracle:   external_code
+//   source:   Benz, T. (2007). Small-strain stiffness of soils and its numerical consequences. Mitteilung 55, Institut fuer Geotechnik, Universitaet Stuttgart.
+//   locator:  p. 81 (the internal parameters are solved for so that the model simulates E50 in triaxial and E_oed and K0nc in oedometer element tests); the points are those of a published verification of this parameter set, read from its plot, sigma_3 = 200 kPa
+//   quantity: secant at q_f / 2 with the cap yielding [kPa]; axial stress at seven axial strains [kPa]; deviator on the plateau [kPa]; volumetric strain at 5% axial strain [-]
+//   expected: the secant is E50; 400 / 512 / 587 / 637 / 678 / 705 / 730 kPa at 0.1 .. 0.7%; q_f = 646 kPa; net dilation
+//   band:     2% on the secant (calibrated at p_ref, read at 2 p_ref); 1.5% on the points, as read from the plot; 0.01% on the plateau
 #include <katai/materials/hardening_soil_plastic.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 
 using katai::core::HardeningSoilParams;
 using katai::core::HsIntegrated;
@@ -53,6 +65,7 @@ void test_berlin_triaxial() {
     // Parameterised by the integration tolerance, because the distance from the plateau is a
     // function of it -- see the plateau check below.
     double q50_err = -1.0, epsv_max_contr = 0.0, epsv_final = 0.0, q_final = 0.0;
+    double s1_at[7] = {0.0};
     const auto walk = [&](double stol, double pp0) {
         Eigen::Vector3d sig(sigma3, sigma3, sigma3);
         double gp = 0, pp = pp0, eps1 = 0, epsv = 0;
@@ -68,6 +81,8 @@ void test_berlin_triaxial() {
             }
             epsv += 5e-6 + 2.0 * dlat;  // axial + 2*lateral (compression +)
             sig = r.stress; gp = r.gamma_p; pp = r.pp; eps1 += 5e-6;
+            for (int k = 0; k < 7; ++k)
+                if (s1_at[k] == 0.0 && eps1 >= (k + 1) * 1e-3 - 1e-9) s1_at[k] = sig(0);
             epsv_max_contr = std::fmax(epsv_max_contr, epsv);  // peak contraction (positive)
             const double q = sig(0) - sig(2);
             if (!q50_read && q >= 0.5 * qf) { q50_err = (q / eps1 - E50) / E50; q50_read = true; }
@@ -77,9 +92,11 @@ void test_berlin_triaxial() {
         return q_final;
     };
     // THE HYPERBOLA, on its own: the same test with the cap out of reach (pp = 2 sigma3), so the
-    // shear surface is the only one yielding and the secant at q_f/2 must be E50 itself.
+    // shear surface is the only one yielding and the secant at q_f/2 is E50 times what the
+    // calibration took the initial stiffness up by.
     walk(0.0, 2.0 * sigma3);
-    const double q50_shear = q50_err;
+    const double q50_shear = (1.0 + q50_err) / p.ei_scale - 1.0;
+    std::fill(std::begin(s1_at), std::end(s1_at), 0.0);
     walk(0.0, sigma3);   // the shipped integration tolerance, normally consolidated
     // Printed to three decimals, not one: what this line is read for is HOW CLOSE the deviator
     // gets to its plateau, and the two returns of the failure bound that this tree once carried
@@ -97,13 +114,18 @@ void test_berlin_triaxial() {
     // sand's K0 of 0.38 and had parked alpha at 80, where the cap is all but volumetric.
     std::printf("  secant at q_f/2 against E50: shear surface alone %+.4f%% | normally "
                 "consolidated, cap yielding too %+.3f%%\n", 100.0 * q50_shear, 100.0 * q50_err);
-    check(std::fabs(q50_shear) < 5e-3, "secant at qf/2 = E50 when only the shear surface yields");
-    // From an isotropic normally consolidated state the cap yields as well (the path raises p on
-    // a cap that passes through the start), so the response is SOFTER than the hyperbola -- by
-    // 9.8% with the cap calibrated to K0 = 0.38 and Eoed_ref. Asserted as a direction and a
-    // bound, not as agreement with a number nobody measured.
-    check(q50_err < 0.0 && q50_err > -0.15,
-          "with the cap yielding too the secant is softer than E50, and by less than 15%");
+    check(std::fabs(q50_shear) < 5e-3, "secant at qf/2 = f E50 when only the shear surface yields");
+    // From an isotropic normally consolidated state the cap yields as well (the path raises p on a cap
+    // that passes through the start), and the initial stiffness is what makes the test read E50 all the
+    // same; before it was calibrated this secant was 9.8% soft. It is calibrated at p_ref, and read here at twice that.
+    check(std::fabs(q50_err) < 0.02, "with the cap yielding too the secant is E50 (2%)");
+    const double published[7] = {400.0, 512.0, 587.0, 637.0, 678.0, 705.0, 730.0};
+    bool on_points = true;
+    for (int k = 0; k < 7; ++k) {
+        std::printf("  axial strain %.1f%%: axial stress %.1f, published %.0f\n", 0.1 * (k + 1), s1_at[k], published[k]);
+        on_points = on_points && std::fabs(s1_at[k] / published[k] - 1.0) < 0.015;
+    }
+    check(on_points, "on the published points of this parameter set (1.5%, as read from the plot)");
     // Volumetric: initial contraction then net dilation.
     check(epsv_max_contr > 2e-4 && epsv_max_contr < 3e-3,
           "initial volumetric contraction (cap), small peak ~0.1%");

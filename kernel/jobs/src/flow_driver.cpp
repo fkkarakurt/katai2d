@@ -540,7 +540,7 @@ FlowResult solve_groundwater_flow(const model::Project& pr, const katai::mesh::M
 
     R.pore.assign(mesh_in.node_count, 0.0);
     for (int n = 0; n < mesh_in.node_count; ++n)
-        R.pore[n] = kFlowGammaWater * std::fmax(0.0, R.head[n] - mesh_in.y[n]);
+        R.pore[n] = pr.gamma_water * std::fmax(0.0, R.head[n] - mesh_in.y[n]);
 
     R.ok = true;
     // In an axisymmetric model every integral above is per radian; the discharges are stated for

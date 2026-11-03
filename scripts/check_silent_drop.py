@@ -143,7 +143,6 @@ def classify(lines: list[str], idx: int, loop_head: int) -> tuple[str, str]:
 CODE = re.compile(r"K2D-[A-Z][0-9]{3}")
 UNTESTED_CODES = {
     "K2D-A011": "the legacy hand-over of an external flow field; staged phases solve their own flow",
-    "K2D-A019": "raised only when Newton stagnates below 1e-3 of the load scale, a numerical event",
     "K2D-A032": "raised only when the small-strain stiffness falls back to a fixed strain increment",
 }
 TABLE_ROW = re.compile(r"\|\s*`(K2D-[A-Z][0-9]{3})`\s*\|\s*(\w+)")

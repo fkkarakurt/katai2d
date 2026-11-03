@@ -1,4 +1,5 @@
 #include <katai/analysis/strength_reduction.hpp>
+#include <katai/analysis/cancel.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -75,6 +76,7 @@ static void factor_strength(MaterialModel& m, double srf) {
 // dilatancy to clamp (its Coulomb return is non-dilatant), and its stiffnesses are not strengths.
 static void factor_interface_strength(iface::InterfaceProps& p, double srf) {
     p.c_i /= srf;
+    if (p.c_neg >= 0.0) p.c_neg /= srf;
     p.phi_i = std::atan(std::tan(p.phi_i) / srf);
     p.sigma_t /= srf;
 }
@@ -93,6 +95,8 @@ double factor_of_safety(const mesh::Mesh& mesh, const DofMap& dofs,
             const NewtonResult r = solve_nonlinear(
                 mesh, dofs, materials, gravity_load, linear_solve, options.newton);
             return r.converged;
+        } catch (const katai::analysis::Cancelled&) {
+            throw;  // a cancelled run is not a collapse
         } catch (...) {
             // A singular/!factorizable tangent at incipient collapse is itself
             // the failure signal -- treat it as an unstable (collapsed) slope.
@@ -150,6 +154,8 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
             out = solve_nonlinear(mesh, dofs, m, gravity_load, linear_solve, options.newton,
                                   initial_state, active_element, s, {}, {}, p);
             return out.converged;
+        } catch (const katai::analysis::Cancelled&) {
+            throw;  // a cancelled run is not a collapse
         } catch (...) {
             return false;  // singular tangent at incipient collapse = the failure signal
         }
@@ -192,20 +198,41 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
     if (incremental) {
         NewtonResult base_run;
         bool stands = false;
+        bool hold_parent = false;
         if (from_parent) {
             // SRF = 1 from the parent is a chained phase of its own: the parent's force held, and
             // whatever this phase's configuration changes (its load vector against the parent's
             // internal force) ramped in at full strength. Nothing changed = a nil step, which
             // converges at once; a change that the ground cannot carry is reported as that, not
             // as a factor of safety below one.
+            const Eigen::VectorXd change = gravity_load - baseline;
             try {
-                const Eigen::VectorXd change = gravity_load - baseline;
                 base_run = solve_nonlinear(mesh, dofs, materials, change, linear_solve,
                                            options.newton, initial_state, active_element, base, {},
                                            baseline, profile, init_struct);
                 stands = base_run.converged;
+            } catch (const katai::analysis::Cancelled&) {
+                throw;  // a cancelled run is not a collapse
             } catch (...) {
                 stands = false;
+            }
+            // A PARENT THAT CLOSED INSIDE ITS TOLERATED BAND leaves a force out of balance, and to this search it looks
+            // like a change the phase makes. Where nothing else differs and the iteration cannot place even that, it
+            // is the iteration's own stall and not something the ground cannot carry: the parent's state stands, at
+            // the tolerance it was accepted at, and the search holds its force. Measured on a slope on jointed rock
+            // (psi 0, 15-noded, 1 m): 4.9 kN/m out of 950 refused as a change the ground would not carry.
+            if (!stands && change.norm() <= 1.01 * options.parent_left) {
+                try {
+                    const Eigen::VectorXd none = Eigen::VectorXd::Zero(gravity_load.size());
+                    base_run = solve_nonlinear(mesh, dofs, materials, none, linear_solve, options.newton,
+                                               initial_state, active_element, base, {}, baseline, profile, init_struct);
+                    stands = base_run.converged;
+                    hold_parent = stands;
+                } catch (const katai::analysis::Cancelled&) {
+                    throw;  // a cancelled run is not a collapse
+                } catch (...) {
+                    stands = false;
+                }
             }
             if (!stands) {
                 res.start_failed = true;
@@ -222,7 +249,7 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
             std::vector<GaussState> states = base_run.gauss_states;
             Eigen::VectorXd u_total = base_run.displacement;
             const Eigen::VectorXd no_load = Eigen::VectorXd::Zero(gravity_load.size());
-            const Eigen::VectorXd& held = gravity_load;   // equilibrated at SRF = 1 either way
+            const Eigen::VectorXd& held = hold_parent ? baseline : gravity_load;   // equilibrated at SRF = 1 either way
             const bool parent_datum =
                 from_parent && init_struct.u_datum.size() == (Eigen::Index)dofs.equation_count();
             NewtonOptions step_opt = options.newton;
@@ -314,16 +341,26 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                     // A continuation that stopped without finding the limit (the path could not
                     // be started from here) leaves the search to the prescribed steps.
                     return r.srf_limit || r.srf >= arc_opt.srf_max;
+                } catch (const katai::analysis::Cancelled&) {
+                    throw;  // a cancelled run is not a collapse
                 } catch (...) {
                     return false;
                 }
             };
             {
+                // A limit found where the continuation started is a path that was not started: the
+                // prescribed steps then say whether the factor is that of the state the phase began
+                // from or above it. Taken as found, a reduction from a state its parent closed only
+                // to the tolerance's last resort reported 1.0000 with nothing to say so (measured:
+                // an embankment's first lift on 15-noded elements, 1.09 on 6-noded ones).
                 NewtonResult ra;
-                if (continue_by_arc(options.msf_step, ra)) {
+                if (continue_by_arc(options.msf_step, ra) &&
+                    !(ra.srf_limit && ra.srf <= srf * (1.0 + options.fos_resolution))) {
                     res.fos = std::min(std::max(ra.srf, srf), std::max(options.srf_max, options.srf_ceiling));
                     res.bracketed = ra.srf_limit;
                     ra.displacement += u_total;
+                    res.path = ra.path;
+                    res.curve_u = ra.curve_u;
                     res.mechanism = std::move(ra);
                     return res;
                 }
@@ -331,6 +368,27 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
             double step = options.msf_step;
             double failed_at = -1.0;            // set only by a step at the resolution failing
             bool ever_failed = false;
+            // u_total holds every DOF; the path's measure reads the nodes, from where the reduction
+            // started (u_total starts at the equilibrium at full strength, which can be a gravity
+            // loading's whole settlement) -- as the continuation's does
+            const Eigen::VectorXd u_start = u_total;
+            const auto node_u = [&]() {
+                double m2 = 0.0;
+                for (int nd = 0; nd < mesh.node_count; ++nd) {
+                    const int gx = dofs.global_dof(nd, 0), gy = dofs.global_dof(nd, 1);
+                    const double ux = u_total(gx) - u_start(gx), uy = u_total(gy) - u_start(gy);
+                    m2 = std::max(m2, ux * ux + uy * uy);
+                }
+                return std::sqrt(m2);
+            };
+            const auto curve_u = [&]() {
+                for (const int nd : options.newton.curve_nodes)
+                    for (int c = 0; c < 2; ++c)
+                        res.curve_u.push_back(
+                            nd >= 0 ? u_total(dofs.global_dof(nd, c)) - u_start(dofs.global_dof(nd, c)) : 0.0);
+            };
+            res.path.push_back({srf, node_u()});
+            curve_u();
             for (int guard = 0; guard < 400; ++guard) {
                 double next = srf + step;
                 const double top = std::max(options.srf_max, options.srf_ceiling);
@@ -352,6 +410,8 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                     r = solve_nonlinear(mesh, dofs, m, no_load, linear_solve, step_opt, states,
                                         active_element, s, {}, held, p, carry);
                     ok = r.converged;
+                } catch (const katai::analysis::Cancelled&) {
+                    throw;  // a cancelled run is not a collapse
                 } catch (...) {
                     ok = false;
                 }
@@ -361,6 +421,8 @@ SafetyResult safety_analysis(const mesh::Mesh& mesh, const DofMap& dofs,
                     u_total += r.displacement;
                     r.displacement = u_total;
                     res.mechanism = std::move(r);
+                    res.path.push_back({srf, node_u()});
+                    curve_u();
                     step *= ever_failed ? 1.25 : 1.5;   // stride out again, more warily once burnt
                 } else {
                     ever_failed = true;

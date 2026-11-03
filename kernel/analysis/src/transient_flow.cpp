@@ -3,6 +3,7 @@
 // element-templated detail implementations instantiate here for tri6 and tri15;
 // consumers see declarations only.
 #include <katai/analysis/transient_flow.hpp>
+#include <katai/analysis/cancel.hpp>
 
 namespace katai::core {
 
@@ -95,6 +96,7 @@ TransientFlowResult transient_flow_impl(
     res.head.push_back(hfull);
 
     for (int step = 0; step < nsteps; ++step) {
+        katai::analysis::poll_cancel();
         const double t = (step + 1) * dt;
         // Prescribed-value extension g (0 at free nodes, head_bc(n,t) at Dirichlet nodes).
         Eigen::VectorXd g = Eigen::VectorXd::Zero(nc);
@@ -313,6 +315,7 @@ UnsaturatedFlowResult unsaturated_flow_impl(
         // a tenth). Convergence is judged on the full update, so damping never stops it early.
         double omega = 1.0, dprev = 1e300;
         for (; it < iter_cap; ++it) {
+            katai::analysis::poll_cancel();
             math::SparseMatrixBuilder Ab(nc), Hb(nc);
             Ab.reserve((std::size_t)mesh.element_count * N * N); Hb.reserve((std::size_t)mesh.element_count * N * N);
             assemble(h, hn, dts, Ab, Hb, storage_vec, water_vol);
@@ -398,6 +401,7 @@ UnsaturatedFlowResult unsaturated_flow_impl(
     };
 
     for (int step = 0; step < nsteps; ++step) {
+        katai::analysis::poll_cancel();
         const double t0 = step * dt;
         // A STEP THAT DOES NOT CONVERGE IS SPLIT. A wetting or drying front crossing a steep
         // retention curve within one step is the usual cause, and halving the step until the

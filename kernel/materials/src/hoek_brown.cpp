@@ -9,46 +9,83 @@ Return return_mapping(double s1t, double s2t, double s3t, const Params& P,
 
     const LameConstants lame = lame_from(P.E, P.nu);
     const double lam = lame.lambda, mu = lame.mu;
-    const double npsi = [&] {
-        const double pm = psi_mobilised(s1t, P, C);
-        const double sp = std::sin(pm);
-        return (1.0 + sp) / (1.0 - sp);
-    }();
-    // D_e * m for m = [N_psi, 0, -1] (isotropic elasticity in principal space).
-    const double d1 = (lam + 2.0 * mu) * npsi - lam;
-    const double d2 = lam * (npsi - 1.0);
-    const double d3 = lam * npsi - (lam + 2.0 * mu);
 
-    // THE APEX IS A DOMAIN BOUNDARY, NOT A SPECIAL CASE. The criterion's bracket closes exactly at
-    // s1 = sigma_t = s sigma_ci / m_b, so there is no surface on the tensile side of the
-    // isotropic tension point. A trial that is already past it cannot be returned to a surface
-    // that does not exist, and goes to the apex itself.
+    // PAST THE TENSILE LIMIT IS NOT AT THE APEX. The admissible set is the criterion intersected with
+    // s1 <= sigma_t (yield), and that limit is a plane, not a point: a stress with its major principal a
+    // hair over it and the others in compression is cut back along the plane. Every such trial used to
+    // go to the isotropic point (sigma_t, sigma_t, sigma_t): a jump of 1138 kPa in the vertical stress for
+    // 0.02 kPa of trial, and with the cut-off at zero a stress of (-20, -1000) came back as nothing at all.
+    // An imposed displacement then closed on zero stress and reported "Solved" with no reaction, and a
+    // free column stopped at a load factor of 3e-8. So the trial is cut back onto the plane, as for every
+    // other model here (apply_rankine_cap: the plane, the edge of two, the apex of three); where that
+    // state is inside the criterion it is the answer, and where it is not, the criterion's own surface
+    // is met first and the corrector below finds it.
     if (s1t >= C.sigt) {
-        R.s1 = R.s2 = R.s3 = C.sigt;
-        R.plastic = true; R.apex = true;
-        return R;
+        double rs[3] = {s1t, s2t, s3t};
+        apply_rankine_cap(rs, C.sigt, lam, mu);
+        const double scale_t = std::fabs(C.sigc) + std::fabs(C.sigt) + 1.0;
+        if (rs[0] - rs[2] - fbar(rs[0], P, C) <= 1e-12 * scale_t) {
+            R.s1 = rs[0]; R.s2 = rs[1]; R.s3 = rs[2];
+            R.plastic = true;
+            R.apex = rs[0] - rs[2] <= 1e-12 * scale_t;
+            return R;
+        }
     }
 
-    const auto f_of = [&](double L) {
-        return yield(s1t - L * d1, s3t - L * d3, P, C);
-    };
     // The corrector drives s1 down and s3 up, so f falls monotonically and without bound: a
     // doubling search finds a bracket on any input, and bisection cannot leave it. (Newton would
     // be faster and would step past the apex where the bracket's derivative vanishes; this is one
     // of the places where the slower method is the one that always answers.)
-    double lo = 0.0, hi = 1.0;
+    double npsi = 1.0, d1 = 0.0, d2 = 0.0, d3 = 0.0, L = 0.0;
     const double scale = std::fabs(s1t) + std::fabs(s3t) + std::fabs(C.sigc) + 1.0;
-    hi = scale / std::max(1.0, d1 - d3);
-    for (int i = 0; i < 200 && f_of(hi) > 0.0; ++i) hi *= 2.0;
-    for (int i = 0; i < 80; ++i) {          // bisection: monotone in lambda, and it cannot escape
-        const double mid = 0.5 * (lo + hi);
-        (f_of(mid) > 0.0 ? lo : hi) = mid;
+    const auto corrector = [&](double psi_now) {
+        // 90 degrees is the limit at sigma_t, where N_psi has no finite value and the flow is all in s1.
+        const double sp = std::min(std::sin(psi_now), 1.0 - 1e-12);
+        npsi = (1.0 + sp) / (1.0 - sp);
+        // D_e * m for m = [N_psi, 0, -1] (isotropic elasticity in principal space).
+        d1 = (lam + 2.0 * mu) * npsi - lam;
+        d2 = lam * (npsi - 1.0);
+        d3 = lam * npsi - (lam + 2.0 * mu);
+        const auto f_of = [&](double l) { return yield(s1t - l * d1, s3t - l * d3, P, C); };
+        double lo = 0.0, hi = scale / std::max(1.0, d1 - d3);
+        for (int i = 0; i < 200 && f_of(hi) > 0.0; ++i) hi *= 2.0;
+        for (int i = 0; i < 80; ++i) {      // bisection: monotone in lambda, and it cannot escape
+            const double mid = 0.5 * (lo + hi);
+            (f_of(mid) > 0.0 ? lo : hi) = mid;
+        }
+        L = 0.5 * (lo + hi);
+    };
+    // THE DILATANCY IS THAT OF THE STRESS RETURNED TO. It depends on s1 in the tensile zone, where it rises to 90
+    // degrees at sigma_t, and under a declared decay. Read at the trial, a stress on the plateau at low confinement
+    // flowed by what its trial stress dilates and not by what its own stress does, and from a step of about 2e-6 of
+    // axial strain up the lateral balance of a test at zero confinement had no root at all (nor at 100 kPa from 1e-4,
+    // nor at 1000 kPa from 5e-4). In compression with no decay declared it does not depend on the stress and one pass is
+    // all there is, the same bits as before. Elsewhere there is one answer, and the first pass brackets it: more
+    // dilatancy takes s1 further down, and the dilatancy at the end falls with s1.
+    {
+        const double psi_trial = psi_mobilised(s1t, P, C);
+        corrector(psi_trial);
+        const double psi_end = psi_mobilised(s1t - L * d1, P, C);
+        if (std::fabs(psi_end - psi_trial) >= 1e-10) {
+            double lo = std::min(psi_trial, psi_end), hi = std::max(psi_trial, psi_end);
+            for (int pass = 0; pass < 40 && hi - lo >= 1e-10; ++pass) {
+                const double mid = 0.5 * (lo + hi);
+                corrector(mid);
+                (psi_mobilised(s1t - L * d1, P, C) > mid ? lo : hi) = mid;
+            }
+            corrector(0.5 * (lo + hi));
+        }
     }
-    const double L = 0.5 * (lo + hi);
     R.s1 = s1t - L * d1;
     R.s2 = s2t - L * d2;
     R.s3 = s3t - L * d3;
     R.plastic = true;
+    // The corrector met the hydrostatic axis before the surface: the isotropic point is the answer.
+    if (R.s1 <= R.s3) {
+        R.s1 = R.s2 = R.s3 = C.sigt;
+        R.apex = true;
+        return R;
+    }
 
     // THE ORDER IS PART OF THE ANSWER. The corrector moves s2 as well, so a state that started
     // ordered can leave the region where f_13 alone governs -- which is exactly where the second

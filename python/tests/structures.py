@@ -96,6 +96,17 @@ check(built.plates[0].EA == 1.2e7 and built.plates[0].nu == 0.15,
 check(built.structs[0].iface_pos and built.structs[0].iface_neg,
       "interfaces='both' puts one on each side of the wall")
 check(built.structs[0].flow_barrier == 1, "a wall can be made a groundwater screen")
+check(built.structs[4].flow_barrier == 1, "an interface is a groundwater screen unless said otherwise")
+pb = katai.Project("Barriers")
+pb.geometry.rectangle(0, 0, 30, 20, material=pb.materials.mohr_coulomb("Sand", E=3e4, nu=0.3, c=5, phi=32,
+                                                                       gamma=19), name="Ground")
+pb.structures.plate((5, 20), (5, 10), EA=1e7, EI=1e5, interfaces="both", name="Wall with joints")
+pb.structures.plate((10, 20), (10, 10), EA=1e7, EI=1e5, name="Bare plate")
+pb.structures.plate((15, 20), (15, 10), EA=1e7, EI=1e5, interfaces="both", barrier="permeable",
+                    name="Permeable wall")
+bb = pb.build()
+check([s.flow_barrier for s in bb.structs] == [1, 0, 0],
+      "a wall with interfaces is a screen, a plate without them is not, and 'permeable' is kept")
 check(built.anchors[0].prestress == 300 and built.anchors[0].Lspacing == 2.5,
       "anchor lock-off force and out-of-plane spacing carry through")
 check(built.anchors[0].elastoplastic and built.anchors[0].Fmax_tens == 800,

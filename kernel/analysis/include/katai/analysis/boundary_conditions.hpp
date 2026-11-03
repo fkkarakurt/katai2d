@@ -107,6 +107,49 @@ inline void apply_boundary_conditions(const std::vector<BcEdge>& edges, const ka
             fix_node(dofs, node, bc, h.nx, h.ny);
         }
     }
+    // A FIXITY ON A LINE INSIDE THE MODEL HOLDS THE WHOLE LINE. The loop above reads the nodes of the
+    // domain's boundary, so an edge with ground on both sides -- the floor of a block removed later, a
+    // support drawn inside the ground -- held its two end nodes and nothing between them, and nothing
+    // said so (measured: a column fixed along its top under a block lifted by 0.044 m on average and
+    // 0.084 m at most, where fixed it stays and free it rises 0.149 m). Only an edge with a
+    // fixity is looked at here, so a model with none inside is untouched.
+    //
+    // ACROSS A JOINT'S SEAM ONE SIDE IS HELD AND THE OTHER MOVES. A joint along the line has two nodes at each place, and
+    // the second is what the joint is there for: a block on a joint on the fixed base of the model slides on it. So only
+    // one node of a place is held, the one on the domain's boundary where there is one, else the first.
+    std::vector<char> on_boundary(static_cast<size_t>(mesh.node_count), 0);
+    for (int node : mesh.boundary_nodes) on_boundary[static_cast<size_t>(node)] = 1;
+    std::vector<int> by_x;   // the nodes in order of x, for finding a node's twin; built when a line needs it
+    const auto has_holder = [&](int node, double tol) {
+        if (by_x.empty()) {
+            by_x.resize(static_cast<size_t>(mesh.node_count));
+            for (int i = 0; i < mesh.node_count; ++i) by_x[static_cast<size_t>(i)] = i;
+            std::sort(by_x.begin(), by_x.end(), [&](int a, int b) { return mesh.x[a] < mesh.x[b]; });
+        }
+        const double xn = mesh.x[node], yn = mesh.y[node];
+        auto it = std::lower_bound(by_x.begin(), by_x.end(), xn - tol, [&](int a, double v) { return mesh.x[a] < v; });
+        for (; it != by_x.end() && mesh.x[*it] <= xn + tol; ++it) {
+            const int other = *it;
+            if (other == node || std::fabs(mesh.y[other] - yn) > tol) continue;
+            if (on_boundary[static_cast<size_t>(other)] || other < node) return true;
+        }
+        return false;
+    };
+    for (const BcEdge& e : edges) {
+        if (e.fixity == EdgeFixity::Free) continue;
+        const double ex = e.bx - e.ax, ey = e.by - e.ay, l2 = ex * ex + ey * ey;
+        if (l2 < 1e-18) continue;
+        for (int node = 0; node < mesh.node_count; ++node) {
+            if (on_boundary[static_cast<size_t>(node)]) continue;
+            if (released && node < static_cast<int>(released->size()) && (*released)[node]) continue;
+            const double xn = mesh.x[node], yn = mesh.y[node];
+            double t = ((xn - e.ax) * ex + (yn - e.ay) * ey) / l2;
+            t = std::clamp(t, 0.0, 1.0);
+            const double d = std::hypot(xn - (e.ax + t * ex), yn - (e.ay + t * ey));
+            const double tol = 1e-9 + 1e-7 * std::fmax(std::fabs(xn), std::fabs(yn));
+            if (d <= tol && !has_holder(node, tol)) fix_node(dofs, node, e.fixity, e.nx, e.ny);
+        }
+    }
 }
 
 } // namespace katai::core

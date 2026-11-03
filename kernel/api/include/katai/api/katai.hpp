@@ -52,6 +52,7 @@ using model::StructElement;
 using model::Load;
 using model::PrescribedDisp;
 using model::HydroLine;         // wells and drains (hydraulic conditions)
+using model::CurvePoint;        // a point whose displacement every step records
 using model::HydroKind;
 using model::WellBehaviour;
 using model::DrainBehaviour;

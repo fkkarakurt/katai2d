@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,10 @@ struct SafetyPhase {
     // caller's override was silently ignored: a sweep over the tolerance then returned three
     // identical numbers because nothing had changed, which reads exactly like independence.
     double tolerance = 0.0;
+    // The force the parent phase left out of balance (StrengthReductionOptions::parent_left).
+    double parent_left = 0.0;
+    // NewtonOptions::srf_stall_accept.
+    double stall_accept = 0.0;
     int load_steps = 0;
     int max_iterations = 0;
     // THE PARENT PHASE'S STATE, when the search starts from it (see safety_analysis): its
@@ -55,6 +60,7 @@ struct SafetyPhase {
     Eigen::VectorXd parent_force;
     StructuralInit parent_structures;
     bool from_parent() const { return !parent_state.empty() && parent_force.size() > 0; }
+    std::vector<int> curve_nodes;   // the nodes of the points for curves (SolveResult::curve_nodes)
 };
 
 // THE ADVANCED MODELS ENTER A SAFETY SEARCH AS MOHR-COULOMB. Reducing the strength of a
@@ -190,7 +196,7 @@ inline bool solve_safety_phase(
         }
     if (in.from_parent() && (in.has_hardening || in.has_softsoil))
         add_diagnostic(R, DiagnosticSeverity::Note, "K2D-A020", "Safety",
-                       "The Hardening Soil / Soft Soil materials take part in this Safety phase "
+                       "The Hardening Soil, Soft Soil and Modified Cam-Clay materials take part in this Safety phase "
                        "as Mohr-Coulomb materials with their own c', phi', psi and nu_ur, and a "
                        "stiffness taken from the stress state the phase starts from. Their "
                        "hardening is not reduced with the strength: reduced together, the factor "
@@ -201,6 +207,9 @@ inline bool solve_safety_phase(
                                 in.max_iterations > 0 ? in.max_iterations : 120,
                                 in.tolerance > 0.0 ? in.tolerance : 1e-3};
     sopt.newton.kinematics = in.axisymmetric ? Kinematics::Axisymmetric : Kinematics::PlaneStrain;
+    sopt.newton.curve_nodes = in.curve_nodes;
+    sopt.parent_left = in.parent_left;
+    sopt.newton.srf_stall_accept = in.stall_accept;
     const auto sr =
         in.from_parent()
             ? safety_analysis(mesh, dofs, f,
@@ -210,6 +219,20 @@ inline bool solve_safety_phase(
             : safety_analysis(mesh, dofs, f, models, solver, sopt, {}, in.active, profiles,
                               structures);
     R.fos = sr.fos;
+    if (sr.mechanism.stagnation_accepted > 0) {
+        char worst[32];
+        std::snprintf(worst, sizeof(worst), "%.2e", sr.mechanism.worst_accepted_residual);
+        add_diagnostic(R, DiagnosticSeverity::Warning, "K2D-A019", "",
+                       std::to_string(sr.mechanism.stagnation_accepted) +
+                           " step(s) of the strength reduction stopped converging before its tolerance and were "
+                           "kept at their best iterate, with an out-of-balance force of up to " + std::string(worst) +
+                           " of the force scale. Re-run with a finer or coarser mesh to see whether the factor moves.");
+    }
+    for (const auto& pt : sr.path) { R.path_factor.push_back(pt[0]); R.path_disp.push_back(pt[1]); }
+    if (!in.curve_nodes.empty() && sr.curve_u.size() == sr.path.size() * 2 * in.curve_nodes.size()) {
+        R.curve_nodes = in.curve_nodes;
+        R.curve_u = sr.curve_u;
+    }
     if (sr.start_failed) {
         R.message = "Safety analysis: the ground did not reach equilibrium at full strength under "
                     "this phase's own changes to the phase before it (activated or removed "

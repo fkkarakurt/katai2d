@@ -22,6 +22,7 @@
 
 #include <Eigen/Core>
 
+#include <katai/analysis/cancel.hpp>
 #include <katai/analysis/consolidation.hpp>
 #include <katai/analysis/constants.hpp>
 #include <katai/analysis/hydraulic_boundary.hpp>
@@ -62,6 +63,7 @@ struct ConsolidationPhaseMaterial {
 
 // The phase's neutral configuration.
 struct ConsolidationPhase {
+    double gamma_water = kGammaWater;                   // the unit weight of water [kN/m^3]
     std::vector<ConsolidationPhaseMaterial> materials;  // by material id
     std::vector<FlowEdge> flow_edges;                   // B4 vocabulary, Closed edges included
     bool have_flow_bcs = false;                         // unfiltered declaration scan (B4 rule)
@@ -92,6 +94,8 @@ struct ConsolidationPhase {
     // semi-permeable, is a CONDUCTANCE dh/R between them and is not expressible as either -- it is
     // refused rather than rounded to whichever neighbour looks closer.
     bool has_semi_permeable_interface = false;
+    // The nodes of the active impermeable lines: a face along them does not drain (flow_drained_nodes).
+    const std::vector<char>* sealed_nodes = nullptr;
     const std::vector<int>* pore_tie = nullptr;              // node -> the node it shares a pore eq with
     const std::vector<IfaceDiag>* iface_diagrams = nullptr;  // joints to report tau / sigma_n / slip for
     // The structural elements themselves, the lines to report forces for, and the parent phase's
@@ -120,6 +124,7 @@ struct ConsolidationPhase {
     // AXISYMMETRIC: solved per radian with the hoop terms. Always on the elastoplastic path, which
     // integrates a linear-elastic soil exactly too (its Newton step is one iteration).
     bool axisymmetric = false;
+    std::vector<int> curve_nodes;   // the nodes of the points for curves (SolveResult::curve_nodes)
 };
 
 // Solve the phase. Fills the settlement-time series, the final displacement and
@@ -157,27 +162,6 @@ inline bool solve_consolidation_phase(
         return false;
     }
     const size_t nmat = in.materials.size();
-    // Soft Soil Creep x consolidation: honest refusal. End-to-end verification WAS attempted and
-    // failed (2026-07-21, test_soft_soil_gui): on a fast-draining column the settlement DEPENDS on
-    // the time-step size and the creep tail came out 37% short of the exact mu* H ln(100) oracle
-    // that the verified Plastic-phase path holds to +0.1%. Until the Biot x creep interaction is
-    // resolved: apply loads in a timed Plastic phase, model holding as a timed no-change Plastic
-    // phase (both pinned against the isotach closed forms).
-    for (size_t mi = 0; mi < nmat; ++mi) {
-        bool used_m = false;
-        for (int e = 0; e < mesh.element_count && !used_m; ++e)
-            if ((in.active.empty() || in.active[e]) && mesh.element_material[e] == (int)mi) used_m = true;
-        if (used_m && models[mi].type == MaterialType::SoftSoilCreep) {
-            R.message = "Material '" + in.materials[mi].name + "' is Soft Soil Creep: the "
-                        "consolidation (Biot) x creep interaction is not verified yet -- "
-                        "measured settlements DEPEND on the time-step size on this path, so "
-                        "it is refused rather than shipped silently wrong. Apply loads in a "
-                        "Plastic phase WITH its real time interval, and model holding "
-                        "periods as a chained no-change Plastic phase with the holding time "
-                        "(both verified against the isotach closed forms).";
-            return false;
-        }
-    }
     // Non-porous x consolidation: honest refusal. The Biot solver gives every active element a
     // pore-pressure DOF -- a non-porous region would silently carry pore pressure and pass water
     // (concrete gaining pore stiffness, drainage paths running through it). The fluid stiffness is
@@ -234,7 +218,8 @@ inline bool solve_consolidation_phase(
     // draining boundary say the same thing to this solver, that the excess pore pressure there
     // is zero.)
     std::vector<char> drained =
-        flow_drained_nodes(in.flow_edges, in.have_flow_bcs, mesh, in.active, in.yscale, in.axisymmetric);
+        flow_drained_nodes(in.flow_edges, in.have_flow_bcs, mesh, in.active, in.yscale, in.axisymmetric,
+                           in.sealed_nodes);
     for (int n : in.drain_nodes)
         if (n >= 0 && n < mesh.node_count) drained[n] = 1;
     // Two nodes that share a pore pressure share its boundary condition too: if either side of a
@@ -327,7 +312,7 @@ inline bool solve_consolidation_phase(
                 laws->set_offset(to_equations(v_total));
             }
             ConsolidationPlasticResult r = solve_consolidation_plastic(
-                mesh, dofs, models, cperm, kGammaWater, kw_over_n, drained, state, p_state,
+                mesh, dofs, models, cperm, in.gamma_water, kw_over_n, drained, state, p_state,
                 step_dt, n, in.active, load, plastic_factory, 40, in.newton_tol, profiles, struct_k,
                 in.pore_tie, ramp, instant, in.axisymmetric, laws.get());
             if (laws) {
@@ -340,7 +325,7 @@ inline bool solve_consolidation_phase(
             c.series = std::move(r.series);
             c.committed = std::move(r.committed);
         } else {
-            c.series = solve_consolidation(mesh, dofs, models, cperm, kGammaWater, kw_over_n,
+            c.series = solve_consolidation(mesh, dofs, models, cperm, in.gamma_water, kw_over_n,
                                            drained, p_state, step_dt, n, in.active, load,
                                            le_factory, profiles, struct_k, in.pore_tie, ramp,
                                            instant);
@@ -365,6 +350,10 @@ inline bool solve_consolidation_phase(
     R.consol_time.push_back(0.0);          // the phase's own start: no displacement, no excess pore
     R.consol_settlement.push_back(0.0);
     R.consol_excess_pore.push_back(0.0);
+    if (!in.curve_nodes.empty()) {
+        R.curve_nodes = in.curve_nodes;
+        R.curve_u.assign(2 * in.curve_nodes.size(), 0.0);
+    }
 
     auto step_pmax = [&](const Chunk& c, int s) {
         double pmax = 0.0;
@@ -391,6 +380,11 @@ inline bool solve_consolidation_phase(
             R.consol_time.push_back(t_now + c.series.times[s]);
             R.consol_settlement.push_back(smax);
             R.consol_excess_pore.push_back(pmax);
+            for (const int nd : in.curve_nodes)
+                for (int k = 0; k < 2; ++k) {
+                    const int d = dofs.global_dof(nd, k);
+                    R.curve_u.push_back(v_total(d) + c.series.displacement[s](d));
+                }
             pore_peak = std::fmax(pore_peak, pmax);
         }
         v_total += c.series.displacement[n];
@@ -471,7 +465,7 @@ inline bool solve_consolidation_phase(
                                          consolidation_critical_dt(h, eta, in.materials[mi].eoed,
                                                                    in.materials[mi].ky,
                                                                    in.materials[mi].porosity,
-                                                                   kWaterBulk, kGammaWater));
+                                                                   kWaterBulk, in.gamma_water));
             dt_level *= kFirstStepOverCritical;
             if (!(dt_level > 0.0)) {
                 R.message = "This consolidation phase ends on a target rather than on a time "
@@ -514,6 +508,7 @@ inline bool solve_consolidation_phase(
         };
 
         while (!R.consol_stop_met && steps_done < max_steps) {
+            katai::analysis::poll_cancel();
             const int n = std::min(kStepsPerLevel, max_steps - steps_done);
             Chunk c = run_chunk(dt_level, n, load_pending);
             if (!c.ok) { R.message = kFailedMessage; return false; }

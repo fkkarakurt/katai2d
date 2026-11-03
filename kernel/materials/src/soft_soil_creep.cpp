@@ -2,6 +2,43 @@
 
 namespace katai::core::softsoilcreep {
 
+namespace {
+// WHERE ON THE ELLIPSE A CREEP STEP ENDS. The creep goes along the normal of the ellipse, m = n / tr(n), and the
+// deviatoric part of a normal is along w, the weights of q~, which the order of the principal stresses fixes. So a
+// step moves the stress along w, and all the direction asks of the step's end is X = q~ / (M (p' + c cot phi)), the
+// position on the ellipse: 1 is its top. With A the trial's q~, B = M (p' + c cot phi) at the step's end and
+// C = 4 G L (w . w) / M, backward Euler on the direction reads
+//     A - B X = C X / (1 - X^2),   that is   h(X) = (A - B X)(1 - X^2) - C X = 0.
+// There is one root below the top, in (0, min(1, A/B)), and one above it, beyond max(1, A/B), each by a monotone
+// function, whatever the size of the step.
+double position_on_ellipse(double A, double B, double C, bool above_top) {
+    const auto h = [&](double X) { return (A - B * X) * (1.0 - X * X) - C * X; };
+    double lo, hi;
+    if (!above_top) {
+        lo = 0.0;
+        hi = std::min(1.0, A / B);
+        if (!(hi > 0.0)) return 0.0;
+        if (C <= 0.0) return hi;
+    } else {
+        lo = std::max(1.0, A / B);
+        if (C <= 0.0) return lo;
+        hi = 2.0 * lo;
+        for (int i = 0; i < 200 && h(hi) < 0.0; ++i) hi *= 2.0;
+    }
+    double X = 0.5 * (lo + hi);
+    for (int it = 0; it < 100; ++it) {
+        const double f = h(X);
+        if ((f > 0.0) != above_top) lo = X; else hi = X;   // h falls through its root below the top, rises above it
+        const double df = -B * (1.0 - X * X) - 2.0 * X * (A - B * X) - C;
+        double next = df != 0.0 ? X - f / df : 0.5 * (lo + hi);
+        if (!(next > lo && next < hi)) next = 0.5 * (lo + hi);
+        if (std::fabs(next - X) <= 1e-14 * std::max(X, 1e-300)) return next;
+        X = next;
+    }
+    return X;
+}
+}  // namespace
+
 StepResult ssc_substep(const Params& P, const softsoil::Params& S,
                        const Eigen::Vector3d& sig_c, double pp_c,
                        const Eigen::Vector3d& deps, double dt) {
@@ -25,48 +62,66 @@ StepResult ssc_substep(const Params& P, const softsoil::Params& S,
 
     StepResult out{sig_tr, std::max(pp_c, ppfloor), 0.0, false, 1};
 
-    // --- Creep correction: L = Δε_v^c backward Euler, direction frozen at the trial -----------
-    // Sorted-role analytic direction n = a·w + b·1 (the SS cap_normal structure) +
-    // VALIDITY cascade: if the creep step breaks the trial ordering, the tied pair's roles
-    // are averaged and the pair equalized (with w2=w3, p_eq depends only on σ2+σ3 → the
-    // equalization changes neither p_eq nor the hardening; the creep counterpart of the
-    // corner-branching lesson measured on SS — tolerance-free, scale-independent).
+    // --- Creep correction: backward Euler on L = d eps_v^c AND on the direction ------------------
+    // The direction used to be the trial's, kept through the step. Near the top of the ellipse that is not a
+    // matter of accuracy: tr(n) goes to 0 there, and a step that ends elsewhere than the trial moved by the trial's
+    // enormous m. Measured on an undrained triaxial test of a clay with M = 1.296 against a friction line of 1.287
+    // (K0nc 0.61): q 121 or 23 kPa for 297 at 200 steps, 1.15e7 kPa from one large step, each reported as solved, and
+    // a strip footing stopping at 15 to 36% of its load; the coefficient K0 of an oedometer +2% at the substeps of
+    // the rule. Read at the step's end the same test is within 0.01% of an independent integration of the rate
+    // equations at every step size, and K0 within 0.03%.
+    //
+    // A tie in the ordering (Koiter): if the creep step breaks the trial's order, the pair's roles are averaged and
+    // the pair equalized. With w2 = w3 the equivalent pressure depends only on s2 + s3, so the equalization changes
+    // neither it nor the hardening.
     const double pe_tr = p_eq(S, sig_tr);
     if (pe_tr > 1e-12 && dt > 0.0) {
         int idx[3] = {0, 1, 2};
         std::sort(idx, idx + 3, [&](int a, int b) { return sig_tr(a) > sig_tr(b); });
+        // The side of the top the step starts on. The rate is normalised on its volumetric part, so at the top the
+        // deviatoric creep grows without bound and drives the stress away from it, from either side: a stress on
+        // one side stays there, and under shear a clay that reaches the top from below stays at it.
+        const bool above_c = softsoil::detail::q_tilde(sig_c, delta) > M * std::max(p_c + ccot, 1e-9);
         bool tied01 = false, tied12 = false;
         for (int attempt = 0; attempt < 3; ++attempt) {
             Eigen::Vector3d w(1.0, delta - 1.0, -delta);
             if (tied01 && tied12) {
-                w.setConstant(0.0);   // full tie: no q̃ contribution (purely volumetric)
+                w.setConstant(0.0);   // full tie: no q~ contribution (purely volumetric)
             } else if (tied01) {
                 const double mw = 0.5 * (w(0) + w(1)); w(0) = mw; w(1) = mw;
             } else if (tied12) {
                 const double mw = 0.5 * (w(1) + w(2)); w(1) = mw; w(2) = mw;
             }
-            // n = a·w + b·1, tr(n) = 3b (w sums to 0). m = n/tr(n): tr(m) = 1 → the
-            // volumetric component is EXACTLY the 1D rate (the creep-direction normalization).
-            // Around the nose, |3b| is protected by the floor.
-            const double pb = std::max(sig_tr.mean() + ccot, 1e-9);
-            const double qt = sig_tr(idx[0]) + (delta - 1.0) * sig_tr(idx[1]) - delta * sig_tr(idx[2]);
-            const double a = 2.0 * qt / (M * M * pb);
-            double b3 = 1.0 - qt * qt / (M * M * pb * pb);
-            if (std::fabs(b3) < 1e-6) b3 = b3 < 0.0 ? -1e-6 : 1e-6;
-            Eigen::Vector3d n;
-            for (int k = 0; k < 3; ++k) n(idx[k]) = a * w(k) + b3 / 3.0;
-            const Eigen::Vector3d m = n / b3;                         // tr(m) = 1
-            const Eigen::Vector3d mdev = m - Eigen::Vector3d::Constant(1.0 / 3.0);
+            const double W = w.squaredNorm();
+            const double q0 = w(0) * sig_tr(idx[0]) + w(1) * sig_tr(idx[1]) + w(2) * sig_tr(idx[2]);
+            const Eigen::Vector3d s_tr = sig_tr - Eigen::Vector3d::Constant(sig_tr.mean());
+
+            // A creep too small to matter does not hold the stress at the top. To hold it the deviatoric creep would
+            // have to be over a million times the volumetric one (|tr n| below 1e-6, the floor this direction has
+            // always had), and then the stress crosses with its trial: an overconsolidated clay is elastic there,
+            // and passes. Decided once for the step, from the creep the trial asks for.
+            bool above = above_c;
+            {
+                const double pb = std::max(p_tr + ccot, 1e-9);
+                const double B = M * pb;
+                const double X0 = position_on_ellipse(q0, B, 0.0, above_c);
+                const double pe0 = p_tr + X0 * X0 * pb;
+                const double L0 = dt * (P.mu_star / P.tau_day) * std::pow(std::max(pe0, 1e-12) / out.pp, beta);
+                if (above_c ? q0 < B : q0 > B) {
+                    const double X = position_on_ellipse(q0, B, 4.0 * G * L0 * W / M, above_c);
+                    if (std::fabs(1.0 - X * X) < 1e-6) above = !above_c;
+                }
+            }
 
             auto state_at = [&](double L, Eigen::Vector3d& sL, double& ppL) {
                 const double pL = softsoil::mean_after(p_tr, -L, P.kap_star, ccot);
-                sL = Eigen::Vector3d::Constant(pL) +
-                     (sig_tr - Eigen::Vector3d::Constant(sig_tr.mean())) - L * 2.0 * G * mdev;
+                const double B = M * std::max(pL + ccot, 1e-9);
+                const double X = W > 0.0 ? position_on_ellipse(q0, B, 4.0 * G * L * W / M, above) : 0.0;
+                const double lam = W > 0.0 ? (q0 - B * X) / W : 0.0;
+                sL = Eigen::Vector3d::Constant(pL) + s_tr;
+                for (int k = 0; k < 3; ++k) sL(idx[k]) -= lam * w(k);
                 // The tied pair takes its common value HERE, so that the creep rate is read at
-                // the state that is kept. q~ weighs the two members of a pair differently:
-                // read before they were made equal, the equivalent pressure was not the kept
-                // state's, and the update jumped where an increment passed from the surface
-                // to the edge (the Soft Soil lesson, soft_soil.cpp).
+                // the state that is kept (the Soft Soil lesson, soft_soil.cpp).
                 if (tied01 && tied12) {
                     sL.setConstant(sL.mean());
                 } else if (tied01) {
@@ -83,7 +138,6 @@ StepResult ssc_substep(const Params& P, const softsoil::Params& S,
                 const double pe = std::max(p_eq(S, sL), 1e-12);
                 return L - dt * (P.mu_star / P.tau_day) * std::pow(pe / ppL, beta);
             };
-            // Bracketed root: R(0) ≤ 0, R monotone increasing (L↑ ⇒ p_eq↓, p_p↑) → guaranteed convergence.
             Eigen::Vector3d sL; double ppL;
             double lo = 0.0, flo = resid(0.0, sL, ppL);
             double L = 0.0;
@@ -108,16 +162,6 @@ StepResult ssc_substep(const Params& P, const softsoil::Params& S,
                 state_at(L, sL, ppL);
             } else {
                 state_at(0.0, sL, ppL);
-            }
-            // equalization (tied pair → common value; p_eq/hardening invariant)
-            if (tied01 && tied12) {
-                sL.setConstant(sL.mean());
-            } else if (tied01) {
-                const double ms = 0.5 * (sL(idx[0]) + sL(idx[1]));
-                sL(idx[0]) = ms; sL(idx[1]) = ms;
-            } else if (tied12) {
-                const double ms = 0.5 * (sL(idx[1]) + sL(idx[2]));
-                sL(idx[1]) = ms; sL(idx[2]) = ms;
             }
             const double slack = 1e-9 * (1.0 + std::fabs(sL(idx[0])));
             const bool bad01 = !tied01 && sL(idx[0]) - sL(idx[1]) < -slack;

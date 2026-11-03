@@ -243,6 +243,14 @@ MaterialModel build_mcc(const MaterialParams& p) {
     s.phi = p.phi_rad;
     s.psi = 0.0;
     s.K0nc = k0nc_of(p);
+    // NO TENSION CUT-OFF: the model is its ellipse, and its strength is the critical state line. A cut-off
+    // laid over it dilates at a pre-consolidation pressure it does not soften, so at constant volume the
+    // state ends above the line: measured in undrained plane strain, the published undrained strength
+    // of a clay at OCR 8 came out 11.9% too high (114.46 kPa against 102.3), and 38.7% at OCR 20, with
+    // nothing to say so. It bites where the ellipse reaches a tensile principal stress, from
+    // OCR = 1 + 3/M^2 in plane strain and 1 + 9/M^2 in triaxial compression. The model's parameters do
+    // not include one.
+    mm.tension_cutoff = false;
     MaterialParams q = p;
     q.c = 0.0;   // the undrained pore fluid's reference K' has no cohesion shift either
     undrained_soft_soil(mm, q);

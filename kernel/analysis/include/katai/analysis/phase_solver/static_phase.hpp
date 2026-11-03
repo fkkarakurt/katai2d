@@ -171,6 +171,7 @@ struct StaticPhase {
     // Prescribed displacements (nonzero Dirichlet): full-DOF vector, ramped 0 -> value
     // together with the load (the caller fixed the corresponding dofs). Empty = none.
     Eigen::VectorXd presc;
+    std::vector<int> curve_nodes;   // the nodes of the points for curves (SolveResult::curve_nodes)
 };
 
 // Solve the phase. `carry_full` is the parent's converged full-DOF displacement
@@ -204,6 +205,7 @@ inline bool solve_static_phase(
     if (in.line_search_window > 0) nopt.line_search_window = in.line_search_window;
     if (in.substep_tolerance > 0.0) nopt.substep_tolerance = in.substep_tolerance;
     nopt.stagnation_accept = in.stagnation_accept;
+    nopt.curve_nodes = in.curve_nodes;
     if (in.enforce_local_criteria != 0)
         nopt.enforce_local_criteria = in.enforce_local_criteria > 0;
     // SSC TIME (Stage 3): a staged Plastic phase's Time interval [days] enters the constitutive
@@ -231,8 +233,14 @@ inline bool solve_static_phase(
         static_carry ? carry_init : no_init);
     R.nil_step = in.nil_step;
     R.load_factor = nr.load_factor;
+    for (const auto& pt : nr.path) { R.path_factor.push_back(pt[0]); R.path_disp.push_back(pt[1]); }
+    if (!in.curve_nodes.empty() && nr.curve_u.size() == nr.path.size() * 2 * in.curve_nodes.size()) {
+        R.curve_nodes = in.curve_nodes;
+        R.curve_u = nr.curve_u;
+    }
     R.timings = nr.timings;
     R.iterations = nr.total_iterations;
+    R.force_left = nr.force_left;
     R.stopped_by = nr.converged ? NewtonResult::Abandonment::None : nr.last_abandonment;
     R.convergence = nr.convergence;
     // The integration guard, said out loud. A phase whose COMMITTED path contains a cut-short
@@ -274,7 +282,7 @@ inline bool solve_static_phase(
                            " increment(s) stopped converging before the phase's tolerance and "
                            "were kept at their best iterate, with an out-of-balance force of up "
                            "to " + std::string(worst) +
-                           " of the load scale. The answer carries that much unbalanced force. "
+                           " of the force scale. The answer carries that much unbalanced force. "
                            "Re-run with a finer or coarser mesh, or more load steps, to see "
                            "whether it moves.");
     }
@@ -390,15 +398,9 @@ inline bool solve_static_phase(
         StructForce d = force_diagram(sp, structures, mesh, dofs, disp_total,
                                       nr.anchor_plastic, nr.geogrid_plastic,
                                       /*elastic=*/false, nr.plate_plastic, nr.plate5_plastic);
-        // Plate M-N hinge formed (this phase or carried in): committed plastic state nonzero
-        // anywhere on this chain -- return mapping only ever writes a nonzero value when it fires.
-        if (sp.kind == 0 || sp.kind == 5) {
-            const auto& psv = sp.kind == 0 ? nr.plate_plastic : nr.plate5_plastic;
-            const size_t S = sp.kind == 0 ? (size_t)plate::kPlasticStateSize
-                                          : (size_t)plate::kPlasticStateSize5;
-            for (size_t k = sp.begin * S; k < sp.end * S && k < psv.size(); ++k)
-                if (psv[k] != 0.0) { d.yielded = true; break; }
-        }
+        // A plate YIELDED: force_diagram reads it (plate_on_cap) -- a hinge formed, or at capacity
+        // now. Until 2026-10-30 it was any nonzero state, which a section change or a line
+        // contraction writes too, and an elastic lining was reported "at capacity".
         if (static_carry) {
             // Station ux/uy drive the deformed overlay, and the GUI deforms the mesh by the
             // PHASE INCREMENT (R.disp) -- so the overlay must use the increment too, or the
@@ -420,7 +422,8 @@ inline bool solve_static_phase(
     // the solver).
     for (const auto& is : iface_diags) {
         InterfaceResult ir = force_diagram(is, structures, mesh, dofs, disp_total,
-                                           nr.interface_slip, nr.interface5_slip, false);
+                                           nr.interface_slip, nr.interface5_slip, false, true,
+                                           false, nullptr, &nr.interface_pore, &nr.interface5_pore);
         ir.slip_checked = true;   // the static solve applies the Coulomb return -- a real check
         for (const auto& st : ir.stations) {
             ir.max_abs_tau = std::max(ir.max_abs_tau, std::fabs(st.tau));
